@@ -127,7 +127,7 @@ Windows convenience launcher:
 
 ## Desktop App
 
-The desktop app is built with Tauri 2 and reuses the existing React/Vite frontend. The current desktop package does not bundle the FastAPI backend, database, or FFmpeg; start the backend first through local development or Docker before using the desktop app. Development mode reaches the backend through the Vite proxy, while packaged desktop builds connect to `http://localhost:8900` by default.
+The desktop app is built with Tauri 2 and reuses the existing React/Vite frontend. The root `yarn desktop:build` command bundles the FastAPI backend plus FFmpeg/FFprobe, and the installed app initializes its own SQLite database and per-install secrets in the user application-data directory. Development mode reaches the backend through the Vite proxy; packaged desktop builds start their bundled backend on a persistent per-install loopback port and use same-origin API requests.
 The meeting recorder uses the same frontend flow in desktop and web builds: clicking the bottom-right `Meeting recording` button immediately requests microphone access and starts recording.
 
 Install the Rust toolchain before working on the desktop app:

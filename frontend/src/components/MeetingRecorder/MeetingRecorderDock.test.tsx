@@ -22,7 +22,7 @@ const meetingGenerationMock = vi.hoisted(() => ({
 const desktopRecorderWindowMock = vi.hoisted(() => ({
   isTauriRuntime: vi.fn(() => false),
   isRecorderWindowRoute: vi.fn(() => false),
-  openRecorderWindow: vi.fn(),
+  openRecorderWindowWhenReady: vi.fn(),
   setRecorderActive: vi.fn(),
   setRecorderWindowLayout: vi.fn(),
   setRecorderWindowSize: vi.fn(),
@@ -31,6 +31,7 @@ const desktopRecorderWindowMock = vi.hoisted(() => ({
   startCurrentRecorderWindowDrag: vi.fn(),
   emitRecorderWindowState: vi.fn(),
   emitRecorderOpenPanel: vi.fn(),
+  emitRecorderWindowReady: vi.fn(),
   listenRecorderWindowState: vi.fn(),
   listenDesktopNavigation: vi.fn(),
   listenRecorderOpenPanel: vi.fn(),
@@ -136,7 +137,7 @@ describe('MeetingRecorderDock', () => {
     updateNoteMock.mockResolvedValue({ id: 'draft-1', title: '会议录音', content: '# Summary', taskId: 'task-1', status: 'done' })
     desktopRecorderWindowMock.isTauriRuntime.mockReturnValue(false)
     desktopRecorderWindowMock.isRecorderWindowRoute.mockReturnValue(false)
-    desktopRecorderWindowMock.openRecorderWindow.mockResolvedValue('created')
+    desktopRecorderWindowMock.openRecorderWindowWhenReady.mockResolvedValue('created')
     desktopRecorderWindowMock.setRecorderActive.mockResolvedValue(undefined)
     desktopRecorderWindowMock.setRecorderWindowLayout.mockResolvedValue(undefined)
     desktopRecorderWindowMock.setRecorderWindowSize.mockResolvedValue(undefined)
@@ -145,6 +146,7 @@ describe('MeetingRecorderDock', () => {
     desktopRecorderWindowMock.startCurrentRecorderWindowDrag.mockResolvedValue(undefined)
     desktopRecorderWindowMock.emitRecorderWindowState.mockResolvedValue(undefined)
     desktopRecorderWindowMock.emitRecorderOpenPanel.mockResolvedValue(undefined)
+    desktopRecorderWindowMock.emitRecorderWindowReady.mockResolvedValue(undefined)
     desktopRecorderWindowMock.listenRecorderWindowState.mockResolvedValue(undefined)
     desktopRecorderWindowMock.listenDesktopNavigation.mockResolvedValue(undefined)
     desktopRecorderWindowMock.listenRecorderOpenPanel.mockResolvedValue(undefined)
@@ -191,9 +193,22 @@ describe('MeetingRecorderDock', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
 
-    expect(desktopRecorderWindowMock.openRecorderWindow).toHaveBeenCalledTimes(1)
+    expect(desktopRecorderWindowMock.openRecorderWindowWhenReady).toHaveBeenCalledTimes(1)
     expect(audioRecorderMock.start).not.toHaveBeenCalled()
     expect(screen.queryByRole('region', { name: '会议录音' })).not.toBeInTheDocument()
+  })
+
+  it('falls back to the main-window recorder when the packaged recorder window does not become ready', async () => {
+    desktopRecorderWindowMock.isTauriRuntime.mockReturnValue(true)
+    desktopRecorderWindowMock.openRecorderWindowWhenReady.mockRejectedValueOnce(new Error('recorder_window_load_timeout'))
+    renderDock()
+
+    await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
+
+    await waitFor(() => expect(audioRecorderMock.start).toHaveBeenCalledTimes(1))
+    expect(screen.getByRole('region', { name: '会议录音' })).toBeInTheDocument()
+    expect(screen.getByText('录音中')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '开始会议录音' })).not.toBeInTheDocument()
   })
 
   it('auto-starts recording when mounted inside the native recorder window', async () => {
@@ -202,6 +217,7 @@ describe('MeetingRecorderDock', () => {
     renderDock({ autoStart: true })
 
     await waitFor(() => expect(audioRecorderMock.start).toHaveBeenCalledTimes(1))
+    expect(desktopRecorderWindowMock.emitRecorderWindowReady).toHaveBeenCalledTimes(1)
     expect(screen.getByRole('region', { name: '会议录音' })).toBeInTheDocument()
     expect(desktopRecorderWindowMock.setRecorderWindowLayout).toHaveBeenCalledWith('expanded')
   })
@@ -388,7 +404,7 @@ describe('MeetingRecorderDock', () => {
     await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
 
     await waitFor(() => {
-      expect(desktopRecorderWindowMock.openRecorderWindow).toHaveBeenCalledTimes(1)
+      expect(desktopRecorderWindowMock.openRecorderWindowWhenReady).toHaveBeenCalledTimes(1)
     })
     await waitFor(() => {
       expect(desktopRecorderWindowMock.emitRecorderOpenPanel).toHaveBeenCalledTimes(1)
