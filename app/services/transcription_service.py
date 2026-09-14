@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Callable
 
 from app.config import settings
+from app.services.tracing_service import observation, content_summary, update_current, traced
 from app.models.stt_profile import LOCAL_STT_PROVIDERS, ResolvedSTTConfig
 from app.models.transcript import TranscriptResult, TranscriptSegment
 from app.services.stt_profile_service import STTProfileService
@@ -104,6 +105,20 @@ def create_transcriber(config: ResolvedSTTConfig | None = None) -> Transcriber:
 
 
 class TranscriptionService:
+    @staticmethod
+    def _transcribe_chunk(transcriber, file_path, chunk=None):
+        metadata = {"adapter": type(transcriber).__name__, "streamed": False}
+        model = getattr(transcriber, "model", None)
+        if isinstance(model, str):
+            metadata["model"] = model
+        if chunk is not None:
+            metadata.update(chunk_index=chunk.index, chunk_total=chunk.total,
+                            start_seconds=chunk.chunk_start, end_seconds=chunk.chunk_end)
+        with observation("调用语音识别", metadata=metadata):
+            result = transcriber.transcribe(file_path=file_path)
+            update_current(output=content_summary(result.full_text))
+            return result
+
     def __init__(
         self,
         transcriber: Transcriber | None = None,
@@ -216,6 +231,7 @@ class TranscriptionService:
         )
         return chunks
 
+    @traced("提取音频分块")
     def _extract_chunk(self, *, audio_path: str, chunk: ChunkSpec) -> None:
         duration = max(1.0, chunk.chunk_end - chunk.chunk_start)
         bitrate = max(32, int(settings.transcription_chunk_bitrate_kbps))
@@ -246,6 +262,7 @@ class TranscriptionService:
     def _segment_midpoint(segment: TranscriptSegment) -> float:
         return (segment.start + segment.end) / 2
 
+    @traced("合并识别分块")
     def _merge_chunk_results(self, *, chunk_results: list[tuple[ChunkSpec, TranscriptResult]]) -> TranscriptResult:
         merged_segments: list[TranscriptSegment] = []
         languages: list[str] = []
@@ -333,7 +350,7 @@ class TranscriptionService:
                 temp_dir=Path(temp_dir),
             )
             if not chunk_specs:
-                return transcriber.transcribe(file_path=audio_path)
+                return self._transcribe_chunk(transcriber, audio_path)
 
             chunk_results: list[tuple[ChunkSpec, TranscriptResult]] = []
             for chunk in chunk_specs:
@@ -356,7 +373,7 @@ class TranscriptionService:
                             f"({self._format_seconds(chunk.trim_start)} - {self._format_seconds(chunk.trim_end)})..."
                         ),
                     )
-                chunk_results.append((chunk, transcriber.transcribe(file_path=str(chunk.file_path))))
+                chunk_results.append((chunk, self._transcribe_chunk(transcriber, str(chunk.file_path), chunk)))
 
             return self._merge_chunk_results(chunk_results=chunk_results)
 
@@ -372,6 +389,7 @@ class TranscriptionService:
     ) -> TranscriptResult:
         cached = load_cached()
         if cached:
+            update_current(metadata={"cache_hit": True})
             logger.info("[Transcribe] cache hit for audio=%s", audio_path)
             return cached
 
@@ -380,6 +398,9 @@ class TranscriptionService:
             stt_profile_id=stt_profile_id,
         )
         transcriber = self.transcriber or create_transcriber(resolved_config)
+        if resolved_config:
+            update_current(metadata={"provider": resolved_config.provider,
+                                     "model": resolved_config.model_name, "cache_hit": False})
 
         if self._is_local_transcriber(resolved_config) and update_status:
             update_status("transcribing", "Loading local speech model...")

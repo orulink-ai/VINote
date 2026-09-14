@@ -371,3 +371,7 @@ Supabase 的 Reset password 邮件模板须包含 `{{ .Token }}`，用户在桌�
 安装包云端依赖服务器已部署支持多身份来源与 `/v1/default-models` 的对应分支。服务端保留 ViTalk 的身份来源，并在 `VILAB_AUTH_SUPABASE_SOURCES_JSON` 添加 VINote 的 Project URL 和 publishable key；安装包构建成功不代表远端部署已经升级。
 
 Windows 覆盖安装/卸载会检查并关闭 VINote 主进程及其 `vinote-backend.exe` 后端，避免旧进程占用 DLL。打包后端监视桌面父进程，即使安装器强制关闭主窗口，后端也会自动退出；用户数据保存在独立应用数据目录，不随安装文件覆盖。
+
+# Langfuse 追踪
+
+VINote 支持独立 Langfuse 项目的笔记生成链路追踪，覆盖媒体准备、转写、分块总结、LLM 调用、截图与结果保存。配置、安装版接入和真实上报验证见 [Langfuse 接入说明](docs/langfuse.md)。默认不采集正文，项目密钥只配置在后端本机。

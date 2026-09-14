@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.config import settings
+from app.services.tracing_service import traced, update_current, content_summary
 from app.downloaders.base import Downloader
 from app.downloaders.ytdlp_downloader import YtdlpDownloader
 from app.llm.prompts import normalize_output_language, normalize_summary_mode
@@ -74,6 +75,7 @@ class NoteService:
             llm_config.model_name,
         )
 
+    @traced("笔记生成全链路", root=True, as_type="chain")
     def generate(
         self,
         video_url: str,
@@ -131,6 +133,7 @@ class NoteService:
                 self.artifact_service.update_status(failed_dir, "failed", str(exc))
             raise
 
+    @traced("笔记生成全链路", root=True, as_type="chain")
     def generate_from_file(
         self,
         file_path: str,
@@ -190,6 +193,7 @@ class NoteService:
                 self.artifact_service.update_status(failed_dir, "failed", str(exc))
             raise
 
+    @traced("笔记生成全链路", root=True, as_type="chain")
     def generate_from_transcript(
         self,
         transcript: TranscriptResult,
@@ -246,6 +250,7 @@ class NoteService:
                 self.artifact_service.update_status(failed_dir, "failed", str(exc))
             raise
 
+    @traced("下载源媒体")
     def _download_audio(self, *, video_url: str, task_dir: Path) -> AudioDownloadResult:
         cached_audio = self.artifact_service.load_audio_meta(task_dir)
         if cached_audio:
@@ -256,6 +261,7 @@ class NoteService:
         self.artifact_service.save_audio_meta(task_dir, audio_meta)
         return audio_meta
 
+    @traced("准备本地媒体")
     def _build_local_audio_meta(self, *, file_path: str, task_id: str, title: str | None) -> AudioDownloadResult:
         audio_title = title or os.path.splitext(os.path.basename(file_path))[0]
         return AudioDownloadResult(
@@ -268,6 +274,7 @@ class NoteService:
             raw_info={},
         )
 
+    @traced("准备上传字幕")
     def _build_transcript_audio_meta(
         self,
         *,
@@ -372,8 +379,11 @@ class NoteService:
 
         audio_meta.file_path = str(final_dir / relative_path)
 
+    @traced("获取识别原文", as_type="chain")
     def _transcribe_audio(self, context: PipelineContext):
         if context.preloaded_transcript is not None:
+            update_current(metadata={"source": "uploaded_transcript", "stt_skipped": True},
+                           output=content_summary(context.preloaded_transcript.full_text))
             self.artifact_service.update_status(context.task_dir, "transcribing", "Using uploaded transcript...")
             self.artifact_service.save_transcript(context.task_dir, context.preloaded_transcript)
             context.step_timings["transcribe"] = 0.0
@@ -394,8 +404,11 @@ class NoteService:
             stt_profile_id=context.stt_profile_id,
         )
         context.step_timings["transcribe"] = time.time() - step_start
+        update_current(output=content_summary(transcript.full_text),
+                       metadata={"segment_count": len(transcript.segments)})
         return transcript
 
+    @traced("生成结构化笔记", as_type="chain")
     def _summarize_audio(self, context: PipelineContext, transcript):
         step_start = time.time()
         self.artifact_service.update_status(context.task_dir, "summarizing", "Generating note...")
@@ -422,6 +435,7 @@ class NoteService:
         context.step_timings["summarize"] = time.time() - step_start
         return markdown
 
+    @traced("处理时间戳与截图")
     def _enrich_markdown_with_media(self, context: PipelineContext, transcript, markdown: str) -> str:
         media_url = ""
         if context.audio_meta.file_path and os.path.exists(context.audio_meta.file_path):

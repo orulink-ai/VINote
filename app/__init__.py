@@ -33,6 +33,11 @@ def create_app() -> FastAPI:
     def startup():
         init_db()
 
+    @app.on_event("shutdown")
+    def shutdown_tracing():
+        from app.services.tracing_service import shutdown
+        shutdown()
+
     from app.routers import vilab
     app.include_router(vilab.router, prefix="/api")
     app.include_router(auth.router, prefix="/api")

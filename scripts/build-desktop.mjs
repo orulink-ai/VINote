@@ -46,6 +46,8 @@ exec(py, ['-m', 'PyInstaller', '--noconfirm', '--onedir', '--name', 'vinote-back
   '--distpath', join(staging, 'dist'), '--workpath', join(staging, 'work'), '--specpath', staging,
   '--paths', root, '--collect-submodules', 'app', '--collect-all', 'yt_dlp', '--collect-all', 'uvicorn',
   '--hidden-import', 'sqlalchemy.dialects.sqlite', '--hidden-import', 'bcrypt', '--collect-all', 'passlib',
+  '--collect-all', 'langfuse', '--collect-submodules', 'opentelemetry',
+  '--copy-metadata', 'opentelemetry-api', '--copy-metadata', 'opentelemetry-sdk',
   '--add-data', `${join(staging, 'desktop-config.json')}${sep}.`,
   '--add-data', `${join(root, 'frontend/dist')}${sep}frontend`, '--add-binary', `${join(staging, 'bin/*')}${sep}bin`,
   join(root, 'scripts/desktop_backend.py')])
