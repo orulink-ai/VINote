@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.config import settings
+from app.services.tracing_service import traced, current_trace_id
 from app.models.audio import AudioDownloadResult
 from app.models.note import NoteResult
 from app.models.transcript import TranscriptResult, TranscriptSegment
@@ -80,6 +81,7 @@ class TaskArtifactService:
     def save_transcript(self, task_dir: Path, transcript: TranscriptResult) -> None:
         self.write_json(task_dir / "transcript.json", asdict(transcript))
 
+    @traced("保存 Markdown 笔记")
     def save_markdown(self, task_dir: Path, markdown: str) -> None:
         self.write_text(task_dir / "note.md", markdown)
 
@@ -162,10 +164,14 @@ class TaskArtifactService:
     def update_status(self, task_dir: Path, status: str, message: str = "") -> None:
         status_file = task_dir / "status.json"
         payload = {"status": status, "message": message}
+        trace_id = current_trace_id()
+        if trace_id:
+            payload["langfuse_trace_id"] = trace_id
         temp_file = status_file.with_suffix(".tmp")
         self.write_json(temp_file, payload)
         temp_file.replace(status_file)
 
+    @traced("保存生成结果")
     def save_result(self, task_dir: Path, result: NoteResult) -> None:
         self.write_json(
             task_dir / "result.json",

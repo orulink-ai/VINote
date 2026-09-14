@@ -4,6 +4,30 @@ import os
 from pathlib import Path
 import secrets
 import sys
+import logging
+
+
+def configure_langfuse(state):
+    """Use a per-install atomic credential set, following ViTalk desktop."""
+    os.environ.setdefault('LANGFUSE_TRACING_ENVIRONMENT', 'production')
+    path = state / 'langfuse.env'
+    if not path.exists():
+        return
+    from dotenv import dotenv_values
+    keys = ('LANGFUSE_BASE_URL', 'LANGFUSE_PUBLIC_KEY', 'LANGFUSE_SECRET_KEY')
+    try:
+        values = dotenv_values(path)
+        for key in keys:
+            os.environ[key] = (values.get(key) or '').strip()
+        complete = all(os.environ[key] for key in keys)
+        enabled = (values.get('LANGFUSE_ENABLED') or 'true').strip().lower() in ('true', '1', 'yes', 'on')
+        os.environ['LANGFUSE_ENABLED'] = 'true' if complete and enabled else 'false'
+        os.environ['LANGFUSE_CAPTURE_CONTENT'] = values.get('LANGFUSE_CAPTURE_CONTENT') or 'false'
+        if not complete:
+            logging.warning('Langfuse configuration incomplete; tracing disabled')
+    except Exception:
+        os.environ['LANGFUSE_ENABLED'] = 'false'
+        logging.warning('Langfuse configuration unreadable; tracing disabled')
 
 
 def watch_parent(parent_pid):
@@ -45,6 +69,7 @@ def configure():
         secret_file.chmod(0o600)
     os.environ.update(json.loads(secret_file.read_text(encoding='utf-8')))
     os.environ.update(config)
+    configure_langfuse(state)
     os.environ.update({
         'HOST': '127.0.0.1', 'DATABASE_URL': f'sqlite:///{(state / "vinote.db").as_posix()}',
         'DATA_DIR': str(state / 'data'), 'OUTPUT_DIR': str(state / 'output'),

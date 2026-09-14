@@ -9,6 +9,8 @@ import httpx
 from openai import OpenAI
 
 from app.config import settings
+from app.services.tracing_service import (traced_generation, record_usage, traced,
+                                          record_model_parameters, observation)
 from app.llm.anthropic_compat import post_anthropic_compatible
 from app.llm.base import LLMSummarizer, SummaryProgressCallback
 from app.llm.prompts import (
@@ -26,6 +28,10 @@ logger = logging.getLogger(__name__)
 
 
 class _BasePromptLLM(LLMSummarizer):
+    def _complete_stage(self, *, stage, metadata=None, **prompts):
+        with observation(stage, as_type="chain", metadata=metadata):
+            return self._complete(**prompts)
+
     def _complete(self, *, system_prompt: str, user_prompt: str) -> str:
         raise NotImplementedError
 
@@ -100,6 +106,7 @@ class _BasePromptLLM(LLMSummarizer):
             or total_chars > max(2000, int(settings.summary_default_max_chars))
         )
 
+    @traced("一次性总结", as_type="chain")
     def _summarize_one_shot(
         self,
         *,
@@ -115,6 +122,7 @@ class _BasePromptLLM(LLMSummarizer):
             user_prompt=user_prompt,
         )
 
+    @traced("分块总结与全局合并", as_type="chain")
     def _summarize_hierarchical(
         self,
         *,
@@ -142,7 +150,9 @@ class _BasePromptLLM(LLMSummarizer):
                 progress_callback(f"Generating structured chunk notes {index}/{total_chunks}...")
 
             chunk_notes.append(
-                self._complete(
+                self._complete_stage(
+                    stage="总结字幕分块",
+                    metadata={"chunk_index": index, "chunk_total": total_chunks},
                     system_prompt=build_chunk_system_prompt(output_language),
                     user_prompt=build_chunk_user_prompt(
                         title=title,
@@ -163,7 +173,8 @@ class _BasePromptLLM(LLMSummarizer):
             f"## Chunk Draft {index}\n{chunk_note.strip()}"
             for index, chunk_note in enumerate(chunk_notes, start=1)
         )
-        return self._complete(
+        return self._complete_stage(
+            stage="合并分块笔记",
             system_prompt=build_merge_system_prompt(output_language),
             user_prompt=build_merge_user_prompt(
                 title=title,
@@ -226,7 +237,9 @@ class OpenAILLM(_BasePromptLLM):
         self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=300.0)
         logger.info("[LLM] init openai-compatible model=%s base_url=%s", model, base_url)
 
+    @traced_generation
     def _complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        record_model_parameters({"temperature": self.temperature})
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -235,6 +248,7 @@ class OpenAILLM(_BasePromptLLM):
             ],
             temperature=self.temperature,
         )
+        record_usage(getattr(response, "usage", None))
         return (response.choices[0].message.content or "").strip()
 
 
@@ -261,7 +275,9 @@ class AnthropicLLM(_BasePromptLLM):
             return f"{self.base_url}/messages"
         return f"{self.base_url}/v1/messages"
 
+    @traced_generation
     def _complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        record_model_parameters({"temperature": self.temperature, "max_tokens": 8192})
         response = post_anthropic_compatible(
             url=self._messages_url(),
             api_key=self.api_key,
@@ -275,6 +291,7 @@ class AnthropicLLM(_BasePromptLLM):
             timeout=300.0,
         )
         payload = response.json()
+        record_usage(payload.get("usage"))
         for block in payload.get("content", []):
             if isinstance(block, dict) and block.get("type") == "text":
                 return (block.get("text") or "").strip()
@@ -309,7 +326,9 @@ class AzureOpenAILLM(_BasePromptLLM):
             f"?api-version={settings.azure_openai_api_version}"
         )
 
+    @traced_generation
     def _complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        record_model_parameters({"temperature": self.temperature, "max_tokens": 8192})
         response = httpx.post(
             self._chat_url(),
             headers={"Content-Type": "application/json", "api-key": self.api_key},
@@ -325,4 +344,5 @@ class AzureOpenAILLM(_BasePromptLLM):
         )
         response.raise_for_status()
         payload = response.json()
+        record_usage(payload.get("usage"))
         return (payload["choices"][0]["message"]["content"] or "").strip()

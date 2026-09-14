@@ -14,6 +14,7 @@ yt-dlp==2026.6.9
 
 # LLM integration (OpenAI-compatible + Anthropic for MiniMax)
 openai==1.58.1
+langfuse==4.15.2
 
 # HTTP client
 httpx==0.28.1
