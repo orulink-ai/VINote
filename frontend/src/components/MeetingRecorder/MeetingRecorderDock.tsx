@@ -6,13 +6,14 @@ import { useAudioRecorder } from '../../hooks/useAudioRecorder'
 import {
   closeCurrentRecorderWindow,
   emitRecorderOpenPanel,
+  emitRecorderWindowReady,
   emitRecorderWindowState,
   isRecorderWindowRoute,
   isTauriRuntime,
   listenDesktopNavigation,
   listenRecorderOpenPanel,
   listenRecorderWindowState,
-  openRecorderWindow,
+  openRecorderWindowWhenReady,
   setRecorderActive,
   setRecorderWindowLayout,
   setRecorderWindowSize,
@@ -90,6 +91,7 @@ function formatRecorderFailure(error: unknown, copy: ReturnType<typeof useI18n>[
   if (normalized.includes('microphone_unsupported')) return copy.unsupported
   if (normalized.includes('microphone_no-device') || normalized.includes('microphone_no_audio')) return copy.microphoneNoAudio
   if (normalized.includes('microphone_unavailable')) return copy.microphoneUnavailable
+  if (normalized.includes('recorder_window_load_timeout')) return copy.windowLoadFailed
   return message || copy.unknownError
 }
 
@@ -199,6 +201,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   } = useMeetingRecorderStore()
   const [position, setPosition] = useState(getInitialPosition)
   const [hasCustomPosition, setHasCustomPosition] = useState(false)
+  const [useInlineDesktopRecorder, setUseInlineDesktopRecorder] = useState(false)
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null)
   const minimizedPointerRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number; dragging: boolean } | null>(null)
   const suppressRestoreRef = useRef(false)
@@ -207,6 +210,11 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   const draftTitleRef = useRef('')
   const recordingIdRef = useRef<string | null>(null)
   const finishInFlightRef = useRef(false)
+
+  useEffect(() => {
+    if (!isRecorderWindow) return
+    void emitRecorderWindowReady()
+  }, [isRecorderWindow])
 
   useEffect(() => {
     void loadModelProfiles()
@@ -405,37 +413,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     void setRecorderWindowLayout('expanded')
   }
 
-  const handleOpenLauncher = () => {
-    draftNoteIdRef.current = null
-    draftTitleRef.current = ''
-    recordingIdRef.current = null
-    resetSession()
-    setPosition(getInitialPosition())
-    setHasCustomPosition(false)
-    if (isTauriRuntime() && !isRecorderWindow) {
-      void openRecorderWindow()
-        .then(() => emitRecorderOpenPanel())
-        .catch((windowError) => {
-          failStage('uploading', formatRecorderFailure(windowError, recorderCopy))
-        })
-      closePanel()
-      return
-    }
-    openPanel()
-    setPhase('idle')
-  }
-
-  const handleStart = async () => {
-    if (isTauriRuntime() && !isRecorderWindow) {
-      try {
-        await openRecorderWindow()
-        closePanel()
-      } catch (windowError) {
-        failStage('uploading', formatRecorderFailure(windowError, recorderCopy))
-      }
-      return
-    }
-
+  const startLocalRecording = async () => {
     startedAtRef.current = new Date()
     setPhase('requesting')
     try {
@@ -444,6 +422,47 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     } catch (startError) {
       failStage('uploading', formatRecorderFailure(startError, recorderCopy))
     }
+  }
+
+  const handleOpenLauncher = async () => {
+    draftNoteIdRef.current = null
+    draftTitleRef.current = ''
+    recordingIdRef.current = null
+    resetSession()
+    setUseInlineDesktopRecorder(false)
+    setPosition(getInitialPosition())
+    setHasCustomPosition(false)
+    if (isTauriRuntime() && !isRecorderWindow) {
+      try {
+        await openRecorderWindowWhenReady()
+        await emitRecorderOpenPanel()
+      } catch {
+        // WebView2 can fail to load a dynamically-created window in packaged
+        // builds. Fall back to the proven in-window recorder instead of
+        // leaving the user without a microphone control.
+        setUseInlineDesktopRecorder(true)
+        openPanel()
+        await startLocalRecording()
+      }
+      return
+    }
+    openPanel()
+    setPhase('idle')
+  }
+
+  const handleStart = async () => {
+    if (isTauriRuntime() && !isRecorderWindow && !useInlineDesktopRecorder) {
+      try {
+        await openRecorderWindowWhenReady()
+        closePanel()
+      } catch (windowError) {
+        failStage('uploading', formatRecorderFailure(windowError, recorderCopy))
+        closePanel()
+      }
+      return
+    }
+
+    await startLocalRecording()
   }
 
   useEffect(() => {
@@ -749,7 +768,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         ? `${recorderCopy.processingHint}: ${statusLabel}`
         : statusLabel
   const dockedStyle = hasCustomPosition ? { left: position.x, top: position.y } : { right: EDGE_PADDING, bottom: EDGE_PADDING }
-  const shouldRenderRecorderSurface = isPanelOpen && !isDesktopMainWindow
+  const shouldRenderRecorderSurface = isPanelOpen && (!isDesktopMainWindow || useInlineDesktopRecorder)
   const minimizedContainerClass = clsx(
     'inline-flex h-12 w-[320px] items-center gap-3 rounded-full border border-white/80 bg-white px-3.5 pr-4 text-base font-medium text-[#111827]',
     isRecorderWindow ? '' : 'shadow-[0_8px_22px_rgba(15,23,42,0.14)]',

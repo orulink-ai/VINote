@@ -47,6 +47,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             request_microphone_access,
             open_recorder_window,
+            close_recorder_window,
             set_recorder_active,
             show_main_window,
             set_recorder_window_layout,
@@ -121,7 +122,11 @@ async fn open_recorder_window(app: AppHandle) -> Result<String, String> {
         let _ = window.show();
         let _ = window.set_focus();
         let _ = window.set_always_on_top(true);
-        return Ok("existing".into());
+        return Ok(if app.state::<RecorderRuntimeState>().is_active() {
+            "active"
+        } else {
+            "existing"
+        }.into());
     }
 
     #[cfg(debug_assertions)]
@@ -158,6 +163,18 @@ async fn open_recorder_window(app: AppHandle) -> Result<String, String> {
     let window = builder.build().map_err(|error| error.to_string())?;
     let _ = window.set_focus();
     Ok("created".into())
+}
+
+#[tauri::command]
+fn close_recorder_window(
+    app: AppHandle,
+    state: State<'_, RecorderRuntimeState>,
+) -> Result<(), String> {
+    state.set_active(false);
+    if let Some(window) = app.get_webview_window(RECORDER_WINDOW_LABEL) {
+        window.close().map_err(|error| error.to_string())?;
+    }
+    Ok(())
 }
 
 fn apply_recorder_window_layout(window: &tauri::WebviewWindow, layout: &str) -> Result<(), String> {

@@ -11,7 +11,8 @@ The web UI must not show a pop-out/export window control or an inside/outside mo
 The Tauri desktop app opens a native recorder window by default:
 
 - the idle main app shows only the lower-right recorder launcher;
-- clicking the launcher in the main app opens one native `recorder-window` (or re-focuses a hidden one and re-opens its panel) instead of showing an expanded recorder overlay or starting `MediaRecorder` in the main window;
+- clicking the launcher in the main app opens one native `recorder-window` (or re-focuses an existing one); the main-window launcher remains available until the recorder React page emits its ready event;
+- if a packaged WebView does not become ready within the bounded startup timeout, VINote closes that unusable child window and automatically falls back to the in-window recorder so microphone capture remains available;
 - duplicate Start clicks focus the existing recorder window rather than creating duplicates;
 - the recorder window is small, borderless, skipped from taskbar, positioned near the screen edge/top, draggable by native window movement from the recorder surface, and configured with `always_on_top`;
 - the expanded native window starts at `360x132` px and grows vertically (up to `400` px) when the failed/success state adds the re-record or view-note action row, measured by a `ResizeObserver` in the recorder panel; the minimized native window is fixed to `320x48` px and contains only the compact pill;

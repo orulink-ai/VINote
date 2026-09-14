@@ -7,6 +7,8 @@ import type { MeetingRecorderExternalSnapshot } from '../stores/meetingRecorderS
 const RECORDER_EVENT = 'meeting-recorder-state'
 const NAVIGATE_EVENT = 'vinote-navigate'
 const RECORDER_OPEN_PANEL_EVENT = 'vinote-recorder-open-panel'
+const RECORDER_READY_EVENT = 'vinote-recorder-ready'
+const RECORDER_READY_TIMEOUT_MS = 8000
 
 export { isTauriRuntime } from './desktopMicrophonePermission'
 
@@ -18,6 +20,56 @@ export function isRecorderWindowRoute() {
 export async function openRecorderWindow() {
   if (!isTauriRuntime()) return 'web'
   return invoke<string>('open_recorder_window')
+}
+
+export async function closeRecorderWindow() {
+  if (!isTauriRuntime()) return
+  await invoke('close_recorder_window')
+}
+
+/**
+ * A native window being created is not the same as its React application being
+ * usable. This matters in packaged builds, where the recorder loads from the
+ * bundled backend instead of the Vite development server. Keep the launcher
+ * visible until the recorder page confirms that it mounted successfully.
+ */
+export async function openRecorderWindowWhenReady(timeoutMs = RECORDER_READY_TIMEOUT_MS) {
+  if (!isTauriRuntime()) return 'web'
+
+  let unlisten: UnlistenFn | undefined
+  let timeout: ReturnType<typeof window.setTimeout> | undefined
+  let resolveReady: (() => void) | undefined
+  let rejectReady: ((error: Error) => void) | undefined
+  const ready = new Promise<void>((resolve, reject) => {
+    resolveReady = resolve
+    rejectReady = reject
+  })
+  // Attach immediately: native creation can take longer than the ready timeout.
+  void ready.catch(() => undefined)
+
+  try {
+    // Register first so a fast packaged WebView cannot emit ready between the
+    // native create call and listener setup.
+    unlisten = await listen(RECORDER_READY_EVENT, () => resolveReady?.())
+    timeout = window.setTimeout(
+      () => rejectReady?.(new Error('recorder_window_load_timeout')),
+      timeoutMs,
+    )
+    const result = await openRecorderWindow()
+    if (result === 'active') return result
+    await ready
+    return result
+  } catch (error) {
+    try {
+      await closeRecorderWindow()
+    } catch {
+      // The failed window may never have been created.
+    }
+    throw error
+  } finally {
+    if (timeout) window.clearTimeout(timeout)
+    unlisten?.()
+  }
 }
 
 export async function setRecorderActive(active: boolean) {
@@ -86,6 +138,11 @@ export async function listenDesktopNavigation(
 export async function emitRecorderOpenPanel() {
   if (!isTauriRuntime() || isRecorderWindowRoute()) return
   await emit(RECORDER_OPEN_PANEL_EVENT)
+}
+
+export async function emitRecorderWindowReady() {
+  if (!isTauriRuntime() || !isRecorderWindowRoute()) return
+  await emit(RECORDER_READY_EVENT)
 }
 
 export async function listenRecorderOpenPanel(
