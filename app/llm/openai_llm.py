@@ -44,7 +44,11 @@ class _BasePromptLLM(LLMSummarizer):
         return f"{minutes:02d}:{secs:02d}"
 
     def _build_segment_text(self, segments: List[TranscriptSegment]) -> str:
-        return "\n".join(f"{self._format_time(seg.start)} - {seg.text}" for seg in segments)
+        return "\n".join(
+            f"{self._format_time(seg.start)}–{self._format_time(seg.end)} - "
+            f"{('[' + (seg.speaker_label or seg.speaker_id) + '] ') if seg.speaker_id else ''}{seg.text}"
+            for seg in segments
+        )
 
     def _build_user_prompt(
         self,

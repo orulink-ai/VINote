@@ -1,3 +1,6 @@
+import { openMeetingController, publishMeetingState, listenMeetingActions, type MeetingControlAction } from '../../lib/meetingController'
+import { useAuthStore } from '../../stores/authStore'
+import { DEFAULT_CAPTURE_OPTIONS, START_MEETING_EVENT, type MeetingCaptureOptions } from '../../lib/meetingCapture'
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { ChevronDown, Loader2, Mic, Minus, Pause, Play, RotateCcw, Square, X } from 'lucide-react'
 import clsx from 'clsx'
@@ -5,7 +8,6 @@ import { useNavigate } from 'react-router-dom'
 import { useAudioRecorder } from '../../hooks/useAudioRecorder'
 import {
   closeCurrentRecorderWindow,
-  emitRecorderOpenPanel,
   emitRecorderWindowReady,
   emitRecorderWindowState,
   isRecorderWindowRoute,
@@ -29,7 +31,7 @@ import {
   submitMeetingRecording,
 } from '../../lib/meetingGeneration'
 import { useI18n } from '../../lib/i18n'
-import { deleteRecordedAudio, generateRecordingId, getRecordedAudio, saveRecordedAudio } from '../../lib/audioStorage'
+import { deletePendingMeeting, savePendingMeeting, type PendingMeeting, deleteRecordedAudio, generateRecordingId, getRecordedAudio, saveRecordedAudio } from '../../lib/audioStorage'
 import { useMeetingRecorderStore, type MeetingRecorderPhase, type MeetingRecorderStage } from '../../stores/meetingRecorderStore'
 import { useModelProfileStore } from '../../stores/modelProfileStore'
 import { useNoteLibraryStore } from '../../stores/noteLibraryStore'
@@ -159,12 +161,15 @@ interface MeetingRecorderDockProps {
 export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockProps) {
   const navigate = useNavigate()
   const recorder = useAudioRecorder()
+  const { user } = useAuthStore()
+  const captureOptionsRef = useRef<MeetingCaptureOptions>(DEFAULT_CAPTURE_OPTIONS)
   const { copy, language } = useI18n()
   const recorderCopy = copy.meetingRecorder
   const isRecorderWindow = isRecorderWindowRoute()
   const isDesktopMainWindow = isTauriRuntime() && !isRecorderWindow
   const { saveNote, updateNote, deleteNote } = useNoteLibraryStore()
   const { currentWorkspace } = useTeamStore()
+  const captureWorkspaceRef = useRef(currentWorkspace)
   const { selectedProfileId: selectedModelProfileId, loadProfiles: loadModelProfiles } = useModelProfileStore()
   const { loadProfiles: loadSTTProfiles } = useSTTProfileStore()
   const {
@@ -293,11 +298,11 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   }, [elapsedSeconds, error, isMinimized, isPanelOpen, isRecorderWindow, noteId, notification, phase, taskId])
 
   useEffect(() => {
-    if (!isRecorderWindow) return
+    if (!isRecorderWindow && !useInlineDesktopRecorder) return
     const shouldProtectRecorder =
-      NATIVE_PROTECTED_PHASES.includes(phase) || (phase === 'failed' && Boolean(recordedAudio))
+      NATIVE_PROTECTED_PHASES.includes(phase) || Boolean(recordedAudio)
     void setRecorderActive(shouldProtectRecorder)
-  }, [isRecorderWindow, phase, recordedAudio])
+  }, [isRecorderWindow, useInlineDesktopRecorder, phase, recordedAudio])
 
   useEffect(() => {
     if (!isRecorderWindow) return
@@ -307,9 +312,9 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   }, [isRecorderWindow])
 
   useEffect(() => {
-    if (isDesktopMainWindow) return
+    if (isDesktopMainWindow && !useInlineDesktopRecorder) return
     setElapsedSeconds(recorder.elapsedSeconds)
-  }, [isDesktopMainWindow, recorder.elapsedSeconds, setElapsedSeconds])
+  }, [isDesktopMainWindow, useInlineDesktopRecorder, recorder.elapsedSeconds, setElapsedSeconds])
 
   useEffect(() => {
     if (!isRecorderWindow) return
@@ -413,42 +418,21 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     void setRecorderWindowLayout('expanded')
   }
 
-  const startLocalRecording = async () => {
+  const startLocalRecording = async (options?: MeetingCaptureOptions) => {
     startedAtRef.current = new Date()
     setPhase('requesting')
     try {
-      await recorder.start()
-      if (useMeetingRecorderStore.getState().phase === 'requesting') setPhase('recording')
+      await recorder.start(options)
+      if (useMeetingRecorderStore.getState().phase === 'requesting') {
+        setPhase('recording')
+        if (options && isTauriRuntime()) void openMeetingController().catch(() => undefined)
+      }
     } catch (startError) {
       failStage('uploading', formatRecorderFailure(startError, recorderCopy))
     }
   }
 
-  const handleOpenLauncher = async () => {
-    draftNoteIdRef.current = null
-    draftTitleRef.current = ''
-    recordingIdRef.current = null
-    resetSession()
-    setUseInlineDesktopRecorder(false)
-    setPosition(getInitialPosition())
-    setHasCustomPosition(false)
-    if (isTauriRuntime() && !isRecorderWindow) {
-      try {
-        await openRecorderWindowWhenReady()
-        await emitRecorderOpenPanel()
-      } catch {
-        // WebView2 can fail to load a dynamically-created window in packaged
-        // builds. Fall back to the proven in-window recorder instead of
-        // leaving the user without a microphone control.
-        setUseInlineDesktopRecorder(true)
-        openPanel()
-        await startLocalRecording()
-      }
-      return
-    }
-    openPanel()
-    setPhase('idle')
-  }
+  const handleOpenLauncher = () => navigate('/meetings')
 
   const handleStart = async () => {
     if (isTauriRuntime() && !isRecorderWindow && !useInlineDesktopRecorder) {
@@ -502,6 +486,9 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       recordingIdRef.current = persistedId
       setRecordingId(persistedId)
       await saveRecordedAudio(persistedId, audioBlob)
+      await savePendingMeeting({ id: persistedId, ownerId: user?.id || '', workspace: captureWorkspaceRef.current,
+        options: captureOptionsRef.current, startedAt: (startedAtRef.current || new Date()).toISOString(),
+        elapsedSeconds: useMeetingRecorderStore.getState().elapsedSeconds })
       setPhase('stopped')
     } catch (stopError) {
       const failedStage = stageFromError(stopError)
@@ -519,6 +506,9 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     const activeSTTProfileId = sttProfileIdOverride ?? useSTTProfileStore.getState().selectedProfileId
     const response = await submitMeetingRecording({
       audioBlob,
+      title: captureOptionsRef.current.title,
+      diarize: captureOptionsRef.current.diarize,
+      speakerCount: captureOptionsRef.current.speakerCount,
       startedAt,
       outputLanguage: language,
       summaryMode: 'default',
@@ -529,13 +519,60 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     await createMeetingDraft(response.task_id, audioBlob, startedAt)
     const note = await completeMeetingRecordingGeneration({
       taskId: response.task_id,
-      workspace: currentWorkspace,
+      workspace: captureWorkspaceRef.current,
       saveNote: saveCompletedMeetingNote,
       onStage: setPhase,
     })
     setGeneratedNote({ title: note.title, markdown: note.content, taskId: response.task_id })
+    if (recordingIdRef.current) await deletePendingMeeting(recordingIdRef.current)
     complete(note.id)
   }
+
+  useEffect(() => {
+    if (isRecorderWindow) return
+    const startMeeting = (event: Event) => {
+      if (ACTIVE_RECORDING_PHASES.includes(useMeetingRecorderStore.getState().phase) || useMeetingRecorderStore.getState().hasRecoverableRecording) return
+      captureWorkspaceRef.current = currentWorkspace
+      captureOptionsRef.current = (event as CustomEvent<MeetingCaptureOptions>).detail
+      draftNoteIdRef.current = null
+      recordingIdRef.current = null
+      resetSession()
+      setUseInlineDesktopRecorder(true)
+      openPanel()
+      void startLocalRecording(captureOptionsRef.current)
+    }
+    const restore = (event: Event) => {
+      if (useMeetingRecorderStore.getState().hasRecoverableRecording) return
+      const pending = (event as CustomEvent<PendingMeeting>).detail
+      if (pending.ownerId !== user?.id) return
+      void getRecordedAudio(pending.id).then(blob => {
+        if (!blob) { failStage('uploading', '找不到本地录制文件。'); return }
+        resetSession()
+        captureOptionsRef.current = pending.options
+        captureWorkspaceRef.current = pending.workspace
+        startedAtRef.current = new Date(pending.startedAt)
+        recordingIdRef.current = pending.id
+        draftNoteIdRef.current = null
+        setUseInlineDesktopRecorder(true)
+        setRecordingId(pending.id)
+        setRecordedAudio(blob)
+        setElapsedSeconds(pending.elapsedSeconds)
+        setPhase('stopped')
+        openPanel()
+      })
+    }
+    window.addEventListener(START_MEETING_EVENT, startMeeting)
+    window.addEventListener('vinote-restore-meeting', restore)
+    return () => { window.removeEventListener(START_MEETING_EVENT, startMeeting); window.removeEventListener('vinote-restore-meeting', restore) }
+  })
+
+  useEffect(() => {
+    if (recorder.sourceEnded && (phase === 'recording' || phase === 'paused')) void handleStop()
+  }, [recorder.sourceEnded, phase])
+
+  useEffect(() => {
+    useMeetingRecorderStore.setState({ preview: recorder.preview, sizeBytes: recorder.sizeBytes })
+  }, [recorder.preview, recorder.sizeBytes])
 
   const handleGenerate = async () => {
     if (phase !== 'stopped' || !recordedAudio || finishInFlightRef.current) return
@@ -543,14 +580,16 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     try {
       await generateFromAudio(recordedAudio)
     } catch (error) {
-      failStage(stageFromError(error), formatRecorderFailure(error, recorderCopy))
+      const message = formatRecorderFailure(error, recorderCopy)
+      await markDraftFailed(stageFromError(error), message)
+      failStage(stageFromError(error), message)
     } finally {
       finishInFlightRef.current = false
     }
   }
 
   const createMeetingDraft = async (draftTaskId: string, audioBlob: Blob, startedAt: Date) => {
-    const title = createMeetingRecordingTitle(startedAt, language)
+    const title = captureOptionsRef.current.title.trim() || createMeetingRecordingTitle(startedAt, language)
     draftTitleRef.current = title
     const body = buildMeetingDraftContent({
       taskId: draftTaskId,
@@ -565,8 +604,8 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       `${body}\n\n<!-- recording_id: ${recordingIdRef.current || ''} -->`,
       undefined,
       draftTaskId,
-      currentWorkspace,
-      MEETING_NOTE_SOURCE_TYPE,
+      captureWorkspaceRef.current,
+      audioBlob.type.startsWith('video/') ? 'meeting_video' : MEETING_NOTE_SOURCE_TYPE,
       'pending',
     )
     if (draft) draftNoteIdRef.current = draft.id
@@ -577,7 +616,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       const updated = await updateNote(draftNoteIdRef.current, title, content, 'done')
       if (updated) return updated
     }
-    return saveNote(title, content, undefined, useMeetingRecorderStore.getState().taskId || undefined, currentWorkspace, MEETING_NOTE_SOURCE_TYPE, 'done')
+    return saveNote(title, content, undefined, useMeetingRecorderStore.getState().taskId || undefined, captureWorkspaceRef.current, captureOptionsRef.current.screen ? 'meeting_video' : MEETING_NOTE_SOURCE_TYPE, 'done')
   }
 
   const markDraftFailed = async (failedStage: MeetingRecorderStage, failureMessage: string) => {
@@ -619,7 +658,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       // existing note text again without re-running the pipeline.
       if (state.failedStage === 'saving' && state.generatedNote) {
         setPhase('saving')
-        const note = await saveNote(state.generatedNote.title, state.generatedNote.markdown, undefined, state.generatedNote.taskId, currentWorkspace, MEETING_NOTE_SOURCE_TYPE, 'done')
+        const note = await saveNote(state.generatedNote.title, state.generatedNote.markdown, undefined, state.generatedNote.taskId, captureWorkspaceRef.current, captureOptionsRef.current.screen ? 'meeting_video' : MEETING_NOTE_SOURCE_TYPE, 'done')
         if (!note) throw new MeetingGenerationError('saving', recorderCopy.saveFailed)
         complete(note.id)
         return
@@ -722,6 +761,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     recorder.reset()
     if (persistedRecordingId) {
       await deleteRecordedAudio(persistedRecordingId)
+      await deletePendingMeeting(persistedRecordingId)
     }
     if (draftNoteId) {
       await deleteNote(draftNoteId)
@@ -738,6 +778,30 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     }
   }
 
+  const controlsRef = useRef<(action: MeetingControlAction) => void>(() => undefined)
+  controlsRef.current = action => {
+    const state = useMeetingRecorderStore.getState()
+    if (action === 'sync') void publishMeetingState({ phase: state.phase, elapsedSeconds: state.elapsedSeconds, noteId: state.noteId, error: state.error })
+    if (action === 'pause') handlePause()
+    if (action === 'resume') handleResume()
+    if (action === 'stop') void handleStop()
+    if (action === 'generate') void handleGenerate()
+    if (action === 'retry') void handleRetry()
+  }
+  useEffect(() => {
+    if (!isTauriRuntime() || isRecorderWindow) return
+    let disposed = false
+    let unsubscribe: (() => void) | undefined
+    void listenMeetingActions(action => controlsRef.current(action)).then(cleanup => {
+      if (disposed) cleanup()
+      else unsubscribe = cleanup
+    })
+    return () => { disposed = true; unsubscribe?.() }
+  }, [isRecorderWindow])
+  useEffect(() => {
+    if (useInlineDesktopRecorder) void publishMeetingState({ phase, elapsedSeconds, noteId, error })
+  }, [useInlineDesktopRecorder, phase, elapsedSeconds, noteId, error])
+
   const handleReRecord = () => {
     const previousRecordingId = recordingIdRef.current
     recorder.reset()
@@ -745,6 +809,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     void setRecorderWindowLayout('expanded')
     if (previousRecordingId) {
       void deleteRecordedAudio(previousRecordingId)
+      void deletePendingMeeting(previousRecordingId)
     }
     recordingIdRef.current = null
     resetSession()

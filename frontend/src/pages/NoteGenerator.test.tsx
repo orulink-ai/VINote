@@ -16,6 +16,7 @@ vi.mock('../lib/api', () => ({
 
 vi.mock('react-router-dom', () => ({
   useNavigate: () => navigateMock,
+  useSearchParams: () => [new URLSearchParams()],
 }))
 
 vi.mock('../stores/languageStore', () => ({

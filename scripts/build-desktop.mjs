@@ -22,6 +22,7 @@ if (spawnSync(py, ['-c', 'import PyInstaller'], { stdio: 'ignore' }).status !== 
 }
 const staging = join(root, '.desktop-build')
 mkdirSync(join(staging, 'bin'), { recursive: true })
+exec(py, [join(root, 'scripts/setup_diarization.py'), '--models-dir', join(staging, 'models/diarization')])
 const publicConfig = JSON.parse(readFileSync(join(root, 'config/desktop-public.json'), 'utf8'))
 const config = {
   VILAB_SERVER_URL: process.env.VINOTE_RELEASE_VILAB_SERVER_URL || 'http://192.168.1.143:9876',
@@ -46,9 +47,11 @@ exec(py, ['-m', 'PyInstaller', '--noconfirm', '--onedir', '--name', 'vinote-back
   '--distpath', join(staging, 'dist'), '--workpath', join(staging, 'work'), '--specpath', staging,
   '--paths', root, '--collect-submodules', 'app', '--collect-all', 'yt_dlp', '--collect-all', 'uvicorn',
   '--hidden-import', 'sqlalchemy.dialects.sqlite', '--hidden-import', 'bcrypt', '--collect-all', 'passlib',
+  '--collect-all', 'sherpa_onnx', '--collect-all', 'numpy',
   '--collect-all', 'langfuse', '--collect-submodules', 'opentelemetry',
   '--copy-metadata', 'opentelemetry-api', '--copy-metadata', 'opentelemetry-sdk',
   '--add-data', `${join(staging, 'desktop-config.json')}${sep}.`,
+  '--add-data', `${join(staging, 'models')}${sep}models`,
   '--add-data', `${join(root, 'frontend/dist')}${sep}frontend`, '--add-binary', `${join(staging, 'bin/*')}${sep}bin`,
   join(root, 'scripts/desktop_backend.py')])
 exec(join(staging, 'dist/vinote-backend', process.platform === 'win32' ? 'vinote-backend.exe' : 'vinote-backend'), ['--smoke-test'], {

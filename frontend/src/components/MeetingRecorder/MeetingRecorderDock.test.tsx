@@ -1,3 +1,4 @@
+import { START_MEETING_EVENT, DEFAULT_CAPTURE_OPTIONS } from '../../lib/meetingCapture'
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
@@ -114,6 +115,11 @@ vi.mock('../../lib/meetingGeneration', async (importOriginal) => {
 })
 
 vi.mock('../../lib/desktopRecorderWindow', () => desktopRecorderWindowMock)
+vi.mock('../../lib/meetingController', () => ({
+  openMeetingController: vi.fn().mockResolvedValue(undefined),
+  publishMeetingState: vi.fn().mockResolvedValue(undefined),
+  listenMeetingActions: vi.fn().mockResolvedValue(() => {}),
+}))
 
 function renderDock(props?: { autoStart?: boolean }) {
   return render(
@@ -123,6 +129,13 @@ function renderDock(props?: { autoStart?: boolean }) {
       </I18nProvider>
     </MemoryRouter>,
   )
+}
+
+vi.mock('../../lib/audioStorage', async (importOriginal) => ({ ...(await importOriginal<object>()), savePendingMeeting: vi.fn(), deletePendingMeeting: vi.fn() }))
+
+async function startMeeting() {
+  act(() => { window.dispatchEvent(new CustomEvent(START_MEETING_EVENT, { detail: DEFAULT_CAPTURE_OPTIONS })) })
+  await waitFor(() => expect(audioRecorderMock.start).toHaveBeenCalled())
 }
 
 describe('MeetingRecorderDock', () => {
@@ -157,27 +170,17 @@ describe('MeetingRecorderDock', () => {
     meetingGenerationMock.fetchMeetingAudioBlob.mockResolvedValue(new Blob(['audio-restored'], { type: 'audio/webm' }))
   })
 
-  it('opens a ready web overlay without starting MediaRecorder until Start is clicked', async () => {
+  it('routes the microphone shortcut to meeting setup without starting capture', async () => {
     renderDock()
-
     await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
-
+    expect(navigate).toHaveBeenCalledWith('/meetings')
     expect(audioRecorderMock.start).not.toHaveBeenCalled()
-    expect(screen.getByRole('region', { name: '会议录音' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '弹出独立录音窗口' })).not.toBeInTheDocument()
-
-    await userEvent.click(screen.getByRole('button', { name: '开始' }))
-
-    expect(audioRecorderMock.start).toHaveBeenCalledTimes(1)
-    expect(screen.getByText('录音中')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '停止' })).toBeEnabled()
   })
 
   it('allows stopping directly while recording', async () => {
     renderDock()
 
-    await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
-    await userEvent.click(screen.getByRole('button', { name: '开始' }))
+    await startMeeting()
 
     const stopWhileRecording = screen.getByRole('button', { name: '停止' })
     expect(stopWhileRecording).toBeEnabled()
@@ -187,28 +190,13 @@ describe('MeetingRecorderDock', () => {
     expect(meetingGenerationMock.submitMeetingRecording).not.toHaveBeenCalled()
   })
 
-  it('opens the native recorder window instead of recording in the desktop main window', async () => {
+  it('starts desktop capture in the initiating window to retain screen-picker activation', async () => {
     desktopRecorderWindowMock.isTauriRuntime.mockReturnValue(true)
     renderDock()
-
-    await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
-
-    expect(desktopRecorderWindowMock.openRecorderWindowWhenReady).toHaveBeenCalledTimes(1)
-    expect(audioRecorderMock.start).not.toHaveBeenCalled()
-    expect(screen.queryByRole('region', { name: '会议录音' })).not.toBeInTheDocument()
-  })
-
-  it('falls back to the main-window recorder when the packaged recorder window does not become ready', async () => {
-    desktopRecorderWindowMock.isTauriRuntime.mockReturnValue(true)
-    desktopRecorderWindowMock.openRecorderWindowWhenReady.mockRejectedValueOnce(new Error('recorder_window_load_timeout'))
-    renderDock()
-
-    await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
-
-    await waitFor(() => expect(audioRecorderMock.start).toHaveBeenCalledTimes(1))
+    await startMeeting()
+    expect(audioRecorderMock.start).toHaveBeenCalledWith(DEFAULT_CAPTURE_OPTIONS)
+    expect(desktopRecorderWindowMock.openRecorderWindowWhenReady).not.toHaveBeenCalled()
     expect(screen.getByRole('region', { name: '会议录音' })).toBeInTheDocument()
-    expect(screen.getByText('录音中')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '开始会议录音' })).not.toBeInTheDocument()
   })
 
   it('auto-starts recording when mounted inside the native recorder window', async () => {
@@ -267,8 +255,7 @@ describe('MeetingRecorderDock', () => {
   it('stops recording, creates an audio draft, and completes the same note', async () => {
     renderDock()
 
-    await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
-    await userEvent.click(screen.getByRole('button', { name: '开始' }))
+    await startMeeting()
     await userEvent.click(screen.getByRole('button', { name: '暂停' }))
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
     await userEvent.click(await screen.findByRole('button', { name: '生成会议纪要' }))
@@ -292,8 +279,7 @@ describe('MeetingRecorderDock', () => {
     meetingGenerationMock.completeMeetingRecordingGeneration.mockRejectedValue(new Error('Error code: 401 - invalid_api_key'))
     renderDock()
 
-    await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
-    await userEvent.click(screen.getByRole('button', { name: '开始' }))
+    await startMeeting()
     await userEvent.click(screen.getByRole('button', { name: '暂停' }))
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
     await userEvent.click(await screen.findByRole('button', { name: '生成会议纪要' }))
@@ -309,8 +295,7 @@ describe('MeetingRecorderDock', () => {
     audioRecorderMock.stop.mockRejectedValueOnce(new Error('microphone_no_audio'))
     renderDock()
 
-    await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
-    await userEvent.click(screen.getByRole('button', { name: '开始' }))
+    await startMeeting()
     await userEvent.click(screen.getByRole('button', { name: '暂停' }))
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
 
@@ -324,8 +309,7 @@ describe('MeetingRecorderDock', () => {
   it('requires explicit confirmation before discarding an active recording', async () => {
     renderDock()
 
-    await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
-    await userEvent.click(screen.getByRole('button', { name: '开始' }))
+    await startMeeting()
     await userEvent.click(screen.getByRole('button', { name: '关闭' }))
 
     expect(screen.getByRole('dialog', { name: '放弃这段会议录音？' })).toBeInTheDocument()
@@ -348,8 +332,7 @@ describe('MeetingRecorderDock', () => {
   it('keeps minimized recorder minimized after drag', async () => {
     renderDock()
 
-    await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
-    await userEvent.click(screen.getByRole('button', { name: '开始' }))
+    await startMeeting()
     await userEvent.click(screen.getByRole('button', { name: '最小化' }))
 
     const dragHandle = screen.getByLabelText('拖动已最小化的会议录音')
@@ -396,19 +379,12 @@ describe('MeetingRecorderDock', () => {
     expect(desktopRecorderWindowMock.closeCurrentRecorderWindow).toHaveBeenCalled()
   })
 
-  it('emits an open-panel event after opening the recorder window from the launcher', async () => {
+  it('routes the desktop shortcut to the same meeting setup', async () => {
     desktopRecorderWindowMock.isTauriRuntime.mockReturnValue(true)
-    desktopRecorderWindowMock.isRecorderWindowRoute.mockReturnValue(false)
     renderDock()
-
     await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
-
-    await waitFor(() => {
-      expect(desktopRecorderWindowMock.openRecorderWindowWhenReady).toHaveBeenCalledTimes(1)
-    })
-    await waitFor(() => {
-      expect(desktopRecorderWindowMock.emitRecorderOpenPanel).toHaveBeenCalledTimes(1)
-    })
+    expect(navigate).toHaveBeenCalledWith('/meetings')
+    expect(desktopRecorderWindowMock.openRecorderWindowWhenReady).not.toHaveBeenCalled()
   })
 
   it('re-opens the recorder panel when the open-panel event fires in recorder-window mode', async () => {

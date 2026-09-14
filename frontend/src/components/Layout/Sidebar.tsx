@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronDown, ChevronRight, ChevronsLeftRight, FileText, Folder, Home, Plus, Settings, Users } from 'lucide-react'
+import { ChevronDown, ChevronRight, ChevronsLeftRight, FileText, Folder, Home, Mic, Video, Plus, Settings, Users } from 'lucide-react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import clsx from 'clsx'
 import { AppFooter } from './AppFooter'
@@ -49,6 +49,8 @@ export function Sidebar({ collapsed }: SidebarProps) {
 
   const navItems = [
     { path: '/', icon: Home, label: copy.sidebar.home },
+    { path: '/meetings', icon: Mic, label: isZh ? '会议记录' : 'Meetings' },
+    { path: '/generate', icon: Video, label: isZh ? '视频总结' : 'Video summary' },
     { path: '/notes', icon: FileText, label: copy.sidebar.notes },
     { path: '/team', icon: Users, label: copy.sidebar.team },
     { path: '/settings', icon: Settings, label: copy.sidebar.settings },

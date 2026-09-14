@@ -1,7 +1,7 @@
 import { ModelSourcePanel } from "../components/Settings/ModelSourcePanel"
 import { useAppModeStore } from "../stores/appModeStore"
 import { useEffect, useRef, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ArrowLeft, Wand2 } from 'lucide-react'
 import { FileUploader, type UploadMode } from '../components/NoteGenerator/FileUploader'
 import { GenerateProgress } from '../components/NoteGenerator/GenerateProgress'
@@ -26,9 +26,11 @@ type TaskStatusResponse = {
 }
 
 export function NoteGenerator() {
+  const [searchParams] = useSearchParams()
+  const isMeeting = searchParams.get('meeting') === '1'
   const [videoUrl, setVideoUrl] = useState('')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [uploadMode, setUploadMode] = useState<UploadMode>('url')
+  const [uploadMode, setUploadMode] = useState<UploadMode>(isMeeting ? 'file' : 'url')
   const [summaryMode, setSummaryMode] = useState<SummaryMode>('default')
   const [taskMessage, setTaskMessage] = useState('')
   const [, setTaskId] = useState('')
@@ -100,7 +102,7 @@ export function NoteGenerator() {
             sourceUrl || undefined,
             data.result?.task_id || id,
             workspace,
-            sourceType,
+            isMeeting ? (sourceType === 'video' ? 'meeting_video' : 'meeting_recording') : sourceType,
           )
           if (note) {
             navigate(`/note/${note.id}`)
@@ -184,6 +186,8 @@ export function NoteGenerator() {
         formData.append('file', selectedFile)
         formData.append('source_type', sourceType)
         formData.append('title', selectedFile.name)
+        formData.append('style', isMeeting ? 'meeting' : 'detailed')
+        if (isMeeting && sourceType !== 'transcript') formData.append('diarize', 'true')
         formData.append('summary_mode', summaryMode)
         formData.append('output_language', language)
         if (selectedProfileId) {

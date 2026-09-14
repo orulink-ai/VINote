@@ -1,3 +1,5 @@
+import { captureMeetingSources, type MeetingCaptureOptions } from '../lib/meetingCapture'
+import { createRecordingFile } from '../lib/recordingFile'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { requestDesktopMicrophoneAccess } from '../lib/desktopMicrophonePermission'
 import { checkMicrophoneReadiness, mapMicrophoneError } from '../lib/microphonePermission'
@@ -25,6 +27,11 @@ export function useAudioRecorder() {
   const [status, setStatus] = useState<AudioRecorderStatus>('idle')
   const [elapsedSeconds, setElapsedSeconds] = useState(0)
   const [error, setError] = useState('')
+  const captureCleanupRef = useRef<(() => void) | null>(null)
+  const diskRef = useRef<Awaited<ReturnType<typeof createRecordingFile>> | null>(null)
+  const [preview, setPreview] = useState<MediaStream | null>(null)
+  const [sizeBytes, setSizeBytes] = useState(0)
+  const [sourceEnded, setSourceEnded] = useState(false)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -64,6 +71,9 @@ export function useAudioRecorder() {
   }, [clearTimer])
 
   const cleanupStream = useCallback(() => {
+    captureCleanupRef.current?.()
+    captureCleanupRef.current = null
+    setPreview(null)
     streamRef.current?.getTracks().forEach((track) => track.stop())
     streamRef.current = null
   }, [])
@@ -93,11 +103,15 @@ export function useAudioRecorder() {
     accumulatedMsRef.current = 0
     mimeTypeRef.current = ''
     setElapsedSeconds(0)
+    setSizeBytes(0)
+    setSourceEnded(false)
+    void diskRef.current?.remove()
+    diskRef.current = null
     setError('')
     setStatus('idle')
   }, [cleanupStream, clearTimer, stopActiveRecorder])
 
-  const start = useCallback(async () => {
+  const start = useCallback(async (options?: MeetingCaptureOptions) => {
     if (!isSupported) {
       const message = 'microphone_unsupported'
       setError(message)
@@ -110,15 +124,23 @@ export function useAudioRecorder() {
     setStatus('requesting')
 
     try {
-      await requestDesktopMicrophoneAccess()
-      const readiness = await checkMicrophoneReadiness()
+      // Acquire display capture before any unrelated await consumes user activation.
+      const captured = options ? await captureMeetingSources(options) : null
+      if (captured && requestVersion !== requestVersionRef.current) { captured.cleanup(); return }
+      captureCleanupRef.current = captured?.cleanup || null
+      if (captured?.display) {
+        setPreview(options?.screen ? captured.display : null)
+        captured.display.getVideoTracks().forEach(track => { track.onended = () => setSourceEnded(true) })
+      }
+      if (!captured) await requestDesktopMicrophoneAccess()
+      const readiness = captured ? { ok: true, reason: undefined } : await checkMicrophoneReadiness()
       if (!readiness.ok) {
         throw new Error(`microphone_${readiness.reason}`)
       }
       if (requestVersion !== requestVersionRef.current) return
       let timer: ReturnType<typeof setTimeout> | undefined
       let expired = false
-      const mediaRequest = navigator.mediaDevices.getUserMedia({ audio: true }).then(stream => {
+      const mediaRequest = (captured ? Promise.resolve(captured.stream) : navigator.mediaDevices.getUserMedia({ audio: true })).then(stream => {
         if (expired || requestVersion !== requestVersionRef.current) {
           stream.getTracks().forEach(track => track.stop())
           throw new Error('microphone_request_cancelled')
@@ -135,8 +157,11 @@ export function useAudioRecorder() {
       if (stream.getAudioTracks().length === 0) {
         throw new Error('microphone_no-device')
       }
-      const mimeType = getPreferredAudioMimeType()
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType }) : new MediaRecorder(stream)
+      if (options?.screen) diskRef.current = await createRecordingFile()
+      const mimeType = options?.screen
+        ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(type => MediaRecorder.isTypeSupported(type)) || ''
+        : getPreferredAudioMimeType()
+      const recorder = mimeType ? new MediaRecorder(stream, { mimeType, ...(options?.screen ? { videoBitsPerSecond: 1500000 } : {}) }) : new MediaRecorder(stream)
 
       streamRef.current = stream
       recorderRef.current = recorder
@@ -145,7 +170,9 @@ export function useAudioRecorder() {
 
       recorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          chunksRef.current.push(event.data)
+          setSizeBytes(size => size + event.data.size)
+          if (diskRef.current) diskRef.current.append(event.data)
+          else chunksRef.current.push(event.data)
         }
       }
       recorder.onerror = () => {
@@ -218,7 +245,16 @@ export function useAudioRecorder() {
         }
         settled = true
         clearFallbackTimer()
-        const rawBlob = new Blob(chunksRef.current, { type: mimeTypeRef.current || recorder.mimeType || 'audio/webm' })
+        let rawBlob: Blob
+        try {
+          const type = mimeTypeRef.current || recorder.mimeType || 'audio/webm'
+          rawBlob = diskRef.current ? await diskRef.current.finish(type) : new Blob(chunksRef.current, { type })
+        } catch (error) {
+          cleanupStream()
+          setStatus('failed')
+          reject(error)
+          return
+        }
         chunksRef.current = []
         recorder.onstop = null
         recorder.onerror = null
@@ -273,10 +309,14 @@ export function useAudioRecorder() {
     clearTimer()
     stopActiveRecorder()
     cleanupStream()
+    void diskRef.current?.remove()
   }, [cleanupStream, clearTimer, stopActiveRecorder])
 
   return {
     status,
+    preview,
+    sizeBytes,
+    sourceEnded,
     elapsedSeconds,
     error,
     isSupported,

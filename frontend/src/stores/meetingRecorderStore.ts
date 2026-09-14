@@ -28,6 +28,8 @@ export interface MeetingRecorderNotification {
 }
 
 interface MeetingRecorderState {
+  preview?: MediaStream | null
+  sizeBytes?: number
   isPanelOpen: boolean
   isMinimized: boolean
   confirmDiscardOpen: boolean
@@ -82,6 +84,8 @@ export interface MeetingRecorderExternalSnapshot {
 }
 
 const initialState = {
+  preview: null as MediaStream | null,
+  sizeBytes: 0,
   isPanelOpen: false,
   isMinimized: false,
   confirmDiscardOpen: false,

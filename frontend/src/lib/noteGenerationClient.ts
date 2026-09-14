@@ -29,6 +29,8 @@ export interface UploadGenerationInput {
   outputLanguage?: string
   modelProfileId?: string
   sttProfileId?: string
+  diarize?: boolean
+  speakerCount?: number
 }
 
 export async function submitUploadedSource(input: UploadGenerationInput) {
@@ -38,6 +40,8 @@ export async function submitUploadedSource(input: UploadGenerationInput) {
   formData.append('title', input.title)
   formData.append('style', input.style || 'meeting')
   formData.append('summary_mode', input.summaryMode)
+  if (input.diarize) formData.append('diarize', 'true')
+  if (input.speakerCount) formData.append('speaker_count', String(input.speakerCount))
 
   if (input.outputLanguage) {
     formData.append('output_language', input.outputLanguage)

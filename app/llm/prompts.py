@@ -38,7 +38,7 @@ STYLE_INSTRUCTIONS: dict[OutputLanguage, dict[str, str]] = {
         "detailed": "风格要求：使用详细模式，尽量完整记录内容、示例、结论和关键细节。",
         "academic": "风格要求：使用学术表达，整理论点、论据和原文中明确出现的引用关系。",
         "tutorial": "风格要求：使用教程模式，按步骤整理流程、方法和关键操作。",
-        "meeting": "风格要求：使用会议纪要模式，整理议题、讨论要点、决策和待办事项。",
+        "meeting": "风格要求：按原文实际内容整理会议记录，保留发言人编号和 [MM:SS] 时间引用。议题、决策、待办、未决问题均为可选章节，原文没有就省略，禁止为了填满模板编造。只有原文明示要执行的任务才是待办；仅已有任务缺少负责人或日期时可标注待确认。播放演示或引用他人音频不代表其中的发言者在操作播放，也不代表正在开会或产生后续任务。区分建议、过程说明与已达成的决策，不把资料缺失改写成未决问题。",
         "xiaohongshu": "风格要求：使用小红书风格，语气更轻松，适度使用 emoji 和高亮表达。",
     },
     "en": {
@@ -46,7 +46,7 @@ STYLE_INSTRUCTIONS: dict[OutputLanguage, dict[str, str]] = {
         "detailed": "Style requirement: use a detailed format and preserve examples, conclusions, and supporting details.",
         "academic": "Style requirement: use an academic tone and organize claims, evidence, and explicit references from the transcript.",
         "tutorial": "Style requirement: use a tutorial format and present the workflow as clear step-by-step guidance.",
-        "meeting": "Style requirement: use meeting minutes format with agenda items, discussion points, decisions, and follow-ups.",
+        "meeting": "Style requirement: organize only the actual content, retaining speaker IDs and [MM:SS] references. Agenda, decisions, actions and open questions are optional; omit unsupported sections. An action requires an explicitly stated task; only an existing task's missing owner or date may be marked unconfirmed. Playback or quoted speech does not imply that the quoted speaker operated playback, attended a meeting or accepted a follow-up. Distinguish proposals and process narration from decisions. Missing information is not an open question.",
         "xiaohongshu": "Style requirement: use a Xiaohongshu-style tone with light emoji usage and stronger highlights.",
     },
 }
@@ -68,8 +68,9 @@ SYSTEM_PROMPTS: dict[OutputLanguage, str] = {
 2. 可以重组语序、分段、添加小标题和列表，但不要改变原意。
 3. 去掉寒暄、口头禅、重复和明显无关内容。
 4. 保留关键事实、例子、步骤、结论和建议。
-5. 每个主要章节都放一个截图标记，格式为 [[Screenshot:MM:SS]]。
-6. 如果视频很短，至少放 2 到 3 个截图标记。""",
+5. 仅在有明确时间依据且画面有助于理解时添加 [[Screenshot:MM:SS]]，不强行凑图。
+6. 不推断未提供的画面内容，不将展示的建议写成已确认结论。
+7. 发言时间范围严格使用输入的开始与结束时间，不把下一位说话人的开始时间当作上一段的结束时间。""",
     "en": """You are a professional video note assistant. Convert raw video transcripts into clear, accurate Markdown notes.
 
 Language requirements:
@@ -86,8 +87,9 @@ Editing principles:
 2. You may reorganize sentences, paragraphs, headings, and lists, but do not change the meaning.
 3. Remove greetings, filler words, repetition, and obviously irrelevant content.
 4. Preserve important facts, examples, steps, conclusions, and recommendations.
-5. Add one screenshot marker to every major section using [[Screenshot:MM:SS]].
-6. If the video is short, include at least 2 to 3 screenshot markers.""",
+5. Add [[Screenshot:MM:SS]] only when a supported timestamp and useful visual context exist; do not force screenshots.
+6. Do not invent unseen visual content or treat a presented proposal as a confirmed decision.
+7. Use the supplied start and end times for speaking turns; never substitute the next speaker's start time for a turn's end.""",
 }
 
 CHUNK_SYSTEM_PROMPTS: dict[OutputLanguage, str] = {

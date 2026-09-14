@@ -70,6 +70,7 @@ def configure():
     os.environ.update(json.loads(secret_file.read_text(encoding='utf-8')))
     os.environ.update(config)
     configure_langfuse(state)
+    os.environ.setdefault("DIARIZATION_MODEL_DIR", str(bundle / "models" / "diarization"))
     os.environ.update({
         'HOST': '127.0.0.1', 'DATABASE_URL': f'sqlite:///{(state / "vinote.db").as_posix()}',
         'DATA_DIR': str(state / 'data'), 'OUTPUT_DIR': str(state / 'output'),

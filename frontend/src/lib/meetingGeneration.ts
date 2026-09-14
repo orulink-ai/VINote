@@ -24,6 +24,9 @@ type SaveNote = (
 
 interface SubmitMeetingRecordingInput {
   audioBlob: Blob
+  title?: string
+  diarize?: boolean
+  speakerCount?: number
   startedAt: Date
   outputLanguage?: string
   summaryMode: SummaryMode
@@ -77,8 +80,9 @@ export async function submitMeetingRecording(
   try {
     return await submit({
       file,
-      sourceType: 'audio',
-      title: createMeetingRecordingTitle(input.startedAt, input.outputLanguage || 'zh-CN'),
+      ...(input.diarize ? { diarize: true, speakerCount: input.speakerCount } : {}),
+      sourceType: input.audioBlob.type.startsWith('video/') ? 'video' : 'audio',
+      title: input.title?.trim() || createMeetingRecordingTitle(input.startedAt, input.outputLanguage || 'zh-CN'),
       style: 'meeting',
       summaryMode: input.summaryMode,
       outputLanguage: input.outputLanguage,

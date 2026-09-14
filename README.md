@@ -347,7 +347,11 @@ npm run build
 
 VINote 云端模式在每次生成任务开始时通过 VILab Server 的已认证 `GET /v1/default-models` 读取服务端当前 LLM 和 STT，并在任务中保持该选择。桌面端不提供云端模型选择或密钥输入；仅本地模式显示自定义配置。服务端调整当前模型后，新任务自动生效。实时 STT 的请求超时按音频时长计算。
 
-桌面会议录音通过异步 Tauri 命令打开独立录音窗口，避免 Windows WebView2 同步创建窗口死锁；录音进行中重复打开只聚焦窗口，不重载录音会话。前端开发页面由 Vite 热更新，Rust 修改需重新编译桌面端。
+桌面端通过「会议记录」选择麦克风、可选系统声音和录屏，再开始录制。主窗口持有媒体流，独立悬浮控制窗同步暂停、停止和生成操作；创建窗口使用异步 Tauri 命令。前端开发页面由 Vite 热更新，Rust 修改需重新编译桌面端。
+
+会议说话人区分使用本地 sherpa-onnx 分段与声纹特征聚类，再调用选定 STT 转写各发言片段。源码开发先用后端 Python 运行 `python scripts/setup_diarization.py` 安装依赖和模型；`DIARIZATION_MODEL_DIR` 可覆盖模型目录。编号仅在同一次录音中保持一致，真实姓名需人工确认；自动人数可能偏多，可指定已知人数。缺少模型时需安装模型或关闭该开关。
+
+真实会议生成验证可运行 `python scripts/check_meeting_generation.py data/diarization-four-speakers.wav --live --speakers 4 --output data/meeting-live-report.json`。它调用桌面端共用的上传、任务、保存、逐字稿和媒体接口，真实消耗云端 STT/LLM，并在当前唯一关联账号的个人空间保存一条标注「测试」的笔记；多账号需传 `--user-id`。该后台检查不验证原生麦克风、录屏权限或桌面窗口交互。
 
 ### Windows / macOS 统一启动与打包
 

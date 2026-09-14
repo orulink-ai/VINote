@@ -199,7 +199,7 @@ export function NoteEditor() {
   const activeMoment = findActiveKeyMoment(keyMoments, currentTimestamp)
   const localMediaUrl = id && taskId ? `/api/notes/${id}/media` : undefined
   const isAudioNote = Boolean(localMediaUrl) && ['audio', 'meeting_recording'].includes(sourceType)
-  const isVideoNote = Boolean(localMediaUrl) && sourceType === 'video'
+  const isVideoNote = Boolean(localMediaUrl) && ['video', 'meeting_video'].includes(sourceType)
   const splitLabel = locale.startsWith('zh') ? '对照' : 'Split'
   const workspaceBadge = noteScope === 'team'
     ? noteWorkspaceName || (locale.startsWith('zh') ? '团队笔记' : 'Team note')

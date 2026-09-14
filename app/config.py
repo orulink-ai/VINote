@@ -20,7 +20,7 @@ class Settings:
     langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
     langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
     langfuse_environment: str = os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "development")
-    langfuse_release: str = os.getenv("LANGFUSE_RELEASE", "0.4.0")
+    langfuse_release: str = os.getenv("LANGFUSE_RELEASE", "0.5.0")
     langfuse_capture_content: bool = os.getenv("LANGFUSE_CAPTURE_CONTENT", "false").lower() == "true"
 
     host: str = os.getenv("HOST", "0.0.0.0")
@@ -46,6 +46,8 @@ class Settings:
     llm_base_url: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
     llm_model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
     llm_provider: str = os.getenv("LLM_PROVIDER", "openai-compatible")
+
+    diarization_model_dir: Path = Path(os.getenv("DIARIZATION_MODEL_DIR", str(BASE_DIR / "data" / "models" / "diarization")))
 
     transcriber_type: str = os.getenv("TRANSCRIBER_TYPE", "groq")
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")

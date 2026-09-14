@@ -79,3 +79,43 @@ export async function deleteRecordedAudio(id: string): Promise<void> {
 export function generateRecordingId() {
   return `rec-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
+
+export interface PendingMeeting {
+  id: string
+  ownerId: string
+  workspace: import('../stores/teamStore').WorkspaceSelection
+  options: import('./meetingCapture').MeetingCaptureOptions
+  startedAt: string
+  elapsedSeconds: number
+}
+
+export async function savePendingMeeting(meeting: PendingMeeting) {
+  const db = await openDatabase()
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    tx.objectStore(STORE_NAME).put(meeting, `pending:${meeting.id}`)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+    tx.onabort = () => reject(tx.error)
+  })
+}
+
+export async function listPendingMeetings(ownerId: string): Promise<PendingMeeting[]> {
+  if (!isIndexedDBSupported()) return []
+  const db = await openDatabase()
+  return new Promise((resolve, reject) => {
+    const result: PendingMeeting[] = []
+    const tx = db.transaction(STORE_NAME, 'readonly')
+    const request = tx.objectStore(STORE_NAME).openCursor(IDBKeyRange.bound('pending:', 'pending:\uffff'))
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (!cursor) return
+      if (cursor.value.ownerId === ownerId) result.push(cursor.value)
+      cursor.continue()
+    }
+    tx.oncomplete = () => resolve(result)
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
+export function deletePendingMeeting(id: string) { return deleteRecordedAudio(`pending:${id}`) }

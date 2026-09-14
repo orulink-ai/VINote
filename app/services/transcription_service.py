@@ -386,9 +386,11 @@ class TranscriptionService:
         update_status: StatusCallback | None = None,
         user_id: str | None = None,
         stt_profile_id: str | None = None,
+        diarize: bool = False,
+        speaker_count: int | None = None,
     ) -> TranscriptResult:
         cached = load_cached()
-        if cached:
+        if cached and bool(cached.metadata.get("speaker_diarization")) == diarize:
             update_current(metadata={"cache_hit": True})
             logger.info("[Transcribe] cache hit for audio=%s", audio_path)
             return cached
@@ -405,13 +407,19 @@ class TranscriptionService:
         if self._is_local_transcriber(resolved_config) and update_status:
             update_status("transcribing", "Loading local speech model...")
 
-        duration = self.get_audio_duration(audio_path)
-        transcript = self._transcribe_in_chunks(
-            audio_path=audio_path,
-            duration=duration,
-            transcriber=transcriber,
-            update_status=update_status,
-        )
+        if diarize:
+            from app.services.speaker_diarization_service import SpeakerDiarizationService
+            transcript = SpeakerDiarizationService().transcribe(
+                audio_path=audio_path,
+                transcribe=lambda path: self._transcribe_chunk(transcriber, path),
+                speaker_count=speaker_count, update_status=update_status,
+            )
+        else:
+            duration = self.get_audio_duration(audio_path)
+            transcript = self._transcribe_in_chunks(
+                audio_path=audio_path, duration=duration, transcriber=transcriber,
+                update_status=update_status,
+            )
         if update_status:
             update_status("transcribing", "Saving transcription...")
 
