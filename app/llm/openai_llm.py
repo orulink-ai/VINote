@@ -13,6 +13,7 @@ from app.services.tracing_service import (traced_generation, record_usage, trace
                                           record_model_parameters, observation)
 from app.llm.anthropic_compat import post_anthropic_compatible
 from app.llm.base import LLMSummarizer, SummaryProgressCallback
+from app.llm.meeting_review import build_meeting_review_prompts
 from app.llm.prompts import (
     build_chunk_system_prompt,
     build_chunk_user_prompt,
@@ -34,6 +35,21 @@ class _BasePromptLLM(LLMSummarizer):
 
     def _complete(self, *, system_prompt: str, user_prompt: str) -> str:
         raise NotImplementedError
+
+    def _complete_review(self, *, system_prompt: str, user_prompt: str) -> str:
+        return self._complete(system_prompt=system_prompt, user_prompt=user_prompt)
+
+    def _review_meeting_note(self, *, source, draft, extras, output_language,
+                             intermediate=False, source_is_reviewed_notes=False):
+        with observation("核对会议纪要事实", as_type="chain"):
+            result = self._complete_review(**build_meeting_review_prompts(
+                source=source, draft=draft, extras=extras,
+                output_language=output_language, intermediate=intermediate,
+                source_is_reviewed_notes=source_is_reviewed_notes,
+            ))
+        if not result or not result.strip():
+            raise RuntimeError("会议纪要事实复核未返回内容，请重试。")
+        return result.strip()
 
     @staticmethod
     def _format_time(seconds: float) -> str:
@@ -119,11 +135,20 @@ class _BasePromptLLM(LLMSummarizer):
         style: str,
         extras: str | None,
         output_language: str,
+        progress_callback: SummaryProgressCallback | None = None,
     ) -> str:
         user_prompt = self._build_user_prompt(title, segments, style, extras, output_language)
-        return self._complete(
+        draft = self._complete(
             system_prompt=build_system_prompt(output_language),
             user_prompt=user_prompt,
+        )
+        if style != "meeting":
+            return draft
+        if progress_callback:
+            progress_callback("正在对照转写核对会议结论与行动事项…")
+        return self._review_meeting_note(
+            source=self._build_segment_text(segments), draft=draft,
+            extras=extras, output_language=output_language,
         )
 
     @traced("分块总结与全局合并", as_type="chain")
@@ -145,6 +170,7 @@ class _BasePromptLLM(LLMSummarizer):
                 style=style,
                 extras=extras,
                 output_language=output_language,
+                progress_callback=progress_callback,
             )
 
         chunk_notes: list[str] = []
@@ -169,6 +195,13 @@ class _BasePromptLLM(LLMSummarizer):
                     ),
                 )
             )
+            if style == "meeting":
+                if progress_callback:
+                    progress_callback(f"正在核对会议分段 {index}/{total_chunks}…")
+                chunk_notes[-1] = self._review_meeting_note(
+                    source=self._build_segment_text(chunk), draft=chunk_notes[-1],
+                    extras=extras, output_language=output_language, intermediate=True,
+                )
 
         if progress_callback:
             progress_callback("Combining chunk notes into the final note...")
@@ -177,7 +210,7 @@ class _BasePromptLLM(LLMSummarizer):
             f"## Chunk Draft {index}\n{chunk_note.strip()}"
             for index, chunk_note in enumerate(chunk_notes, start=1)
         )
-        return self._complete_stage(
+        draft = self._complete_stage(
             stage="合并分块笔记",
             system_prompt=build_merge_system_prompt(output_language),
             user_prompt=build_merge_user_prompt(
@@ -187,6 +220,14 @@ class _BasePromptLLM(LLMSummarizer):
                 extras=extras,
                 output_language=output_language,
             ),
+        )
+        if style != "meeting":
+            return draft
+        if progress_callback:
+            progress_callback("正在核对合并后的会议纪要…")
+        return self._review_meeting_note(
+            source=chunk_notes_text, draft=draft, extras=extras,
+            output_language=output_language, source_is_reviewed_notes=True,
         )
 
     def summarize(
@@ -207,6 +248,7 @@ class _BasePromptLLM(LLMSummarizer):
                 style=style,
                 extras=extras,
                 output_language=output_language,
+                progress_callback=progress_callback,
             )
 
         if mode == "accurate" or self._should_use_hierarchical_mode(segments):
@@ -225,6 +267,7 @@ class _BasePromptLLM(LLMSummarizer):
             style=style,
             extras=extras,
             output_language=output_language,
+            progress_callback=progress_callback,
         )
 
 

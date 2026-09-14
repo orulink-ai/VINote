@@ -1,6 +1,7 @@
 import hashlib
 
 from app.llm.openai_llm import _BasePromptLLM
+from app.config import settings
 from app.services.tracing_service import traced_generation, record_usage, record_model_parameters, update_current, content_summary
 from app.services.vilab_cloud_service import VILabCloudService
 
@@ -9,6 +10,21 @@ class VILabLLM(_BasePromptLLM):
     def __init__(self, user_id: str, model: str):
         self.user_id = user_id
         self.model = model
+        self._meeting_reviewer = None
+
+    def _complete_review(self, *, system_prompt: str, user_prompt: str) -> str:
+        if self._meeting_reviewer is None:
+            preferred = settings.meeting_review_model
+            model = self.model
+            if preferred and preferred != model:
+                available = VILabCloudService().models(self.user_id)
+                if any(item["id"] == preferred and item["modelType"] == "llm"
+                       and item["runtimeStatus"] == "available" for item in available):
+                    model = preferred
+            self._meeting_reviewer = VILabLLM(self.user_id, model)
+        return self._meeting_reviewer._complete(
+            system_prompt=system_prompt, user_prompt=user_prompt,
+        )
 
     @traced_generation
     def _complete(self, *, system_prompt: str, user_prompt: str) -> str:

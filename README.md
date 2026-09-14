@@ -353,6 +353,8 @@ VINote 云端模式在每次生成任务开始时通过 VILab Server 的已认�
 
 会议纪要按问题、主题、确认决策和明确行动整理；没有依据的负责人、期限和未决问题不补写，时间线仅辅助回听。实际会议起止时间只采用明确提供的信息；累计录音时长不包含暂停，不能用来推算会议结束时间。短会议和长会议的分段合并均遵循这项规则。
 
+会议草稿会额外调用 LLM 对照转写复核主体、决策和行动后再返回，增加一次模型调用；长会议先逐块复核，再合并并核对一致性。云端复核优先使用 `MEETING_REVIEW_MODEL`（默认 `gpt-6-astra`），仅在服务列为可用时选择；未提供该模型或设为空值则沿用原模型，本地/自定义模式始终使用当前模型。全局模型选择不变。复核失败不静默返回未复核稿；这项复核不能恢复录音缺失信息或保证所有识别错误都已消除。
+
 正式版使用 `yarn desktop:build:release`，测试版使用 `yarn desktop:build:test`。两种安装包默认均连接 `192.168.1.143:9876`，仅源码运行默认连接本机 `127.0.0.1:9878`；测试版使用独立安装身份和数据目录。产物与校验清单位于 `.desktop-build/artifacts/`，详见[打包说明](docs/desktop-packaging.md)。
 
 真实会议生成验证可运行 `python scripts/check_meeting_generation.py data/diarization-four-speakers.wav --live --speakers 4 --output data/meeting-live-report.json`。它调用桌面端共用的上传、任务、保存、逐字稿和媒体接口，真实消耗云端 STT/LLM，并在当前唯一关联账号的个人空间保存一条标注「测试」的笔记；多账号需传 `--user-id`。该后台检查不验证原生麦克风、录屏权限或桌面窗口交互。

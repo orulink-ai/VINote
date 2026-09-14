@@ -53,6 +53,7 @@ def main():
         readback.raise_for_status()
         assert readback.json()["content"] == markdown
     print(json.dumps({"note_id": report["note_id"], "summary_seconds": round(time.monotonic() - started, 2),
+                      "review_model": getattr(getattr(summarizer, "_meeting_reviewer", None), "model", None),
                       "summary_file": str(args.output.resolve()), "reused_real_transcript": True}, ensure_ascii=False))
 
 

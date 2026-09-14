@@ -17,6 +17,7 @@ export function resolveDesktopProfile({ channel = 'release', version, env = {}, 
     VINOTE_SUPABASE_PUBLISHABLE_KEY: env.VINOTE_SUPABASE_PUBLISHABLE_KEY || publicConfig.VINOTE_SUPABASE_PUBLISHABLE_KEY,
     LANGFUSE_RELEASE: test ? `${version}-test` : version,
     LANGFUSE_TRACING_ENVIRONMENT: test ? 'test' : 'production',
+    MEETING_REVIEW_MODEL: env.MEETING_REVIEW_MODEL ?? publicConfig.MEETING_REVIEW_MODEL ?? 'gpt-6-astra',
   }
   if (!config.VINOTE_SUPABASE_URL || !config.VINOTE_SUPABASE_PUBLISHABLE_KEY?.startsWith('sb_publishable_')) {
     throw new Error('Email accounts require a Supabase URL and publishable key; secret keys cannot be bundled')

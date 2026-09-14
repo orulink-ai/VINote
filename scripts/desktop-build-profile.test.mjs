@@ -16,6 +16,13 @@ test('test and release packages use separate identities but the same deployed or
   assert.notEqual(release.backendName, testing.backendName)
   assert.equal(release.config.VILAB_SERVER_URL, 'http://192.168.1.143:9876')
   assert.equal(testing.config.VILAB_SERVER_URL, release.config.VILAB_SERVER_URL)
+  assert.equal(testing.config.MEETING_REVIEW_MODEL, 'gpt-6-astra')
+  assert.equal(release.config.MEETING_REVIEW_MODEL, testing.config.MEETING_REVIEW_MODEL)
+})
+
+test('review model preference can explicitly reuse the primary model', () => {
+  const profile = resolveDesktopProfile({ ...input, env: { MEETING_REVIEW_MODEL: '' } })
+  assert.equal(profile.config.MEETING_REVIEW_MODEL, '')
 })
 
 test('channel-specific overrides do not leak source dev URL or credentials', () => {
