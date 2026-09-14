@@ -48,6 +48,14 @@ class VILabCloudService:
         if response.status_code in {401, 403}:
             raise HTTPException(502, "云端服务未接受当前身份，请检查账号登录及服务端可信身份来源配置")
         if not response.is_success:
+            if path == "/v1/asr/transcriptions" and response.status_code == 502:
+                try:
+                    message = response.json().get("error", {}).get("message")
+                except (ValueError, AttributeError):
+                    message = None
+                if message == "Aliyun ASR returned an empty transcript.":
+                    from app.models.transcript import NoSpeechDetectedError
+                    raise NoSpeechDetectedError("该音频片段未识别出文字")
             raise HTTPException(502, f"云端模型请求失败（HTTP {response.status_code}）")
         return response.json()
 

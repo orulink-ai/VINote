@@ -12,6 +12,9 @@
     "build": "yarn --cwd frontend build",
     "preview": "yarn --cwd frontend preview",
     "desktop:build": "node scripts/build-desktop.mjs",
+    "desktop:build:release": "node scripts/build-desktop.mjs --channel release",
+    "desktop:build:test": "node scripts/build-desktop.mjs --channel test",
+    "desktop:check": "node --test scripts/desktop-build-profile.test.mjs",
     "docs:dev": "yarn --cwd docs docs:dev",
     "docs:build": "yarn --cwd docs docs:build"
   }

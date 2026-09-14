@@ -16,10 +16,13 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("file", type=Path)
     parser.add_argument("--speakers", type=int)
+    parser.add_argument("--threshold", type=float, help="Diagnostic clustering distance threshold")
     parser.add_argument("--with-vilab", action="store_true", help="Send speaking turns to configured ViLab STT")
     parser.add_argument("--user-id", help="Local VINote account for personal cloud authentication")
     parser.add_argument("--output", type=Path)
     args = parser.parse_args()
+    if args.threshold is not None:
+        settings.diarization_cluster_threshold = args.threshold
     if args.with_vilab:
         from app.transcribers.vilab_transcriber import VILabTranscriber
         user_id = args.user_id

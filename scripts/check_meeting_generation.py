@@ -5,6 +5,7 @@ Credentials stay in memory and are never written to the report.
 """
 import argparse
 import json
+import mimetypes
 import sys
 import time
 from pathlib import Path
@@ -17,7 +18,10 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("file", type=Path)
     parser.add_argument("--live", action="store_true", required=True)
-    parser.add_argument("--speakers", type=int, default=4)
+    parser.add_argument("--speakers", type=int, help="Known speaker count; omitted means automatic")
+    parser.add_argument("--title", help="Test note title; defaults to the input filename")
+    parser.add_argument("--extras", help="Explicit meeting context, such as actual start/end times")
+    parser.add_argument("--no-diarize", action="store_true", help="Explicit content-only baseline without speaker attribution")
     parser.add_argument("--user-id")
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
@@ -53,14 +57,17 @@ def main():
         client.cookies.set(settings.auth_cookie_name, create_access_token(user))
         capability = client.get("/api/meeting-capabilities")
         capability.raise_for_status()
-        assert capability.json()["diarization"]["available"], capability.json()
+        if not args.no_diarize:
+            assert capability.json()["diarization"]["available"], capability.json()
         with args.file.open("rb") as audio:
             response = client.post("/api/generate_from_upload", data={
-                "source_type": "audio", "diarize": "true",
-                "speaker_count": str(args.speakers), "style": "meeting",
+                "source_type": "audio", "diarize": "false" if args.no_diarize else "true",
+                **({"speaker_count": str(args.speakers)} if args.speakers else {}),
+                "style": "meeting",
                 "summary_mode": "default", "output_language": "zh-CN",
-                "title": "测试｜公开四人音频会议总结",
-            }, files={"file": (args.file.name, audio, "audio/wav")})
+                "title": args.title or f"测试｜{args.file.stem}",
+                **({"extras": args.extras} if args.extras else {}),
+            }, files={"file": (args.file.name, audio, mimetypes.guess_type(args.file.name)[0] or "application/octet-stream")})
         response.raise_for_status()
         task_id = response.json()["task_id"]
         status = client.get(f"/api/task/{task_id}")
@@ -68,6 +75,7 @@ def main():
         result = status.json()
         args.output.parent.mkdir(parents=True, exist_ok=True)
         report = {"task_id": task_id, "status": result,
+                  "diarize_requested": not args.no_diarize,
                   "models": models, "elapsed_seconds": round(time.monotonic() - started, 2),
                   "validation_scope": "in-process desktop HTTP routes, real cloud STT and LLM; no native capture/UI"}
         args.output.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")

@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import importlib.util
 import math
-import subprocess
 import tempfile
 import threading
 import wave
@@ -16,8 +15,9 @@ from pathlib import Path
 from typing import Callable
 
 from app.config import settings
-from app.models.transcript import TranscriptResult, TranscriptSegment
+from app.models.transcript import NoSpeechDetectedError, TranscriptResult, TranscriptSegment
 from app.services.tracing_service import traced
+from app.services.audio_preprocessing_service import prepare_meeting_audio
 
 _INFERENCE_LOCK = threading.Lock()
 
@@ -89,15 +89,14 @@ class SpeakerDiarizationService:
 
         if speaker_count is not None and not 1 <= speaker_count <= 20:
             raise ValueError("Speaker count must be between 1 and 20")
+        if not 0 < settings.diarization_cluster_threshold <= 2:
+            raise ValueError("DIARIZATION_CLUSTER_THRESHOLD must be in (0, 2]")
         segmentation, embedding = self.model_paths()
         with tempfile.TemporaryDirectory(prefix="diarization-", dir=settings.data_dir) as folder:
             pcm_path = Path(folder) / "audio.f32"
             if update_status:
                 update_status("transcribing", "正在准备音频并区分说话人…")
-            subprocess.run([
-                "ffmpeg", "-nostdin", "-y", "-v", "error", "-i", audio_path,
-                "-vn", "-ar", "16000", "-ac", "1", "-f", "f32le", str(pcm_path),
-            ], check=True, capture_output=True, timeout=3600)
+            preprocessing = prepare_meeting_audio(audio_path, pcm_path)
             if pcm_path.stat().st_size < 4:
                 raise ValueError("录制中没有可分析的音频。")
             # Keep large decoded recordings backed by disk, including on Windows.
@@ -110,19 +109,37 @@ class SpeakerDiarizationService:
                     ),
                     embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding), num_threads=2),
                     clustering=sherpa_onnx.FastClusteringConfig(
-                        num_clusters=speaker_count or -1, threshold=0.5),
-                    min_duration_on=0.2, min_duration_off=0.3,
+                        num_clusters=speaker_count or -1, threshold=settings.diarization_cluster_threshold),
+                    min_duration_on=0.3, min_duration_off=0.5,
                 )
                 if not config.validate():
                     raise ValueError("说话人模型配置无效，请重新运行安装脚本。")
                 with _INFERENCE_LOCK:
                     engine = sherpa_onnx.OfflineSpeakerDiarization(config)
-                    detected = engine.process(samples).sort_by_start_time()
+                    last_progress = -1
+
+                    def report_progress(done, total):
+                        nonlocal last_progress
+                        progress = int(done * 100 / max(total, 1)) // 5 * 5
+                        if update_status and progress != last_progress:
+                            update_status("transcribing", f"正在区分说话人：{progress}%")
+                            last_progress = progress
+                        return 0
+
+                    detected = engine.process(samples, callback=report_progress).sort_by_start_time()
                 duration = len(samples) / 16000
                 turns = build_speaker_turns(detected, duration)
                 if not turns:
                     raise ValueError("未检测到有效发言，请检查录音声音。")
+                clustering = {'method': 'fixed-speaker-count', 'requested_count': speaker_count}
+                if speaker_count is None:
+                    from app.services.speaker_clustering_service import refine_speaker_turns
+                    if update_status:
+                        update_status("transcribing", "正在核对完整发言的声音特征并自动判断人数…")
+                    with _INFERENCE_LOCK:
+                        turns, clustering = refine_speaker_turns(turns, samples, embedding)
                 result_segments: list[TranscriptSegment] = []
+                unrecognized_segments: list[dict] = []
                 language = None
                 for index, turn in enumerate(turns):
                     if update_status:
@@ -138,7 +155,13 @@ class SpeakerDiarizationService:
                             output.setsampwidth(2)
                             output.setframerate(16000)
                             output.writeframes(audio.tobytes())
-                        result = transcribe(str(chunk_path))
+                        try:
+                            result = transcribe(str(chunk_path))
+                        except NoSpeechDetectedError:
+                            unrecognized_segments.append({"start": offset, "end": end,
+                                                          "reason": "provider_returned_no_text"})
+                            offset = end
+                            continue
                         language = language or result.language
                         segments = result.segments or [TranscriptSegment(0, end - offset, result.full_text)]
                         for segment in segments:
@@ -148,7 +171,11 @@ class SpeakerDiarizationService:
                             end_time = max(start_time, min(end, offset + segment.end))
                             if end_time <= start_time:
                                 start_time, end_time = offset, end
-                            label = "重叠发言（归属待确认）" if turn.speaker_id == "speaker_overlap" else f"说话人 {turn.speaker_id.split('_')[-1]}"
+                            label = (
+                                "重叠发言（归属待确认）" if turn.speaker_id == "speaker_overlap"
+                                else "说话人待确认" if turn.speaker_id == "speaker_unknown"
+                                else f"说话人 {turn.speaker_id.split('_')[-1]}"
+                            )
                             result_segments.append(TranscriptSegment(
                                 start=start_time, end=end_time, text=segment.text,
                                 raw_text=segment.raw_text or segment.text, cleaned_text=segment.cleaned_text,
@@ -161,9 +188,13 @@ class SpeakerDiarizationService:
                     language=language, full_text=" ".join(segment.text for segment in result_segments),
                     segments=result_segments,
                     metadata={"speaker_diarization": True, "diarization_provider": "sherpa-onnx",
-                              "speaker_count": len({turn.speaker_id for turn in turns} - {"speaker_overlap"}),
+                              "speaker_count": len({turn.speaker_id for turn in turns} - {"speaker_overlap", "speaker_unknown"}),
+                              "clustering": clustering,
                               "timestamp_granularity": "speaker_turn", "overlap_detected": any(
-                                  turn.speaker_id == "speaker_overlap" for turn in turns)},
+                                  turn.speaker_id == "speaker_overlap" for turn in turns),
+                              "cluster_threshold": settings.diarization_cluster_threshold,
+                              "audio_preprocessing": preprocessing,
+                              "unrecognized_segments": unrecognized_segments},
                 )
             finally:
                 # Release the memory map before TemporaryDirectory removes it on Windows.

@@ -5,6 +5,10 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 
+class NoSpeechDetectedError(RuntimeError):
+    """The upstream recognizer explicitly returned no recognized speech."""
+
+
 @dataclass
 class TranscriptSegment:
     """单段转写片段"""

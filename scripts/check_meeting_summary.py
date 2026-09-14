@@ -13,6 +13,7 @@ def main():
     parser.add_argument("report", type=Path)
     parser.add_argument("--live", action="store_true", required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--extras", help="Explicit meeting context and terminology, not inferred facts")
     args = parser.parse_args()
     from fastapi.testclient import TestClient
     from sqlalchemy import select
@@ -40,7 +41,7 @@ def main():
             user_id=user_id, model_profile_id=None, model_name=None,
             api_key=None, base_url=None,
         )
-        markdown = summarizer.summarize(title, transcript.segments, style="meeting", output_language="zh-CN")
+        markdown = summarizer.summarize(title, transcript.segments, style="meeting", output_language="zh-CN", extras=args.extras)
     args.output.write_text(markdown, encoding="utf-8")
     with TestClient(app) as client:
         client.cookies.set(settings.auth_cookie_name, create_access_token(get_user_by_id(user_id)))

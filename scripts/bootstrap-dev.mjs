@@ -51,4 +51,9 @@ export function bootstrap() {
     writeFileSync(config, Object.entries(initial).map(([key, value]) => `${key}=${value}`).join('\n') + '\n', { flag: 'wx', mode: 0o600 })
     console.log('[setup] Created local .env with unique installation secrets (not tracked by Git).')
   }
+  const speakerSetup = join(root, 'scripts/setup_diarization.py')
+  if (spawnSync(py, [speakerSetup, '--check'], { cwd: root, stdio: 'ignore', windowsHide: true }).status !== 0) {
+    console.log('[setup] Preparing local speaker recognition runtime and models...')
+    exec(py, [speakerSetup])
+  }
 }

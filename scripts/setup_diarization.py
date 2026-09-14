@@ -31,10 +31,15 @@ def download(url: str, destination: Path) -> None:
             time.sleep(2)
 
 
-def setup(destination: Path, *, install_runtime: bool = True) -> None:
+def setup(destination: Path, *, install_runtime: bool = True, cache: Path | None = None) -> None:
     if install_runtime:
         subprocess.run([sys.executable, "-m", "pip", "install", "-r", str(ROOT / "requirements.diarization.txt")], check=True)
     destination.mkdir(parents=True, exist_ok=True)
+    if cache and cache.resolve() != destination.resolve():
+        for name in ("segmentation.onnx", "embedding.onnx"):
+            source = cache / name
+            if source.is_file() and source.stat().st_size and not (destination / name).exists():
+                shutil.copyfile(source, destination / name)
     base = "https://api.github.com/repos/k2-fsa/sherpa-onnx/releases/assets"
     with tempfile.TemporaryDirectory(prefix="setup-", dir=destination) as folder:
         temp = Path(folder)
@@ -60,5 +65,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--models-dir", type=Path, default=settings.diarization_model_dir)
     parser.add_argument("--models-only", action="store_true")
+    parser.add_argument("--check", action="store_true", help="Check installed runtime and model files without downloading")
     args = parser.parse_args()
-    setup(args.models_dir, install_runtime=not args.models_only)
+    if args.check:
+        import sherpa_onnx
+        import numpy
+
+        for name in ("segmentation.onnx", "embedding.onnx"):
+            path = args.models_dir / name
+            if not path.is_file() or path.stat().st_size == 0:
+                raise SystemExit(1)
+    else:
+        setup(args.models_dir, install_runtime=not args.models_only, cache=settings.diarization_model_dir)

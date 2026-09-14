@@ -140,7 +140,7 @@ Windows 一键启动：
 ## 桌面 App
 
 桌面端基于 Tauri 2，复用现有 React/Vite 前端界面。安装包内置 FastAPI 后端、SQLite 与 FFmpeg，安装后无需 Python/Node。后端由桌面壳首次选择可用本机端口并持久保存，退出时一并停止；数据和加密密钥保存在用户应用数据目录。开发模式通过 Vite 代理访问 8900 后端。
-会议录音入口在桌面端和 Web 端共用同一套前端流程：点击右下角 `会议录音` 按钮后会直接请求麦克风权限并开始录音。
+会议录音入口在桌面端和 Web 端共用同一套前端流程：进入「会议记录」，选择麦克风和可选录屏后开始录制。
 
 首次开发桌面端前需要安装 Rust 工具链：
 
@@ -175,7 +175,7 @@ cd frontend
 npm run desktop:build
 ```
 
-Tauri 构建产物默认输出到 `frontend/src-tauri/target/release/bundle/`，macOS 默认生成 `.app` 应用包。
+构建产物按渠道和版本归档到 `.desktop-build/artifacts/<channel>/<version>/<buildId>/`，包含校验清单；详见 [桌面打包](docs/desktop-packaging.md)。
 
 ## Docker
 
@@ -349,7 +349,11 @@ VINote 云端模式在每次生成任务开始时通过 VILab Server 的已认�
 
 桌面端通过「会议记录」选择麦克风、可选系统声音和录屏，再开始录制。主窗口持有媒体流，独立悬浮控制窗同步暂停、停止和生成操作；创建窗口使用异步 Tauri 命令。前端开发页面由 Vite 热更新，Rust 修改需重新编译桌面端。
 
-会议说话人区分使用本地 sherpa-onnx 分段与声纹特征聚类，再调用选定 STT 转写各发言片段。源码开发先用后端 Python 运行 `python scripts/setup_diarization.py` 安装依赖和模型；`DIARIZATION_MODEL_DIR` 可覆盖模型目录。编号仅在同一次录音中保持一致，真实姓名需人工确认；自动人数可能偏多，可指定已知人数。缺少模型时需安装模型或关闭该开关。
+会议说话人区分先在临时副本上降噪，再使用本地 sherpa-onnx 分段与声音特征聚类，最后调用选定 STT 转写各发言片段。自动模式以持续发言的声音特征进行平均链接聚类和轮廓评分选组，不把每个短片段当成新人；证据不足与重叠发言单独标注。`yarn client:dev` 会自动检查并准备依赖和模型，也可用后端 Python 手动运行 `python scripts/setup_diarization.py`；`DIARIZATION_MODEL_DIR` 可覆盖模型目录。编号仅在同一次录音中保持一致，真实姓名需人工确认；分组数量不代表逐段身份判断已完全准确。`DIARIZATION_CLUSTER_THRESHOLD` 仅用于初始聚类诊断。
+
+会议纪要按问题、主题、确认决策和明确行动整理；没有依据的负责人、期限和未决问题不补写，时间线仅辅助回听。实际会议起止时间只采用明确提供的信息；累计录音时长不包含暂停，不能用来推算会议结束时间。短会议和长会议的分段合并均遵循这项规则。
+
+正式版使用 `yarn desktop:build:release`，测试版使用 `yarn desktop:build:test`。两种安装包默认均连接 `192.168.1.143:9876`，仅源码运行默认连接本机 `127.0.0.1:9878`；测试版使用独立安装身份和数据目录。产物与校验清单位于 `.desktop-build/artifacts/`，详见[打包说明](docs/desktop-packaging.md)。
 
 真实会议生成验证可运行 `python scripts/check_meeting_generation.py data/diarization-four-speakers.wav --live --speakers 4 --output data/meeting-live-report.json`。它调用桌面端共用的上传、任务、保存、逐字稿和媒体接口，真实消耗云端 STT/LLM，并在当前唯一关联账号的个人空间保存一条标注「测试」的笔记；多账号需传 `--user-id`。该后台检查不验证原生麦克风、录屏权限或桌面窗口交互。
 
@@ -360,7 +364,7 @@ VINote 云端模式在每次生成任务开始时通过 VILab Server 的已认�
 1. VILab Server 仓库：`yarn dev`，模型 API 为 `http://127.0.0.1:9878`，管理界面为 `http://127.0.0.1:5174/admin/`。
 2. VINote 仓库：直接运行 `yarn client:dev`：首次自动安装前端依赖、创建 `.venv`、安装后端依赖并生成忽略提交的 `.env`（不覆盖已有配置）。自动启动 VINote API、Vite 和一个桌面开发实例。先登录/注册邮箱账号，再在应用中选择云端或本地。
 3. 开发云端地址使用 VINote `.env` 中的 `VILAB_SERVER_URL`（环境变量优先），未配置默认 `http://127.0.0.1:9878`。先设置 `VINOTE_SUPABASE_URL` 和 `VINOTE_SUPABASE_PUBLISHABLE_KEY`。
-4. 安装 FFmpeg/FFprobe 并加入 PATH，然后运行根目录 `yarn desktop:build`，脚本会自动初始化依赖和安装 PyInstaller。Windows 生成 NSIS `.exe`，macOS 生成 `.app` 和 `.dmg`，位置为 `frontend/src-tauri/target/release/bundle/`。必须在对应系统上构建；签名/公证需要各平台的发布证书。
+4. 安装 FFmpeg/FFprobe 并加入 PATH，然后运行根目录 `yarn desktop:build:release` 或 `yarn desktop:build:test`，脚本会自动初始化依赖和安装 PyInstaller。Windows 生成 NSIS `.exe`，macOS 生成 `.app` 和 `.dmg`，归档到 `.desktop-build/artifacts/`。必须在对应系统上构建；签名/公证需要各平台的发布证书。
 5. 安装包的云端默认地址为 `http://192.168.1.143:9876`，不沿用开发地址。可在构建时设置 `VINOTE_RELEASE_VILAB_SERVER_URL`。打包只读取 Supabase URL 和 publishable key，不打包 `.env`、模型密钥或个人数据。
 
 `VINOTE_PYTHON` 可指定 Python；`VINOTE_FFMPEG_PATH`、`VINOTE_FFPROBE_PATH` 可指定打包用的二进制文件。macOS 请使用可分发的同架构 FFmpeg（其动态依赖也须可分发）。

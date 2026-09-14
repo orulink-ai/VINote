@@ -15,6 +15,7 @@ DEFAULT_SQLITE_PATH = BASE_DIR / "data" / "vinote.db"
 
 @dataclass
 class Settings:
+    diarization_cluster_threshold: float = float(os.getenv("DIARIZATION_CLUSTER_THRESHOLD", "0.5"))
     langfuse_enabled: bool = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
     langfuse_base_url: str = os.getenv("LANGFUSE_BASE_URL", "").rstrip("/")
     langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")

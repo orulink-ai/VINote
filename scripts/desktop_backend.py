@@ -108,7 +108,38 @@ def main():
         init_db()
         for tool in ('ffmpeg', 'ffprobe'):
             subprocess.run([str(bundle / 'bin' / (tool + ('.exe' if os.name == 'nt' else ''))), '-version'], check=True, stdout=subprocess.DEVNULL)
-        print('Desktop backend smoke test passed: database, routes, frontend, ffmpeg and ffprobe.')
+        from app.services.speaker_diarization_service import SpeakerDiarizationService
+        import numpy as np
+        import sherpa_onnx
+
+        segmentation, embedding = SpeakerDiarizationService.model_paths()
+        for model in (segmentation, embedding):
+            if not model.resolve().is_relative_to(bundle.resolve()):
+                raise RuntimeError('Package smoke test must use bundled speaker models')
+        SpeakerDiarizationService.require_ready()
+        diarizer = sherpa_onnx.OfflineSpeakerDiarization(
+            sherpa_onnx.OfflineSpeakerDiarizationConfig(
+                segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
+                    pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(model=str(segmentation)),
+                    num_threads=2,
+                ),
+                embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding), num_threads=2),
+                clustering=sherpa_onnx.FastClusteringConfig(num_clusters=-1, threshold=0.5),
+            )
+        )
+        diarizer.process(np.zeros(16000, dtype=np.float32))
+        import tempfile
+        import wave
+        from app.services.audio_preprocessing_service import prepare_meeting_audio
+        with tempfile.TemporaryDirectory() as directory:
+            sample = Path(directory) / 'silence.wav'
+            with wave.open(str(sample), 'wb') as output:
+                output.setnchannels(1)
+                output.setsampwidth(2)
+                output.setframerate(16000)
+                output.writeframes(bytes(32000))
+            prepare_meeting_audio(str(sample), Path(directory) / 'clean.f32')
+        print('Desktop backend smoke test passed: database, routes, frontend, ffmpeg, ffprobe and bundled speaker inference.')
         return
     uvicorn.run(app, host='127.0.0.1', port=int(os.environ['PORT']), log_level='info')
 

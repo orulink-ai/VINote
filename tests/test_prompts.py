@@ -68,7 +68,9 @@ class PromptBuilderTest(unittest.TestCase):
 
         self.assertIn("chunk 2/4", chunk_prompt)
         self.assertIn("Chunk drafts:", merge_prompt)
-        self.assertIn("AI Summary", merge_prompt)
+        self.assertNotIn("## AI Summary", merge_prompt)
+        self.assertIn("Paused recording duration", chunk_prompt)
+        self.assertIn("Paused recording duration", merge_prompt)
 
 
 if __name__ == "__main__":

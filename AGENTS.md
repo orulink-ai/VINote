@@ -187,14 +187,21 @@ Desktop packaging: scripts/desktop_backend.py initializes per-install secrets an
 
 Fresh-checkout startup: yarn client:dev runs bootstrap-dev.mjs to install frontend dependencies, create .venv and install requirements, and create .env with unique local secrets and config/desktop-public.json account defaults. Existing .env is preserved. --setup-only performs initialization without opening a window. Node 22+, Python, Rust/platform compilers and FFmpeg are system prerequisites.
 
-# Langfuse observability
-
 ## Meeting recording and speaker diarization
+
+- Actual meeting wall-clock start/end must come from explicitly supplied metadata/context, never from audio duration or the last transcript timestamp. Paused recordings have a shorter accumulated duration. Transcript/heading timestamps are recording offsets, not wall-clock times.
+
+- `audio_preprocessing_service.py` owns conservative FFmpeg denoising on temporary audio, without trimming time. Explicit upstream empty recognition is recorded in `unrecognized_segments`; other STT failures remain errors. `DIARIZATION_CLUSTER_THRESHOLD` controls the diagnostic clustering threshold.
+- `speaker_clustering_service.py` refines automatic grouping using sustained-turn embeddings, average linkage and silhouette selection. Short uncertain turns remain unknown; overlap remains explicit. Group count and silhouette are not identity accuracy guarantees.
+- Meeting summaries synthesize themes, confirmed decisions and explicit actions; omit unsupported owners/deadlines/open questions. Both one-shot and hierarchical prompts keep wall-clock metadata separate from media offsets and avoid a duplicate closing AI summary.
+- `bootstrap-dev.mjs` checks/prepares local speaker runtime/models. `desktop-build-profile.mjs` owns release/test identity and configuration isolation. Both packages default to the deployed LAN ViLab Origin; source development uses localhost. Build entry points and artifacts are documented in `docs/desktop-packaging.md`; never package `.env` or private meeting artifacts.
 
 - `/meetings` owns meeting setup/history; `meetingCapture.ts` captures selected microphone plus optional display/system audio. Main-window `MeetingRecorderDock` owns the stream; `MeetingRecorderController` forwards native floating-window actions via Tauri events.
 - `speaker_diarization_service.py` performs whole-recording local sherpa-onnx Pyannote/3D-Speaker clustering, then calls the configured STT per turn. IDs are local to the recording; overlap labels indicate uncertain attribution, not separated overlapping audio.
 - Media generation routes accept `diarize` and optional `speaker_count` (1–20); authenticated `GET /api/meeting-capabilities` returns `diarization.available`. Source development installs optional `requirements.diarization.txt` and models via `scripts/setup_diarization.py`; `DIARIZATION_MODEL_DIR` defaults to `data/models/diarization`. Desktop packaging stages these models.
 - Uploaded video reuses its source file for screenshot extraction. Audio-only notes remove screenshot placeholders. Meeting video notes use `meeting_video`; audio uses `meeting_recording`.
 - `scripts/check_meeting_generation.py --live` uses real cloud services through in-process desktop API routes and saves a personal test note. This is not a native capture/UI test. Explicit transient STT HTTP 502/503/504 responses retry at most twice; other errors fail immediately.
+
+## Langfuse observability
 
 `app/services/tracing_service.py` owns optional fail-open Langfuse SDK 4 tracing. Root note-generation chains correlate by task_id/sessionId, hash local user IDs, and record Chinese stage names following ViTalk origin/dev 33111e5. LLM adapters record actual parameters and returned usage; content is redacted unless LANGFUSE_CAPTURE_CONTENT=true. Configure LANGFUSE_ENABLED, LANGFUSE_BASE_URL, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY, LANGFUSE_TRACING_ENVIRONMENT and optional LANGFUSE_RELEASE. Never package credentials. Desktop reads an atomic langfuse.env in VINOTE_DESKTOP_DATA; incomplete files disable tracing. Task status optionally includes langfuse_trace_id. Set LANGFUSE_ENABLED=false for unit tests; scripts/check_langfuse.py --send is an explicit live synthetic smoke with API readback. See docs/langfuse.md for scope and limitations.
