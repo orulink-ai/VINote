@@ -53,6 +53,12 @@ describe('closing the desktop recorder', () => {
     expect(invokeMock).not.toHaveBeenCalledWith('close_recorder_window')
   })
 
+  it('keeps an active recording open without waiting for another mount event', async () => {
+    invokeMock.mockResolvedValue('active')
+    await expect(openRecorderWindowWhenReady(100)).resolves.toBe('active')
+    expect(invokeMock).not.toHaveBeenCalledWith('close_recorder_window')
+  })
+
   it('closes a packaged recorder window that never becomes ready', async () => {
     window.history.replaceState({}, '', '/')
     vi.useFakeTimers()

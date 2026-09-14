@@ -44,6 +44,8 @@ export async function openRecorderWindowWhenReady(timeoutMs = RECORDER_READY_TIM
     resolveReady = resolve
     rejectReady = reject
   })
+  // Attach immediately: native creation can take longer than the ready timeout.
+  void ready.catch(() => undefined)
 
   try {
     // Register first so a fast packaged WebView cannot emit ready between the
@@ -54,6 +56,7 @@ export async function openRecorderWindowWhenReady(timeoutMs = RECORDER_READY_TIM
       timeoutMs,
     )
     const result = await openRecorderWindow()
+    if (result === 'active') return result
     await ready
     return result
   } catch (error) {

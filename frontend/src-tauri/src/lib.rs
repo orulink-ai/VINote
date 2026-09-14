@@ -122,7 +122,11 @@ async fn open_recorder_window(app: AppHandle) -> Result<String, String> {
         let _ = window.show();
         let _ = window.set_focus();
         let _ = window.set_always_on_top(true);
-        return Ok("existing".into());
+        return Ok(if app.state::<RecorderRuntimeState>().is_active() {
+            "active"
+        } else {
+            "existing"
+        }.into());
     }
 
     #[cfg(debug_assertions)]
