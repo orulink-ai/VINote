@@ -7,16 +7,15 @@ VINote 使用独立 Langfuse 项目，记录后端笔记生成任务。实现参
 在根目录 `.env` 配置项目凭据，然后重启后端：
 
 ```dotenv
-LANGFUSE_ENABLED=true
 LANGFUSE_BASE_URL=http://192.168.1.118:3000
 LANGFUSE_PUBLIC_KEY=替换为VINote项目PublicKey
 LANGFUSE_SECRET_KEY=替换为VINote项目SecretKey
 LANGFUSE_TRACING_ENVIRONMENT=development
-LANGFUSE_RELEASE=0.4.0
+LANGFUSE_RELEASE=0.5.0
 LANGFUSE_CAPTURE_CONTENT=false
 ```
 
-默认关闭；缺少配置或 SDK/导出出错时继续生成笔记。开启后，后台批量上报，正常关闭后端时清空队列；强制终止进程可能丢失尚未上报的记录。项目密钥只放后端或本机配置，不放前端、版本库和安装包。
+源码、测试安装包与正式安装包固定启用，旧 `LANGFUSE_ENABLED=false` 不再关闭追踪。源码缺少项目凭据会在启动时明确报错；两种安装包缺少凭据会阻止构建。SDK/网络导出故障不阻断笔记生成，但不视为追踪验收通过。后台批量上报，正常关闭后端时清空队列；强制终止进程可能丢失未上报记录。默认地址为 `http://192.168.1.118:3000`，构建者可通过后端配置迁移地址。
 
 `LANGFUSE_CAPTURE_CONTENT=false` 记录脱敏标记和字符数；设为 `true` 后记录提示词、识别文本和生成笔记。不会记录原始音视频、API key、认证头、本地文件路径或来源 URL。错误记录异常类型，不复制可能含凭据的供应商错误正文。用量仅记录供应商返回的数据；不估算缺失 token，不伪造非流式请求的首 token 时间。模型费用由 Langfuse 对支持的模型定价计算，自定义模型需配置价格。
 
@@ -33,15 +32,17 @@ LANGFUSE_CAPTURE_CONTENT=false
 
 ## 安装版
 
-安装版从 `VINOTE_DESKTOP_DATA` 对应的应用数据目录读取 `langfuse.env`，与 SQLite/`desktop-secrets.json` 同级。文件仅需 BASE_URL、PUBLIC_KEY、SECRET_KEY 三项以及可选 `LANGFUSE_CAPTURE_CONTENT`；凭据齐全自动启用；可在该文件设置 `LANGFUSE_ENABLED=false` 显式关闭。已有文件是独立配置集，不与源码 `.env` 混用；文件不完整或无法读取时禁用 tracing。安装版环境默认 `production`，开发默认 `development`，测试部署可通过 `LANGFUSE_TRACING_ENVIRONMENT=test` 指定。重新打包后才包含此能力，现有安装包不会自动更新。
+测试与正式安装包从构建环境的 `.env` 或进程环境读取同一 VINote Langfuse 项目配置，写入后端资源 `desktop-config.json`。安装后无需手动创建文件；旧应用数据目录中的 `langfuse.env` 不再参与配置，父进程中的其他项目凭据也不能覆盖包内项目。环境分别为 `test`、`production`，源码为 `development`。旧安装包必须重新构建更新。
+
+用户要求三种运行方式统一直接接入，因此安装包包含 Langfuse 项目凭据，安装包持有人可提取这些凭据。这是明确的分发边界，不能把冻结资源当成加密保管。凭据不得进入 Git、前端资源、日志和 manifest；开发 `.env` 整体、模型 API key、用户会话、数据库密码仍不得打包。
+
+两个渠道构建都必须运行冻结后端的 `--langfuse-smoke-test`：上报合成笔记链路并通过 Langfuse API 读回，确认 environment、模型、用量与父子关系后才生成安装包。manifest 的 `langfuse` 字段保存不含密钥的验收回执。此检查需要构建机能访问 Langfuse；缺依赖、认证失败或读回失败会阻止产物生成。
 
 ## 验证
 
 ```powershell
-$env:LANGFUSE_ENABLED='false'
 .venv/Scripts/python.exe -m pytest tests -q
-Remove-Item Env:LANGFUSE_ENABLED
 .venv/Scripts/python.exe scripts/check_langfuse.py --send
 ```
 
-第二条 Python 命令会使用合成字幕与模拟 LLM 响应执行真实 NoteService 管线，并向配置的 Langfuse 发送记录，再通过公共 API 读回检查 session、模型与 token。它验证接入和字段落库，不验证真实 STT/LLM 效果；普通单元测试应关闭对外 tracing。
+第二条 Python 命令会使用合成字幕与模拟 LLM 响应执行真实 NoteService 管线，并向配置的 Langfuse 发送记录，再通过公共 API 读回检查 session、模型与 token。它验证接入和字段落库，不验证真实 STT/LLM 效果；`tests/conftest.py` 仅在测试进程中关闭对外 tracing，不依赖产品关闭开关。

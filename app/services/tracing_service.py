@@ -1,9 +1,10 @@
-"""Optional, fail-open Langfuse tracing for note generation."""
+"""Always-enabled Langfuse tracing; exporter failures do not interrupt generation."""
 import atexit
 import hashlib
 import hmac
 import inspect
 import logging
+import os
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from functools import wraps
@@ -16,6 +17,14 @@ _client = None
 _lock = Lock()
 _generation = ContextVar("vinote_generation", default=None)
 _active_span = ContextVar("vinote_span", default=None)
+
+
+def validate_configuration():
+    """Reject missing deployment credentials instead of silently running unobserved."""
+    if settings.langfuse_enabled and not all((value or '').strip() for value in (
+        settings.langfuse_base_url, settings.langfuse_public_key, settings.langfuse_secret_key,
+    )):
+        raise RuntimeError('Langfuse project configuration is required; configure backend credentials')
 
 
 def get_client():
@@ -34,6 +43,8 @@ def get_client():
                     "service.version": settings.langfuse_release,
                     "deployment.environment.name": settings.langfuse_environment,
                 }))
+                # The SDK also reads its own legacy switch; keep product policy authoritative.
+                os.environ['LANGFUSE_TRACING_ENABLED'] = 'true'
                 _client = Langfuse(
                     public_key=settings.langfuse_public_key,
                     secret_key=settings.langfuse_secret_key,
@@ -42,6 +53,7 @@ def get_client():
                     release=settings.langfuse_release,
                     tracer_provider=provider,
                     timeout=5,
+                    sample_rate=1.0,
                 )
                 atexit.register(shutdown)
             except Exception:

@@ -133,6 +133,26 @@ class NoteServiceTest(unittest.TestCase):
         mode.start()
         self.addCleanup(mode.stop)
 
+    def test_uploaded_video_reuses_original_for_screenshots(self):
+        with tempfile.TemporaryDirectory() as root:
+            artifacts = TaskArtifactService(Path(root))
+            folder = artifacts.create_task_dir("screen-test")
+            video = folder / "media" / "source_video.webm"
+            video.parent.mkdir()
+            video.write_bytes(b"original recording")
+            artifacts.record_source_media(folder, video, media_kind="video")
+            screenshots = FakeScreenshotService()
+            service = NoteService(downloader=FakeDownloader(str(video)),
+                                  transcription_service=FakeTranscriptionService(),
+                                  llm_service=FakeLLMService(), artifact_service=artifacts,
+                                  screenshot_service=screenshots)
+            with patch.object(screenshots, "prepare_local_video", side_effect=AssertionError("Must not download")):
+                result = service.generate_from_file(str(video), "screen-test", title="Screen meeting")
+            assert "![Screenshot" in result.markdown
+            assert "/source_video.webm" in result.markdown
+            assert artifacts.resolve_source_media(Path(result.output_dir)).read_bytes() == b"original recording"
+            assert not list(Path(result.output_dir).glob("media/source_audio.*"))
+
     def test_failure_after_rename_is_visible_to_polling(self):
         with tempfile.TemporaryDirectory() as root:
             artifacts = TaskArtifactService(Path(root))

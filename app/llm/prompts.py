@@ -38,7 +38,16 @@ STYLE_INSTRUCTIONS: dict[OutputLanguage, dict[str, str]] = {
         "detailed": "风格要求：使用详细模式，尽量完整记录内容、示例、结论和关键细节。",
         "academic": "风格要求：使用学术表达，整理论点、论据和原文中明确出现的引用关系。",
         "tutorial": "风格要求：使用教程模式，按步骤整理流程、方法和关键操作。",
-        "meeting": "风格要求：使用会议纪要模式，整理议题、讨论要点、决策和待办事项。",
+        "meeting": """风格要求：产出能直接用于推进工作的会议纪要，而非逐条发言或时间线抄录。
+按实际信息选择以下层次，缺少依据的章节直接省略：
+1. 会议概览：用一小段说明本次要解决的问题，再用 3–5 条列出最重要的共识或结果。
+2. 核心议题：按业务主题归并跨时间、跨说话人的讨论；每个主题说明结论/方向、关键约束及必要依据，不机械复述发言。
+3. 已确认决策：仅列原文明示确认的决定，并简要说明依据；建议、设想单独标明，不能升级为决策。
+4. 行动事项：只列明确提出的任务，可用“事项｜负责人｜期限｜完成标准”表格。任务存在但负责人或时间未说明时写“未明确”；禁止补造任务、验收标准和日期。
+5. 未决问题：仅列会议实际提出且未解决的问题，不把资料缺失编成议题。
+正文中按需附少量 [MM:SS] 引用供回听；智能章节或时间线仅可作为最后的辅助索引，不替代主题总结。不为了格式重复相同信息，不强行输出金句或空表格。
+只在归属明确且有助理解时注明发言人；播放或引用的声音不等于本人参加会议或操作播放。多人示例音频按内容总结，不硬套真实会议决策与待办。
+输出前核对：不得把原文已明确的渠道、范围或分工改写为“尚未确定”；不得把单个行动拆成多个空泛待办；没有明确提出的开放问题就省略未决章节。只有文件级时间戳时，不在每个主题重复无信息量的 [00:00]。""",
         "xiaohongshu": "风格要求：使用小红书风格，语气更轻松，适度使用 emoji 和高亮表达。",
     },
     "en": {
@@ -46,7 +55,9 @@ STYLE_INSTRUCTIONS: dict[OutputLanguage, dict[str, str]] = {
         "detailed": "Style requirement: use a detailed format and preserve examples, conclusions, and supporting details.",
         "academic": "Style requirement: use an academic tone and organize claims, evidence, and explicit references from the transcript.",
         "tutorial": "Style requirement: use a tutorial format and present the workflow as clear step-by-step guidance.",
-        "meeting": "Style requirement: use meeting minutes format with agenda items, discussion points, decisions, and follow-ups.",
+        "meeting": """Produce actionable meeting minutes, not a chronological list of utterances.
+Choose supported sections only: an overview of the problem and 3–5 main outcomes; thematic discussion synthesizing conclusions, constraints and rationale across speakers; explicitly confirmed decisions separated from proposals; explicit actions with task/owner/deadline/completion criterion; and questions actually raised but unresolved.
+Mark an existing action's missing fields as unspecified; never invent tasks, owners, deadlines or acceptance criteria. Omit empty sections and avoid duplication. Use occasional [MM:SS] evidence links; a chapter timeline is only a supplementary appendix, never the main summary. Attribute speakers only when supported and useful. Quoted or played voices are not necessarily participants or playback operators. Demonstration recordings must not acquire invented meeting decisions or follow-ups.""",
         "xiaohongshu": "Style requirement: use a Xiaohongshu-style tone with light emoji usage and stronger highlights.",
     },
 }
@@ -68,8 +79,10 @@ SYSTEM_PROMPTS: dict[OutputLanguage, str] = {
 2. 可以重组语序、分段、添加小标题和列表，但不要改变原意。
 3. 去掉寒暄、口头禅、重复和明显无关内容。
 4. 保留关键事实、例子、步骤、结论和建议。
-5. 每个主要章节都放一个截图标记，格式为 [[Screenshot:MM:SS]]。
-6. 如果视频很短，至少放 2 到 3 个截图标记。""",
+5. 仅在有明确时间依据且画面有助于理解时添加 [[Screenshot:MM:SS]]，不强行凑图。
+6. 不推断未提供的画面内容，不将展示的建议写成已确认结论。
+7. 发言时间范围严格使用输入的开始与结束时间，不把下一位说话人的开始时间当作上一段的结束时间。
+8. 实际会议起止时间与累计录音时长分开记录。录音可能暂停或分段，禁止用音频时长、最后一个片段时间或文件日期推算会议起止；只采用明确提供的实际时间，缺少时省略。章节时间引用属于录音时间轴，不代表实际钟表时间。""",
     "en": """You are a professional video note assistant. Convert raw video transcripts into clear, accurate Markdown notes.
 
 Language requirements:
@@ -86,8 +99,10 @@ Editing principles:
 2. You may reorganize sentences, paragraphs, headings, and lists, but do not change the meaning.
 3. Remove greetings, filler words, repetition, and obviously irrelevant content.
 4. Preserve important facts, examples, steps, conclusions, and recommendations.
-5. Add one screenshot marker to every major section using [[Screenshot:MM:SS]].
-6. If the video is short, include at least 2 to 3 screenshot markers.""",
+5. Add [[Screenshot:MM:SS]] only when a supported timestamp and useful visual context exist; do not force screenshots.
+6. Do not invent unseen visual content or treat a presented proposal as a confirmed decision.
+7. Use the supplied start and end times for speaking turns; never substitute the next speaker's start time for a turn's end.
+8. Keep actual meeting start/end times separate from accumulated recording duration. Recording may pause or contain separate segments. Never infer meeting times from media duration, the last segment or a filename date; use explicitly supplied actual times, or omit them. Chapter timestamps are recording offsets, not wall-clock times.""",
 }
 
 CHUNK_SYSTEM_PROMPTS: dict[OutputLanguage, str] = {
@@ -135,7 +150,7 @@ USER_PROMPT_TEMPLATES: dict[OutputLanguage, str] = {
 ---
 
 请根据上面的转录内容生成一份结构化视频笔记。
-请在笔记末尾增加 **## AI 总结** 章节，用 3 到 5 句话概括视频核心内容。
+{summary_instruction}
 
 {style_instruction}
 {extras_instruction}""",
@@ -147,7 +162,7 @@ Segmented transcript (format: timestamp - content):
 ---
 
 Please generate a structured video note from the transcript above.
-Add a **## AI Summary** section at the end with 3 to 5 sentences summarizing the core ideas.
+{summary_instruction}
 
 {style_instruction}
 {extras_instruction}""",
@@ -203,7 +218,7 @@ MERGE_USER_PROMPT_TEMPLATES: dict[OutputLanguage, str] = {
 - 去重并合并相邻主题
 - 保留关键事实、例子、步骤、决策和待办
 - 不要遗漏跨片段出现的重要结论
-- 在笔记末尾增加 **## AI 总结** 章节，用 3 到 5 句话概括核心内容
+{summary_instruction}
 
 中间整理稿：
 ---
@@ -220,7 +235,7 @@ Requirements:
 - Deduplicate and merge adjacent topics
 - Preserve important facts, examples, steps, decisions, and follow-ups
 - Do not lose important conclusions that appear across chunks
-- Add a **## AI Summary** section at the end with 3 to 5 sentences summarizing the core ideas
+{summary_instruction}
 
 Chunk drafts:
 ---
@@ -245,7 +260,30 @@ def normalize_summary_mode(summary_mode: str | None) -> SummaryMode:
 
 
 def _build_style_instruction(style: str, language: OutputLanguage) -> str:
-    return STYLE_INSTRUCTIONS[language].get(style, STYLE_INSTRUCTIONS[language]["detailed"])
+    instruction = STYLE_INSTRUCTIONS[language].get(style, STYLE_INSTRUCTIONS[language]["detailed"])
+    if style == "meeting":
+        instruction += "\n" + (
+            "保留行动主体、动作对象、否定词与前提条件，不能用常见流程替换原文安排。"
+            "实际会议时间只采用明确提供的值；录音可能暂停，累计录音时长和章节偏移不能推算会议起止。"
+            if language == "zh-CN" else
+            "Preserve actors, objects, negations and conditions; do not substitute a conventional workflow. "
+            "Use only explicitly supplied meeting times. Paused recording duration and media offsets cannot establish meeting start/end times."
+        )
+    return instruction
+
+
+def _build_summary_instruction(style: str, language: OutputLanguage) -> str:
+    if style == "meeting":
+        return (
+            "关键结果集中写在开头的会议概览，末尾不重复总结。"
+            if language == "zh-CN" else
+            "Put key outcomes in the opening overview; do not repeat a closing summary."
+        )
+    return (
+        "请在笔记末尾增加 **## AI 总结** 章节，用 3 到 5 句话概括核心内容。"
+        if language == "zh-CN" else
+        "Add a **## AI Summary** section at the end with 3 to 5 sentences summarizing the core ideas."
+    )
 
 
 def _build_extras_instruction(extras: str | None, language: OutputLanguage) -> str:
@@ -280,6 +318,7 @@ def build_user_prompt(
 ) -> str:
     language = normalize_output_language(output_language)
     return USER_PROMPT_TEMPLATES[language].format(
+        summary_instruction=_build_summary_instruction(style, language),
         title=title,
         segment_text=segment_text,
         style_instruction=_build_style_instruction(style, language),
@@ -316,6 +355,7 @@ def build_merge_user_prompt(
 ) -> str:
     language = normalize_output_language(output_language)
     return MERGE_USER_PROMPT_TEMPLATES[language].format(
+        summary_instruction=_build_summary_instruction(style, language),
         title=title,
         chunk_notes_text=chunk_notes_text,
         style_instruction=_build_style_instruction(style, language),

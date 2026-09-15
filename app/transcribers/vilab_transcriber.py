@@ -1,9 +1,11 @@
 """VILab's native HTTP file transcription API (not OpenAI audio)."""
 import subprocess
 import tempfile
+import time
 from pathlib import Path
 
 import httpx
+from fastapi import HTTPException
 
 from app.models.transcript import TranscriptResult, TranscriptSegment
 from app.transcribers.base import Transcriber
@@ -27,7 +29,17 @@ class VILabTranscriber(Transcriber):
                                check=True, capture_output=True, timeout=600)
             except (subprocess.SubprocessError, OSError):
                 raise RuntimeError("无法转换音频，请检查 ffmpeg 和输入文件") from None
-            return self._transcribe_normalized(normalized)
+            for attempt in range(3):
+                try:
+                    return self._transcribe_normalized(normalized)
+                except (HTTPException, RuntimeError) as exc:
+                    # Retry only explicit transient gateway failures. Authentication,
+                    # validation and unknown failures remain visible immediately.
+                    detail = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
+                    transient = any(f"HTTP {code}" in detail for code in (502, 503, 504))
+                    if not transient or attempt == 2:
+                        raise
+                    time.sleep(attempt + 1)
 
     def _transcribe_normalized(self, file_path: str) -> TranscriptResult:
         # Streaming ASR may consume the upload at real-time speed.
@@ -71,10 +83,33 @@ class VILabTranscriber(Transcriber):
             "ffprobe", "-v", "error", "-show_entries", "format=duration",
             "-of", "default=noprint_wrappers=1:nokey=1", file_path,
         ], text=True, timeout=30).strip())
-        # VILab returns whole-file text, not sentence-level timestamps.
+        # Preserve provider evidence when available; never synthesize speakers.
+        segments = []
+        for item in payload.get("segments") or []:
+            if not isinstance(item, dict) or not str(item.get("text") or "").strip():
+                continue
+            try:
+                start, end = float(item["start"]), float(item["end"])
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not 0 <= start <= end <= duration + 1:
+                continue
+            speaker = item.get("speaker_id", item.get("speaker"))
+            segments.append(TranscriptSegment(
+                start=start, end=end, text=str(item["text"]), raw_text=str(item["text"]),
+                speaker_id=str(speaker) if speaker is not None else None,
+                speaker_label=item.get("speaker_label"),
+            ))
+        has_timestamps = bool(segments)
+        if not segments:
+            segments = [TranscriptSegment(start=0, end=duration, text=text, raw_text=text)]
         return TranscriptResult(
             language=payload.get("language") or self.language,
             full_text=text,
-            segments=[TranscriptSegment(start=0, end=duration, text=text, raw_text=text)],
-            metadata={"provider": "vliab-server", "timestamp_granularity": "file"},
+            segments=segments,
+            metadata={
+                "provider": "vliab-server",
+                "timestamp_granularity": "segment" if has_timestamps else "file",
+                "speaker_diarization": any(segment.speaker_id is not None for segment in segments),
+            },
         )

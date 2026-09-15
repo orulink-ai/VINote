@@ -15,12 +15,15 @@ DEFAULT_SQLITE_PATH = BASE_DIR / "data" / "vinote.db"
 
 @dataclass
 class Settings:
-    langfuse_enabled: bool = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
-    langfuse_base_url: str = os.getenv("LANGFUSE_BASE_URL", "").rstrip("/")
+    meeting_review_model: str = os.getenv("MEETING_REVIEW_MODEL", "gpt-6-astra").strip()
+    diarization_cluster_threshold: float = float(os.getenv("DIARIZATION_CLUSTER_THRESHOLD", "0.5"))
+    # Tracing is a product requirement in source, test and release builds.
+    langfuse_enabled: bool = True
+    langfuse_base_url: str = os.getenv("LANGFUSE_BASE_URL", "http://192.168.1.118:3000").rstrip("/")
     langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
     langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
     langfuse_environment: str = os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "development")
-    langfuse_release: str = os.getenv("LANGFUSE_RELEASE", "0.4.0")
+    langfuse_release: str = os.getenv("LANGFUSE_RELEASE", "0.5.0")
     langfuse_capture_content: bool = os.getenv("LANGFUSE_CAPTURE_CONTENT", "false").lower() == "true"
 
     host: str = os.getenv("HOST", "0.0.0.0")
@@ -46,6 +49,8 @@ class Settings:
     llm_base_url: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
     llm_model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
     llm_provider: str = os.getenv("LLM_PROVIDER", "openai-compatible")
+
+    diarization_model_dir: Path = Path(os.getenv("DIARIZATION_MODEL_DIR", str(BASE_DIR / "data" / "models" / "diarization")))
 
     transcriber_type: str = os.getenv("TRANSCRIBER_TYPE", "groq")
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")

@@ -13,7 +13,7 @@ from app.transcribers.vilab_transcriber import VILabTranscriber
 from app.llm.vilab_llm import VILabLLM
 
 
-def test_generation_uses_server_defaults_over_saved_selection(monkeypatch):
+def test_generation_requires_resolved_models(monkeypatch):
     service = VILabCloudService()
     monkeypatch.setattr(service, "status", lambda uid: {
         "configured": True, "mode": "cloud", "llm_model": "old", "asr_model": "asr",
@@ -138,8 +138,42 @@ def test_running_task_keeps_mode_until_next_task(monkeypatch):
     monkeypatch.setattr(module, "session_scope", session)
     service = VILabCloudService()
     monkeypatch.setattr(service, "request", lambda *a, **k: {"llm_model": "server-current", "asr_model": "server-asr"})
+    monkeypatch.setattr(service, "models", lambda uid: [
+        {"id": "llm", "modelType": "llm", "runtimeStatus": "available"},
+        {"id": "asr", "modelType": "asr", "runtimeStatus": "available"},
+    ])
     with service.task_snapshot("user-1"):
         row.mode = "local"
         assert service.status("user-1")["mode"] == "cloud"
-        assert service.status("user-1")["llm_model"] == "server-current"
+        row.llm_model = "changed-after-start"
+        assert service.status("user-1")["llm_model"] == "llm"
     assert service.status("user-1")["mode"] == "local"
+
+
+def test_model_preferences_are_resolved_per_user(monkeypatch):
+    service = VILabCloudService()
+    monkeypatch.setattr(service, "status", lambda uid: {
+        "asr_model": "", "llm_model": "chosen" if uid == "user-a" else "",
+    })
+    monkeypatch.setattr(service, "request", lambda *a, **k: {
+        "asr_model": "default-asr", "llm_model": "default-llm",
+    })
+    monkeypatch.setattr(service, "models", lambda uid: [
+        {"id": "chosen", "modelType": "llm", "runtimeStatus": "available"},
+    ])
+    assert service.defaults("user-a") == {"asr_model": "default-asr", "llm_model": "chosen"}
+    assert service.defaults("user-b")["llm_model"] == "default-llm"
+
+
+@pytest.mark.parametrize("runtime_status", ["unavailable", "loading", ""])
+def test_unavailable_selection_fails_before_generation(monkeypatch, runtime_status):
+    service = VILabCloudService()
+    monkeypatch.setattr(service, "status", lambda uid: {"llm_model": "chosen"})
+    monkeypatch.setattr(service, "request", lambda *a, **k: {"llm_model": "default"})
+    monkeypatch.setattr(service, "models", lambda uid: [
+        {"id": "chosen", "modelType": "llm", "runtimeStatus": runtime_status},
+    ])
+    with pytest.raises(HTTPException, match="不可用"):
+        service.defaults("user-a")
+    with pytest.raises(HTTPException, match="不可用"):
+        service.select("user-a", "cloud", "", "chosen")

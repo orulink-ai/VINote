@@ -30,6 +30,7 @@ frontend/.env
 frontend/.env.local
 frontend/.env.*.local
 frontend/src-tauri/target/
+frontend/src-tauri/gen/schemas/windows-schema.json
 node_modules/
 docs/.vitepress/cache/
 docs/.vitepress/dist/

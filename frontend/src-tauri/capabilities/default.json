@@ -5,6 +5,7 @@
   "windows": ["main", "recorder-window"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
   "permissions": [
+    "meeting-recorder",
     "core:default",
     "core:window:allow-hide",
     "core:window:allow-close",

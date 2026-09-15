@@ -105,7 +105,8 @@ fn recorder_window_position(app: &AppHandle) -> Option<LogicalPosition<f64>> {
 }
 
 #[tauri::command]
-async fn open_recorder_window(app: AppHandle) -> Result<String, String> {
+async fn open_recorder_window(app: AppHandle, controller: Option<bool>) -> Result<String, String> {
+    let controller = controller.unwrap_or(false);
     // WebView2 window creation must not run in a synchronous IPC command:
     // it can deadlock the Windows UI thread before microphone access begins.
     if let Some(window) = app.get_webview_window(RECORDER_WINDOW_LABEL) {
@@ -115,7 +116,9 @@ async fn open_recorder_window(app: AppHandle) -> Result<String, String> {
         // listener that may no longer exist.
         if !app.state::<RecorderRuntimeState>().is_active() {
             if let Ok(url) = window.url() {
-                let _ = window.navigate(recorder_window_reopen_url(url));
+                let mut next_url = recorder_window_reopen_url(url);
+                if controller { next_url.query_pairs_mut().append_pair("controller", "1"); }
+                let _ = window.navigate(next_url);
             }
         }
         let _ = window.unminimize();
@@ -130,11 +133,11 @@ async fn open_recorder_window(app: AppHandle) -> Result<String, String> {
     }
 
     #[cfg(debug_assertions)]
-    let recorder_url = WebviewUrl::App(recorder_window_url().into());
+    let recorder_url = WebviewUrl::App(if controller { "index.html?recorderWindow=1&controller=1".into() } else { recorder_window_url().into() });
     #[cfg(not(debug_assertions))]
     let recorder_url = WebviewUrl::External(app.get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or("Main window not found")?.url().map_err(|e| e.to_string())?
-        .join("/?recorderWindow=1&autostart=1").map_err(|e| e.to_string())?);
+        .join(if controller { "/?recorderWindow=1&controller=1" } else { "/?recorderWindow=1&autostart=1" }).map_err(|e| e.to_string())?);
     let mut builder = WebviewWindowBuilder::new(
         &app,
         RECORDER_WINDOW_LABEL,
@@ -257,10 +260,14 @@ fn handle_run_event(app: &AppHandle, event: RunEvent) {
             if let WindowEvent::CloseRequested { api, .. } = event {
                 if label == MAIN_WINDOW_LABEL {
                     api.prevent_close();
-                    if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
-                        let _ = window.hide();
+                    if app.get_webview_window(RECORDER_WINDOW_LABEL).is_some() {
+                        if let Some(window) = app.get_webview_window(MAIN_WINDOW_LABEL) {
+                            let _ = window.hide();
+                        }
+                        focus_recorder_window(app);
+                    } else {
+                        let _ = app.emit_to(MAIN_WINDOW_LABEL, NAVIGATE_EVENT, "/meetings");
                     }
-                    focus_recorder_window(app);
                 } else if label == RECORDER_WINDOW_LABEL {
                     api.prevent_close();
                     focus_recorder_window(app);

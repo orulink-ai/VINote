@@ -4,7 +4,7 @@ Request and response models for note generation.
 from dataclasses import dataclass
 from typing import Literal, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.models.audio import AudioDownloadResult
 from app.models.transcript import TranscriptResult
@@ -28,6 +28,8 @@ class NoteRequest(BaseModel):
 
 
 class LocalFileRequest(BaseModel):
+    diarize: bool = False
+    speaker_count: int | None = Field(default=None, ge=1, le=20)
     file_path: str
     title: Optional[str] = None
     style: Optional[str] = "meeting"

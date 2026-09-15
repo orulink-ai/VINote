@@ -15,7 +15,7 @@ from app.llm.prompts import STYLE_MAP
 from app.models.auth import AuthenticatedUser
 from app.models.note import LocalFileRequest, NoteRequest, NoteResponse, SummaryMode, TaskStatusResponse
 from app.models.transcript import TranscriptResult, TranscriptSegment
-from app.services.auth_service import get_optional_current_user
+from app.services.auth_service import get_current_user, get_optional_current_user
 from app.services.audio_normalizer import normalize_audio_for_transcription
 from app.services.note_service import NoteService
 
@@ -305,9 +305,13 @@ def _build_note_request_fields(
     model_name: str | None,
     api_key: str | None,
     base_url: str | None,
+    diarize: bool = False,
+    speaker_count: int | None = None,
 ) -> LocalFileRequest:
     return LocalFileRequest(
         file_path=file_path,
+        diarize=diarize,
+        speaker_count=speaker_count,
         title=title,
         style=style or "meeting",
         summary_mode=summary_mode,
@@ -410,6 +414,12 @@ def get_task_artifact(task_id: str, asset_path: str):
     return FileResponse(Path(requested_path))
 
 
+@router.get("/meeting-capabilities")
+def meeting_capabilities(user: AuthenticatedUser = Depends(get_current_user)):
+    from app.services.speaker_diarization_service import SpeakerDiarizationService
+    return {"diarization": SpeakerDiarizationService.readiness()}
+
+
 @router.get("/styles")
 def get_styles():
     return {"styles": [{"value": key, "description": value} for key, value in STYLE_MAP.items()]}
@@ -440,6 +450,8 @@ def generate_from_file_sync(
     try:
         result = _note_service.generate_from_file(
             file_path=req.file_path,
+            diarize=req.diarize,
+            speaker_count=req.speaker_count,
             task_id=task_id,
             title=req.title,
             style=req.style or "meeting",
@@ -473,6 +485,8 @@ async def generate_from_upload(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     source_type: str = Form("media"),
+    diarize: bool = Form(False),
+    speaker_count: int | None = Form(None, ge=1, le=20),
     title: str | None = Form(None),
     style: str | None = Form("meeting"),
     summary_mode: str = Form("default"),
@@ -489,15 +503,16 @@ async def generate_from_upload(
         normalized_source_type = _normalize_source_type(source_type)
         normalized_summary_mode = _normalize_summary_mode(summary_mode)
         normalized_output_language = _normalize_output_language(output_language)
-        file_bytes = await file.read()
-
-        if not file_bytes:
-            raise ValueError("Uploaded file is empty.")
-
+        if diarize and normalized_source_type != "transcript":
+            from app.services.speaker_diarization_service import SpeakerDiarizationService
+            SpeakerDiarizationService.require_ready()
         task_id = str(uuid.uuid4())
 
         if normalized_source_type == "transcript":
             _ensure_transcript_extension(file.filename)
+            file_bytes = await file.read()
+            if not file_bytes:
+                raise ValueError("Uploaded file is empty.")
             transcript = _build_transcript_from_upload(file.filename, file_bytes)
             background_tasks.add_task(
                 _run_task_from_transcript,
@@ -522,7 +537,13 @@ async def generate_from_upload(
             media_dir.mkdir(parents=True, exist_ok=True)
             suffix = Path(_sanitize_filename(file.filename)).suffix.lower() or ".webm"
             upload_path = media_dir / f"source_{normalized_source_type}{suffix}"
-            upload_path.write_bytes(file_bytes)
+            # Stream large recordings instead of retaining the whole video in RAM.
+            with upload_path.open("wb") as destination:
+                while chunk := await file.read(1024 * 1024):
+                    destination.write(chunk)
+            if not upload_path.stat().st_size:
+                upload_path.unlink()
+                raise ValueError("Uploaded file is empty.")
             _note_service.artifact_service.record_source_media(
                 task_dir,
                 upload_path,
@@ -537,6 +558,8 @@ async def generate_from_upload(
             _note_service.artifact_service.update_status(task_dir, "uploaded", "Media uploaded")
             req = _build_note_request_fields(
                 file_path=str(upload_path),
+                diarize=diarize,
+                speaker_count=speaker_count,
                 title=title,
                 style=style,
                 summary_mode=normalized_summary_mode,
@@ -568,6 +591,8 @@ async def generate_from_upload(
 async def generate_from_upload_sync(
     file: UploadFile = File(...),
     source_type: str = Form("media"),
+    diarize: bool = Form(False),
+    speaker_count: int | None = Form(None, ge=1, le=20),
     title: str | None = Form(None),
     style: str | None = Form("meeting"),
     summary_mode: str = Form("default"),
@@ -585,15 +610,13 @@ async def generate_from_upload_sync(
         normalized_source_type = _normalize_source_type(source_type)
         normalized_summary_mode = _normalize_summary_mode(summary_mode)
         normalized_output_language = _normalize_output_language(output_language)
-        file_bytes = await file.read()
-
-        if not file_bytes:
-            raise ValueError("Uploaded file is empty.")
-
         _ensure_media_extension(normalized_source_type, file.filename)
 
         if normalized_source_type == "transcript":
             _ensure_transcript_extension(file.filename)
+            file_bytes = await file.read()
+            if not file_bytes:
+                raise ValueError("Uploaded file is empty.")
             transcript = _build_transcript_from_upload(file.filename, file_bytes)
             result = _note_service.generate_from_transcript(
                 transcript=transcript,
@@ -616,7 +639,13 @@ async def generate_from_upload_sync(
             media_dir.mkdir(parents=True, exist_ok=True)
             suffix = Path(_sanitize_filename(file.filename)).suffix.lower() or ".webm"
             upload_path = media_dir / f"source_{normalized_source_type}{suffix}"
-            upload_path.write_bytes(file_bytes)
+            # Stream large recordings instead of retaining the whole video in RAM.
+            with upload_path.open("wb") as destination:
+                while chunk := await file.read(1024 * 1024):
+                    destination.write(chunk)
+            if not upload_path.stat().st_size:
+                upload_path.unlink()
+                raise ValueError("Uploaded file is empty.")
             _note_service.artifact_service.record_source_media(
                 task_dir,
                 upload_path,
@@ -626,6 +655,8 @@ async def generate_from_upload_sync(
                 upload_path = normalize_audio_for_transcription(upload_path)
             req = _build_note_request_fields(
                 file_path=str(upload_path),
+                diarize=diarize,
+                speaker_count=speaker_count,
                 title=title,
                 style=style,
                 summary_mode=normalized_summary_mode,
@@ -695,6 +726,8 @@ def _run_task_from_file(task_id: str, req: LocalFileRequest, user_id: str | None
     try:
         _note_service.generate_from_file(
             file_path=req.file_path,
+            diarize=req.diarize,
+            speaker_count=req.speaker_count,
             task_id=task_id,
             title=req.title,
             style=req.style or "meeting",

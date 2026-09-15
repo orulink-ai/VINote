@@ -31,6 +31,8 @@ def create_app() -> FastAPI:
 
     @app.on_event("startup")
     def startup():
+        from app.services.tracing_service import validate_configuration
+        validate_configuration()
         init_db()
 
     @app.on_event("shutdown")

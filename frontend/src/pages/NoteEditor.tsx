@@ -4,6 +4,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { MarkdownContent } from '../components/Markdown/MarkdownContent'
 import { KeyMomentsRail } from '../components/Notes/KeyMomentsRail'
 import { VideoReferencePanel } from '../components/Notes/VideoReferencePanel'
+import { SavedRecordingActions } from '../components/Notes/SavedRecordingActions'
 import { RecordingRetryBar } from '../components/Notes/RecordingRetryBar'
 import { TranscriptEvidencePanel } from '../components/Notes/TranscriptEvidencePanel'
 import { apiJson } from '../lib/api'
@@ -197,9 +198,11 @@ export function NoteEditor() {
 
   const noteView: NoteView = searchParams.get('view') === 'transcript' ? 'transcript' : 'summary'
   const activeMoment = findActiveKeyMoment(keyMoments, currentTimestamp)
-  const localMediaUrl = id && taskId ? `/api/notes/${id}/media` : undefined
+  const [recordingDeleted, setRecordingDeleted] = useState(false)
+  useEffect(() => setRecordingDeleted(false), [id])
+  const localMediaUrl = id && taskId && !recordingDeleted ? `/api/notes/${id}/media` : undefined
   const isAudioNote = Boolean(localMediaUrl) && ['audio', 'meeting_recording'].includes(sourceType)
-  const isVideoNote = Boolean(localMediaUrl) && sourceType === 'video'
+  const isVideoNote = Boolean(localMediaUrl) && ['video', 'meeting_video'].includes(sourceType)
   const splitLabel = locale.startsWith('zh') ? '对照' : 'Split'
   const workspaceBadge = noteScope === 'team'
     ? noteWorkspaceName || (locale.startsWith('zh') ? '团队笔记' : 'Team note')
@@ -515,6 +518,7 @@ export function NoteEditor() {
 
   return (
     <div className="flex h-full flex-col bg-[#f1efe8] dark:bg-[#0f0f0f]">
+      {id && ['meeting_recording', 'meeting_video'].includes(sourceType) && <SavedRecordingActions key={id} noteId={id} title={localTitle} onDeleted={() => setRecordingDeleted(true)} />}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-gray-200 px-4 py-3 dark:border-gray-800">
         <div className="flex min-w-0 items-center gap-3">
           <button

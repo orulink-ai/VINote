@@ -2,6 +2,8 @@
 Core note generation pipeline orchestration.
 """
 import logging
+import json
+import re
 import os
 import time
 from dataclasses import dataclass
@@ -43,6 +45,8 @@ class PipelineContext:
     source_video_url: str | None
     task_start_time: float
     step_timings: dict[str, float]
+    diarize: bool = False
+    speaker_count: int | None = None
     preloaded_transcript: TranscriptResult | None = None
 
 
@@ -149,15 +153,22 @@ class NoteService:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         user_id: Optional[str] = None,
+        diarize: bool = False,
+        speaker_count: int | None = None,
     ) -> NoteResult:
         task_start_time = time.time()
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Audio file does not exist: {file_path}")
 
         task_dir = self.artifact_service.create_task_dir(task_id)
+        if user_id:
+            (task_dir / "recording_owner").write_text(user_id, encoding="utf-8")
         step_timings: dict[str, float] = {}
 
         try:
+            if diarize:
+                from app.services.speaker_diarization_service import SpeakerDiarizationService
+                SpeakerDiarizationService.require_ready()
             from app.services.vilab_cloud_service import VILabCloudService
 
             VILabCloudService().validate_ready(user_id, needs_stt=True)
@@ -182,6 +193,8 @@ class NoteService:
                 base_url=base_url,
                 user_id=user_id,
                 source_video_url=None,
+                diarize=diarize,
+                speaker_count=speaker_count,
                 task_start_time=task_start_time,
                 preloaded_transcript=None,
                 step_timings=step_timings,
@@ -317,6 +330,8 @@ class NoteService:
         source_video_url: str | None,
         task_start_time: float,
         step_timings: dict[str, float],
+        diarize: bool = False,
+        speaker_count: int | None = None,
     ) -> NoteResult:
         resolved_output_language = normalize_output_language(output_language)
         resolved_summary_mode = normalize_summary_mode(summary_mode)
@@ -338,6 +353,8 @@ class NoteService:
             base_url=base_url,
             user_id=user_id,
             preloaded_transcript=preloaded_transcript,
+            diarize=diarize,
+            speaker_count=speaker_count,
             source_video_url=source_video_url,
             task_start_time=task_start_time,
             step_timings=step_timings,
@@ -402,6 +419,7 @@ class NoteService:
             ),
             user_id=context.user_id,
             stt_profile_id=context.stt_profile_id,
+            **({"diarize": True, "speaker_count": context.speaker_count} if context.diarize else {}),
         )
         context.step_timings["transcribe"] = time.time() - step_start
         update_current(output=content_summary(transcript.full_text),
@@ -439,7 +457,7 @@ class NoteService:
     def _enrich_markdown_with_media(self, context: PipelineContext, transcript, markdown: str) -> str:
         media_url = ""
         if context.audio_meta.file_path and os.path.exists(context.audio_meta.file_path):
-            local_audio_file = self.artifact_service.stage_media_file(
+            local_audio_file = self.artifact_service.resolve_source_media(context.task_dir) or self.artifact_service.stage_media_file(
                 context.task_dir,
                 context.audio_meta.file_path,
                 target_stem="source_audio",
@@ -447,16 +465,26 @@ class NoteService:
             media_url = f"/api/task/{context.task_id}/artifacts/media/{local_audio_file.name}"
         local_video_path = None
 
-        if not context.source_video_url:
-            return markdown
-
-        prepared_video = self.screenshot_service.prepare_local_video(
-            video_url=context.source_video_url,
-            task_dir=context.task_dir,
-            task_id=context.task_id,
-        )
-        if prepared_video:
-            local_video_path, media_url = prepared_video
+        if context.source_video_url:
+            prepared_video = self.screenshot_service.prepare_local_video(
+                video_url=context.source_video_url,
+                task_dir=context.task_dir,
+                task_id=context.task_id,
+            )
+            if prepared_video:
+                local_video_path, media_url = prepared_video
+        else:
+            manifest_path = context.task_dir / "source_media.json"
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                manifest = {}
+            if manifest.get("media_kind") == "video":
+                local_video_path = self.artifact_service.resolve_source_media(context.task_dir)
+                if local_video_path:
+                    media_url = f"/api/task/{context.task_id}/artifacts/media/{local_video_path.name}"
+            if not local_video_path:
+                return re.sub(r"\[\[Screenshot:\d{1,3}:\d{2}\]\]", "", markdown)
 
         markdown = self.media_service.enrich_markdown(
             markdown=markdown,
@@ -468,7 +496,7 @@ class NoteService:
         step_start = time.time()
         self.artifact_service.update_status(context.task_dir, "screenshots", "Processing screenshots...")
         markdown = self.screenshot_service.inject_screenshots(
-            video_url=context.source_video_url,
+            video_url=context.source_video_url or "",
             markdown=markdown,
             task_dir=context.task_dir,
             task_id=context.task_id,

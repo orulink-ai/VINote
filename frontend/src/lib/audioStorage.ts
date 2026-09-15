@@ -1,3 +1,4 @@
+import { removeSavedRecordingFile } from './recordingFile'
 // Persists recorded audio blobs in IndexedDB so a meeting recording can be
 // retried even after the recorder window is closed, the page is reloaded, or
 // the device restarts. The blob is keyed by an opaque recording id that is
@@ -78,4 +79,71 @@ export async function deleteRecordedAudio(id: string): Promise<void> {
 
 export function generateRecordingId() {
   return `rec-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+}
+
+export interface PendingMeeting {
+  id: string
+  ownerId: string
+  workspace: import('../stores/teamStore').WorkspaceSelection
+  options: import('./meetingCapture').MeetingCaptureOptions
+  startedAt: string
+  endedAt?: string
+  fileName?: string
+  elapsedSeconds: number
+}
+
+export async function savePendingMeeting(meeting: PendingMeeting) {
+  const db = await openDatabase()
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    tx.objectStore(STORE_NAME).put(meeting, `pending:${meeting.id}`)
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error)
+    tx.onabort = () => reject(tx.error)
+  })
+}
+
+export async function listPendingMeetings(ownerId: string): Promise<PendingMeeting[]> {
+  if (!isIndexedDBSupported()) return []
+  const db = await openDatabase()
+  return new Promise((resolve, reject) => {
+    const result: PendingMeeting[] = []
+    const tx = db.transaction(STORE_NAME, 'readonly')
+    const request = tx.objectStore(STORE_NAME).openCursor(IDBKeyRange.bound('pending:', 'pending:\uffff'))
+    request.onsuccess = () => {
+      const cursor = request.result
+      if (!cursor) return
+      if (cursor.value.ownerId === ownerId) result.push(cursor.value)
+      cursor.continue()
+    }
+    tx.oncomplete = () => resolve(result)
+    tx.onerror = () => reject(tx.error)
+  })
+}
+
+export function deletePendingMeeting(id: string) { return deleteRecordedAudio(`pending:${id}`) }
+
+/** User-visible deletion must report storage failures, unlike best-effort cleanup. */
+export async function deleteLocalRecording(id: string, ownerId: string) {
+  const db = await openDatabase()
+  const metadata = await new Promise<PendingMeeting>((resolve, reject) => {
+    const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(`pending:${id}`)
+    request.onsuccess = () => request.result?.ownerId === ownerId ? resolve(request.result) : reject(new Error('录制不存在或无权删除'))
+    request.onerror = () => reject(request.error)
+  })
+  if (metadata.fileName) await removeSavedRecordingFile(metadata.fileName)
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    const store = tx.objectStore(STORE_NAME)
+    const request = store.get(`pending:${id}`)
+    request.onsuccess = () => {
+      const recording = request.result as PendingMeeting | undefined
+      if (!recording || recording.ownerId !== ownerId) { tx.abort(); return }
+      store.delete(id)
+      store.delete(`pending:${id}`)
+    }
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('无法删除录制文件'))
+    tx.onabort = () => reject(new Error('录制不存在、无权删除或存储操作失败'))
+  })
 }

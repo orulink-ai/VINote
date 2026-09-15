@@ -1,3 +1,5 @@
+import { isMeetingController } from './lib/meetingController'
+import { MeetingRecorderController } from './components/MeetingRecorder/MeetingRecorderController'
 import { Suspense, lazy, useEffect } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { AuthGuard } from './components/Auth/AuthGuard'
@@ -13,6 +15,7 @@ const Notes = lazy(async () => ({ default: (await import('./pages/Notes')).Notes
 const NoteGenerator = lazy(async () => ({ default: (await import('./pages/NoteGenerator')).NoteGenerator }))
 const NoteEditor = lazy(async () => ({ default: (await import('./pages/NoteEditor')).NoteEditor }))
 const Settings = lazy(async () => ({ default: (await import('./pages/Settings')).Settings }))
+const Meetings = lazy(async () => ({ default: (await import('./pages/Meetings')).Meetings }))
 const Team = lazy(async () => ({ default: (await import('./pages/Team')).Team }))
 
 function RouteFallback() {
@@ -53,7 +56,7 @@ function App() {
     return (
       <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <div className="meeting-recorder-window-route h-screen w-screen overflow-hidden bg-transparent">
-          <MeetingRecorderDock autoStart />
+          {isMeetingController() ? <MeetingRecorderController /> : <MeetingRecorderDock autoStart />}
         </div>
       </BrowserRouter>
     )
@@ -70,6 +73,7 @@ function App() {
             </AuthGuard>
           }>
             <Route index element={<Home />} />
+            <Route path="meetings" element={<Meetings />} />
             <Route path="notes" element={<Notes />} />
             <Route path="generate" element={<NoteGenerator />} />
             <Route path="note/:id" element={<NoteEditor />} />

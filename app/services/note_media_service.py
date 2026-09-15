@@ -51,6 +51,7 @@ class NoteMediaService:
         updated_lines = list(lines)
         insertions: list[tuple[int, list[str]]] = []
         section_count = len(sections)
+        illustrated_timestamps: set[int] = set()
 
         for section in sections:
             section_lines = updated_lines[section.start_line : section.end_line]
@@ -69,7 +70,9 @@ class NoteMediaService:
                         video_url=video_url,
                         seconds=seconds,
                     )
-                    insertions.append((section.heading_index + 1, self._build_key_moment_block(seconds)))
+                    if seconds not in illustrated_timestamps:
+                        insertions.append((section.heading_index + 1, self._build_key_moment_block(seconds)))
+                        illustrated_timestamps.add(seconds)
 
             updated_lines[section.start_line : section.end_line] = cleaned_section_lines
 
