@@ -1,3 +1,4 @@
+import { removeSavedRecordingFile } from './recordingFile'
 // Persists recorded audio blobs in IndexedDB so a meeting recording can be
 // retried even after the recorder window is closed, the page is reloaded, or
 // the device restarts. The blob is keyed by an opaque recording id that is
@@ -87,6 +88,7 @@ export interface PendingMeeting {
   options: import('./meetingCapture').MeetingCaptureOptions
   startedAt: string
   endedAt?: string
+  fileName?: string
   elapsedSeconds: number
 }
 
@@ -124,6 +126,12 @@ export function deletePendingMeeting(id: string) { return deleteRecordedAudio(`p
 /** User-visible deletion must report storage failures, unlike best-effort cleanup. */
 export async function deleteLocalRecording(id: string, ownerId: string) {
   const db = await openDatabase()
+  const metadata = await new Promise<PendingMeeting>((resolve, reject) => {
+    const request = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME).get(`pending:${id}`)
+    request.onsuccess = () => request.result?.ownerId === ownerId ? resolve(request.result) : reject(new Error('录制不存在或无权删除'))
+    request.onerror = () => reject(request.error)
+  })
+  if (metadata.fileName) await removeSavedRecordingFile(metadata.fileName)
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite')
     const store = tx.objectStore(STORE_NAME)

@@ -9,6 +9,7 @@ export async function createRecordingFile() {
   let failure: unknown
   let closed = false
   return {
+    name,
     append(blob: Blob) {
       pending = pending.then(() => writable.write(blob)).catch(error => { failure = error })
     },
@@ -26,4 +27,12 @@ export async function createRecordingFile() {
       await root.removeEntry(name).catch(() => undefined)
     },
   }
+}
+
+/** Delete only a recording-owned OPFS entry, never an arbitrary path. */
+export async function removeSavedRecordingFile(name: string) {
+  if (!/^meeting-[0-9a-f-]{36}\.webm$/i.test(name)) throw new Error('录制文件标识不正确')
+  const root = await navigator.storage.getDirectory()
+  try { await root.removeEntry(name) }
+  catch (error) { if (!(error instanceof DOMException && error.name === 'NotFoundError')) throw error }
 }

@@ -31,7 +31,7 @@ import {
   submitMeetingRecording,
 } from '../../lib/meetingGeneration'
 import { useI18n } from '../../lib/i18n'
-import { deletePendingMeeting, savePendingMeeting, type PendingMeeting, deleteRecordedAudio, generateRecordingId, getRecordedAudio, saveRecordedAudio } from '../../lib/audioStorage'
+import { deleteLocalRecording, savePendingMeeting, type PendingMeeting, generateRecordingId, getRecordedAudio, saveRecordedAudio } from '../../lib/audioStorage'
 import { useMeetingRecorderStore, type MeetingRecorderPhase, type MeetingRecorderStage } from '../../stores/meetingRecorderStore'
 import { useModelProfileStore } from '../../stores/modelProfileStore'
 import { useNoteLibraryStore } from '../../stores/noteLibraryStore'
@@ -497,7 +497,9 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       await savePendingMeeting({ id: persistedId, ownerId: user?.id || '', workspace: captureWorkspaceRef.current,
         options: captureOptionsRef.current, startedAt: (startedAtRef.current || new Date()).toISOString(),
         endedAt: endedAtRef.current.toISOString(),
+        fileName: recorder.getRecordingFileName?.(),
         elapsedSeconds: useMeetingRecorderStore.getState().elapsedSeconds })
+      recorder.retainRecordingFile?.()
       // Recording history exists independently of STT/LLM generation.
       recorder.reset()
       resetSession()
@@ -543,8 +545,9 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     })
     setGeneratedNote({ title: note.title, markdown: note.content, taskId: response.task_id })
     if (recordingIdRef.current) {
-      await deletePendingMeeting(recordingIdRef.current)
-      await deleteRecordedAudio(recordingIdRef.current)
+      // A cleanup failure must not turn an already saved note into a failed task.
+      // Its local history entry remains available for a later explicit deletion.
+      await deleteLocalRecording(recordingIdRef.current, user?.id || '').catch(() => undefined)
     }
     complete(note.id)
   }
@@ -785,8 +788,8 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
 
     recorder.reset()
     if (persistedRecordingId) {
-      await deleteRecordedAudio(persistedRecordingId)
-      await deletePendingMeeting(persistedRecordingId)
+      try { await deleteLocalRecording(persistedRecordingId, user?.id || '') }
+      catch (cause) { failStage('uploading', cause instanceof Error ? cause.message : '无法删除本地录制'); return }
     }
     if (draftNoteId) {
       await deleteNote(draftNoteId)
@@ -833,8 +836,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     void setRecorderActive(false)
     void setRecorderWindowLayout('expanded')
     if (previousRecordingId) {
-      void deleteRecordedAudio(previousRecordingId)
-      void deletePendingMeeting(previousRecordingId)
+      void deleteLocalRecording(previousRecordingId, user?.id || '').catch(() => undefined)
     }
     recordingIdRef.current = null
     resetSession()

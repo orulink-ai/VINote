@@ -329,6 +329,8 @@ export function useAudioRecorder() {
   }, [cleanupStream, clearTimer, stopActiveRecorder])
 
   return {
+    getRecordingFileName: () => diskRef.current?.name,
+    retainRecordingFile: () => { diskRef.current = null },
     status,
     preview,
     sizeBytes,

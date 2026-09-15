@@ -132,7 +132,7 @@ function renderDock(props?: { autoStart?: boolean }) {
   )
 }
 
-vi.mock('../../lib/audioStorage', async (importOriginal) => ({ ...(await importOriginal<object>()), savePendingMeeting: vi.fn(), deletePendingMeeting: vi.fn(), getRecordedAudio: vi.fn().mockResolvedValue(null) }))
+vi.mock('../../lib/audioStorage', async (importOriginal) => ({ ...(await importOriginal<object>()), savePendingMeeting: vi.fn(), deletePendingMeeting: vi.fn(), deleteLocalRecording: vi.fn().mockResolvedValue(undefined), getRecordedAudio: vi.fn().mockResolvedValue(null) }))
 
 async function startMeeting() {
   act(() => { window.dispatchEvent(new CustomEvent(START_MEETING_EVENT, { detail: DEFAULT_CAPTURE_OPTIONS })) })
