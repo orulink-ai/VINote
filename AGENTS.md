@@ -189,6 +189,8 @@ Fresh-checkout startup: yarn client:dev runs bootstrap-dev.mjs to install fronte
 
 ## Meeting recording and speaker diarization
 
+- Desktop custom recorder commands are explicitly allowed by `frontend/src-tauri/permissions/meeting-recorder.toml` and the default capability, scoped to the main/recorder windows and local backend Origin. Native WebView regression must check command errors as well as media playback.
+
 - Actual meeting wall-clock start/end must come from explicitly supplied metadata/context, never from audio duration or the last transcript timestamp. Paused recordings have a shorter accumulated duration. Transcript/heading timestamps are recording offsets, not wall-clock times.
 
 - `audio_preprocessing_service.py` owns conservative FFmpeg denoising on temporary audio, without trimming time. Explicit upstream empty recognition is recorded in `unrecognized_segments`; other STT failures remain errors. `DIARIZATION_CLUSTER_THRESHOLD` controls the diagnostic clustering threshold.
