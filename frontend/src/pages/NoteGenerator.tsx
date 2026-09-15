@@ -364,11 +364,11 @@ export function NoteGenerator() {
 
         <button
           onClick={() => void handleGenerate()}
-          disabled={status !== 'idle' || (uploadMode === 'url' ? !videoUrl : !selectedFile)}
+          disabled={!['idle', 'failed'].includes(status) || (uploadMode === 'url' ? !videoUrl : !selectedFile)}
           className="w-full flex items-center justify-center gap-2 py-3 px-6 bg-primary-light dark:bg-primary-dark text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Wand2 className="w-5 h-5" />
-          {status === 'idle' ? copy.generator.start : copy.generator.generating}
+          {status === 'uploading' || status === 'processing' ? copy.generator.generating : copy.generator.start}
         </button>
 
         {status === 'failed' ? (
