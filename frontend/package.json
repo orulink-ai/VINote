@@ -1,7 +1,7 @@
 {
   "name": "vinote-frontend",
   "private": true,
-  "version": "0.5.0",
+  "version": "0.5.1",
   "description": "VINote desktop and web frontend",
   "type": "module",
   "author": "VINote",

@@ -11,6 +11,7 @@ from app.models.transcript import TranscriptResult
 
 OutputLanguage = Literal["en", "zh-CN"]
 SummaryMode = Literal["default", "accurate", "oneshot"]
+TraceWorkflow = Literal["meeting", "note_organization"]
 
 
 class NoteRequest(BaseModel):
@@ -25,6 +26,7 @@ class NoteRequest(BaseModel):
     model_name: Optional[str] = None
     api_key: Optional[str] = None
     base_url: Optional[str] = None
+    workflow: TraceWorkflow = "note_organization"
 
 
 class LocalFileRequest(BaseModel):
@@ -41,6 +43,7 @@ class LocalFileRequest(BaseModel):
     model_name: Optional[str] = None
     api_key: Optional[str] = None
     base_url: Optional[str] = None
+    workflow: TraceWorkflow = "note_organization"
 
 
 class NoteResponse(BaseModel):
@@ -58,6 +61,7 @@ class TaskStatusResponse(BaseModel):
     status: str
     message: str = ""
     result: Optional[NoteResponse] = None
+    langfuse_trace_id: Optional[str] = None
 
 
 @dataclass

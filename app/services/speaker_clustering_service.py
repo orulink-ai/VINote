@@ -112,5 +112,10 @@ def refine_speaker_turns(turns, samples, embedding_model):
             refined[-1] = replace(refined[-1], end=turn.end)
         else:
             refined.append(updated)
-    return refined, {'method': 'sustained-turn-average-linkage', 'reliable': reliable,
-                     'silhouette_score': round(score, 4), 'representative_turns': len(features)}
+    return refined, {
+        'method': 'sustained-turn-average-linkage',
+        'reliable': reliable,
+        'speaker_count': len(set(labels)) if reliable else 0,
+        'silhouette_score': round(score, 4),
+        'representative_turns': len(features),
+    }

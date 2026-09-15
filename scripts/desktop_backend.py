@@ -14,7 +14,7 @@ def configure_langfuse(config):
     for key in keys:
         os.environ[key] = config[key].strip()
     os.environ['LANGFUSE_ENABLED'] = 'true'
-    os.environ['LANGFUSE_CAPTURE_CONTENT'] = config.get('LANGFUSE_CAPTURE_CONTENT') or 'false'
+    os.environ['LANGFUSE_CAPTURE_CONTENT'] = 'true'
     os.environ['LANGFUSE_TRACING_ENVIRONMENT'] = config.get('LANGFUSE_TRACING_ENVIRONMENT') or 'production'
 
 
@@ -57,6 +57,7 @@ def configure():
         secret_file.chmod(0o600)
     os.environ.update(json.loads(secret_file.read_text(encoding='utf-8')))
     os.environ.update(config)
+    os.environ['VINOTE_DESKTOP_RUNTIME'] = 'true'
     configure_langfuse(config)
     os.environ.setdefault("DIARIZATION_MODEL_DIR", str(bundle / "models" / "diarization"))
     os.environ.update({

@@ -11,7 +11,8 @@ from pathlib import Path
 from typing import Optional
 
 from app.config import settings
-from app.services.tracing_service import traced, update_current, content_summary
+from app.services.tracing_service import (content_summary, observation, traced,
+                                          update_current, update_trace_input)
 from app.downloaders.base import Downloader
 from app.downloaders.ytdlp_downloader import YtdlpDownloader
 from app.llm.prompts import normalize_output_language, normalize_summary_mode
@@ -95,6 +96,8 @@ class NoteService:
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         user_id: Optional[str] = None,
+        diarize: bool = False,
+        speaker_count: int | None = None,
     ) -> NoteResult:
         del platform
 
@@ -110,6 +113,8 @@ class NoteService:
             self.artifact_service.update_status(task_dir, "downloading", "Downloading audio...")
             audio_meta = self._download_audio(video_url=video_url, task_dir=task_dir)
             step_timings["download"] = time.time() - step_start
+            update_trace_input(title=audio_meta.title, duration_seconds=audio_meta.duration,
+                               platform=audio_meta.platform)
 
             return self._run_pipeline(
                 task_id=task_id,
@@ -129,6 +134,8 @@ class NoteService:
                 source_video_url=video_url,
                 task_start_time=task_start_time,
                 step_timings=step_timings,
+                diarize=diarize,
+                speaker_count=speaker_count,
             )
         except Exception as exc:
             logger.error("[Pipeline] task=%s failed: %s", task_id, exc, exc_info=True)
@@ -177,6 +184,8 @@ class NoteService:
             audio_meta = self._build_local_audio_meta(file_path=file_path, task_id=task_id, title=title)
             self.artifact_service.save_audio_meta(task_dir, audio_meta)
             step_timings["prepare"] = time.time() - step_start
+            update_trace_input(title=audio_meta.title, duration_seconds=audio_meta.duration,
+                               file_size_bytes=Path(file_path).stat().st_size)
 
             return self._run_pipeline(
                 task_id=task_id,
@@ -236,6 +245,9 @@ class NoteService:
             audio_meta = self._build_transcript_audio_meta(transcript=transcript, task_id=task_id, title=title)
             self.artifact_service.save_audio_meta(task_dir, audio_meta)
             step_timings["prepare"] = time.time() - step_start
+            update_trace_input(title=audio_meta.title, duration_seconds=audio_meta.duration,
+                               transcript=content_summary(transcript.full_text),
+                               transcript_segments=len(transcript.segments), stt_skipped=True)
 
             return self._run_pipeline(
                 task_id=task_id,
@@ -369,9 +381,18 @@ class NoteService:
             markdown = self._enrich_markdown_with_media(context, transcript, markdown)
             result = self._build_result(context, transcript, markdown)
 
-            self.artifact_service.save_markdown(final_dir, markdown)
-            self.artifact_service.save_result(final_dir, result)
-            self.artifact_service.update_status(final_dir, "success", "Note generated successfully")
+            with observation(
+                "保存结果",
+                input={"task_id": context.task_id, "markdown_characters": len(markdown)},
+            ) as span:
+                self.artifact_service.save_markdown(final_dir, markdown)
+                self.artifact_service.save_result(final_dir, result)
+                self.artifact_service.update_status(final_dir, "success", "Note generated successfully")
+                if span is not None:
+                    span.update(output={"status": "success", "task_id": context.task_id})
+            update_current(metadata={"stage_duration_ms": {
+                key: round(value * 1000) for key, value in context.step_timings.items()
+            }})
             logger.info("[Pipeline] task=%s completed timings=%s", task_id, step_timings)
             return result
         except Exception as exc:
@@ -396,17 +417,24 @@ class NoteService:
 
         audio_meta.file_path = str(final_dir / relative_path)
 
-    @traced("获取识别原文", as_type="chain")
+    @traced("语音转写", as_type="chain")
     def _transcribe_audio(self, context: PipelineContext):
         if context.preloaded_transcript is not None:
-            update_current(metadata={"source": "uploaded_transcript", "stt_skipped": True},
-                           output=content_summary(context.preloaded_transcript.full_text))
+            update_current(
+                input={"source": "uploaded_transcript", "stt_skipped": True},
+                metadata={"source": "uploaded_transcript", "stt_skipped": True},
+                output={"text": content_summary(context.preloaded_transcript.full_text),
+                        "segment_count": len(context.preloaded_transcript.segments)},
+            )
             self.artifact_service.update_status(context.task_dir, "transcribing", "Using uploaded transcript...")
             self.artifact_service.save_transcript(context.task_dir, context.preloaded_transcript)
             context.step_timings["transcribe"] = 0.0
             return context.preloaded_transcript
 
         step_start = time.time()
+        update_current(input={"audio_duration_seconds": context.audio_meta.duration,
+                              "diarization": context.diarize,
+                              "speaker_count": context.speaker_count or "auto"})
         self.artifact_service.update_status(context.task_dir, "transcribing", "Transcribing audio...")
         transcript = self.transcription_service.transcribe(
             audio_path=context.audio_meta.file_path,
@@ -422,11 +450,17 @@ class NoteService:
             **({"diarize": True, "speaker_count": context.speaker_count} if context.diarize else {}),
         )
         context.step_timings["transcribe"] = time.time() - step_start
-        update_current(output=content_summary(transcript.full_text),
-                       metadata={"segment_count": len(transcript.segments)})
+        update_current(
+            output={"text": content_summary(transcript.full_text),
+                    "language": transcript.language,
+                    "segment_count": len(transcript.segments),
+                    "metadata": transcript.metadata},
+            metadata={"segment_count": len(transcript.segments),
+                      "latency_ms": round(context.step_timings["transcribe"] * 1000)},
+        )
         return transcript
 
-    @traced("生成结构化笔记", as_type="chain")
+    @traced("生成总结", as_type="chain")
     def _summarize_audio(self, context: PipelineContext, transcript):
         step_start = time.time()
         self.artifact_service.update_status(context.task_dir, "summarizing", "Generating note...")
@@ -451,10 +485,17 @@ class NoteService:
             ),
         )
         context.step_timings["summarize"] = time.time() - step_start
+        update_current(
+            input={"title": context.audio_meta.title, "summary_mode": context.summary_mode,
+                   "style": context.style, "transcript": content_summary(transcript.full_text)},
+            output={"note": content_summary(markdown)},
+            metadata={"latency_ms": round(context.step_timings["summarize"] * 1000)},
+        )
         return markdown
 
-    @traced("处理时间戳与截图")
+    @traced("提取关键帧")
     def _enrich_markdown_with_media(self, context: PipelineContext, transcript, markdown: str) -> str:
+        update_current(input={"duration_seconds": context.audio_meta.duration})
         media_url = ""
         if context.audio_meta.file_path and os.path.exists(context.audio_meta.file_path):
             local_audio_file = self.artifact_service.resolve_source_media(context.task_dir) or self.artifact_service.stage_media_file(
@@ -484,6 +525,7 @@ class NoteService:
                 if local_video_path:
                     media_url = f"/api/task/{context.task_id}/artifacts/media/{local_video_path.name}"
             if not local_video_path:
+                update_current(output={"status": "skipped", "reason": "audio_only"})
                 return re.sub(r"\[\[Screenshot:\d{1,3}:\d{2}\]\]", "", markdown)
 
         markdown = self.media_service.enrich_markdown(
@@ -504,6 +546,8 @@ class NoteService:
             local_video_path=local_video_path,
         )
         context.step_timings["screenshots"] = time.time() - step_start
+        update_current(output={"status": "success", "note": content_summary(markdown)},
+                       metadata={"latency_ms": round(context.step_timings["screenshots"] * 1000)})
         return markdown
 
     def _build_result(self, context: PipelineContext, transcript, markdown: str) -> NoteResult:

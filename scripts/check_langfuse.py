@@ -18,7 +18,7 @@ from app.llm.openai_llm import OpenAILLM
 from app.models.transcript import TranscriptResult, TranscriptSegment
 from app.services.note_service import NoteService
 from app.services.task_artifact_service import TaskArtifactService
-from app.services.tracing_service import get_client, shutdown
+from app.services.tracing_service import DesktopTraceContext, desktop_trace, get_client, shutdown
 
 
 def run_check():
@@ -39,11 +39,16 @@ def run_check():
         with patch.object(llm.client.chat.completions, 'create', return_value=completion), patch(
             'app.services.vilab_cloud_service.VILabCloudService.status', return_value={'mode': 'local'}
         ):
-            service.generate_from_transcript(
-                TranscriptResult(language='en', full_text='Synthetic integration check.',
-                                 segments=[TranscriptSegment(start=0, end=1, text='Synthetic integration check.')]),
-                task_id, title='Langfuse synthetic integration check',
-            )
+            with desktop_trace(DesktopTraceContext(
+                workflow='synthetic', source='build_validation', media_type='transcript',
+                channel=settings.langfuse_environment,
+                input={'synthetic': True, 'business': False, 'purpose': 'langfuse_connectivity'},
+            )):
+                service.generate_from_transcript(
+                    TranscriptResult(language='en', full_text='Synthetic integration check.',
+                                     segments=[TranscriptSegment(start=0, end=1, text='Synthetic integration check.')]),
+                    task_id, title='Langfuse synthetic integration check',
+                )
         trace_id = artifacts.get_status(task_id).get('langfuse_trace_id')
         if not trace_id:
             raise SystemExit('Pipeline did not produce a trace ID')
@@ -64,6 +69,7 @@ def run_check():
         else:
             raise SystemExit('Trace not visible yet: ' + trace_id)
     assert trace['sessionId'] == task_id
+    assert trace['name'] == '桌面端｜笔记整理'
     generations = [item for item in observations if item.get('type') == 'GENERATION']
     assert generations[0]['model'] == 'vinote-smoke-mock'
     assert generations[0]['usage']['total'] == 30

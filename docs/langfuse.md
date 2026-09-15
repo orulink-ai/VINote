@@ -1,48 +1,58 @@
-# VINote Langfuse tracing
+# VINote 桌面端 Langfuse 追踪
 
-VINote 使用独立 Langfuse 项目，记录后端笔记生成任务。实现参考 ViTalk 桌面端远端 `dev` 提交 `33111e5dfa8f7dc71bc6259a4377ab799d736be0`（0.6.4）：中文步骤名、真实父子链路、环境和版本标签、用户标识加盐哈希、输入输出脱敏摘要、实际模型请求参数及供应商用量。使用 Langfuse Python SDK 4 的 OTLP 导出。
+VINote 只追踪桌面端发起的生成任务。Tauri 请求携带 `X-VINote-Client: desktop`，后端据此创建 Trace；浏览器、树莓派部署和普通后端 API 调用不会初始化 Langfuse。源码桌面端、测试安装包和正式安装包均固定接入同一个 VINote 项目，环境分别为 `development`、`test` 和 `production`。
 
-## 本机开发配置
+## 根 Trace
 
-在根目录 `.env` 配置项目凭据，然后重启后端：
+业务根 Trace 只使用两个名称，按用户进入的功能区分，与文件扩展名无关：
+
+- `桌面端｜会议纪要`：会议录音、录屏及从会议页导入的录音或录像。
+- `桌面端｜笔记整理`：视频链接、本地音频、本地视频、字幕和其他支持的文件。
+
+构建时的连通性检查也使用 `桌面端｜笔记整理`，并带有 `workflow=synthetic`、`synthetic=true` 标记，不能作为真实业务请求验收。这样项目中的根名称始终只有上述两个。
+
+根输入记录入口、媒体类型、文件名、文件大小、标题、总结模式、输出语言和媒体时长；URL 会移除查询参数。根输出记录完整逐字稿统计、最终 Markdown 和各阶段耗时。`sessionId` 对应 `task_id`，本地用户 ID 只记录加盐哈希。
+
+## 可调试的子节点
+
+实际执行到的阶段才创建 observation：
+
+- `语音转写` 下的每次 `STT｜模型｜区间` generation 记录供应商、模型、音频格式、字节数、录音偏移、说话人上下文、完整识别文本、分段结果和真实耗时。普通长音频沿用 STT 的长音频能力；只有超过通用时长或文件大小阈值时才使用原有容错分块。
+- 含音轨的桌面输入默认执行 `音频预处理`、`说话人检测`、`说话人聚类` 和 `说话人识别与逐字稿对齐`。完整预处理录音只发起一次长音频 STT，和本地说话人分析相互独立。ASR 有句级时间戳时按区间重合关联；只有全文时按检测到的发言有效时长顺序估算，并以 `speaker_alignment=estimated_by_speaking_duration` 明确标记。链路记录实际 STT 请求次数、sherpa-onnx 模型、阈值、自动聚类结果、重叠/未知轮次及各发言区间；用户界面不暴露人数和开关。
+- `生成总结` 下的每次 `LLM｜…` generation 记录实际模型、system/user prompt、完整输出、供应商返回的 token 用量和真实耗时。一次生成、分块总结、合并和会议事实核对使用不同名称。
+- `提取关键帧` 和 `保存结果` 记录是否跳过、关键帧数量及保存结果，不制造空的模型节点。
+
+纯文本和字幕输入没有音轨，因此明确跳过 STT 与说话人识别。失败会记录在实际失败节点和根 Trace，保留安全的错误类型和脱敏消息。
+
+## 数据边界
+
+桌面端 Trace 为调试用途，固定记录完整转写、提示词和生成结果。不会记录原始音视频二进制、API key、Cookie/JWT、认证头、数据库密码、原始说话人 embedding 或本地绝对路径。异常正文会清除常见 token/key/secret 字段。网络或导出故障不阻断用户的生成任务，但不能视为追踪验收通过。
+
+## 配置与安装包
+
+本机 `.env` 配置：
 
 ```dotenv
 LANGFUSE_BASE_URL=http://192.168.1.118:3000
 LANGFUSE_PUBLIC_KEY=替换为VINote项目PublicKey
 LANGFUSE_SECRET_KEY=替换为VINote项目SecretKey
 LANGFUSE_TRACING_ENVIRONMENT=development
-LANGFUSE_RELEASE=0.5.0
-LANGFUSE_CAPTURE_CONTENT=false
+LANGFUSE_RELEASE=0.5.1
 ```
 
-源码、测试安装包与正式安装包固定启用，旧 `LANGFUSE_ENABLED=false` 不再关闭追踪。源码缺少项目凭据会在启动时明确报错；两种安装包缺少凭据会阻止构建。SDK/网络导出故障不阻断笔记生成，但不视为追踪验收通过。后台批量上报，正常关闭后端时清空队列；强制终止进程可能丢失未上报记录。默认地址为 `http://192.168.1.118:3000`，构建者可通过后端配置迁移地址。
+`yarn client:dev` 会设置 `VINOTE_DESKTOP_RUNTIME=true`，缺少 Langfuse 项目配置时拒绝启动桌面后端。普通 `uvicorn` 后端可以不配置 Langfuse，因为非桌面请求不会上报。
 
-`LANGFUSE_CAPTURE_CONTENT=false` 记录脱敏标记和字符数；设为 `true` 后记录提示词、识别文本和生成笔记。不会记录原始音视频、API key、认证头、本地文件路径或来源 URL。错误记录异常类型，不复制可能含凭据的供应商错误正文。用量仅记录供应商返回的数据；不估算缺失 token，不伪造非流式请求的首 token 时间。模型费用由 Langfuse 对支持的模型定价计算，自定义模型需配置价格。
+测试与正式构建把构建环境中的同一项目配置写入冻结后端资源 `desktop-config.json`。安装包持有人可提取这些凭据，这是直接接入方案的分发边界。凭据不得进入 Git、前端资源、日志或 manifest；`.env`、模型 API key、用户会话和数据库密码不得打包。旧应用数据中的 `langfuse.env` 会被忽略。
 
-## Trace 层级
-
-一次 URL、本地音视频或字幕生成对应一条「笔记生成全链路」chain，`sessionId` 对应 `task_id`，metadata 标记输入类型。实际执行到的步骤才产生 observation：
-
-- 下载源媒体 / 准备本地媒体 / 准备上传字幕。
-- 获取识别原文：缓存命中、字幕跳过 STT，或提取音频分块、调用语音识别、合并识别分块。
-- 生成结构化笔记：一次性总结，或分块总结与全局合并；每次 LLM 请求对应 generation，记录模型、实际参数、prompt 哈希版本和用量。
-- 处理时间戳与截图、保存 Markdown 笔记、保存生成结果。
-
-失败记录在实际失败步骤及父链路上。任务 `status.json` 和任务状态 API 返回可选 `langfuse_trace_id`，可以在 Langfuse 搜索定位。这条链路从后端生成入口开始，不包含浏览器上传耗时或前端保存笔记到库的请求；VILab 云端仅记录 VINote 调用边界，未接入服务端内部 span 的跨服务传播。
-
-## 安装版
-
-测试与正式安装包从构建环境的 `.env` 或进程环境读取同一 VINote Langfuse 项目配置，写入后端资源 `desktop-config.json`。安装后无需手动创建文件；旧应用数据目录中的 `langfuse.env` 不再参与配置，父进程中的其他项目凭据也不能覆盖包内项目。环境分别为 `test`、`production`，源码为 `development`。旧安装包必须重新构建更新。
-
-用户要求三种运行方式统一直接接入，因此安装包包含 Langfuse 项目凭据，安装包持有人可提取这些凭据。这是明确的分发边界，不能把冻结资源当成加密保管。凭据不得进入 Git、前端资源、日志和 manifest；开发 `.env` 整体、模型 API key、用户会话、数据库密码仍不得打包。
-
-两个渠道构建都必须运行冻结后端的 `--langfuse-smoke-test`：上报合成笔记链路并通过 Langfuse API 读回，确认 environment、模型、用量与父子关系后才生成安装包。manifest 的 `langfuse` 字段保存不含密钥的验收回执。此检查需要构建机能访问 Langfuse；缺依赖、认证失败或读回失败会阻止产物生成。
+两个构建渠道都运行冻结后端的合成 Trace 上报与 API 回读检查，并在 `manifest.json` 保存不含凭据的验收回执。
 
 ## 验证
 
 ```powershell
 .venv/Scripts/python.exe -m pytest tests -q
 .venv/Scripts/python.exe scripts/check_langfuse.py --send
+.venv/Scripts/python.exe scripts/check_meeting_generation.py <音频> --live --workflow meeting --output data/meeting-trace.json
+.venv/Scripts/python.exe scripts/check_meeting_generation.py <音频> --live --workflow note_organization --output data/note-trace.json
 ```
 
-第二条 Python 命令会使用合成字幕与模拟 LLM 响应执行真实 NoteService 管线，并向配置的 Langfuse 发送记录，再通过公共 API 读回检查 session、模型与 token。它验证接入和字段落库，不验证真实 STT/LLM 效果；`tests/conftest.py` 仅在测试进程中关闭对外 tracing，不依赖产品关闭开关。
+最后两条命令通过桌面 HTTP 身份调用真实 STT、说话人识别和 LLM，并从 Langfuse API 回读验证根名称、完整输入输出、模型与必需子节点。它们不操作 Tauri 界面或系统录音设备。

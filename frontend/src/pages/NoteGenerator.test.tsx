@@ -85,7 +85,7 @@ describe('NoteGenerator failed generation recovery', () => {
       screen.getByPlaceholderText('Paste a YouTube, Bilibili, or other supported video URL...'),
       'https://example.com/video'
     )
-    await userEvent.click(screen.getByRole('button', { name: 'Start generation' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Organize notes' }))
     await waitFor(() => expect(useNoteGenerationStore.getState().status).toBe('failed'), { timeout: 4000 })
     expect(screen.getByText('Task record is missing. Please try again.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Regenerate' })).toBeEnabled()
@@ -102,7 +102,7 @@ describe('NoteGenerator failed generation recovery', () => {
       screen.getByPlaceholderText('Paste a YouTube, Bilibili, or other supported video URL...'),
       'https://example.com/video'
     )
-    await userEvent.click(screen.getByRole('button', { name: 'Start generation' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Organize notes' }))
 
     expect(await screen.findByText('backend unavailable')).toBeInTheDocument()
 

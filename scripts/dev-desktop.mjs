@@ -26,6 +26,7 @@ process.on('exit', () => {
   try { if (readFileSync(lock, 'utf8') === String(process.pid)) unlinkSync(lock) } catch {}
 })
 process.env.VILAB_SERVER_URL ||= 'http://127.0.0.1:9878'
+process.env.VINOTE_DESKTOP_RUNTIME = 'true'
 const children = []
 let closing = false
 function shutdown(code = 0) {

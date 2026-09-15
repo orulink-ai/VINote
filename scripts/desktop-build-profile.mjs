@@ -20,7 +20,7 @@ export function resolveDesktopProfile({ channel = 'release', version, env = {}, 
     LANGFUSE_BASE_URL: env.LANGFUSE_BASE_URL || 'http://192.168.1.118:3000',
     LANGFUSE_PUBLIC_KEY: env.LANGFUSE_PUBLIC_KEY?.trim(),
     LANGFUSE_SECRET_KEY: env.LANGFUSE_SECRET_KEY?.trim(),
-    LANGFUSE_CAPTURE_CONTENT: env.LANGFUSE_CAPTURE_CONTENT || 'false',
+    LANGFUSE_CAPTURE_CONTENT: 'true',
     LANGFUSE_TRACING_ENVIRONMENT: test ? 'test' : 'production',
     MEETING_REVIEW_MODEL: env.MEETING_REVIEW_MODEL ?? publicConfig.MEETING_REVIEW_MODEL ?? 'gpt-6-astra',
   }

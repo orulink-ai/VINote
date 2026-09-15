@@ -3,6 +3,23 @@ import { apiJson } from './api'
 
 afterEach(() => vi.unstubAllGlobals())
 
+it('marks only Tauri requests as desktop traffic', async () => {
+  Object.defineProperty(window, '__TAURI_INTERNALS__', { value: {}, configurable: true })
+  const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { headers: { 'Content-Type': 'application/json' } }))
+  vi.stubGlobal('fetch', fetchMock)
+  await apiJson('/api/test')
+  expect(fetchMock.mock.calls[0][1].headers.get('X-VINote-Client')).toBe('desktop')
+  delete (window as typeof window & { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__
+})
+
+it('does not mark browser requests as desktop traffic', async () => {
+  delete (window as typeof window & { __TAURI_INTERNALS__?: object }).__TAURI_INTERNALS__
+  const fetchMock = vi.fn().mockResolvedValue(new Response('{}', { headers: { 'Content-Type': 'application/json' } }))
+  vi.stubGlobal('fetch', fetchMock)
+  await apiJson('/api/test')
+  expect(fetchMock.mock.calls[0][1].headers.has('X-VINote-Client')).toBe(false)
+})
+
 it('accepts successful deletion with an empty JSON-labelled 204 response', async () => {
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, {
     status: 204, headers: { 'Content-Type': 'application/json' },

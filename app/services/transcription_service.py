@@ -106,17 +106,40 @@ def create_transcriber(config: ResolvedSTTConfig | None = None) -> Transcriber:
 
 class TranscriptionService:
     @staticmethod
-    def _transcribe_chunk(transcriber, file_path, chunk=None):
-        metadata = {"adapter": type(transcriber).__name__, "streamed": False}
-        model = getattr(transcriber, "model", None)
-        if isinstance(model, str):
-            metadata["model"] = model
+    def _transcribe_chunk(transcriber, file_path, chunk=None, trace_context=None):
+        model = getattr(transcriber, "model", None) or type(transcriber).__name__
+        metadata = {"adapter": type(transcriber).__name__, "streamed": False,
+                    "provider": getattr(transcriber, "provider", type(transcriber).__name__)}
+        audio_path = Path(file_path)
+        input_payload = {
+            "format": audio_path.suffix.lower().lstrip("."),
+            "size_bytes": audio_path.stat().st_size if audio_path.exists() else None,
+        }
         if chunk is not None:
             metadata.update(chunk_index=chunk.index, chunk_total=chunk.total,
                             start_seconds=chunk.chunk_start, end_seconds=chunk.chunk_end)
-        with observation("调用语音识别", metadata=metadata):
+            input_payload.update(start_seconds=chunk.chunk_start, end_seconds=chunk.chunk_end,
+                                 audio_duration_seconds=chunk.chunk_end - chunk.chunk_start,
+                                 chunk_index=chunk.index, chunk_total=chunk.total)
+        if trace_context:
+            input_payload.update(trace_context)
+        name_context = trace_context or {}
+        if name_context.get("speaker"):
+            suffix = f"{name_context['speaker']}｜{TranscriptionService._format_seconds(name_context['start_seconds'])}–{TranscriptionService._format_seconds(name_context['end_seconds'])}"
+        elif chunk is not None:
+            suffix = f"分段 {chunk.index}/{chunk.total}"
+        else:
+            suffix = "完整音频"
+        with observation(f"STT｜{model}｜{suffix}", as_type="generation", model=model,
+                         metadata=metadata, input=input_payload):
             result = transcriber.transcribe(file_path=file_path)
-            update_current(output=content_summary(result.full_text))
+            update_current(output={
+                "text": content_summary(result.full_text),
+                "language": result.language,
+                "segments": [{"start": segment.start, "end": segment.end,
+                              "text": content_summary(segment.text)}
+                             for segment in result.segments],
+            })
             return result
 
     def __init__(
@@ -411,7 +434,8 @@ class TranscriptionService:
             from app.services.speaker_diarization_service import SpeakerDiarizationService
             transcript = SpeakerDiarizationService().transcribe(
                 audio_path=audio_path,
-                transcribe=lambda path: self._transcribe_chunk(transcriber, path),
+                transcribe=lambda path, **context: self._transcribe_chunk(
+                    transcriber, path, trace_context=context),
                 speaker_count=speaker_count, update_status=update_status,
             )
         else:

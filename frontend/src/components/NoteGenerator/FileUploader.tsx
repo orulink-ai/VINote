@@ -11,6 +11,8 @@ interface FileUploaderProps {
   onModeChange: (mode: UploadMode) => void
   videoUrl: string
   fileUploadEnabled?: boolean
+  initialMode?: UploadMode
+  urlEnabled?: boolean
 }
 
 export function FileUploader({
@@ -19,9 +21,11 @@ export function FileUploader({
   onModeChange,
   videoUrl,
   fileUploadEnabled = true,
+  initialMode = 'url',
+  urlEnabled = true,
 }: FileUploaderProps) {
   const { copy } = useI18n()
-  const [mode, setMode] = useState<UploadMode>('url')
+  const [mode, setMode] = useState<UploadMode>(initialMode)
   const [dragActive, setDragActive] = useState(false)
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
 
@@ -42,6 +46,11 @@ export function FileUploader({
       setModeSafe('url')
     }
   }, [fileUploadEnabled, mode])
+
+  useEffect(() => {
+    setMode(initialMode)
+    setSelectedFile(null)
+  }, [initialMode])
 
   const handleDrag = useCallback((event: React.DragEvent) => {
     event.preventDefault()
@@ -75,8 +84,8 @@ export function FileUploader({
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-2">
-        <button
+      <div className="flex flex-wrap gap-2">
+        {urlEnabled && <button
           onClick={() => setModeSafe('url')}
           className={clsx(
             'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
@@ -87,7 +96,7 @@ export function FileUploader({
         >
           <LinkIcon className="w-4 h-4" />
           {copy.fileUploader.videoUrl}
-        </button>
+        </button>}
         {fileUploadEnabled ? (
           <>
             <button
@@ -149,7 +158,9 @@ export function FileUploader({
         >
           {selectedFile ? (
             <div className="flex items-center justify-center gap-3">
-              <FileAudio className="w-8 h-8 text-primary-light dark:text-primary-dark" />
+              {mode === 'transcript'
+                ? <FileText className="w-8 h-8 text-primary-light dark:text-primary-dark" />
+                : <FileAudio className="w-8 h-8 text-primary-light dark:text-primary-dark" />}
               <span className="font-medium">{selectedFile.name}</span>
               <button
                 onClick={() => {
