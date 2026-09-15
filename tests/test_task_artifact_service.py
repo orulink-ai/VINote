@@ -1,5 +1,7 @@
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 import json
 from pathlib import Path
@@ -11,6 +13,52 @@ from app.services.task_artifact_service import TaskArtifactService
 
 
 class TaskArtifactServiceTest(unittest.TestCase):
+    def test_status_replace_retries_transient_windows_permission_error(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = TaskArtifactService(Path(temp_dir))
+            task_dir = service.create_task_dir("task-retry")
+
+            with (
+                patch(
+                    "app.services.task_artifact_service.os.replace",
+                    side_effect=[PermissionError("busy"), None],
+                ) as replace,
+                patch("app.services.task_artifact_service.time.sleep") as sleep,
+            ):
+                service.update_status(task_dir, "transcribing", "Transcribing audio...")
+
+            self.assertEqual(replace.call_count, 2)
+            sleep.assert_called_once_with(0.01)
+            self.assertFalse(list(task_dir.glob(".status.json.*.tmp")))
+
+    def test_status_polling_and_updates_do_not_race(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = TaskArtifactService(Path(temp_dir))
+            task_dir = service.create_task_dir("task-concurrent")
+            service.update_status(task_dir, "preparing")
+            start = threading.Event()
+
+            def write_statuses() -> None:
+                start.wait()
+                for index in range(100):
+                    service.update_status(task_dir, "transcribing", str(index))
+
+            def read_statuses() -> None:
+                start.wait()
+                for _ in range(200):
+                    payload = service.get_status("task-concurrent")
+                    self.assertIn(payload["status"], {"preparing", "transcribing"})
+
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = [executor.submit(write_statuses)]
+                futures.extend(executor.submit(read_statuses) for _ in range(4))
+                start.set()
+                for future in futures:
+                    future.result()
+
+            self.assertEqual(service.get_status("task-concurrent")["message"], "99")
+            self.assertFalse(list(task_dir.glob(".status.json.*.tmp")))
+
     def test_truncated_title_is_windows_safe_and_mapping_survives(self):
         with tempfile.TemporaryDirectory() as root:
             service = TaskArtifactService(Path(root))

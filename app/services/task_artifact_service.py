@@ -3,7 +3,11 @@ Task artifact storage for note generation jobs.
 """
 import hashlib
 import json
+import os
 import shutil
+import threading
+import time
+import uuid
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -14,6 +18,10 @@ from app.services.tracing_service import current_trace_id
 from app.models.audio import AudioDownloadResult
 from app.models.note import NoteResult
 from app.models.transcript import TranscriptResult, TranscriptSegment
+
+
+_STATUS_FILE_LOCK = threading.RLock()
+_STATUS_REPLACE_DELAYS_SECONDS = (0.01, 0.02, 0.04, 0.08, 0.16, 0.25, 0.25, 0.25)
 
 
 class TaskArtifactService:
@@ -166,9 +174,25 @@ class TaskArtifactService:
         trace_id = current_trace_id()
         if trace_id:
             payload["langfuse_trace_id"] = trace_id
-        temp_file = status_file.with_suffix(".tmp")
-        self.write_json(temp_file, payload)
-        temp_file.replace(status_file)
+        temp_file = task_dir / f".{status_file.name}.{uuid.uuid4().hex}.tmp"
+        with _STATUS_FILE_LOCK:
+            try:
+                self.write_json(temp_file, payload)
+                self._replace_status_file(temp_file, status_file)
+            finally:
+                temp_file.unlink(missing_ok=True)
+
+    @staticmethod
+    def _replace_status_file(temp_file: Path, status_file: Path) -> None:
+        """Replace a polled status file despite transient Windows sharing locks."""
+        for attempt, delay in enumerate(_STATUS_REPLACE_DELAYS_SECONDS):
+            try:
+                os.replace(temp_file, status_file)
+                return
+            except PermissionError:
+                if attempt == len(_STATUS_REPLACE_DELAYS_SECONDS) - 1:
+                    raise
+                time.sleep(delay)
 
     def save_result(self, task_dir: Path, result: NoteResult) -> None:
         self.write_json(
@@ -203,9 +227,10 @@ class TaskArtifactService:
     def get_status(self, task_id: str) -> dict:
         task_dir = self.find_task_dir(task_id) or (self.output_dir / task_id)
         status_file = task_dir / "status.json"
-        if not status_file.exists():
-            return {"status": "not_found", "message": "Task not found"}
-        return json.loads(status_file.read_text(encoding="utf-8"))
+        with _STATUS_FILE_LOCK:
+            if not status_file.exists():
+                return {"status": "not_found", "message": "Task not found"}
+            return json.loads(status_file.read_text(encoding="utf-8"))
 
     def get_result(self, task_id: str) -> Optional[dict]:
         task_dir = self.find_task_dir(task_id) or (self.output_dir / task_id)
