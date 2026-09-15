@@ -16,12 +16,26 @@ export function resolveDesktopProfile({ channel = 'release', version, env = {}, 
     VINOTE_SUPABASE_URL: env.VINOTE_SUPABASE_URL || publicConfig.VINOTE_SUPABASE_URL,
     VINOTE_SUPABASE_PUBLISHABLE_KEY: env.VINOTE_SUPABASE_PUBLISHABLE_KEY || publicConfig.VINOTE_SUPABASE_PUBLISHABLE_KEY,
     LANGFUSE_RELEASE: test ? `${version}-test` : version,
+    LANGFUSE_ENABLED: 'true',
+    LANGFUSE_BASE_URL: env.LANGFUSE_BASE_URL || 'http://192.168.1.118:3000',
+    LANGFUSE_PUBLIC_KEY: env.LANGFUSE_PUBLIC_KEY?.trim(),
+    LANGFUSE_SECRET_KEY: env.LANGFUSE_SECRET_KEY?.trim(),
+    LANGFUSE_CAPTURE_CONTENT: env.LANGFUSE_CAPTURE_CONTENT || 'false',
     LANGFUSE_TRACING_ENVIRONMENT: test ? 'test' : 'production',
     MEETING_REVIEW_MODEL: env.MEETING_REVIEW_MODEL ?? publicConfig.MEETING_REVIEW_MODEL ?? 'gpt-6-astra',
   }
   if (!config.VINOTE_SUPABASE_URL || !config.VINOTE_SUPABASE_PUBLISHABLE_KEY?.startsWith('sb_publishable_')) {
     throw new Error('Email accounts require a Supabase URL and publishable key; secret keys cannot be bundled')
   }
+  if (!config.LANGFUSE_PUBLIC_KEY || !config.LANGFUSE_SECRET_KEY) {
+    throw new Error('Langfuse project credentials are required for both desktop channels')
+  }
+  const tracingUrl = new URL(config.LANGFUSE_BASE_URL)
+  if (!['http:', 'https:'].includes(tracingUrl.protocol) || tracingUrl.username || tracingUrl.password
+      || tracingUrl.search || tracingUrl.hash || tracingUrl.pathname !== '/') {
+    throw new Error('Langfuse URL must be an HTTP(S) origin without credentials, query or path')
+  }
+  config.LANGFUSE_BASE_URL = tracingUrl.origin
   return {
     channel, buildId, version: config.LANGFUSE_RELEASE,
     productName: test ? 'VINote Test' : 'VINote',

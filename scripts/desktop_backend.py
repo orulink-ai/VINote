@@ -1,33 +1,21 @@
-"""Frozen desktop backend. Secrets and notes live in the user's app data, never the bundle."""
+"""Frozen backend; user secrets stay in app data, tracing credentials are build-managed."""
 import json
 import os
 from pathlib import Path
 import secrets
 import sys
-import logging
 
 
-def configure_langfuse(state):
-    """Use a per-install atomic credential set, following ViTalk desktop."""
-    os.environ.setdefault('LANGFUSE_TRACING_ENVIRONMENT', 'production')
-    path = state / 'langfuse.env'
-    if not path.exists():
-        return
-    from dotenv import dotenv_values
+def configure_langfuse(config):
+    """Use only the bundled project; stale installation files cannot disable tracing."""
     keys = ('LANGFUSE_BASE_URL', 'LANGFUSE_PUBLIC_KEY', 'LANGFUSE_SECRET_KEY')
-    try:
-        values = dotenv_values(path)
-        for key in keys:
-            os.environ[key] = (values.get(key) or '').strip()
-        complete = all(os.environ[key] for key in keys)
-        enabled = (values.get('LANGFUSE_ENABLED') or 'true').strip().lower() in ('true', '1', 'yes', 'on')
-        os.environ['LANGFUSE_ENABLED'] = 'true' if complete and enabled else 'false'
-        os.environ['LANGFUSE_CAPTURE_CONTENT'] = values.get('LANGFUSE_CAPTURE_CONTENT') or 'false'
-        if not complete:
-            logging.warning('Langfuse configuration incomplete; tracing disabled')
-    except Exception:
-        os.environ['LANGFUSE_ENABLED'] = 'false'
-        logging.warning('Langfuse configuration unreadable; tracing disabled')
+    if not all((config.get(key) or '').strip() for key in keys):
+        raise RuntimeError('Bundled Langfuse configuration is incomplete; rebuild the package')
+    for key in keys:
+        os.environ[key] = config[key].strip()
+    os.environ['LANGFUSE_ENABLED'] = 'true'
+    os.environ['LANGFUSE_CAPTURE_CONTENT'] = config.get('LANGFUSE_CAPTURE_CONTENT') or 'false'
+    os.environ['LANGFUSE_TRACING_ENVIRONMENT'] = config.get('LANGFUSE_TRACING_ENVIRONMENT') or 'production'
 
 
 def watch_parent(parent_pid):
@@ -69,7 +57,7 @@ def configure():
         secret_file.chmod(0o600)
     os.environ.update(json.loads(secret_file.read_text(encoding='utf-8')))
     os.environ.update(config)
-    configure_langfuse(state)
+    configure_langfuse(config)
     os.environ.setdefault("DIARIZATION_MODEL_DIR", str(bundle / "models" / "diarization"))
     os.environ.update({
         'HOST': '127.0.0.1', 'DATABASE_URL': f'sqlite:///{(state / "vinote.db").as_posix()}',
@@ -84,6 +72,13 @@ def main():
     import multiprocessing
     multiprocessing.freeze_support()
     bundle = configure()
+    if '--langfuse-smoke-test' in sys.argv:
+        from scripts.check_langfuse import run_check
+        receipt = run_check()
+        (Path(os.environ['VINOTE_DESKTOP_DATA']) / 'langfuse-smoke.json').write_text(
+            json.dumps(receipt, ensure_ascii=False, indent=2), encoding='utf-8',
+        )
+        return
     if os.environ.get('VINOTE_DESKTOP_PARENT_PID'):
         watch_parent(int(os.environ['VINOTE_DESKTOP_PARENT_PID']))
     from app import create_app

@@ -17,8 +17,9 @@ DEFAULT_SQLITE_PATH = BASE_DIR / "data" / "vinote.db"
 class Settings:
     meeting_review_model: str = os.getenv("MEETING_REVIEW_MODEL", "gpt-6-astra").strip()
     diarization_cluster_threshold: float = float(os.getenv("DIARIZATION_CLUSTER_THRESHOLD", "0.5"))
-    langfuse_enabled: bool = os.getenv("LANGFUSE_ENABLED", "false").lower() == "true"
-    langfuse_base_url: str = os.getenv("LANGFUSE_BASE_URL", "").rstrip("/")
+    # Tracing is a product requirement in source, test and release builds.
+    langfuse_enabled: bool = True
+    langfuse_base_url: str = os.getenv("LANGFUSE_BASE_URL", "http://192.168.1.118:3000").rstrip("/")
     langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
     langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
     langfuse_environment: str = os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "development")

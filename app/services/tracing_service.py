@@ -1,4 +1,4 @@
-"""Optional, fail-open Langfuse tracing for note generation."""
+"""Always-enabled Langfuse tracing; exporter failures do not interrupt generation."""
 import atexit
 import hashlib
 import hmac
@@ -16,6 +16,14 @@ _client = None
 _lock = Lock()
 _generation = ContextVar("vinote_generation", default=None)
 _active_span = ContextVar("vinote_span", default=None)
+
+
+def validate_configuration():
+    """Reject missing deployment credentials instead of silently running unobserved."""
+    if settings.langfuse_enabled and not all((value or '').strip() for value in (
+        settings.langfuse_base_url, settings.langfuse_public_key, settings.langfuse_secret_key,
+    )):
+        raise RuntimeError('Langfuse project configuration is required; configure backend credentials')
 
 
 def get_client():

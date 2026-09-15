@@ -41,21 +41,6 @@ def test_trace_id_failure_does_not_break_task_status():
         tracing._active_span.reset(token)
 
 
-def test_desktop_config_can_explicitly_disable_tracing(tmp_path, monkeypatch):
-    from scripts.desktop_backend import configure_langfuse
-    import os
-
-    for key in ('LANGFUSE_ENABLED', 'LANGFUSE_BASE_URL', 'LANGFUSE_PUBLIC_KEY',
-                'LANGFUSE_SECRET_KEY', 'LANGFUSE_CAPTURE_CONTENT', 'LANGFUSE_TRACING_ENVIRONMENT'):
-        monkeypatch.delenv(key, raising=False)
-    (tmp_path / 'langfuse.env').write_text(
-        'LANGFUSE_BASE_URL=http://localhost:3000\nLANGFUSE_PUBLIC_KEY=pk-test\n'
-        'LANGFUSE_SECRET_KEY=sk-test\nLANGFUSE_ENABLED=false\n', encoding='utf-8',
-    )
-    configure_langfuse(tmp_path)
-    assert os.environ['LANGFUSE_ENABLED'] == 'false'
-
-
 @pytest.mark.parametrize("phase", ["start", "update", "close"])
 def test_exporter_failure_does_not_fail_or_repeat_business_call(monkeypatch, phase):
     @contextmanager
@@ -153,35 +138,44 @@ def test_real_sdk_parentage_and_concurrent_task_isolation(monkeypatch):
         client.shutdown()
 
 
-def test_desktop_incomplete_config_does_not_mix_credentials(tmp_path, monkeypatch):
+@pytest.mark.parametrize("environment", ["test", "production"])
+def test_desktop_tracing_uses_bundle_not_inherited_credentials(environment, monkeypatch):
+    from scripts.desktop_backend import configure_langfuse
+    import os
+
+    for key in ("LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY", "LANGFUSE_BASE_URL"):
+        monkeypatch.setenv(key, "unrelated-project")
+    monkeypatch.setenv("LANGFUSE_ENABLED", "false")
+    monkeypatch.setenv("LANGFUSE_CAPTURE_CONTENT", "true")
+    monkeypatch.setenv("LANGFUSE_TRACING_ENVIRONMENT", "development")
+    configure_langfuse({
+        "LANGFUSE_BASE_URL": "http://localhost:3000", "LANGFUSE_PUBLIC_KEY": "pk-test",
+        "LANGFUSE_SECRET_KEY": "sk-test", "LANGFUSE_TRACING_ENVIRONMENT": environment,
+    })
+    assert os.environ["LANGFUSE_ENABLED"] == "true"
+    assert os.environ["LANGFUSE_SECRET_KEY"] == "sk-test"
+    assert os.environ["LANGFUSE_PUBLIC_KEY"] == "pk-test"
+    assert os.environ["LANGFUSE_CAPTURE_CONTENT"] == "false"
+    assert os.environ["LANGFUSE_TRACING_ENVIRONMENT"] == environment
+
+
+def test_incomplete_bundle_cannot_use_inherited_credentials(monkeypatch):
     from scripts.desktop_backend import configure_langfuse
 
     monkeypatch.setenv("LANGFUSE_SECRET_KEY", "unrelated-project")
-    monkeypatch.setenv("LANGFUSE_ENABLED", "true")
-    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "unrelated-project")
-    monkeypatch.setenv("LANGFUSE_BASE_URL", "http://unrelated")
-    monkeypatch.setenv("LANGFUSE_CAPTURE_CONTENT", "true")
-    (tmp_path / "langfuse.env").write_text("LANGFUSE_BASE_URL=http://localhost:3000", encoding="utf-8")
-    configure_langfuse(tmp_path)
-    import os
-    assert os.environ["LANGFUSE_ENABLED"] == "false"
-    assert os.environ["LANGFUSE_SECRET_KEY"] == ""
-    assert os.environ["LANGFUSE_PUBLIC_KEY"] == ""
-    assert os.environ["LANGFUSE_CAPTURE_CONTENT"] == "false"
+    with pytest.raises(RuntimeError, match="incomplete"):
+        configure_langfuse({"LANGFUSE_BASE_URL": "http://localhost:3000", "LANGFUSE_PUBLIC_KEY": "pk-test"})
 
 
-def test_desktop_config_enables_project_without_content_capture(tmp_path, monkeypatch):
-    from scripts.desktop_backend import configure_langfuse
-    import os
+def test_source_tracing_cannot_be_disabled_by_legacy_switch(monkeypatch):
+    from app.config import Settings
 
-    for key in ("LANGFUSE_BASE_URL", "LANGFUSE_SECRET_KEY", "LANGFUSE_PUBLIC_KEY",
-                "LANGFUSE_ENABLED", "LANGFUSE_CAPTURE_CONTENT", "LANGFUSE_TRACING_ENVIRONMENT"):
-        monkeypatch.delenv(key, raising=False)
-    (tmp_path / "langfuse.env").write_text(
-        "LANGFUSE_BASE_URL=http://localhost:3000\nLANGFUSE_PUBLIC_KEY=pk-test\nLANGFUSE_SECRET_KEY=sk-test\n",
-        encoding="utf-8",
-    )
-    configure_langfuse(tmp_path)
-    assert os.environ["LANGFUSE_ENABLED"] == "true"
-    assert os.environ["LANGFUSE_CAPTURE_CONTENT"] == "false"
-    assert os.environ["LANGFUSE_TRACING_ENVIRONMENT"] == "production"
+    monkeypatch.setenv("LANGFUSE_ENABLED", "false")
+    assert Settings().langfuse_enabled is True
+
+
+def test_missing_project_credentials_fail_startup_without_printing_keys(monkeypatch):
+    monkeypatch.setattr(tracing.settings, 'langfuse_enabled', True)
+    monkeypatch.setattr(tracing.settings, 'langfuse_secret_key', '')
+    with pytest.raises(RuntimeError, match='configuration is required'):
+        tracing.validate_configuration()

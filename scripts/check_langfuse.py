@@ -21,12 +21,7 @@ from app.services.task_artifact_service import TaskArtifactService
 from app.services.tracing_service import get_client, shutdown
 
 
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--send', action='store_true', help='Send synthetic traces to configured Langfuse')
-    args = parser.parse_args()
-    if not args.send:
-        parser.error('--send is required for the live check')
+def run_check():
     client = get_client()
     if client is None:
         raise SystemExit('Langfuse is disabled or missing configuration')
@@ -75,10 +70,23 @@ def main():
     assert generations[0]['parentObservationId']
     assert generations[0]['modelParameters']['temperature'] == 0.7
     assert trace['environment'] == settings.langfuse_environment
-    print(json.dumps({'task_id': task_id, 'trace_id': trace_id,
+    receipt = {'task_id': task_id, 'trace_id': trace_id,
                       'observations': len(observations), 'mock_provider': True,
-                      'trace_url': client.get_trace_url(trace_id=trace_id)}, ensure_ascii=False))
+                      'environment': settings.langfuse_environment,
+                      'release': settings.langfuse_release,
+                      'trace_url': client.get_trace_url(trace_id=trace_id)}
+    print(json.dumps(receipt, ensure_ascii=False))
     shutdown()
+    return receipt
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--send', action='store_true', help='Send synthetic traces to configured Langfuse')
+    args = parser.parse_args()
+    if not args.send:
+        parser.error('--send is required for the live check')
+    run_check()
 
 
 if __name__ == '__main__':

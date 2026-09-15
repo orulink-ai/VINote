@@ -37,6 +37,8 @@ yarn desktop:build:test
 
 安装包携带模型和原生运行库，终端用户无需安装 Python、pip 或手动下载模型。打包时复用源码模型缓存，模型放在后端资源目录。原始音频保持不变，降噪及识别仅处理临时副本，并保留时间轴。真正的 STT 和 LLM 仍需连接上述 ViLab 服务；模型内置不代表云端识别可以离线使用。
 
-包内仅保存服务 Origin 和 Supabase publishable 配置，不保存开发 `.env`、个人会话、模型 API key、JWT 密钥或会议音频。每个安装身份独立初始化本地密钥。
+包内保存服务 Origin、Supabase publishable 配置，以及按用户要求固定接入的 Langfuse 项目配置。Langfuse 凭据由构建环境注入后端资源，可被安装包持有人提取，不进入 Git、前端或日志。不保存开发 `.env`、个人会话、模型 API key、JWT 密钥或会议音频。每个安装身份独立初始化本地密钥。
+
+两种渠道必须提供 `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`，地址默认 `http://192.168.1.118:3000`。构建时使用冻结后端发送合成链路并从 Langfuse API 读回，失败即阻止打包；manifest 保存 `langfuse` 回执。两种包分别标记 `test`/`production`，均无需额外 `langfuse.env`，详见 [Langfuse 接入说明](langfuse.md)。
 
 会议事实复核的模型偏好 `MEETING_REVIEW_MODEL` 也会写入公开配置，默认 `gpt-6-astra`；两种包一致。构建环境可显式覆盖（空字符串表示沿用当前模型）。只在云端目录确认模型可用后使用，不会切换用户的全局模型。复核会增加真实 LLM 调用，当前模型仍负责初稿；本地/自定义模型复核复用当前提供方。

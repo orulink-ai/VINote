@@ -57,6 +57,7 @@ exec(py, ['-m', 'PyInstaller', '--noconfirm', '--onedir', '--name', profile.back
   '--hidden-import', 'sqlalchemy.dialects.sqlite', '--hidden-import', 'bcrypt', '--collect-submodules', 'passlib.handlers',
   '--collect-all', 'sherpa_onnx', '--hidden-import', 'numpy',
   '--collect-all', 'langfuse', '--collect-submodules', 'opentelemetry',
+  '--hidden-import', 'scripts.check_langfuse',
   '--copy-metadata', 'opentelemetry-api', '--copy-metadata', 'opentelemetry-sdk',
   '--add-data', `${join(staging, 'desktop-config.json')}${sep}.`,
   '--add-data', `${join(staging, 'models')}${sep}models`,
@@ -72,6 +73,11 @@ exec(join(backendDir, profile.backendName + (process.platform === 'win32' ? '.ex
     VINOTE_DESKTOP_DATA: join(staging, 'smoke-data'), PORT: '0' },
 })
 const tauriConfig = join(staging, 'tauri-package.json')
+// Require actual ingestion and API readback from the frozen runtime, not just SDK imports.
+exec(join(backendDir, profile.backendName + (process.platform === 'win32' ? '.exe' : '')), ['--langfuse-smoke-test'], {
+  cwd: staging, env: { ...process.env, PATH: smokePath, PYTHONHOME: '', PYTHONPATH: '',
+    VINOTE_DESKTOP_DATA: join(staging, 'smoke-data'), PORT: '0' },
+})
 const hooks = join(staging, 'installer-hooks.nsh')
 writeFileSync(hooks, `!define VINOTE_MAIN_EXE "${profile.binaryName}.exe"\n!define VINOTE_BACKEND_EXE "${profile.backendName}.exe"\n!define VINOTE_APP_NAME "${profile.productName}"\n!include "${join(root, 'frontend/src-tauri/installer-hooks.nsh')}"\n`)
 writeFileSync(tauriConfig, JSON.stringify({
@@ -107,5 +113,6 @@ const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', w
 writeFileSync(join(artifacts, 'manifest.json'), JSON.stringify({ channel: profile.channel, version: profile.version,
   buildId: profile.buildId, identifier: profile.identifier, server: profile.config.VILAB_SERVER_URL,
   platform: process.platform, arch: process.arch, commit: git('rev-parse', 'HEAD'),
-  dirty: Boolean(git('status', '--porcelain')), files }, null, 2))
+  dirty: Boolean(git('status', '--porcelain')),
+  langfuse: JSON.parse(readFileSync(join(staging, 'smoke-data/langfuse-smoke.json'), 'utf8')), files }, null, 2))
 console.log(`Desktop ${profile.channel} artifacts: ${artifacts}`)
