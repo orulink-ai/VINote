@@ -28,6 +28,8 @@ VINote 只追踪桌面端发起的生成任务。Tauri 请求携带 `X-VINote-Cl
 
 桌面端 Trace 为调试用途，固定记录完整转写、提示词和生成结果。不会记录原始音视频二进制、API key、Cookie/JWT、认证头、数据库密码、原始说话人 embedding 或本地绝对路径。异常正文会清除常见 token/key/secret 字段。网络或导出故障不阻断用户的生成任务，但不能视为追踪验收通过。
 
+旧版 `LANGFUSE_CAPTURE_CONTENT` 变量已被忽略，不再形成源码、测试包和正式包之间的行为分叉。
+
 ## 配置与安装包
 
 本机 `.env` 配置：

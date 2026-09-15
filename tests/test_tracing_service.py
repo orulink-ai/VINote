@@ -19,7 +19,6 @@ def recorder(monkeypatch):
         yield span
 
     monkeypatch.setattr(tracing, "get_client", lambda: SimpleNamespace(start_as_current_observation=start))
-    monkeypatch.setattr(tracing.settings, "langfuse_capture_content", False)
     with tracing.desktop_trace(tracing.DesktopTraceContext(
         workflow="meeting", source="local_file", media_type="audio",
     )):
