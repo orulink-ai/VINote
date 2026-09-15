@@ -86,6 +86,7 @@ export interface PendingMeeting {
   workspace: import('../stores/teamStore').WorkspaceSelection
   options: import('./meetingCapture').MeetingCaptureOptions
   startedAt: string
+  endedAt?: string
   elapsedSeconds: number
 }
 
@@ -119,3 +120,22 @@ export async function listPendingMeetings(ownerId: string): Promise<PendingMeeti
 }
 
 export function deletePendingMeeting(id: string) { return deleteRecordedAudio(`pending:${id}`) }
+
+/** User-visible deletion must report storage failures, unlike best-effort cleanup. */
+export async function deleteLocalRecording(id: string, ownerId: string) {
+  const db = await openDatabase()
+  await new Promise<void>((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite')
+    const store = tx.objectStore(STORE_NAME)
+    const request = store.get(`pending:${id}`)
+    request.onsuccess = () => {
+      const recording = request.result as PendingMeeting | undefined
+      if (!recording || recording.ownerId !== ownerId) { tx.abort(); return }
+      store.delete(id)
+      store.delete(`pending:${id}`)
+    }
+    tx.oncomplete = () => resolve()
+    tx.onerror = () => reject(tx.error ?? new Error('无法删除录制文件'))
+    tx.onabort = () => reject(new Error('录制不存在、无权删除或存储操作失败'))
+  })
+}

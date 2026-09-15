@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { captureMeetingSources, DEFAULT_CAPTURE_OPTIONS } from './meetingCapture'
+import { captureMeetingSources, DEFAULT_CAPTURE_OPTIONS as AUTOMATIC_CAPTURE_OPTIONS } from './meetingCapture'
+
+const DEFAULT_CAPTURE_OPTIONS = { ...AUTOMATIC_CAPTURE_OPTIONS, systemAudio: false }
 
 class TestStream {
   constructor(private tracks: Array<{ kind: string; stop: () => void }>) {}
@@ -55,7 +57,7 @@ describe('meeting source capture', () => {
     const stop = vi.fn()
     const getUserMedia = vi.fn()
     vi.stubGlobal('navigator', { mediaDevices: { getUserMedia, getDisplayMedia: vi.fn().mockResolvedValue(new TestStream([{ kind: 'video', stop }])) } })
-    await expect(captureMeetingSources({ ...DEFAULT_CAPTURE_OPTIONS, systemAudio: true })).rejects.toThrow('未采集到会议声音')
+    await expect(captureMeetingSources({ ...DEFAULT_CAPTURE_OPTIONS, systemAudio: true })).rejects.toThrow('无法录制电脑播放的声音')
     expect(stop).toHaveBeenCalledOnce()
     expect(getUserMedia).not.toHaveBeenCalled()
   })

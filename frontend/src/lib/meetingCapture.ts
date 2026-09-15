@@ -7,9 +7,11 @@ export interface MeetingCaptureOptions {
   speakerCount?: number
 }
 
+export const SYSTEM_AUDIO_UNAVAILABLE = '无法录制电脑播放的声音。可以仅录麦克风继续，但不会录到电脑中的其他参会人。'
+
 export const START_MEETING_EVENT = 'vinote-start-meeting'
 export const DEFAULT_CAPTURE_OPTIONS: MeetingCaptureOptions = {
-  title: '', microphoneId: '', screen: false, systemAudio: false, diarize: true,
+  title: '', microphoneId: '', screen: false, systemAudio: true, diarize: true,
 }
 
 /** Permission prompts cannot be dismissed programmatically; dispose late results after cancellation. */
@@ -49,11 +51,16 @@ export async function captureMeetingSources(options: MeetingCaptureOptions, sign
       display = await acquireStream(navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: { ideal: 10, max: 15 }, width: { ideal: 1920 }, height: { ideal: 1080 } },
         audio: options.systemAudio,
-      }), signal)
+        systemAudio: 'include',
+      } as DisplayMediaStreamOptions & { systemAudio: string }), signal).catch(error => {
+        if (signal?.aborted) throw error
+        if (!options.screen && options.systemAudio) throw new Error(SYSTEM_AUDIO_UNAVAILABLE)
+        throw error
+      })
       streams.push(display)
       checkCancelled()
       if (options.systemAudio && !display.getAudioTracks().length) {
-        throw new Error('未采集到会议声音。请重新选择支持共享声音的屏幕并勾选共享音频，或关闭会议声音选项。')
+        throw new Error(SYSTEM_AUDIO_UNAVAILABLE)
       }
     }
     const microphone = await acquireStream(navigator.mediaDevices.getUserMedia({

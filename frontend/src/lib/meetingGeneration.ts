@@ -28,6 +28,7 @@ interface SubmitMeetingRecordingInput {
   diarize?: boolean
   speakerCount?: number
   startedAt: Date
+  endedAt?: Date
   outputLanguage?: string
   summaryMode: SummaryMode
   modelProfileId?: string
@@ -84,6 +85,7 @@ export async function submitMeetingRecording(
       sourceType: input.audioBlob.type.startsWith('video/') ? 'video' : 'audio',
       title: input.title?.trim() || createMeetingRecordingTitle(input.startedAt, input.outputLanguage || 'zh-CN'),
       style: 'meeting',
+      extras: `录制开始时间：${input.startedAt.toISOString()}。${input.endedAt ? `录制结束时间：${input.endedAt.toISOString()}。` : '录制结束时间未知。'}这是录制时间，不代表实际会议起止；录制可能暂停，禁止用音频时长推算会议结束时间。`,
       summaryMode: input.summaryMode,
       outputLanguage: input.outputLanguage,
       modelProfileId: input.modelProfileId,

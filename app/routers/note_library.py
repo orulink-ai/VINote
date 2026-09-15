@@ -17,6 +17,7 @@ from app.models.note_library import (
 from app.services.auth_service import get_current_user
 from app.services.task_artifact_service import TaskArtifactService
 from app.services.note_repository import NoteRepository
+from app.services.meeting_media_service import MeetingMediaService
 
 router = APIRouter(tags=["notes-library"])
 _repository = NoteRepository()
@@ -47,7 +48,7 @@ def get_note_media(note_id: str, user: AuthenticatedUser = Depends(get_current_u
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
 
     task_dir = _artifact_service.find_task_dir(note.task_id)
-    if not task_dir:
+    if not task_dir or (task_dir / "recording_deleted").exists():
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
 
     declared_source = _artifact_service.resolve_source_media(task_dir)
@@ -78,6 +79,16 @@ def get_note_media(note_id: str, user: AuthenticatedUser = Depends(get_current_u
 
     media_type = mimetypes.guess_type(media_path.name)[0] or "application/octet-stream"
     return FileResponse(path=media_path, media_type=media_type, filename=media_path.name)
+
+
+@router.get("/notes/{note_id}/recording")
+def recording_info(note_id: str, user: AuthenticatedUser = Depends(get_current_user)):
+    return MeetingMediaService().info(user.user_id, note_id)
+
+
+@router.delete("/notes/{note_id}/recording", status_code=204)
+def delete_recording(note_id: str, user: AuthenticatedUser = Depends(get_current_user)):
+    MeetingMediaService().delete(user.user_id, note_id)
 
 
 @router.get("/notes/{note_id}/transcript", response_model=TranscriptEvidenceResponse)

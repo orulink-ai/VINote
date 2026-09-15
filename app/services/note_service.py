@@ -161,6 +161,8 @@ class NoteService:
             raise FileNotFoundError(f"Audio file does not exist: {file_path}")
 
         task_dir = self.artifact_service.create_task_dir(task_id)
+        if user_id:
+            (task_dir / "recording_owner").write_text(user_id, encoding="utf-8")
         step_timings: dict[str, float] = {}
 
         try:

@@ -214,6 +214,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   const draftNoteIdRef = useRef<string | null>(null)
   const draftTitleRef = useRef('')
   const recordingIdRef = useRef<string | null>(null)
+  const endedAtRef = useRef<Date | undefined>(undefined)
   const finishInFlightRef = useRef(false)
 
   useEffect(() => {
@@ -425,10 +426,11 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   }
 
   const startLocalRecording = async (options?: MeetingCaptureOptions) => {
-    startedAtRef.current = new Date()
+    endedAtRef.current = undefined
     setPhase('requesting')
     try {
       if (await recorder.start(options) === false) return
+      startedAtRef.current = new Date()
       if (useMeetingRecorderStore.getState().phase === 'requesting') {
         setPhase('recording')
         if (options && isTauriRuntime()) void openMeetingController().catch(() => undefined)
@@ -481,21 +483,30 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     if (finishInFlightRef.current) return
     finishInFlightRef.current = true
     try {
+      endedAtRef.current = new Date()
       setPhase('stopping')
       const audioBlob = await recorder.stop()
       if (audioBlob.size === 0) throw new Error('microphone_no_audio')
       setRecordedAudio(audioBlob)
       // Persist the audio locally so it survives a page reload, window close, or restart.
-      // The note draft created below will reference this same id, so the user can always
-      // recover the recording from the "My Audios" tab even if generation never starts.
+      // History is independent of generation; retain both bytes and owner/workspace metadata.
       const persistedId = recordingIdRef.current || generateRecordingId()
       recordingIdRef.current = persistedId
       setRecordingId(persistedId)
       await saveRecordedAudio(persistedId, audioBlob)
       await savePendingMeeting({ id: persistedId, ownerId: user?.id || '', workspace: captureWorkspaceRef.current,
         options: captureOptionsRef.current, startedAt: (startedAtRef.current || new Date()).toISOString(),
+        endedAt: endedAtRef.current.toISOString(),
         elapsedSeconds: useMeetingRecorderStore.getState().elapsedSeconds })
-      setPhase('stopped')
+      // Recording history exists independently of STT/LLM generation.
+      recorder.reset()
+      resetSession()
+      closePanel()
+      await setRecorderActive(false)
+      if (isRecorderWindow) {
+        await showMainWindow('/meetings')
+        await closeCurrentRecorderWindow()
+      } else navigate('/meetings')
     } catch (stopError) {
       const failedStage = stageFromError(stopError)
       const failureMessage = formatRecorderFailure(stopError, recorderCopy)
@@ -516,6 +527,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       diarize: captureOptionsRef.current.diarize,
       speakerCount: captureOptionsRef.current.speakerCount,
       startedAt,
+      endedAt: endedAtRef.current,
       outputLanguage: language,
       summaryMode: 'default',
       modelProfileId: selectedModelProfileId || undefined,
@@ -530,7 +542,10 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       onStage: setPhase,
     })
     setGeneratedNote({ title: note.title, markdown: note.content, taskId: response.task_id })
-    if (recordingIdRef.current) await deletePendingMeeting(recordingIdRef.current)
+    if (recordingIdRef.current) {
+      await deletePendingMeeting(recordingIdRef.current)
+      await deleteRecordedAudio(recordingIdRef.current)
+    }
     complete(note.id)
   }
 
@@ -548,15 +563,19 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       void startLocalRecording(captureOptionsRef.current)
     }
     const restore = (event: Event) => {
-      if (useMeetingRecorderStore.getState().hasRecoverableRecording) return
+      const restoreState = useMeetingRecorderStore.getState()
+      if (restoreState.hasRecoverableRecording || ACTIVE_RECORDING_PHASES.includes(restoreState.phase)) return
       const pending = (event as CustomEvent<PendingMeeting>).detail
       if (pending.ownerId !== user?.id) return
+      setPhase('requesting')
       void getRecordedAudio(pending.id).then(blob => {
+        if (useMeetingRecorderStore.getState().phase !== 'requesting') return
         if (!blob) { failStage('uploading', '找不到本地录制文件。'); return }
         resetSession()
         captureOptionsRef.current = pending.options
         captureWorkspaceRef.current = pending.workspace
         startedAtRef.current = new Date(pending.startedAt)
+        endedAtRef.current = pending.endedAt ? new Date(pending.endedAt) : undefined
         recordingIdRef.current = pending.id
         draftNoteIdRef.current = null
         setUseInlineDesktopRecorder(true)

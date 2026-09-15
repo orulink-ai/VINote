@@ -1,3 +1,4 @@
+import { getRecordedAudio, savePendingMeeting } from '../../lib/audioStorage'
 import { START_MEETING_EVENT, DEFAULT_CAPTURE_OPTIONS } from '../../lib/meetingCapture'
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -131,11 +132,19 @@ function renderDock(props?: { autoStart?: boolean }) {
   )
 }
 
-vi.mock('../../lib/audioStorage', async (importOriginal) => ({ ...(await importOriginal<object>()), savePendingMeeting: vi.fn(), deletePendingMeeting: vi.fn() }))
+vi.mock('../../lib/audioStorage', async (importOriginal) => ({ ...(await importOriginal<object>()), savePendingMeeting: vi.fn(), deletePendingMeeting: vi.fn(), getRecordedAudio: vi.fn().mockResolvedValue(null) }))
 
 async function startMeeting() {
   act(() => { window.dispatchEvent(new CustomEvent(START_MEETING_EVENT, { detail: DEFAULT_CAPTURE_OPTIONS })) })
   await waitFor(() => expect(audioRecorderMock.start).toHaveBeenCalled())
+}
+
+async function restoreSavedRecording() {
+  await waitFor(() => expect(savePendingMeeting).toHaveBeenCalled())
+  await waitFor(() => expect(useMeetingRecorderStore.getState().phase).toBe('idle'))
+  vi.mocked(getRecordedAudio).mockResolvedValueOnce(new Blob(['audio'], { type: 'audio/webm' }))
+  const pending = vi.mocked(savePendingMeeting).mock.calls.at(-1)![0]
+  act(() => { window.dispatchEvent(new CustomEvent('vinote-restore-meeting', { detail: pending })) })
 }
 
 describe('MeetingRecorderDock', () => {
@@ -186,7 +195,9 @@ describe('MeetingRecorderDock', () => {
     expect(stopWhileRecording).toBeEnabled()
     await userEvent.click(stopWhileRecording)
     expect(audioRecorderMock.stop).toHaveBeenCalledOnce()
-    expect(await screen.findByRole('button', { name: '生成会议纪要' })).toBeEnabled()
+    await waitFor(() => expect(savePendingMeeting).toHaveBeenCalled())
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/meetings'))
+    expect(useMeetingRecorderStore.getState().recordedAudio).toBeUndefined()
     expect(meetingGenerationMock.submitMeetingRecording).not.toHaveBeenCalled()
   })
 
@@ -258,6 +269,7 @@ describe('MeetingRecorderDock', () => {
     await startMeeting()
     await userEvent.click(screen.getByRole('button', { name: '暂停' }))
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
+    await restoreSavedRecording()
     await userEvent.click(await screen.findByRole('button', { name: '生成会议纪要' }))
 
     await waitFor(() => {
@@ -282,6 +294,7 @@ describe('MeetingRecorderDock', () => {
     await startMeeting()
     await userEvent.click(screen.getByRole('button', { name: '暂停' }))
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
+    await restoreSavedRecording()
     await userEvent.click(await screen.findByRole('button', { name: '生成会议纪要' }))
     const statusLine = await screen.findByTestId('meeting-recorder-status')
     expect(statusLine).toHaveTextContent('音频已保留')
