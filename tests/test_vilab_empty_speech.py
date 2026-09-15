@@ -11,6 +11,8 @@ from app.services.vilab_cloud_service import VILabCloudService
 
 @pytest.mark.parametrize("message,exception", [
     ("Aliyun ASR returned an empty transcript.", NoSpeechDetectedError),
+    ("Volcengine ASR returned an empty transcript.", NoSpeechDetectedError),
+    ("Volcengine ASR disconnected before its final result", HTTPException),
     ("ASR upstream unavailable", HTTPException),
 ])
 def test_only_explicit_empty_recognition_is_distinguished(message, exception):

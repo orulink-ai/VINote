@@ -28,7 +28,23 @@ class VILabCloudService:
         snapshot = _task_source.get()
         if snapshot and snapshot[0] == user_id:
             return dict(snapshot[1])
-        return self.request(user_id, "GET", "/v1/default-models")
+        defaults = self.request(user_id, "GET", "/v1/default-models")
+        preferences = self.status(user_id)
+        selections = {key: preferences.get(key) for key in ("asr_model", "llm_model")}
+        if any(selections.values()):
+            models = self.models(user_id)
+            for key, kind in (("asr_model", "asr"), ("llm_model", "llm")):
+                selected = selections[key]
+                if selected:
+                    self._validate_selection(models, selected, kind)
+                    defaults[key] = selected
+        return defaults
+
+    @staticmethod
+    def _validate_selection(models, name, kind):
+        if not any(model["id"] == name and model["modelType"] == kind
+                   and model.get("runtimeStatus") == "available" for model in models):
+            raise HTTPException(400, "所选云端模型当前不可用，请重新选择可用模型或跟随服务默认")
 
     def request(self, user_id, method, path, **kwargs):
         if not settings.vilab_server_url:
@@ -53,7 +69,10 @@ class VILabCloudService:
                     message = response.json().get("error", {}).get("message")
                 except (ValueError, AttributeError):
                     message = None
-                if message == "Aliyun ASR returned an empty transcript.":
+                if message in {
+                    "Aliyun ASR returned an empty transcript.",
+                    "Volcengine ASR returned an empty transcript.",
+                }:
                     from app.models.transcript import NoSpeechDetectedError
                     raise NoSpeechDetectedError("该音频片段未识别出文字")
             raise HTTPException(502, f"云端模型请求失败（HTTP {response.status_code}）")
@@ -94,8 +113,8 @@ class VILabCloudService:
         if mode == "cloud":
             models = self.models(user_id)
             for name, kind in [(asr_model, "asr"), (llm_model, "llm")]:
-                if name and not any(m["id"] == name and m["modelType"] == kind for m in models):
-                    raise HTTPException(400, "请从云端模型列表中选择模型")
+                if name:
+                    self._validate_selection(models, name, kind)
         with session_scope() as db:
             row = db.get(VILabPreferenceDB, user_id)
             if not row:

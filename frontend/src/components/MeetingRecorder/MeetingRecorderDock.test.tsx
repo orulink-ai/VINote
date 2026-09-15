@@ -287,8 +287,8 @@ describe('MeetingRecorderDock', () => {
     expect(statusLine).toHaveTextContent('音频已保留')
     expect(statusLine).toHaveTextContent('请先配置可用的 LLM 和 STT API Key')
     expect(useMeetingRecorderStore.getState().recordedAudio).toBeInstanceOf(Blob)
-    expect(screen.getByRole('button', { name: 'Retry' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Record' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '录制' })).toBeInTheDocument()
   })
 
   it('does not offer retry when the microphone produced no audio', async () => {
@@ -302,8 +302,8 @@ describe('MeetingRecorderDock', () => {
     const statusLine = await screen.findByTestId('meeting-recorder-status')
     expect(statusLine).toHaveTextContent('没有采集到麦克风音频')
     expect(statusLine).not.toHaveTextContent('音频已保留')
-    expect(screen.getByRole('button', { name: 'Record' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Retry' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '录制' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '重试' })).not.toBeInTheDocument()
   })
 
   it('requires explicit confirmation before discarding an active recording', async () => {
@@ -424,7 +424,7 @@ describe('MeetingRecorderDock', () => {
       useMeetingRecorderStore.getState().failStage('uploading', 'network')
     })
 
-    await userEvent.click(screen.getByRole('button', { name: 'Retry' }))
+    await userEvent.click(screen.getByRole('button', { name: '重试' }))
 
     await waitFor(() =>
       expect(meetingGenerationMock.fetchMeetingAudioBlob).toHaveBeenCalledWith('task-recovered'),

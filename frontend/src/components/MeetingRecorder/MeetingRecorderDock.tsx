@@ -113,7 +113,7 @@ function recordingDotClass(phase: MeetingRecorderPhase, activeShadow: string) {
     'rounded-full transition-colors',
     phase === 'recording'
       ? `bg-[#EF2B2D] ${activeShadow}`
-      : 'bg-[#FCA5A5] opacity-70 shadow-[0_0_0_3px_rgba(252,165,165,0.12)]',
+      : phase === 'paused' ? 'bg-amber-400' : 'bg-gray-300',
   )
 }
 
@@ -832,7 +832,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   const canRetry = phase === 'failed' && (hasRecoverableRecording || Boolean(taskId))
   const statusLabel = phaseLabel(phase, recorderCopy)
   const statusText = phase === 'failed' && error
-    ? `${recordedAudio ? `${recorderCopy.audioPreserved} · ` : ''}${error}${retryDescription ? ` · ${retryDescription}` : ''}`
+    ? `${recordedAudio ? `${recorderCopy.audioPreserved} · ` : ''}${error}${canRetry && retryDescription ? ` · ${retryDescription}` : ''}`
     : notification?.kind === 'success'
       ? recorderCopy.completedNotice
       : isProcessing
@@ -963,12 +963,12 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
             </div>
             <div className="h-16 w-px bg-gray-200" />
             <div className="min-w-0 flex-1">
-              <div className="text-sm font-semibold leading-5">{isProcessing ? statusLabel : recorderCopy.title}</div>
+              <div className="text-sm font-semibold leading-5">{isProcessing || phase === 'failed' ? statusLabel : recorderCopy.title}</div>
               <div className="mt-2 flex items-center gap-2.5">
                 <span data-testid="meeting-recorder-expanded-dot" className={clsx('h-2.5 w-2.5', recordingDotClass(phase, 'shadow-[0_0_0_4px_rgba(239,43,45,0.10)]'))} />
                 <span className="font-mono text-xl font-semibold leading-none tabular-nums tracking-tight">{elapsedLabel}</span>
               </div>
-              <div className="mt-3 flex h-6 items-center gap-0.5 overflow-hidden" aria-label={recorderCopy.waveformLabel}>
+              {(phase === 'recording' || phase === 'paused') && <div className="mt-3 flex h-6 items-center gap-0.5 overflow-hidden" aria-label={recorderCopy.waveformLabel}>
                 {WAVEFORM_BAR_HEIGHTS.map((height, index) => (
                   <span
                     key={`wave-${index}`}
@@ -976,8 +976,8 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
                     style={{ height, animationDelay: `${index * 60}ms` }}
                   />
                 ))}
-              </div>
-              <div role={phase === 'failed' ? 'alert' : 'status'} data-testid="meeting-recorder-status" className={clsx('mt-1 max-w-[150px] text-[11px] leading-4', phase === 'failed' ? 'text-red-600' : 'text-[#8B9099]')} title={statusText}>
+              </div>}
+              <div role={phase === 'failed' ? 'alert' : 'status'} data-testid="meeting-recorder-status" className={clsx('mt-1 line-clamp-2 max-w-[150px] text-[11px] leading-4', phase === 'failed' ? 'text-red-600' : 'text-[#8B9099]')} title={statusText}>
                 {statusText}
               </div>
             </div>

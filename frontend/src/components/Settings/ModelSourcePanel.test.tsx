@@ -21,13 +21,14 @@ beforeEach(() => {
   useAppModeStore.setState({ config: { configured: true, mode: 'cloud', asr_model: '', llm_model: '' } })
 })
 
-it('cloud mode hides model selection and credentials', () => {
-  useAppModeStore.setState({ config: { configured: true, mode: 'cloud', asr_model: 'asr', llm_model: 'minimax-m2.7' } })
+it('cloud mode exposes model choices without asking for credentials', async () => {
+  vi.mocked(apiJson).mockResolvedValue([{ id: 'minimax-m2.7', modelType: 'llm', runtimeStatus: 'available' }])
+  useAppModeStore.setState({ config: { configured: true, mode: 'cloud', asr_model: '', llm_model: 'minimax-m2.7' } })
   render(<ModelSourcePanel compact />)
-  expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
-  expect(screen.queryByText(/minimax/)).not.toBeInTheDocument()
-  expect(screen.getByText('自动使用云端当前配置，无需选择模型或填写密钥。')).toBeInTheDocument()
-  expect(apiJson).not.toHaveBeenCalled()
+  expect(screen.getAllByRole('combobox')).toHaveLength(2)
+  expect(await screen.findByRole('option', { name: 'minimax-m2.7' })).toBeInTheDocument()
+  expect(screen.queryByLabelText(/密钥/)).not.toBeInTheDocument()
+  expect(apiJson).toHaveBeenCalledWith('/api/vilab/models')
 })
 
 it('cloud mode offers VINote login and permits local mode during an outage', async () => {
