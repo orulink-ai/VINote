@@ -179,3 +179,21 @@ def test_missing_project_credentials_fail_startup_without_printing_keys(monkeypa
     monkeypatch.setattr(tracing.settings, 'langfuse_secret_key', '')
     with pytest.raises(RuntimeError, match='configuration is required'):
         tracing.validate_configuration()
+
+
+def test_sdk_legacy_switch_cannot_disable_product_tracing(monkeypatch):
+    import langfuse
+    import os
+
+    monkeypatch.setenv('LANGFUSE_TRACING_ENABLED', 'false')
+    monkeypatch.setattr(tracing, '_client', None)
+    monkeypatch.setattr(tracing.settings, 'langfuse_enabled', True)
+    monkeypatch.setattr(tracing.settings, 'langfuse_public_key', 'pk-test')
+    monkeypatch.setattr(tracing.settings, 'langfuse_secret_key', 'sk-test')
+    monkeypatch.setattr(tracing.settings, 'langfuse_base_url', 'http://localhost:3000')
+    constructor = Mock()
+    monkeypatch.setattr(langfuse, 'Langfuse', constructor)
+    assert tracing.get_client() is constructor.return_value
+    assert os.environ['LANGFUSE_TRACING_ENABLED'] == 'true'
+    assert constructor.call_args.kwargs['sample_rate'] == 1.0
+    tracing.shutdown()

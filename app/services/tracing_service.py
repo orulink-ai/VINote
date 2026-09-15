@@ -4,6 +4,7 @@ import hashlib
 import hmac
 import inspect
 import logging
+import os
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from functools import wraps
@@ -42,6 +43,8 @@ def get_client():
                     "service.version": settings.langfuse_release,
                     "deployment.environment.name": settings.langfuse_environment,
                 }))
+                # The SDK also reads its own legacy switch; keep product policy authoritative.
+                os.environ['LANGFUSE_TRACING_ENABLED'] = 'true'
                 _client = Langfuse(
                     public_key=settings.langfuse_public_key,
                     secret_key=settings.langfuse_secret_key,
@@ -50,6 +53,7 @@ def get_client():
                     release=settings.langfuse_release,
                     tracer_provider=provider,
                     timeout=5,
+                    sample_rate=1.0,
                 )
                 atexit.register(shutdown)
             except Exception:
