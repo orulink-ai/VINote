@@ -88,6 +88,15 @@ describe('useAudioRecorder', () => {
     expect(result.current.status).toBe('stopped')
   })
 
+  it('releases the microphone immediately when the recorder fails at runtime', async () => {
+    const { result } = renderHook(() => useAudioRecorder())
+    await act(async () => { await result.current.start() })
+    act(() => { lastRecorder?.onerror?.() })
+    expect(stopTrack).toHaveBeenCalledOnce()
+    expect(lastRecorder?.stop).toHaveBeenCalledOnce()
+    expect(result.current.status).toBe('failed')
+  })
+
   it('times out pending permission and releases a late microphone stream', async () => {
     vi.useFakeTimers()
     let resolveStream!: (stream: MediaStream) => void

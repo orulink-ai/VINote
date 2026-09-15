@@ -8,9 +8,38 @@ class TestStream {
   getVideoTracks() { return this.tracks.filter(track => track.kind === 'video') }
 }
 
-afterEach(() => vi.unstubAllGlobals())
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('meeting source capture', () => {
+  it('releases the screen on cancellation and stops a late microphone result', async () => {
+    const stopScreen = vi.fn()
+    const stopMic = vi.fn()
+    let resolveMic!: (stream: TestStream) => void
+    const getUserMedia = vi.fn(() => new Promise<TestStream>(resolve => { resolveMic = resolve }))
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia,
+      getDisplayMedia: vi.fn().mockResolvedValue(new TestStream([{ kind: 'video', stop: stopScreen }])) } })
+    const controller = new AbortController()
+    const pending = captureMeetingSources({ ...DEFAULT_CAPTURE_OPTIONS, screen: true }, controller.signal)
+    const failure = expect(pending).rejects.toThrow('microphone_request_cancelled')
+    await vi.waitFor(() => expect(getUserMedia).toHaveBeenCalledOnce())
+    controller.abort()
+    await failure
+    expect(stopScreen).toHaveBeenCalledOnce()
+    resolveMic(new TestStream([{ kind: 'audio', stop: stopMic }]))
+    await vi.waitFor(() => expect(stopMic).toHaveBeenCalledOnce())
+  })
+
+  it('times out a meeting microphone prompt and releases the already selected screen', async () => {
+    vi.useFakeTimers()
+    const stop = vi.fn()
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia: vi.fn(() => new Promise(() => {})),
+      getDisplayMedia: vi.fn().mockResolvedValue(new TestStream([{ kind: 'video', stop }])) } })
+    const pending = captureMeetingSources({ ...DEFAULT_CAPTURE_OPTIONS, screen: true })
+    const failure = expect(pending).rejects.toThrow('microphone_request_timeout')
+    await vi.advanceTimersByTimeAsync(20000)
+    await failure
+    expect(stop).toHaveBeenCalledOnce()
+  })
   it('requests the selected microphone and releases all sources', async () => {
     const stop = vi.fn()
     const getUserMedia = vi.fn().mockResolvedValue(new TestStream([{ kind: 'audio', stop }]))

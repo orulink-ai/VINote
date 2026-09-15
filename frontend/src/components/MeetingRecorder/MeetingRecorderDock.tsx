@@ -217,6 +217,12 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   const finishInFlightRef = useRef(false)
 
   useEffect(() => {
+    if (recorder.status === 'failed' && ['recording', 'paused'].includes(useMeetingRecorderStore.getState().phase)) {
+      failStage('uploading', formatRecorderFailure(new Error(recorder.error), recorderCopy))
+    }
+  }, [recorder.status, recorder.error, failStage, recorderCopy])
+
+  useEffect(() => {
     if (!isRecorderWindow) return
     void emitRecorderWindowReady()
   }, [isRecorderWindow])
@@ -422,7 +428,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     startedAtRef.current = new Date()
     setPhase('requesting')
     try {
-      await recorder.start(options)
+      if (await recorder.start(options) === false) return
       if (useMeetingRecorderStore.getState().phase === 'requesting') {
         setPhase('recording')
         if (options && isTauriRuntime()) void openMeetingController().catch(() => undefined)
