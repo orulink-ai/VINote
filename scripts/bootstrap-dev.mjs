@@ -6,7 +6,7 @@ import { root } from './runtime.mjs'
 
 function exec(command, args) {
   const result = spawnSync(command, args, { cwd: root, stdio: 'inherit', windowsHide: true })
-  if (result.error || result.status !== 0) throw new Error(`Setup failed: ${command}. Check network/toolchain and retry yarn client:dev.`)
+  if (result.error || result.status !== 0) throw new Error(`Setup failed: ${command}. Check network/toolchain and retry yarn dev.`)
 }
 
 export function bootstrap() {
@@ -20,7 +20,7 @@ export function bootstrap() {
     if (npm) exec(process.execPath, [npm, 'ci', '--prefix', join(root, 'frontend')])
     else {
       const yarn = process.env.npm_execpath
-      if (!yarn) throw new Error('Run yarn client:dev to install missing frontend dependencies automatically.')
+      if (!yarn) throw new Error('Run yarn dev to install missing frontend dependencies automatically.')
       exec(process.execPath, [yarn, '--cwd', join(root, 'frontend'), 'install'])
     }
   }
@@ -28,7 +28,7 @@ export function bootstrap() {
   if (!process.env.VINOTE_PYTHON && !existsSync(py)) {
     const candidates = process.platform === 'win32' ? [['py', '-3'], ['python'], ['python3']] : [['python3'], ['python']]
     const found = candidates.find(([command, ...args]) => spawnSync(command, [...args, '-c', 'import sys; assert sys.version_info >= (3,10)'], { windowsHide: true }).status === 0)
-    if (!found) throw new Error('Install Python 3.10+ first, then retry yarn client:dev.')
+    if (!found) throw new Error('Install Python 3.10+ first, then retry yarn dev.')
     console.log('[setup] Creating .venv...')
     exec(found[0], [...found.slice(1), '-m', 'venv', join(root, '.venv')])
   }

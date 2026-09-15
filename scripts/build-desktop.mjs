@@ -114,10 +114,16 @@ for (const type of process.platform === 'win32' ? ['nsis'] : ['macos', 'dmg']) {
   }
 }
 if (!files.length) throw new Error('No desktop package artifacts were produced')
-const git = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true }).stdout?.trim()
+const gitRun = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true })
+const git = (...args) => gitRun(...args).stdout?.trim()
+// Tauri can touch Cargo.toml without changing its normalized contents on Windows.
+// Use content diffs plus untracked files so the manifest does not report that as dirty.
+const dirty = gitRun('diff', '--quiet').status !== 0
+  || gitRun('diff', '--cached', '--quiet').status !== 0
+  || Boolean(git('ls-files', '--others', '--exclude-standard'))
 writeFileSync(join(artifacts, 'manifest.json'), JSON.stringify({ channel: profile.channel, version: profile.version,
   buildId: profile.buildId, identifier: profile.identifier, server: profile.config.VILAB_SERVER_URL,
   platform: process.platform, arch: process.arch, commit: git('rev-parse', 'HEAD'),
-  dirty: Boolean(git('status', '--porcelain')),
+  dirty,
   langfuse: JSON.parse(readFileSync(join(staging, 'smoke-data/langfuse-smoke.json'), 'utf8')), files }, null, 2))
 console.log(`Desktop ${profile.channel} artifacts: ${artifacts}`)

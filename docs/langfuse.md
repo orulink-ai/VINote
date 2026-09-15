@@ -42,7 +42,7 @@ LANGFUSE_TRACING_ENVIRONMENT=development
 LANGFUSE_RELEASE=0.5.2
 ```
 
-`yarn client:dev` 会设置 `VINOTE_DESKTOP_RUNTIME=true`，缺少 Langfuse 项目配置时拒绝启动桌面后端。普通 `uvicorn` 后端可以不配置 Langfuse，因为非桌面请求不会上报。
+`yarn dev` 会设置 `VINOTE_DESKTOP_RUNTIME=true`，缺少 Langfuse 项目配置时拒绝启动桌面后端。普通 `uvicorn` 后端可以不配置 Langfuse，因为非桌面请求不会上报。
 
 测试与正式构建把构建环境中的同一项目配置写入冻结后端资源 `desktop-config.json`。安装包持有人可提取这些凭据，这是直接接入方案的分发边界。凭据不得进入 Git、前端资源、日志或 manifest；`.env`、模型 API key、用户会话和数据库密码不得打包。旧应用数据中的 `langfuse.env` 会被忽略。
 
