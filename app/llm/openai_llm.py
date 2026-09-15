@@ -9,8 +9,8 @@ import httpx
 from openai import OpenAI
 
 from app.config import settings
-from app.services.tracing_service import (traced_generation, record_usage, traced,
-                                          record_model_parameters, observation)
+from app.services.tracing_service import (generation_name, record_model_parameters,
+                                          record_usage, traced_generation)
 from app.llm.anthropic_compat import post_anthropic_compatible
 from app.llm.base import LLMSummarizer, SummaryProgressCallback
 from app.llm.meeting_review import build_meeting_review_prompts
@@ -30,7 +30,8 @@ logger = logging.getLogger(__name__)
 
 class _BasePromptLLM(LLMSummarizer):
     def _complete_stage(self, *, stage, metadata=None, **prompts):
-        with observation(stage, as_type="chain", metadata=metadata):
+        del metadata
+        with generation_name(stage):
             return self._complete(**prompts)
 
     def _complete(self, *, system_prompt: str, user_prompt: str) -> str:
@@ -41,7 +42,8 @@ class _BasePromptLLM(LLMSummarizer):
 
     def _review_meeting_note(self, *, source, draft, extras, output_language,
                              intermediate=False, source_is_reviewed_notes=False):
-        with observation("核对会议纪要事实", as_type="chain"):
+        review_name = "LLM｜核对会议分段" if intermediate else "LLM｜核对最终会议纪要"
+        with generation_name(review_name):
             result = self._complete_review(**build_meeting_review_prompts(
                 source=source, draft=draft, extras=extras,
                 output_language=output_language, intermediate=intermediate,
@@ -126,7 +128,6 @@ class _BasePromptLLM(LLMSummarizer):
             or total_chars > max(2000, int(settings.summary_default_max_chars))
         )
 
-    @traced("一次性总结", as_type="chain")
     def _summarize_one_shot(
         self,
         *,
@@ -138,7 +139,8 @@ class _BasePromptLLM(LLMSummarizer):
         progress_callback: SummaryProgressCallback | None = None,
     ) -> str:
         user_prompt = self._build_user_prompt(title, segments, style, extras, output_language)
-        draft = self._complete(
+        draft = self._complete_stage(
+            stage="LLM｜生成会议纪要" if style == "meeting" else "LLM｜生成笔记",
             system_prompt=build_system_prompt(output_language),
             user_prompt=user_prompt,
         )
@@ -151,7 +153,6 @@ class _BasePromptLLM(LLMSummarizer):
             extras=extras, output_language=output_language,
         )
 
-    @traced("分块总结与全局合并", as_type="chain")
     def _summarize_hierarchical(
         self,
         *,
@@ -181,7 +182,7 @@ class _BasePromptLLM(LLMSummarizer):
 
             chunk_notes.append(
                 self._complete_stage(
-                    stage="总结字幕分块",
+                    stage=f"LLM｜分块总结 {index}/{total_chunks}",
                     metadata={"chunk_index": index, "chunk_total": total_chunks},
                     system_prompt=build_chunk_system_prompt(output_language),
                     user_prompt=build_chunk_user_prompt(
@@ -211,7 +212,7 @@ class _BasePromptLLM(LLMSummarizer):
             for index, chunk_note in enumerate(chunk_notes, start=1)
         )
         draft = self._complete_stage(
-            stage="合并分块笔记",
+            stage="LLM｜合并分块总结",
             system_prompt=build_merge_system_prompt(output_language),
             user_prompt=build_merge_user_prompt(
                 title=title,

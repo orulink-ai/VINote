@@ -7,7 +7,7 @@ import re
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 
 from app.config import settings
@@ -18,6 +18,7 @@ from app.models.transcript import TranscriptResult, TranscriptSegment
 from app.services.auth_service import get_current_user, get_optional_current_user
 from app.services.audio_normalizer import normalize_audio_for_transcription
 from app.services.note_service import NoteService
+from app.services.tracing_service import DesktopTraceContext, desktop_trace
 
 logger = logging.getLogger(__name__)
 
@@ -49,6 +50,54 @@ _ALLOWED_MEDIA_EXTENSIONS = {
     ".wmv",
 }
 _ALLOWED_TRANSCRIPT_EXTENSIONS = {".txt", ".vtt", ".srt", ".json", ".md"}
+
+
+def _is_desktop_request(request: Request) -> bool:
+    return request.headers.get("X-VINote-Client", "").strip().lower() == "desktop"
+
+
+def _desktop_trace_context(
+    request: Request,
+    *,
+    workflow: str,
+    source: str,
+    media_type: str,
+    title: str | None = None,
+    filename: str | None = None,
+    size_bytes: int | None = None,
+    url: str | None = None,
+    summary_mode: str = "default",
+    output_language: str | None = None,
+) -> DesktopTraceContext | None:
+    if not _is_desktop_request(request):
+        return None
+    normalized_workflow = "meeting" if workflow == "meeting" else "note_organization"
+    payload = {
+        "workflow": normalized_workflow,
+        "source": source,
+        "media_type": media_type,
+        "title": title or "",
+        "summary_mode": summary_mode,
+        "output_language": output_language or "",
+    }
+    if filename:
+        payload["filename"] = Path(filename).name
+        payload["format"] = Path(filename).suffix.lower().lstrip(".")
+    if size_bytes is not None:
+        payload["size_bytes"] = size_bytes
+    if url:
+        from urllib.parse import urlsplit, urlunsplit
+        parts = urlsplit(url)
+        payload["url"] = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
+        payload["platform"] = parts.netloc.lower()
+    return DesktopTraceContext(
+        workflow=normalized_workflow,
+        source=source,
+        media_type=media_type,
+        client_version=request.headers.get("X-VINote-Client-Version", ""),
+        channel=settings.langfuse_environment,
+        input=payload,
+    )
 
 
 def _coerce_float(value, default: float = 0.0) -> float:
@@ -329,35 +378,47 @@ def _build_note_request_fields(
 def generate_note_async(
     req: NoteRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
     user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
     task_id = str(uuid.uuid4())
-    background_tasks.add_task(_run_task, task_id=task_id, req=req, user_id=user.user_id if user else None)
+    trace_context = _desktop_trace_context(
+        request, workflow=req.workflow, source="url", media_type="video",
+        title=None, url=req.video_url, summary_mode=req.summary_mode,
+        output_language=req.output_language,
+    )
+    if trace_context is not None:
+        req = req.model_copy(update={"diarize": True, "speaker_count": None})
+    background_tasks.add_task(_run_task, task_id=task_id, req=req,
+                              user_id=user.user_id if user else None,
+                              trace_context=trace_context)
     return {"task_id": task_id, "status": "pending", "message": "Task submitted"}
 
 
 @router.post("/generate_sync", response_model=NoteResponse)
 def generate_note_sync(
     req: NoteRequest,
+    request: Request,
     user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
     task_id = str(uuid.uuid4())
     try:
-        result = _note_service.generate(
-            video_url=req.video_url,
-            task_id=task_id,
-            platform=req.platform,
-            style=req.style or "detailed",
-            summary_mode=req.summary_mode,
-            extras=req.extras,
+        trace_context = _desktop_trace_context(
+            request, workflow=req.workflow, source="url", media_type="video",
+            url=req.video_url, summary_mode=req.summary_mode,
             output_language=req.output_language,
-            model_profile_id=req.model_profile_id,
-            stt_profile_id=req.stt_profile_id,
-            model_name=req.model_name,
-            api_key=req.api_key,
-            base_url=req.base_url,
-            user_id=user.user_id if user else None,
         )
+        effective_diarize = req.diarize or trace_context is not None
+        with desktop_trace(trace_context):
+            result = _note_service.generate(
+                video_url=req.video_url, task_id=task_id, platform=req.platform,
+                style=req.style or "detailed", summary_mode=req.summary_mode,
+                extras=req.extras, output_language=req.output_language,
+                model_profile_id=req.model_profile_id, stt_profile_id=req.stt_profile_id,
+                model_name=req.model_name, api_key=req.api_key, base_url=req.base_url,
+                user_id=user.user_id if user else None,
+                diarize=effective_diarize, speaker_count=req.speaker_count,
+            )
     except Exception as exc:
         logger.error("[API] generate_sync failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -391,7 +452,8 @@ def get_task_status(task_id: str):
                 video_id=result_data.get("video_id", ""),
                 summary_mode=result_data.get("summary_mode", "default"),
             )
-    return TaskStatusResponse(task_id=task_id, status=status, message=message, result=result)
+    return TaskStatusResponse(task_id=task_id, status=status, message=message, result=result,
+                              langfuse_trace_id=status_data.get("langfuse_trace_id"))
 
 
 @router.get("/task/{task_id}/artifacts/{asset_path:path}", include_in_schema=False)
@@ -429,14 +491,23 @@ def get_styles():
 def generate_from_file_async(
     req: LocalFileRequest,
     background_tasks: BackgroundTasks,
+    request: Request,
     user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
     task_id = str(uuid.uuid4())
+    trace_context = _desktop_trace_context(
+        request, workflow=req.workflow, source="local_file", media_type="audio",
+        title=req.title, filename=req.file_path, summary_mode=req.summary_mode,
+        output_language=req.output_language,
+    )
+    if trace_context is not None:
+        req = req.model_copy(update={"diarize": True, "speaker_count": None})
     background_tasks.add_task(
         _run_task_from_file,
         task_id=task_id,
         req=req,
         user_id=user.user_id if user else None,
+        trace_context=trace_context,
     )
     return {"task_id": task_id, "status": "pending", "message": "Task submitted"}
 
@@ -444,27 +515,35 @@ def generate_from_file_async(
 @router.post("/generate_from_file_sync", response_model=NoteResponse)
 def generate_from_file_sync(
     req: LocalFileRequest,
+    request: Request,
     user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
     task_id = str(uuid.uuid4())
     try:
-        result = _note_service.generate_from_file(
-            file_path=req.file_path,
-            diarize=req.diarize,
-            speaker_count=req.speaker_count,
-            task_id=task_id,
-            title=req.title,
-            style=req.style or "meeting",
-            summary_mode=req.summary_mode,
-            extras=req.extras,
+        trace_context = _desktop_trace_context(
+            request, workflow=req.workflow, source="local_file", media_type="audio",
+            title=req.title, filename=req.file_path, summary_mode=req.summary_mode,
             output_language=req.output_language,
-            model_profile_id=req.model_profile_id,
-            stt_profile_id=req.stt_profile_id,
-            model_name=req.model_name,
-            api_key=req.api_key,
-            base_url=req.base_url,
-            user_id=user.user_id if user else None,
         )
+        effective_diarize = req.diarize or trace_context is not None
+        with desktop_trace(trace_context):
+            result = _note_service.generate_from_file(
+                file_path=req.file_path,
+                diarize=effective_diarize,
+                speaker_count=req.speaker_count,
+                task_id=task_id,
+                title=req.title,
+                style=req.style or "meeting",
+                summary_mode=req.summary_mode,
+                extras=req.extras,
+                output_language=req.output_language,
+                model_profile_id=req.model_profile_id,
+                stt_profile_id=req.stt_profile_id,
+                model_name=req.model_name,
+                api_key=req.api_key,
+                base_url=req.base_url,
+                user_id=user.user_id if user else None,
+            )
     except Exception as exc:
         logger.error("[API] generate_from_file_sync failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -483,6 +562,7 @@ def generate_from_file_sync(
 @router.post("/generate_from_upload", response_model=dict)
 async def generate_from_upload(
     background_tasks: BackgroundTasks,
+    request: Request,
     file: UploadFile = File(...),
     source_type: str = Form("media"),
     diarize: bool = Form(False),
@@ -497,12 +577,18 @@ async def generate_from_upload(
     model_name: str | None = Form(None),
     api_key: str | None = Form(None),
     base_url: str | None = Form(None),
+    workflow: str = Form("note_organization"),
+    trace_source: str = Form("local_file"),
     user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
     try:
         normalized_source_type = _normalize_source_type(source_type)
         normalized_summary_mode = _normalize_summary_mode(summary_mode)
         normalized_output_language = _normalize_output_language(output_language)
+        desktop_request = _is_desktop_request(request)
+        diarize = diarize or (desktop_request and normalized_source_type != "transcript")
+        if desktop_request:
+            speaker_count = None
         if diarize and normalized_source_type != "transcript":
             from app.services.speaker_diarization_service import SpeakerDiarizationService
             SpeakerDiarizationService.require_ready()
@@ -514,6 +600,11 @@ async def generate_from_upload(
             if not file_bytes:
                 raise ValueError("Uploaded file is empty.")
             transcript = _build_transcript_from_upload(file.filename, file_bytes)
+            trace_context = _desktop_trace_context(
+                request, workflow=workflow, source=trace_source, media_type="transcript",
+                title=title, filename=file.filename, size_bytes=len(file_bytes),
+                summary_mode=normalized_summary_mode, output_language=normalized_output_language,
+            )
             background_tasks.add_task(
                 _run_task_from_transcript,
                 task_id=task_id,
@@ -529,6 +620,7 @@ async def generate_from_upload(
                 api_key=api_key,
                 base_url=base_url,
                 user_id=user.user_id if user else None,
+                trace_context=trace_context,
             )
         else:
             _ensure_media_extension(normalized_source_type, file.filename)
@@ -544,6 +636,7 @@ async def generate_from_upload(
             if not upload_path.stat().st_size:
                 upload_path.unlink()
                 raise ValueError("Uploaded file is empty.")
+            uploaded_size_bytes = upload_path.stat().st_size
             _note_service.artifact_service.record_source_media(
                 task_dir,
                 upload_path,
@@ -571,11 +664,18 @@ async def generate_from_upload(
                 api_key=api_key,
                 base_url=base_url,
             )
+            trace_context = _desktop_trace_context(
+                request, workflow=workflow, source=trace_source,
+                media_type=normalized_source_type, title=title, filename=file.filename,
+                size_bytes=uploaded_size_bytes,
+                summary_mode=normalized_summary_mode, output_language=normalized_output_language,
+            )
             background_tasks.add_task(
                 _run_task_from_file,
                 task_id=task_id,
                 req=req,
                 user_id=user.user_id if user else None,
+                trace_context=trace_context,
             )
         return {"task_id": task_id, "status": "uploaded" if normalized_source_type == "audio" else "pending", "message": "Task submitted"}
     except HTTPException:
@@ -589,6 +689,7 @@ async def generate_from_upload(
 
 @router.post("/generate_from_upload_sync", response_model=NoteResponse)
 async def generate_from_upload_sync(
+    request: Request,
     file: UploadFile = File(...),
     source_type: str = Form("media"),
     diarize: bool = Form(False),
@@ -603,6 +704,8 @@ async def generate_from_upload_sync(
     model_name: str | None = Form(None),
     api_key: str | None = Form(None),
     base_url: str | None = Form(None),
+    workflow: str = Form("note_organization"),
+    trace_source: str = Form("local_file"),
     user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
     task_id = str(uuid.uuid4())
@@ -610,6 +713,10 @@ async def generate_from_upload_sync(
         normalized_source_type = _normalize_source_type(source_type)
         normalized_summary_mode = _normalize_summary_mode(summary_mode)
         normalized_output_language = _normalize_output_language(output_language)
+        desktop_request = _is_desktop_request(request)
+        diarize = diarize or (desktop_request and normalized_source_type != "transcript")
+        if desktop_request:
+            speaker_count = None
         _ensure_media_extension(normalized_source_type, file.filename)
 
         if normalized_source_type == "transcript":
@@ -618,21 +725,27 @@ async def generate_from_upload_sync(
             if not file_bytes:
                 raise ValueError("Uploaded file is empty.")
             transcript = _build_transcript_from_upload(file.filename, file_bytes)
-            result = _note_service.generate_from_transcript(
-                transcript=transcript,
-                task_id=task_id,
-                title=title,
-                style=style or "meeting",
-                summary_mode=normalized_summary_mode,
-                extras=extras,
-                output_language=normalized_output_language,
-                model_profile_id=model_profile_id,
-                stt_profile_id=stt_profile_id,
-                model_name=model_name,
-                api_key=api_key,
-                base_url=base_url,
-                user_id=user.user_id if user else None,
+            trace_context = _desktop_trace_context(
+                request, workflow=workflow, source=trace_source, media_type="transcript",
+                title=title, filename=file.filename, size_bytes=len(file_bytes),
+                summary_mode=normalized_summary_mode, output_language=normalized_output_language,
             )
+            with desktop_trace(trace_context):
+                result = _note_service.generate_from_transcript(
+                    transcript=transcript,
+                    task_id=task_id,
+                    title=title,
+                    style=style or "meeting",
+                    summary_mode=normalized_summary_mode,
+                    extras=extras,
+                    output_language=normalized_output_language,
+                    model_profile_id=model_profile_id,
+                    stt_profile_id=stt_profile_id,
+                    model_name=model_name,
+                    api_key=api_key,
+                    base_url=base_url,
+                    user_id=user.user_id if user else None,
+                )
         else:
             task_dir = _note_service.artifact_service.create_task_dir(task_id)
             media_dir = task_dir / "media"
@@ -646,6 +759,7 @@ async def generate_from_upload_sync(
             if not upload_path.stat().st_size:
                 upload_path.unlink()
                 raise ValueError("Uploaded file is empty.")
+            uploaded_size_bytes = upload_path.stat().st_size
             _note_service.artifact_service.record_source_media(
                 task_dir,
                 upload_path,
@@ -668,21 +782,30 @@ async def generate_from_upload_sync(
                 api_key=api_key,
                 base_url=base_url,
             )
-            result = _note_service.generate_from_file(
-                file_path=req.file_path,
-                task_id=task_id,
-                title=req.title,
-                style=req.style or "meeting",
-                summary_mode=req.summary_mode,
-                extras=req.extras,
-                output_language=req.output_language,
-                model_profile_id=req.model_profile_id,
-                stt_profile_id=req.stt_profile_id,
-                model_name=req.model_name,
-                api_key=req.api_key,
-                base_url=req.base_url,
-                user_id=user.user_id if user else None,
+            trace_context = _desktop_trace_context(
+                request, workflow=workflow, source=trace_source,
+                media_type=normalized_source_type, title=title, filename=file.filename,
+                size_bytes=uploaded_size_bytes,
+                summary_mode=normalized_summary_mode, output_language=normalized_output_language,
             )
+            with desktop_trace(trace_context):
+                result = _note_service.generate_from_file(
+                    file_path=req.file_path,
+                    diarize=req.diarize,
+                    speaker_count=req.speaker_count,
+                    task_id=task_id,
+                    title=req.title,
+                    style=req.style or "meeting",
+                    summary_mode=req.summary_mode,
+                    extras=req.extras,
+                    output_language=req.output_language,
+                    model_profile_id=req.model_profile_id,
+                    stt_profile_id=req.stt_profile_id,
+                    model_name=req.model_name,
+                    api_key=req.api_key,
+                    base_url=req.base_url,
+                    user_id=user.user_id if user else None,
+                )
     except ValueError as exc:
         logger.error("[API] generate_from_upload_sync failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -701,46 +824,44 @@ async def generate_from_upload_sync(
     )
 
 
-def _run_task(task_id: str, req: NoteRequest, user_id: str | None):
+def _run_task(task_id: str, req: NoteRequest, user_id: str | None,
+              trace_context: DesktopTraceContext | None = None):
     try:
-        _note_service.generate(
-            video_url=req.video_url,
-            task_id=task_id,
-            platform=req.platform,
-            style=req.style or "detailed",
-            summary_mode=req.summary_mode,
-            extras=req.extras,
-            output_language=req.output_language,
-            model_profile_id=req.model_profile_id,
-            stt_profile_id=req.stt_profile_id,
-            model_name=req.model_name,
-            api_key=req.api_key,
-            base_url=req.base_url,
-            user_id=user_id,
-        )
+        with desktop_trace(trace_context):
+            _note_service.generate(
+                video_url=req.video_url, task_id=task_id, platform=req.platform,
+                style=req.style or "detailed", summary_mode=req.summary_mode,
+                extras=req.extras, output_language=req.output_language,
+                model_profile_id=req.model_profile_id, stt_profile_id=req.stt_profile_id,
+                model_name=req.model_name, api_key=req.api_key, base_url=req.base_url,
+                user_id=user_id,
+                diarize=req.diarize, speaker_count=req.speaker_count,
+            )
     except Exception as exc:
         logger.error("[Background] task failed task_id=%s error=%s", task_id, exc, exc_info=True)
 
 
-def _run_task_from_file(task_id: str, req: LocalFileRequest, user_id: str | None):
+def _run_task_from_file(task_id: str, req: LocalFileRequest, user_id: str | None,
+                        trace_context: DesktopTraceContext | None = None):
     try:
-        _note_service.generate_from_file(
-            file_path=req.file_path,
-            diarize=req.diarize,
-            speaker_count=req.speaker_count,
-            task_id=task_id,
-            title=req.title,
-            style=req.style or "meeting",
-            summary_mode=req.summary_mode,
-            extras=req.extras,
-            output_language=req.output_language,
-            model_profile_id=req.model_profile_id,
-            stt_profile_id=req.stt_profile_id,
-            model_name=req.model_name,
-            api_key=req.api_key,
-            base_url=req.base_url,
-            user_id=user_id,
-        )
+        with desktop_trace(trace_context):
+            _note_service.generate_from_file(
+                file_path=req.file_path,
+                diarize=req.diarize,
+                speaker_count=req.speaker_count,
+                task_id=task_id,
+                title=req.title,
+                style=req.style or "meeting",
+                summary_mode=req.summary_mode,
+                extras=req.extras,
+                output_language=req.output_language,
+                model_profile_id=req.model_profile_id,
+                stt_profile_id=req.stt_profile_id,
+                model_name=req.model_name,
+                api_key=req.api_key,
+                base_url=req.base_url,
+                user_id=user_id,
+            )
     except Exception as exc:
         logger.error("[Background] local task failed task_id=%s error=%s", task_id, exc, exc_info=True)
 
@@ -759,22 +880,24 @@ def _run_task_from_transcript(
     api_key: str | None,
     base_url: str | None,
     user_id: str | None,
+    trace_context: DesktopTraceContext | None = None,
 ):
     try:
-        _note_service.generate_from_transcript(
-            transcript=transcript,
-            task_id=task_id,
-            title=title,
-            style=style,
-            summary_mode=summary_mode,
-            extras=extras,
-            output_language=output_language,
-            model_profile_id=model_profile_id,
-            stt_profile_id=stt_profile_id,
-            model_name=model_name,
-            api_key=api_key,
-            base_url=base_url,
-            user_id=user_id,
-        )
+        with desktop_trace(trace_context):
+            _note_service.generate_from_transcript(
+                transcript=transcript,
+                task_id=task_id,
+                title=title,
+                style=style,
+                summary_mode=summary_mode,
+                extras=extras,
+                output_language=output_language,
+                model_profile_id=model_profile_id,
+                stt_profile_id=stt_profile_id,
+                model_name=model_name,
+                api_key=api_key,
+                base_url=base_url,
+                user_id=user_id,
+            )
     except Exception as exc:
         logger.error("[Background] transcript task failed task_id=%s error=%s", task_id, exc, exc_info=True)

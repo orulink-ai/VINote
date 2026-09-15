@@ -4,7 +4,11 @@ from unittest.mock import patch
 import pytest
 
 from app.models.transcript import TranscriptResult, TranscriptSegment
-from app.services.speaker_diarization_service import build_speaker_turns, SpeakerTurn
+from app.services.speaker_diarization_service import (
+    SpeakerTurn,
+    align_transcript_to_speaker_turns,
+    build_speaker_turns,
+)
 from app.services.transcription_service import TranscriptionService
 
 
@@ -54,3 +58,35 @@ def test_summary_receives_speaker_evidence():
     assert '[说话人 2]' in text
     assert '00:01–00:03' in text
     assert 'Review tomorrow' in text
+
+
+def test_timestamped_transcript_uses_interval_overlap_for_speakers():
+    transcript = TranscriptResult(
+        'zh',
+        '第一句。第二句。',
+        [TranscriptSegment(0.5, 2.5, '第一句。'), TranscriptSegment(3.2, 4.2, '第二句。')],
+        {'timestamp_granularity': 'segment'},
+    )
+    segments, alignment = align_transcript_to_speaker_turns(transcript, [
+        SpeakerTurn(0, 3, 'speaker_1'),
+        SpeakerTurn(3, 5, 'speaker_2'),
+    ])
+    assert alignment == 'provider_timestamp_overlap'
+    assert [segment.speaker_id for segment in segments] == ['speaker_1', 'speaker_2']
+    assert [segment.start for segment in segments] == [0.5, 3.2]
+
+
+def test_whole_file_transcript_is_aligned_without_additional_stt_calls():
+    transcript = TranscriptResult(
+        'zh',
+        '短句。这里是明显更长的第二句话。',
+        [TranscriptSegment(0, 10, '短句。这里是明显更长的第二句话。')],
+        {'timestamp_granularity': 'file'},
+    )
+    segments, alignment = align_transcript_to_speaker_turns(transcript, [
+        SpeakerTurn(0, 2, 'speaker_1'),
+        SpeakerTurn(2, 10, 'speaker_2'),
+    ])
+    assert alignment == 'estimated_by_speaking_duration'
+    assert [segment.text for segment in segments] == ['短句。', '这里是明显更长的第二句话。']
+    assert [segment.speaker_id for segment in segments] == ['speaker_1', 'speaker_2']

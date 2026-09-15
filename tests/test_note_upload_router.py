@@ -58,6 +58,43 @@ class GenerateFromUploadRouterTest(unittest.TestCase):
         self.assertEqual(kwargs["task_id"], task_id)
         self.assertEqual(kwargs["req"].file_path, str(audio_path))
         self.assertEqual(kwargs["req"].title, "Meeting recording")
+        self.assertFalse(kwargs["req"].diarize)
+
+    def test_desktop_media_upload_always_uses_automatic_diarization(self):
+        fake_note_service = SimpleNamespace(artifact_service=self.artifact_service)
+
+        with patch.object(note, "_note_service", fake_note_service), \
+                patch.object(note, "_run_task_from_file") as run_task, \
+                patch("app.services.speaker_diarization_service.SpeakerDiarizationService.require_ready"):
+            response = self.client.post(
+                "/api/generate_from_upload",
+                headers={"X-VINote-Client": "desktop"},
+                data={"source_type": "audio", "diarize": "false", "speaker_count": "12"},
+                files={"file": ("discussion.wav", b"audio-bytes", "audio/wav")},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        req = run_task.call_args.kwargs["req"]
+        self.assertTrue(req.diarize)
+        self.assertIsNone(req.speaker_count)
+
+    def test_desktop_video_url_always_uses_automatic_diarization(self):
+        with patch.object(note, "_run_task") as run_task:
+            response = self.client.post(
+                "/api/generate",
+                headers={"X-VINote-Client": " Desktop "},
+                json={
+                    "video_url": "https://example.test/video",
+                    "workflow": "note_organization",
+                    "diarize": False,
+                    "speaker_count": 8,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        req = run_task.call_args.kwargs["req"]
+        self.assertTrue(req.diarize)
+        self.assertIsNone(req.speaker_count)
 
     def test_json_transcript_keeps_speaker_text_variants_and_provenance(self):
         transcript = note._build_transcript_from_json(

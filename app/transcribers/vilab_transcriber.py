@@ -12,6 +12,7 @@ from app.transcribers.base import Transcriber
 
 
 class VILabTranscriber(Transcriber):
+    provider = "vilab-server"
     def __init__(self, base_url: str, api_key: str, model: str | None = None, language: str | None = None, cloud_user_id: str | None = None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key

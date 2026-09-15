@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, writeFileSync, copyFileSync, existsSync, readFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync, copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { resolveDesktopProfile, checksum } from './desktop-build-profile.mjs'
@@ -90,12 +90,17 @@ writeFileSync(tauriConfig, JSON.stringify({
     resources: { [backendDir + '/']: 'backend/' } },
 }))
 const targetDir = join(staging, 'target')
+// Tauri keeps versioned packages in the shared channel target directory. Clear
+// only bundle outputs so a new manifest cannot publish an installer from an
+// earlier version while retaining the expensive Rust compilation cache.
+rmSync(join(targetDir, 'release', 'bundle'), { recursive: true, force: true })
 exec(process.execPath, [join(root, 'frontend/node_modules/@tauri-apps/cli/tauri.js'), 'build', '--config', tauriConfig], {
   cwd: join(root, 'frontend'), env: { ...process.env, CARGO_TARGET_DIR: targetDir },
 })
 const { readdirSync, cpSync } = await import('node:fs')
 const bundleDir = join(targetDir, 'release/bundle')
 const artifacts = join(root, '.desktop-build/artifacts', profile.channel, profile.version, profile.buildId)
+rmSync(artifacts, { recursive: true, force: true })
 mkdirSync(artifacts, { recursive: true })
 const files = []
 for (const type of process.platform === 'win32' ? ['nsis'] : ['macos', 'dmg']) {

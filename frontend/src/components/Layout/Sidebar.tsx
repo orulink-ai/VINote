@@ -50,7 +50,7 @@ export function Sidebar({ collapsed }: SidebarProps) {
   const navItems = [
     { path: '/', icon: Home, label: copy.sidebar.home },
     { path: '/meetings', icon: Mic, label: isZh ? '会议记录' : 'Meetings' },
-    { path: '/generate', icon: Video, label: isZh ? '视频总结' : 'Video summary' },
+    { path: '/generate', icon: Video, label: isZh ? '笔记整理' : 'Note organizer' },
     { path: '/notes', icon: FileText, label: copy.sidebar.notes },
     { path: '/team', icon: Users, label: copy.sidebar.team },
     { path: '/settings', icon: Settings, label: copy.sidebar.settings },

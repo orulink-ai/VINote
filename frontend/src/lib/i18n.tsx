@@ -93,7 +93,10 @@ const messages = {
       previewEmpty: '*No content yet.*',
     },
     generator: {
-      title: 'Generate Note',
+      title: 'Note organizer',
+      subtitle: 'Turn a video link, local media, or transcript into a structured note.',
+      meetingTitle: 'Import meeting file',
+      meetingSubtitle: 'Import a meeting recording, screen recording, or transcript to create minutes.',
       modelProfileLabel: 'Model profile for this run',
       systemDefaultModel: 'System default model',
       activeModelPrefix: 'Active model:',
@@ -403,7 +406,10 @@ const messages = {
       previewEmpty: '*还没有内容。*',
     },
     generator: {
-      title: '生成笔记',
+      title: '笔记整理',
+      subtitle: '导入视频链接、本地音视频或文字文件，整理为结构化笔记。',
+      meetingTitle: '导入会议文件',
+      meetingSubtitle: '导入会议录音、录屏或转写文件，自动整理为会议纪要。',
       modelProfileLabel: '本次运行使用的模型配置',
       systemDefaultModel: '系统默认模型',
       activeModelPrefix: '当前模型：',

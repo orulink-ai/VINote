@@ -2,7 +2,7 @@ import { ModelSourcePanel } from "../components/Settings/ModelSourcePanel"
 import { useAppModeStore } from "../stores/appModeStore"
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, Wand2 } from 'lucide-react'
+import { ArrowLeft, FileAudio, Link as LinkIcon, Wand2 } from 'lucide-react'
 import { FileUploader, type UploadMode } from '../components/NoteGenerator/FileUploader'
 import { GenerateProgress } from '../components/NoteGenerator/GenerateProgress'
 import { useI18n } from '../lib/i18n'
@@ -77,6 +77,11 @@ export function NoteGenerator() {
       reset()
     }
   }, [reset])
+
+  useEffect(() => {
+    setUploadMode(isMeeting ? 'file' : 'url')
+    setSelectedFile(null)
+  }, [isMeeting])
 
   const pollTaskStatus = (
     id: string,
@@ -165,6 +170,7 @@ export function NoteGenerator() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             video_url: videoUrl,
+            workflow: isMeeting ? 'meeting' : 'note_organization',
             summary_mode: summaryMode,
             output_language: language,
             model_profile_id: selectedProfileId || undefined,
@@ -187,7 +193,9 @@ export function NoteGenerator() {
         formData.append('source_type', sourceType)
         formData.append('title', selectedFile.name)
         formData.append('style', isMeeting ? 'meeting' : 'detailed')
-        if (isMeeting && sourceType !== 'transcript') formData.append('diarize', 'true')
+        formData.append('workflow', isMeeting ? 'meeting' : 'note_organization')
+        formData.append('trace_source', 'local_file')
+        if (sourceType !== 'transcript') formData.append('diarize', 'true')
         formData.append('summary_mode', summaryMode)
         formData.append('output_language', language)
         if (selectedProfileId) {
@@ -260,15 +268,20 @@ export function NoteGenerator() {
   }
 
   return (
-    <div className="max-w-2xl mx-auto p-8">
-      <div className="flex items-center gap-4 mb-6">
+    <div className="mx-auto max-w-3xl p-8">
+      <div className="mb-6 flex items-start gap-4">
         <button
           onClick={() => navigate('/')}
           className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
         >
           <ArrowLeft className="w-5 h-5" />
         </button>
-        <h2 className="text-2xl font-bold">{copy.generator.title}</h2>
+        <div>
+          <h2 className="text-2xl font-bold">{isMeeting ? copy.generator.meetingTitle : copy.generator.title}</h2>
+          <p className="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
+            {isMeeting ? copy.generator.meetingSubtitle : copy.generator.subtitle}
+          </p>
+        </div>
       </div>
 
       <div className="space-y-6">
@@ -278,7 +291,24 @@ export function NoteGenerator() {
           onFileSelect={setSelectedFile}
           onModeChange={setUploadMode}
           fileUploadEnabled={true}
+          initialMode={isMeeting ? 'file' : 'url'}
+          urlEnabled={!isMeeting}
         />
+
+        <div className="flex items-center gap-3 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/20 dark:text-blue-100">
+          {uploadMode === 'url' ? <LinkIcon className="h-5 w-5 shrink-0" /> : <FileAudio className="h-5 w-5 shrink-0" />}
+          <div>
+            <p className="font-medium">{language === 'zh-CN' ? (isMeeting ? '将生成会议纪要' : '将整理为结构化笔记') : (isMeeting ? 'Meeting minutes output' : 'Structured note output')}</p>
+            <p className="mt-0.5 text-xs opacity-75">{language === 'zh-CN'
+              ? (uploadMode === 'url' ? '输入视频链接后，将自动下载、转写并提取关键画面。' : selectedFile ? `已选择：${selectedFile.name}` : '请选择本地音频、视频或文字文件。')
+              : (uploadMode === 'url' ? 'The video will be downloaded, transcribed, and illustrated with key frames.' : selectedFile ? `Selected: ${selectedFile.name}` : 'Choose a local audio, video, or transcript file.')}</p>
+            {uploadMode !== 'transcript' && (
+              <p className="mt-1 text-xs opacity-75">
+                {language === 'zh-CN' ? '音频与视频会自动降噪并区分说话人，无需设置人数。' : 'Audio and video automatically use denoising and speaker detection.'}
+              </p>
+            )}
+          </div>
+        </div>
 
         <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#202020]">
           <label className="block text-sm font-medium mb-2">
@@ -368,7 +398,11 @@ export function NoteGenerator() {
           className="w-full flex items-center justify-center gap-2 py-3 px-6 bg-primary-light dark:bg-primary-dark text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
         >
           <Wand2 className="w-5 h-5" />
-          {status === 'uploading' || status === 'processing' ? copy.generator.generating : copy.generator.start}
+          {status === 'uploading' || status === 'processing'
+            ? copy.generator.generating
+            : language === 'zh-CN'
+              ? isMeeting ? '生成会议纪要' : '开始整理'
+              : isMeeting ? 'Generate meeting minutes' : 'Organize notes'}
         </button>
 
         {status === 'failed' ? (

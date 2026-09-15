@@ -1,10 +1,12 @@
-"""Always-enabled Langfuse tracing; exporter failures do not interrupt generation."""
+"""Desktop-only Langfuse tracing; exporter failures do not interrupt generation."""
 import atexit
 import hashlib
 import hmac
 import inspect
 import logging
 import os
+import re
+from dataclasses import dataclass
 from contextlib import ExitStack, contextmanager
 from contextvars import ContextVar
 from functools import wraps
@@ -17,11 +19,46 @@ _client = None
 _lock = Lock()
 _generation = ContextVar("vinote_generation", default=None)
 _active_span = ContextVar("vinote_span", default=None)
+_trace_context = ContextVar("vinote_trace_context", default=None)
+_generation_name = ContextVar("vinote_generation_name", default=None)
+
+
+@dataclass(frozen=True)
+class DesktopTraceContext:
+    workflow: str
+    source: str
+    media_type: str
+    client_version: str = ""
+    channel: str = ""
+    input: dict | None = None
+
+    @property
+    def trace_name(self):
+        return "桌面端｜会议纪要" if self.workflow == "meeting" else "桌面端｜笔记整理"
+
+
+@contextmanager
+def desktop_trace(context: DesktopTraceContext | None):
+    """Scope tracing to an explicitly identified desktop generation task."""
+    token = _trace_context.set(context)
+    try:
+        yield
+    finally:
+        _trace_context.reset(token)
+
+
+@contextmanager
+def generation_name(name: str):
+    token = _generation_name.set(name)
+    try:
+        yield
+    finally:
+        _generation_name.reset(token)
 
 
 def validate_configuration():
     """Reject missing deployment credentials instead of silently running unobserved."""
-    if settings.langfuse_enabled and not all((value or '').strip() for value in (
+    if settings.desktop_runtime and settings.langfuse_enabled and not all((value or '').strip() for value in (
         settings.langfuse_base_url, settings.langfuse_public_key, settings.langfuse_secret_key,
     )):
         raise RuntimeError('Langfuse project configuration is required; configure backend credentials')
@@ -79,12 +116,28 @@ def _update(span, **fields):
             logger.warning("Langfuse update failed")
 
 
+def _safe_error_message(exc: BaseException) -> str:
+    value = getattr(exc, "detail", None)
+    text = str(value if isinstance(value, str) else exc)
+    text = re.sub(r"(?i)(authorization:\s*bearer)\s+\S+", r"\1 <redacted>", text)
+    text = re.sub(
+        r"(?i)\b(api[_ -]?key|access[_ -]?token|refresh[_ -]?token|token|secret|password)\b"
+        r"(\s*[=:]\s*)[^\s,;&]+",
+        r"\1\2<redacted>",
+        text,
+    )
+    text = re.sub(r"(?i)(https?://)[^/@\s]+:[^/@\s]+@", r"\1<redacted>@", text)
+    text = re.sub(r"[A-Za-z]:\\[^\r\n]+", "<local-path>", text)
+    return text[:500]
+
+
 @contextmanager
 def observation(name, *, root=None, **fields):
     stack = ExitStack()
     span = None
     try:
-        client = get_client()
+        trace_context = _trace_context.get()
+        client = get_client() if trace_context is not None else None
         if client is not None:
             if root is not None:
                 from langfuse import propagate_attributes
@@ -94,7 +147,7 @@ def observation(name, *, root=None, **fields):
                                        str(user_id).encode(), hashlib.sha256).hexdigest()
                 stack.enter_context(propagate_attributes(
                     session_id=root.get("task_id"), user_id=user_id,
-                    trace_name=name, tags=["vinote", "note-generation"],
+                    trace_name=name, tags=["vinote", "desktop", trace_context.workflow],
                 ))
             span = stack.enter_context(client.start_as_current_observation(name=name, **fields))
     except Exception:
@@ -104,7 +157,9 @@ def observation(name, *, root=None, **fields):
         yield span
     except BaseException as exc:
         # Provider exceptions can contain credentials or complete request bodies.
-        _update(span, level="ERROR", status_message=type(exc).__name__)
+        _update(span, level="ERROR", status_message=type(exc).__name__,
+                output={"status": "failed", "error_type": type(exc).__name__,
+                        "error_message": _safe_error_message(exc)})
         raise
     finally:
         _active_span.reset(token)
@@ -116,11 +171,20 @@ def observation(name, *, root=None, **fields):
 
 
 def content_summary(text):
-    return text if settings.langfuse_capture_content else {"redacted": True, "chars": len(text)}
+    return text if _trace_context.get() is not None else {"redacted": True, "chars": len(text)}
 
 
 def update_current(**fields):
     _update(_active_span.get(), **fields)
+
+
+def update_trace_input(**fields):
+    context = _trace_context.get()
+    if context is None:
+        return
+    payload = dict(context.input or {})
+    payload.update(fields)
+    _update(_active_span.get(), input=payload)
 
 
 def current_trace_id():
@@ -143,17 +207,36 @@ def traced(name, *, root=False, as_type="span"):
                 bound = signature.bind(*args, **kwargs)
                 bound.apply_defaults()
                 values = bound.arguments
+            trace_context = _trace_context.get()
+            resolved_name = trace_context.trace_name if root and trace_context else name
             metadata = {key: values[key] for key in (
                 "task_id", "style", "summary_mode", "output_language"
             ) if key in values}
             if root:
-                metadata["input_type"] = {"generate": "url", "generate_from_file": "file",
-                                          "generate_from_transcript": "transcript"}.get(func.__name__, "test")
-            with observation(name, root=values if root else None, metadata=metadata, as_type=as_type) as span:
+                metadata.update({
+                    "workflow": trace_context.workflow if trace_context else "",
+                    "source": trace_context.source if trace_context else "",
+                    "media_type": trace_context.media_type if trace_context else "",
+                    "client_version": trace_context.client_version if trace_context else "",
+                    "desktop_channel": trace_context.channel if trace_context else "",
+                })
+            fields = {"metadata": metadata, "as_type": as_type}
+            if root and trace_context:
+                fields["input"] = trace_context.input or {}
+            with observation(resolved_name, root=values if root else None, **fields) as span:
                 result = func(*args, **kwargs)
-                if root:
-                    output = {"status": "success"}
-                    output["markdown"] = content_summary(result.markdown)
+                if root and span is not None:
+                    output = {
+                        "status": "success",
+                        "final_note": content_summary(result.markdown),
+                    }
+                    audio_meta = getattr(result, "audio_meta", None)
+                    transcript = getattr(result, "transcript", None)
+                    if audio_meta is not None:
+                        output["duration_seconds"] = audio_meta.duration
+                    if transcript is not None:
+                        output["transcript_characters"] = len(transcript.full_text)
+                        output["transcript_segments"] = len(transcript.segments)
                     _update(span, output=output)
                 return result
         return wrapped
@@ -170,7 +253,7 @@ def traced_generation(func):
             {"role": "system", "content": content_summary(system_prompt)},
             {"role": "user", "content": content_summary(user_prompt)},
         ]
-        with observation("调用大模型生成笔记", **fields) as span:
+        with observation(_generation_name.get() or "LLM｜生成内容", **fields) as span:
             token = _generation.set(span)
             try:
                 result = func(self, system_prompt=system_prompt, user_prompt=user_prompt)
