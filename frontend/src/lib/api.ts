@@ -7,7 +7,7 @@ export async function apiFetch(path: string, init: RequestInit = {}) {
   const headers = new Headers(init.headers ?? {})
   if (isTauriRuntime()) {
     headers.set('X-VINote-Client', 'desktop')
-    headers.set('X-VINote-Client-Version', import.meta.env.VITE_APP_VERSION || '0.5.1')
+    headers.set('X-VINote-Client-Version', import.meta.env.VITE_APP_VERSION || '0.5.2')
   }
 
   return fetch(`${API_BASE}${path}`, {

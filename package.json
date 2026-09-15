@@ -1,11 +1,20 @@
 {
   "name": "vinote",
   "private": true,
-  "version": "0.5.1",
+  "version": "0.5.2",
   "description": "VINote workspace command shortcuts",
   "packageManager": "yarn@1.22.22",
   "scripts": {
+    "setup": "node scripts/dev-desktop.mjs --setup-only",
     "dev": "node scripts/dev-desktop.mjs",
+    "dev:desktop": "node scripts/dev-desktop.mjs",
+    "dev:api": "node scripts/dev-api.mjs",
+    "dev:web": "yarn --cwd frontend web:dev",
+    "verify": "node scripts/verify-project.mjs",
+    "package:release:plan": "node scripts/build-desktop.mjs --channel release --plan",
+    "package:test:plan": "node scripts/build-desktop.mjs --channel test --plan",
+    "package:release": "node scripts/build-desktop.mjs --channel release",
+    "package:test": "node scripts/build-desktop.mjs --channel test",
     "api:dev": "node scripts/dev-api.mjs",
     "client:dev": "node scripts/dev-desktop.mjs",
     "web:dev": "yarn --cwd frontend web:dev",
@@ -14,7 +23,7 @@
     "desktop:build": "node scripts/build-desktop.mjs",
     "desktop:build:release": "node scripts/build-desktop.mjs --channel release",
     "desktop:build:test": "node scripts/build-desktop.mjs --channel test",
-    "desktop:check": "node --test scripts/desktop-build-profile.test.mjs",
+    "desktop:check": "node --test scripts/desktop-build-profile.test.mjs scripts/project-scripts.test.mjs",
     "docs:dev": "yarn --cwd docs docs:dev",
     "docs:build": "yarn --cwd docs docs:build"
   }

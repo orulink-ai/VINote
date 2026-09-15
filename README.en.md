@@ -97,19 +97,20 @@ cp .env.example .env.local
 npm run web:dev
 ```
 
-You can also start the development environment directly from the repository root:
+Use the repository-root commands as the supported entry points:
 
 ```bash
-yarn dev         # backend + Tauri desktop client
-yarn api:dev     # backend only
-yarn client:dev  # Tauri desktop client only
-yarn web:dev     # browser web client only
+yarn setup        # initialize dependencies, config, and speaker models without starting the app
+yarn dev          # backend + Tauri desktop client
+yarn dev:api      # backend only
+yarn dev:web      # browser web client only
+yarn verify        # backend, frontend, script, and docs checks
 ```
 
 When VINote's Vite dev server is already running on port `3100`, desktop development mode reuses it.
-`yarn client:dev` starts the frontend with a cross-platform Node.js script and works in Windows PowerShell and macOS terminals without Bash. Start the backend separately. Desktop development requires Rust and either Windows C++ build tools or macOS Xcode Command Line Tools.
+`yarn dev` uses a cross-platform Node.js launcher and works in Windows PowerShell and macOS terminals without Bash. It starts and waits for the backend before opening Tauri. Desktop development requires Rust and either Windows C++ build tools or macOS Xcode Command Line Tools.
 `yarn dev` automatically selects a Python executable that has the backend dependencies installed; set `VINOTE_PYTHON=/path/to/python` to override it.
-If the local Postgres URL from `.env` is not reachable, `yarn dev` temporarily uses `data/vinote.dev.db` SQLite for that development session without modifying `.env`.
+The backend uses the database configured in `.env`; an unreachable configured database is reported and is never silently replaced.
 
 Docs:
 
@@ -145,25 +146,24 @@ corepack enable
 Desktop hot-reload development mode:
 
 ```bash
-cd frontend
 yarn dev
 ```
 
-Equivalent npm command:
+Inspect package configuration without building:
 
 ```bash
-cd frontend
-npm run dev
+yarn package:test:plan
+yarn package:release:plan
 ```
 
-Build the desktop app bundle for the current platform:
+Build the test or release package:
 
 ```bash
-cd frontend
-npm run desktop:build
+yarn package:test
+yarn package:release
 ```
 
-Tauri build artifacts are written to `frontend/src-tauri/target/release/bundle/`; macOS defaults to a `.app` bundle.
+Validated artifacts and their manifest are written to `.desktop-build/artifacts/<channel>/<version>/<buildId>/`.
 
 ## Docker
 

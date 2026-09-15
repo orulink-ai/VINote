@@ -1,5 +1,7 @@
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from unittest.mock import patch
 import json
 from pathlib import Path
@@ -11,6 +13,78 @@ from app.services.task_artifact_service import TaskArtifactService
 
 
 class TaskArtifactServiceTest(unittest.TestCase):
+    def test_status_replace_retries_transient_windows_permission_error(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = TaskArtifactService(Path(temp_dir))
+            task_dir = service.create_task_dir("task-retry")
+
+            with (
+                patch(
+                    "app.services.task_artifact_service.os.replace",
+                    side_effect=[PermissionError("busy"), None],
+                ) as replace,
+                patch("app.services.task_artifact_service.time.sleep") as sleep,
+            ):
+                service.update_status(task_dir, "transcribing", "Transcribing audio...")
+
+            self.assertEqual(replace.call_count, 2)
+            sleep.assert_called_once_with(0.01)
+            self.assertFalse(list(task_dir.glob(".status.json.*.tmp")))
+
+    def test_status_polling_and_updates_do_not_race(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = TaskArtifactService(Path(temp_dir))
+            task_dir = service.create_task_dir("task-concurrent")
+            service.update_status(task_dir, "preparing")
+            start = threading.Event()
+
+            def write_statuses() -> None:
+                start.wait()
+                for index in range(100):
+                    service.update_status(task_dir, "transcribing", str(index))
+
+            def read_statuses() -> None:
+                start.wait()
+                for _ in range(200):
+                    payload = service.get_status("task-concurrent")
+                    self.assertIn(payload["status"], {"preparing", "transcribing"})
+
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = [executor.submit(write_statuses)]
+                futures.extend(executor.submit(read_statuses) for _ in range(4))
+                start.set()
+                for future in futures:
+                    future.result()
+
+            self.assertEqual(service.get_status("task-concurrent")["message"], "99")
+            self.assertFalse(list(task_dir.glob(".status.json.*.tmp")))
+
+    def test_status_polling_does_not_race_with_task_directory_finalization(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = TaskArtifactService(Path(temp_dir))
+            task_dir = service.create_task_dir("task-finalize")
+            service.update_status(task_dir, "preparing")
+            start = threading.Event()
+
+            def finalize() -> Path:
+                start.wait()
+                return service.finalize_task_dir(task_dir, "会议记录", "task-finalize")
+
+            def poll() -> None:
+                start.wait()
+                for _ in range(100):
+                    self.assertEqual(service.get_status("task-finalize")["status"], "preparing")
+
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                final_future = executor.submit(finalize)
+                poll_futures = [executor.submit(poll) for _ in range(4)]
+                start.set()
+                final_dir = final_future.result()
+                for future in poll_futures:
+                    future.result()
+
+            self.assertEqual(service.find_task_dir("task-finalize"), final_dir)
+
     def test_truncated_title_is_windows_safe_and_mapping_survives(self):
         with tempfile.TemporaryDirectory() as root:
             service = TaskArtifactService(Path(root))

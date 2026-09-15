@@ -60,18 +60,20 @@ The backend can also run as a lightweight MCP server through `mcp_server.py`.
 - Optional local transcriber extras: `pip install -r requirements.local-transcribers.txt` when using `TRANSCRIBER_TYPE=faster-whisper`
 - Backend dev server: `uvicorn main:app --host 0.0.0.0 --port 8900 --reload`
 - Backend direct run: `python main.py`
-- Root desktop + backend shortcut: `yarn dev`
-- Root backend-only shortcut: `yarn api:dev`
-- Root desktop + backend shortcut (Node.js 22+): `yarn client:dev`
-- Root browser frontend shortcut: `yarn web:dev`
+- Fresh-checkout setup without starting the app: `yarn setup`
+- Root desktop + backend entry point: `yarn dev`
+- Root backend-only entry point: `yarn dev:api`
+- Root browser frontend entry point: `yarn dev:web`
+- Merge-ready project validation: `yarn verify`
   - `yarn dev` auto-selects a Python executable with backend dependencies; `VINOTE_PYTHON=/path/to/python` overrides it.
   - Configured database failures are reported; the startup script does not switch to another database. Without DATABASE_URL the backend uses its SQLite default.
 - Frontend install: `cd frontend && npm install`
 - Frontend web dev server only: `cd frontend && npm run web:dev`
-- Tauri desktop hot-reload dev: `cd frontend && yarn dev` or `cd frontend && npm run dev`
+- Tauri desktop hot-reload dev: `yarn dev` from the repository root
 - Frontend build: `cd frontend && npm run build`
 - Frontend preview: `cd frontend && npm run preview`
-- Desktop app bundle build: `cd frontend && npm run desktop:build`
+- Test/release package build: `yarn package:test` / `yarn package:release`
+- Package configuration preview: `yarn package:test:plan` / `yarn package:release:plan`
 - Docs install: `cd docs && npm install`
 - Docs dev server: `cd docs && npm run docs:dev`
 - Docs build: `cd docs && npm run docs:build`
@@ -118,7 +120,7 @@ Frontend Vite settings live in `frontend/.env.local`:
 
 Tauri desktop settings live in `frontend/src-tauri/tauri.conf.json`:
 - `beforeDevCommand` runs `node ../scripts/ensure-web-dev.mjs`, so Tauri desktop development reuses an existing Vite server on port `3100` or starts one when needed, without requiring Bash on Windows.
-- Use root `yarn desktop:build`: scripts/build-desktop.mjs packages the Python backend and FFmpeg, builds the frontend with same-origin requests, and invokes Tauri with a generated resource/bundle config. Direct `tauri build` does not prepare these resources.
+- Use root `yarn package:test` or `yarn package:release`: scripts/build-desktop.mjs packages the Python backend and FFmpeg, builds the frontend with same-origin requests, and invokes Tauri with a generated resource/bundle config. Direct `tauri build` does not prepare these resources.
 - Desktop bundles are generated under `frontend/src-tauri/target/release/bundle/`; macOS defaults to a `.app` bundle.
 
 Raspberry Pi deployment defaults live in `deploy/pi/local.env`:
@@ -185,7 +187,7 @@ Update `README.md`, this `AGENTS.md`, or both whenever you change:
 
 Desktop packaging: scripts/desktop_backend.py initializes per-install secrets and SQLite in the user app data directory. Release-only desktop_backend.rs starts the bundled backend on a persisted per-install loopback port and stops it on exit. Packaged cloud defaults to http://192.168.1.143:9876; source development uses VILAB_SERVER_URL or http://127.0.0.1:9878. The two products remain independent processes/repos.
 
-Fresh-checkout startup: yarn client:dev runs bootstrap-dev.mjs to install frontend dependencies, create .venv and install requirements, and create .env with unique local secrets and config/desktop-public.json account defaults. Existing .env is preserved. --setup-only performs initialization without opening a window. Node 22+, Python, Rust/platform compilers and FFmpeg are system prerequisites.
+Fresh-checkout startup: yarn dev runs bootstrap-dev.mjs to install frontend dependencies, create .venv and install requirements, and create .env with unique local secrets and config/desktop-public.json account defaults. Existing .env is preserved. --setup-only performs initialization without opening a window. Node 22+, Python, Rust/platform compilers and FFmpeg are system prerequisites.
 
 ## Meeting recording and speaker diarization
 

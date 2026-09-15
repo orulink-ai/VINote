@@ -4,9 +4,9 @@
 
 | 运行方式 | 命令 | 默认 ViLab 地址 | 数据位置 |
 | --- | --- | --- | --- |
-| 源码开发 | `yarn client:dev` | `http://127.0.0.1:9878` | 开发配置指定的位置 |
-| 正式安装包 | `yarn desktop:build:release` | `http://192.168.1.143:9876` | `app.vinote.desktop` 对应应用数据目录 |
-| 测试安装包 | `yarn desktop:build:test` | `http://192.168.1.143:9876` | `app.vinote.desktop.test` 对应应用数据目录 |
+| 源码开发 | `yarn dev` | `http://127.0.0.1:9878` | 开发配置指定的位置 |
+| 正式安装包 | `yarn package:release` | `http://192.168.1.143:9876` | `app.vinote.desktop` 对应应用数据目录 |
+| 测试安装包 | `yarn package:test` | `http://192.168.1.143:9876` | `app.vinote.desktop.test` 对应应用数据目录 |
 
 `yarn desktop:build` 保持兼容，等同于正式版。测试安装包同样连接已部署服务，不能自动继承源码 `.env` 的本地 `VILAB_SERVER_URL`。确有需要时，分别使用 `VINOTE_RELEASE_VILAB_SERVER_URL`、`VINOTE_TEST_VILAB_SERVER_URL` 显式覆盖，值必须是没有账号密码、路径和查询参数的 HTTP(S) Origin。
 
@@ -16,9 +16,9 @@
 
 ```powershell
 yarn desktop:check
-yarn desktop:build:release --plan
-yarn desktop:build:test --plan
-yarn desktop:build:test
+yarn package:release:plan
+yarn package:test:plan
+yarn package:test
 ```
 
 `--plan` 仅显示渠道、版本、安装身份及默认服务，不安装依赖或启动应用。`--build-id <标识>` 可覆盖构建标识，默认使用 UTC 时间。
@@ -33,7 +33,7 @@ yarn desktop:build:test
 
 ## 源码与安装包的说话人功能
 
-源码首次启动会检查 sherpa-onnx / NumPy 以及模型，缺失时运行 `scripts/setup_diarization.py` 准备。可用 `yarn client:dev --setup-only` 初始化而不打开桌面窗口。首次模型下载需要网络；后续复用本地文件。
+源码首次启动会检查 sherpa-onnx / NumPy 以及模型，缺失时运行 `scripts/setup_diarization.py` 准备。可用 `yarn setup` 初始化而不打开桌面窗口。首次模型下载需要网络；后续复用本地文件。
 
 安装包携带模型和原生运行库，终端用户无需安装 Python、pip 或手动下载模型。打包时复用源码模型缓存，模型放在后端资源目录。原始音频保持不变，降噪及识别仅处理临时副本，并保留时间轴。真正的 STT 和 LLM 仍需连接上述 ViLab 服务；模型内置不代表云端识别可以离线使用。
 
