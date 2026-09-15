@@ -21,7 +21,7 @@ from app.models.transcript import TranscriptResult, TranscriptSegment
 
 
 _STATUS_FILE_LOCK = threading.RLock()
-_STATUS_REPLACE_DELAYS_SECONDS = (0.01, 0.02, 0.04, 0.08, 0.16, 0.25, 0.25, 0.25)
+_WINDOWS_FILE_RETRY_DELAYS_SECONDS = (0.01, 0.02, 0.04, 0.08, 0.16, 0.25, 0.25, 0.25)
 
 
 class TaskArtifactService:
@@ -40,13 +40,14 @@ class TaskArtifactService:
         final_dir = self.output_dir / new_dir_name
         counter = 1
 
-        while final_dir.exists():
-            final_dir = self.output_dir / f"{new_dir_name}_{counter}"
-            counter += 1
+        with _STATUS_FILE_LOCK:
+            while final_dir.exists():
+                final_dir = self.output_dir / f"{new_dir_name}_{counter}"
+                counter += 1
 
-        # Move the mapping with the directory so errors after rename remain traceable.
-        self.write_text(task_dir / ".task_id", task_id)
-        task_dir.rename(final_dir)
+            # Move the mapping with the directory so errors after rename remain traceable.
+            self.write_text(task_dir / ".task_id", task_id)
+            self._retry_permission_error(lambda: task_dir.rename(final_dir))
         return final_dir
 
     @staticmethod
@@ -185,14 +186,17 @@ class TaskArtifactService:
     @staticmethod
     def _replace_status_file(temp_file: Path, status_file: Path) -> None:
         """Replace a polled status file despite transient Windows sharing locks."""
-        for attempt, delay in enumerate(_STATUS_REPLACE_DELAYS_SECONDS):
+        TaskArtifactService._retry_permission_error(lambda: os.replace(temp_file, status_file))
+
+    @staticmethod
+    def _retry_permission_error(operation):
+        for attempt in range(len(_WINDOWS_FILE_RETRY_DELAYS_SECONDS) + 1):
             try:
-                os.replace(temp_file, status_file)
-                return
+                return operation()
             except PermissionError:
-                if attempt == len(_STATUS_REPLACE_DELAYS_SECONDS) - 1:
+                if attempt == len(_WINDOWS_FILE_RETRY_DELAYS_SECONDS):
                     raise
-                time.sleep(delay)
+                time.sleep(_WINDOWS_FILE_RETRY_DELAYS_SECONDS[attempt])
 
     def save_result(self, task_dir: Path, result: NoteResult) -> None:
         self.write_json(
@@ -210,24 +214,25 @@ class TaskArtifactService:
         )
 
     def find_task_dir(self, task_id: str) -> Optional[Path]:
-        direct_dir = self.output_dir / task_id
-        if direct_dir.exists() and (direct_dir / "status.json").exists():
-            return direct_dir
+        with _STATUS_FILE_LOCK:
+            direct_dir = self.output_dir / task_id
+            if direct_dir.exists() and (direct_dir / "status.json").exists():
+                return direct_dir
 
-        for item in self.output_dir.iterdir():
-            if not item.is_dir():
-                continue
+            for item in self.output_dir.iterdir():
+                if not item.is_dir():
+                    continue
 
-            mapping_file = item / ".task_id"
-            if mapping_file.exists() and mapping_file.read_text(encoding="utf-8").strip() == task_id:
-                return item
+                mapping_file = item / ".task_id"
+                if mapping_file.exists() and mapping_file.read_text(encoding="utf-8").strip() == task_id:
+                    return item
 
         return None
 
     def get_status(self, task_id: str) -> dict:
-        task_dir = self.find_task_dir(task_id) or (self.output_dir / task_id)
-        status_file = task_dir / "status.json"
         with _STATUS_FILE_LOCK:
+            task_dir = self.find_task_dir(task_id) or (self.output_dir / task_id)
+            status_file = task_dir / "status.json"
             if not status_file.exists():
                 return {"status": "not_found", "message": "Task not found"}
             return json.loads(status_file.read_text(encoding="utf-8"))

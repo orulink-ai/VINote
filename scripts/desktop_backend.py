@@ -6,6 +6,44 @@ import secrets
 import sys
 
 
+def verify_task_status_storage():
+    """Exercise the same concurrent polling pattern used by the desktop UI."""
+    from concurrent.futures import ThreadPoolExecutor
+    import threading
+    from app.services.task_artifact_service import TaskArtifactService
+
+    service = TaskArtifactService()
+    task_id = 'desktop-package-status-smoke'
+    task_dir = service.create_task_dir(task_id)
+    service.update_status(task_dir, 'preparing')
+    final_dir = service.finalize_task_dir(task_dir, 'Windows status smoke', task_id)
+    start = threading.Event()
+
+    def write_statuses():
+        start.wait()
+        for index in range(50):
+            service.update_status(final_dir, 'transcribing', str(index))
+
+    def read_statuses():
+        start.wait()
+        for _ in range(100):
+            if service.get_status(task_id)['status'] not in {'preparing', 'transcribing'}:
+                raise RuntimeError('Desktop task status polling returned invalid data')
+
+    try:
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            futures = [executor.submit(write_statuses)]
+            futures.extend(executor.submit(read_statuses) for _ in range(4))
+            start.set()
+            for future in futures:
+                future.result()
+        if service.get_status(task_id).get('message') != '49':
+            raise RuntimeError('Desktop task status did not persist the final update')
+    finally:
+        import shutil
+        shutil.rmtree(final_dir, ignore_errors=True)
+
+
 def configure_langfuse(config):
     """Use only the bundled project; stale installation files cannot disable tracing."""
     keys = ('LANGFUSE_BASE_URL', 'LANGFUSE_PUBLIC_KEY', 'LANGFUSE_SECRET_KEY')
@@ -102,6 +140,7 @@ def main():
         from app.db import init_db
         import subprocess
         init_db()
+        verify_task_status_storage()
         for tool in ('ffmpeg', 'ffprobe'):
             subprocess.run([str(bundle / 'bin' / (tool + ('.exe' if os.name == 'nt' else ''))), '-version'], check=True, stdout=subprocess.DEVNULL)
         from app.services.speaker_diarization_service import SpeakerDiarizationService
@@ -135,7 +174,7 @@ def main():
                 output.setframerate(16000)
                 output.writeframes(bytes(32000))
             prepare_meeting_audio(str(sample), Path(directory) / 'clean.f32')
-        print('Desktop backend smoke test passed: database, routes, frontend, ffmpeg, ffprobe and bundled speaker inference.')
+        print('Desktop backend smoke test passed: database, task status polling, routes, frontend, ffmpeg, ffprobe and bundled speaker inference.')
         return
     uvicorn.run(app, host='127.0.0.1', port=int(os.environ['PORT']), log_level='info')
 

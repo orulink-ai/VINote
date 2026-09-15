@@ -39,7 +39,7 @@ LANGFUSE_BASE_URL=http://192.168.1.118:3000
 LANGFUSE_PUBLIC_KEY=替换为VINote项目PublicKey
 LANGFUSE_SECRET_KEY=替换为VINote项目SecretKey
 LANGFUSE_TRACING_ENVIRONMENT=development
-LANGFUSE_RELEASE=0.5.1
+LANGFUSE_RELEASE=0.5.2
 ```
 
 `yarn client:dev` 会设置 `VINOTE_DESKTOP_RUNTIME=true`，缺少 Langfuse 项目配置时拒绝启动桌面后端。普通 `uvicorn` 后端可以不配置 Langfuse，因为非桌面请求不会上报。

@@ -24,7 +24,7 @@ class Settings:
     langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
     langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
     langfuse_environment: str = os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "development")
-    langfuse_release: str = os.getenv("LANGFUSE_RELEASE", "0.5.1")
+    langfuse_release: str = os.getenv("LANGFUSE_RELEASE", "0.5.2")
 
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8900"))
