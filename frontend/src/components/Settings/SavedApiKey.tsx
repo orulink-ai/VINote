@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Eye, EyeOff } from 'lucide-react'
 import { apiJson } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
+import { Button } from '../ui/button'
 
 export function SavedApiKey({ kind, profileId, hint }: {
   kind: 'model' | 'stt'; profileId: string; hint: string
@@ -33,14 +34,14 @@ export function SavedApiKey({ kind, profileId, hint }: {
     } catch { if (request === generation.current) setError(true) }
     finally { if (request === generation.current) setLoading(false) }
   }
-  if (!hint) return <span className="text-xs text-gray-400">{zh ? '未保存密钥' : 'No saved key'}</span>
-  return <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-gray-500">
+  if (!hint) return <span className="text-xs text-muted-foreground">{zh ? '未保存密钥' : 'No saved key'}</span>
+  return <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
     <span>{zh ? '已保存密钥' : 'Saved key'}</span>
     <code className="break-all">{secret || hint}</code>
-    <button type="button" disabled={loading} onClick={() => void toggle()} aria-label={secret ? (zh ? '隐藏密钥' : 'Hide key') : (zh ? '显示已保存密钥' : 'Show saved key')} aria-pressed={Boolean(secret)} className="inline-flex items-center gap-1 rounded px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-800">
+    <Button type="button" variant="ghost" size="sm" disabled={loading} onClick={() => void toggle()} aria-label={secret ? (zh ? '隐藏密钥' : 'Hide key') : (zh ? '显示已保存密钥' : 'Show saved key')} aria-pressed={Boolean(secret)} className="h-7 gap-1 px-2">
       {secret ? <EyeOff size={14} /> : <Eye size={14} />}
       {loading ? '…' : secret ? (zh ? '隐藏' : 'Hide') : (zh ? '显示' : 'Show')}
-    </button>
-    {error && <span role="alert">{zh ? '读取失败，请重试' : 'Could not load key. Retry.'}</span>}
+    </Button>
+    {error && <span role="alert" className="text-destructive">{zh ? '读取失败，请重试' : 'Could not load key. Retry.'}</span>}
   </div>
 }

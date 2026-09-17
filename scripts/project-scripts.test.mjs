@@ -10,7 +10,7 @@ test('root scripts expose one canonical runtime and package command set', () => 
   const scripts = packageJson.scripts
   assert.equal(scripts.setup, 'node scripts/dev-desktop.mjs --setup-only')
   assert.equal(scripts.verify, 'node scripts/verify-project.mjs')
-  assert.equal(scripts.check, undefined)
+  assert.equal(scripts.check, 'yarn --cwd frontend build && yarn desktop:check')
   assert.equal(scripts['dev:desktop'], 'node scripts/dev-desktop.mjs')
   assert.equal(scripts['dev:api'], 'node scripts/dev-api.mjs')
   assert.equal(scripts['package:test'], 'node scripts/build-desktop.mjs --channel test')

@@ -351,6 +351,7 @@ class TranscriptionService:
         full_text = " ".join(segment.text for segment in deduped_segments).strip()
         language = Counter(languages).most_common(1)[0][0] if languages else None
         metadata = next((result.metadata for _, result in chunk_results if result.metadata), {})
+        metadata = {**metadata, "stt_request_count": len(chunk_results)}
         return TranscriptResult(
             language=language,
             full_text=full_text,
@@ -432,10 +433,15 @@ class TranscriptionService:
 
         if diarize:
             from app.services.speaker_diarization_service import SpeakerDiarizationService
+            duration = self.get_audio_duration(audio_path)
             transcript = SpeakerDiarizationService().transcribe(
                 audio_path=audio_path,
-                transcribe=lambda path, **context: self._transcribe_chunk(
-                    transcriber, path, trace_context=context),
+                transcribe=lambda path, **context: self._transcribe_in_chunks(
+                    audio_path=path,
+                    duration=float(context.get("audio_duration_seconds") or duration),
+                    transcriber=transcriber,
+                    update_status=update_status,
+                ),
                 speaker_count=speaker_count, update_status=update_status,
             )
         else:

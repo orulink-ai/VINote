@@ -291,7 +291,7 @@ class SpeakerDiarizationService:
                               "timestamp_granularity": transcript.metadata.get("timestamp_granularity", "file"),
                               "speaker_alignment": alignment,
                               "speaker_alignment_estimated": alignment == "estimated_by_speaking_duration",
-                              "stt_request_count": 1,
+                              "stt_request_count": transcript.metadata.get("stt_request_count", 1),
                               "speaker_turn_count": len(turns), "overlap_detected": any(
                                   turn.speaker_id == "speaker_overlap" for turn in turns),
                               "cluster_threshold": settings.diarization_cluster_threshold,
@@ -301,7 +301,7 @@ class SpeakerDiarizationService:
                 update_current(output={
                     "speaker_count": result.metadata["speaker_count"],
                     "clustering": clustering,
-                    "stt_request_count": 1,
+                    "stt_request_count": result.metadata["stt_request_count"],
                     "speaker_alignment": alignment,
                     "overlap_detected": result.metadata["overlap_detected"],
                     "unrecognized_segments": [],

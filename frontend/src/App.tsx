@@ -20,8 +20,8 @@ const Team = lazy(async () => ({ default: (await import('./pages/Team')).Team })
 
 function RouteFallback() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-white dark:bg-[#191919]">
-      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-light"></div>
+    <div className="flex min-h-screen items-center justify-center bg-background">
+      <div className="size-8 animate-spin rounded-full border-2 border-muted border-t-primary" />
     </div>
   )
 }

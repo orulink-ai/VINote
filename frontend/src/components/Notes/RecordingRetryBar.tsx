@@ -1,5 +1,7 @@
 import { useEffect, useState } from 'react'
 import { AlertCircle, Loader2, RotateCcw } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useI18n } from '../../lib/i18n'
 import { getRecordedAudio } from '../../lib/audioStorage'
 import {
@@ -95,25 +97,25 @@ export function RecordingRetryBar({ note, onUpdated }: RecordingRetryBarProps) {
 
   return (
     <span className="inline-flex items-center gap-1.5">
-      <button
-        type="button"
+      <Tooltip><TooltipTrigger asChild><Button
+        type="button" variant="outline" size="icon"
         onClick={() => void runRetry()}
         disabled={isWorking}
         title={copy.meetingRecorder.retry}
         aria-label={copy.meetingRecorder.retry}
         data-testid="recording-retry-icon"
-        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-red-200 bg-white text-red-500 shadow-sm transition hover:border-red-300 hover:bg-red-50 hover:text-red-600 disabled:cursor-not-allowed disabled:opacity-50 dark:border-red-900/60 dark:bg-[#1b1b1b] dark:text-red-400 dark:hover:border-red-800 dark:hover:bg-red-950/40"
+        className="rounded-full text-destructive hover:text-destructive"
       >
         {isWorking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCcw className="h-3.5 w-3.5" />}
-      </button>
+      </Button></TooltipTrigger><TooltipContent>{copy.meetingRecorder.retry}</TooltipContent></Tooltip>
       {status === 'error' ? (
-        <span
+        <Tooltip><TooltipTrigger asChild><span
           title={message}
           aria-label={message}
-          className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-red-500 hover:bg-red-50 dark:hover:bg-red-950/40"
+          className="inline-flex size-7 shrink-0 items-center justify-center rounded-full text-destructive"
         >
           <AlertCircle className="h-4 w-4" />
-        </span>
+        </span></TooltipTrigger><TooltipContent>{message}</TooltipContent></Tooltip>
       ) : null}
     </span>
   )

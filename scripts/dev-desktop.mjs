@@ -56,7 +56,7 @@ try {
       s.on('error', () => resolve(false))
     })
     if (occupied) throw new Error('Port 8900 is occupied by an unhealthy service. Stop it before retrying.')
-    start(python(), ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8900'])
+    start(python(), ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8900', '--reload'])
     for (let i = 0; i < 60 && !closing; i++) {
       if (await healthy('http://127.0.0.1:8900/healthz')) break
       await new Promise(resolve => setTimeout(resolve, 500))

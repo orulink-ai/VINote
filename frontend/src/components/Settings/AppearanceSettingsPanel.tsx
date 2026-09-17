@@ -1,80 +1,11 @@
-import clsx from 'clsx'
+import { Moon, Monitor, Sun } from 'lucide-react'
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { useI18n } from '../../lib/i18n'
 import type { LanguageCode } from '../../stores/languageStore'
-
 type ThemeMode = 'light' | 'dark' | 'system'
-
-interface AppearanceSettingsPanelProps {
-  theme: ThemeMode
-  language: LanguageCode
-  onThemeChange: (theme: ThemeMode) => void
-  onLanguageChange: (language: LanguageCode) => void | Promise<void>
-}
-
-export function AppearanceSettingsPanel({
-  theme,
-  language,
-  onThemeChange,
-  onLanguageChange,
-}: AppearanceSettingsPanelProps) {
-  const { copy } = useI18n()
-
-  return (
-    <div className="space-y-6">
-      <div className="space-y-4">
-        <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{copy.theme.title}</h3>
-        <div className="space-y-2">
-          {(['light', 'dark', 'system'] as const).map((value) => (
-            <label
-              key={value}
-              className={clsx(
-                'flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-colors',
-                theme === value
-                  ? 'border-primary-light dark:border-primary-dark bg-primary-light/5 dark:bg-primary-dark/5'
-                  : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
-              )}
-            >
-              <input
-                type="radio"
-                name="theme"
-                value={value}
-                checked={theme === value}
-                onChange={() => onThemeChange(value)}
-              />
-              <span className="text-gray-900 dark:text-gray-100">
-                {value === 'light' ? copy.theme.light : value === 'dark' ? copy.theme.dark : copy.theme.system}
-              </span>
-            </label>
-          ))}
-        </div>
-      </div>
-
-      <div className="space-y-2">
-        <h3 className="text-lg font-medium text-gray-900 dark:text-gray-100">{copy.language.title}</h3>
-        {([
-          { value: 'zh-CN', label: copy.language.chinese },
-          { value: 'en', label: copy.language.english },
-        ] as const).map((option) => (
-          <label
-            key={option.value}
-            className={clsx(
-              'flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-colors',
-              language === option.value
-                ? 'border-primary-light dark:border-primary-dark bg-primary-light/5 dark:bg-primary-dark/5'
-                : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
-            )}
-          >
-            <input
-              type="radio"
-              name="language"
-              value={option.value}
-              checked={language === option.value}
-              onChange={() => void onLanguageChange(option.value)}
-            />
-            <span className="text-gray-900 dark:text-gray-100">{option.label}</span>
-          </label>
-        ))}
-      </div>
-    </div>
-  )
+interface Props { theme: ThemeMode; language: LanguageCode; onThemeChange: (theme: ThemeMode) => void; onLanguageChange: (language: LanguageCode) => void | Promise<void> }
+export function AppearanceSettingsPanel({ theme, language, onThemeChange, onLanguageChange }: Props) {
+  const { copy } = useI18n(); const themes = [{ value: 'light', label: copy.theme.light, icon: Sun }, { value: 'dark', label: copy.theme.dark, icon: Moon }, { value: 'system', label: copy.theme.system, icon: Monitor }] as const
+  return <div className="grid gap-6"><Card><CardHeader><CardTitle>{copy.theme.title}</CardTitle><CardDescription>选择桌面端的显示外观。</CardDescription></CardHeader><CardContent><ToggleGroup type="single" value={theme} onValueChange={value => value && onThemeChange(value as ThemeMode)} className="grid grid-cols-3">{themes.map(item => <ToggleGroupItem key={item.value} value={item.value} className="h-20 flex-col"><item.icon />{item.label}</ToggleGroupItem>)}</ToggleGroup></CardContent></Card><Card><CardHeader><CardTitle>{copy.language.title}</CardTitle><CardDescription>更改界面语言。</CardDescription></CardHeader><CardContent><ToggleGroup type="single" value={language} onValueChange={value => value && void onLanguageChange(value as LanguageCode)} className="grid grid-cols-2"><ToggleGroupItem value="zh-CN">{copy.language.chinese}</ToggleGroupItem><ToggleGroupItem value="en">{copy.language.english}</ToggleGroupItem></ToggleGroup></CardContent></Card></div>
 }

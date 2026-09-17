@@ -11,6 +11,7 @@
     "dev:api": "node scripts/dev-api.mjs",
     "dev:web": "yarn --cwd frontend web:dev",
     "verify": "node scripts/verify-project.mjs",
+    "check": "yarn --cwd frontend build && yarn desktop:check",
     "package:release:plan": "node scripts/build-desktop.mjs --channel release --plan",
     "package:test:plan": "node scripts/build-desktop.mjs --channel test --plan",
     "package:release": "node scripts/build-desktop.mjs --channel release",

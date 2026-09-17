@@ -1,3 +1,6 @@
+import { Button } from '../ui/button'
+import { Input } from '../ui/input'
+import { NativeSelect } from '../ui/native-select'
 import { SavedApiKey } from './SavedApiKey'
 import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
@@ -159,64 +162,64 @@ export function ModelProfileManager() {
   }
 
   return (
-    <section className="rounded-[28px] border border-gray-200 bg-gradient-to-br from-white to-gray-50/80 p-5 shadow-sm dark:border-gray-800 dark:from-[#191919] dark:to-[#141414] lg:p-6">
+    <section className="rounded-[28px] border border-border bg-card p-5 text-card-foreground shadow-sm lg:p-6">
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_380px]">
-        <div className="min-w-0 space-y-4">
-          <div className="flex flex-col gap-4 rounded-3xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-[#1b1b1b] sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0 grid gap-4">
+          <div className="flex flex-col gap-4 rounded-3xl border border-border bg-card p-5 dark:border-border  sm:flex-row sm:items-start sm:justify-between">
             <div>
               <div className="flex items-center gap-3">
                 <h3 className="text-xl font-semibold">{copy.modelProfiles.title}</h3>
-                <span className="rounded-full bg-primary-light/10 px-2.5 py-1 text-xs font-medium text-primary-light dark:bg-primary-dark/10 dark:text-primary-dark">
+                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary /10 ">
                   {profiles.length}
                 </span>
               </div>
-              <p className="mt-2 max-w-2xl text-sm leading-6 text-gray-500 dark:text-gray-400">{copy.modelProfiles.body}</p>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground dark:text-muted-foreground">{copy.modelProfiles.body}</p>
             </div>
-            <button
+            <Button
               onClick={resetForm}
-              className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-gray-200 px-4 py-2.5 font-medium hover:bg-gray-100 dark:border-gray-700 dark:hover:bg-gray-800 transition-colors"
+              className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-border px-4 py-2.5 font-medium hover:bg-muted dark:border-border dark:hover:bg-muted transition-colors"
             >
               <Plus className="w-4 h-4" />
               {copy.modelProfiles.newProfile}
-            </button>
+            </Button>
           </div>
 
           {loading ? (
-            <div className="rounded-3xl border border-gray-200 bg-white p-5 dark:border-gray-800 dark:bg-[#1b1b1b]">{copy.modelProfiles.loading}</div>
+            <div className="rounded-3xl border border-border bg-card p-5 dark:border-border ">{copy.modelProfiles.loading}</div>
           ) : profiles.length === 0 ? (
-            <div className="rounded-3xl border border-dashed border-gray-200 bg-white p-6 text-sm text-gray-500 dark:border-gray-700 dark:bg-[#1b1b1b] dark:text-gray-400">
+            <div className="rounded-3xl border border-dashed border-border bg-card p-6 text-sm text-muted-foreground dark:border-border  dark:text-muted-foreground">
               {copy.modelProfiles.empty}
             </div>
           ) : (
-            <div className="stealth-scroll max-h-[620px] space-y-3 overflow-y-auto pr-1">
+            <div className="stealth-scroll max-h-[620px] grid gap-3 overflow-y-auto pr-1">
               {profiles.filter(profile => profile.id !== 'vilab-cloud').map((profile) => {
                 const profileResult = profileTestResults?.[profile.id]
                 const isTestingProfile = testingProfileIds?.includes(profile.id)
                 return (
                 <div
                   key={profile.id}
-                  className="rounded-3xl border border-gray-200 bg-white p-5 transition-colors hover:border-gray-300 dark:border-gray-800 dark:bg-[#1b1b1b] dark:hover:border-gray-700"
+                  className="rounded-3xl border border-border bg-card p-5 transition-colors hover:border-border dark:border-border  dark:hover:border-border"
                 >
-                  <div className="space-y-4">
+                  <div className="grid gap-4">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
                       <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h4 className="font-medium">{profile.name}</h4>
                         {profile.isDefault && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-primary-light/10 text-primary-light dark:bg-primary-dark/10 dark:text-primary-dark">
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary /10 ">
                             {copy.modelProfiles.default}
                           </span>
                         )}
                         {!profile.isActive && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground">
                             {copy.modelProfiles.inactive}
                           </span>
                         )}
                       </div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                      <p className="text-sm text-muted-foreground dark:text-muted-foreground mt-1">
                         {profile.provider} / {profile.modelName}
                       </p>
-                      <p className="mt-2 break-all text-xs leading-5 text-gray-400">{profile.baseUrl}</p>
+                      <p className="mt-2 break-all text-xs leading-5 text-muted-foreground">{profile.baseUrl}</p>
                       <SavedApiKey key={profile.updatedAt} kind="model" profileId={profile.id} hint={profile.apiKeyHint} />
                       {(isTestingProfile || profileResult) && (
                         <p
@@ -226,7 +229,7 @@ export function ModelProfileManager() {
                               ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300'
                               : profileResult?.ok
                                 ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-300'
-                                : 'bg-red-50 text-red-700 dark:bg-red-900/20 dark:text-red-300'
+                                : 'bg-destructive/10 text-destructive dark:bg-red-900/20 dark:text-red-300'
                           )}
                         >
                           {isTestingProfile ? '测试中...' : formatConnectionResult(profileResult)}
@@ -235,36 +238,36 @@ export function ModelProfileManager() {
                     </div>
                     </div>
                     <div className="flex flex-wrap gap-2">
-                      <button
+                      <Button
                         onClick={() => void handleSavedProfileTest(profile)}
                         disabled={isTestingProfile}
-                        className="inline-flex items-center gap-2 rounded-xl border border-gray-200 px-3 py-2 text-sm hover:bg-gray-100 dark:border-gray-700 dark:hover:bg-gray-800"
+                        className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm hover:bg-muted dark:border-border dark:hover:bg-muted"
                         title={copy.modelProfiles.testConnection}
                       >
                         <Wifi className="w-4 h-4" />
                         {copy.modelProfiles.testConnection}
-                      </button>
-                      <button
+                      </Button>
+                      <Button
                         onClick={() => startEdit(profile)}
-                        className="rounded-xl border border-gray-200 px-3 py-2 text-sm hover:bg-gray-100 dark:border-gray-700 dark:hover:bg-gray-800"
+                        className="rounded-xl border border-border px-3 py-2 text-sm hover:bg-muted dark:border-border dark:hover:bg-muted"
                       >
                         {copy.modelProfiles.edit}
-                      </button>
+                      </Button>
                       {!profile.isDefault && (
-                        <button
+                        <Button
                           onClick={() => void handleSetDefaultProfile(profile)}
-                          className="rounded-xl border border-gray-200 px-3 py-2 text-sm hover:bg-gray-100 dark:border-gray-700 dark:hover:bg-gray-800"
+                          className="rounded-xl border border-border px-3 py-2 text-sm hover:bg-muted dark:border-border dark:hover:bg-muted"
                         >
                           {copy.modelProfiles.setDefault}
-                        </button>
+                        </Button>
                       )}
-                      <button
+                      <Button
                         onClick={() => void deleteProfile(profile.id)}
-                        className="rounded-xl border border-red-200 p-2 text-red-500 hover:bg-red-50 dark:border-red-900/30 dark:hover:bg-red-900/20"
+                        className="rounded-xl border border-destructive/30 p-2 text-destructive hover:bg-destructive/10 dark:border-red-900/30 dark:hover:bg-red-900/20"
                         title={copy.modelProfiles.delete}
                       >
                         <Trash2 className="w-4 h-4" />
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>
@@ -281,96 +284,96 @@ export function ModelProfileManager() {
               event.preventDefault()
               void handleSave()
             }}
-            className="space-y-4 rounded-3xl border border-gray-200 bg-white p-5 shadow-sm dark:border-gray-800 dark:bg-[#1b1b1b]"
+            className="grid gap-4 rounded-3xl border border-border bg-card p-5 shadow-sm dark:border-border "
           >
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-lg font-semibold">{editingId ? copy.modelProfiles.editTitle : copy.modelProfiles.createTitle}</h3>
-                <span className="rounded-full bg-gray-100 px-2.5 py-1 text-xs font-medium text-gray-500 dark:bg-gray-800 dark:text-gray-300">
+                <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground dark:bg-muted dark:text-muted-foreground">
                   {editingId ? copy.modelProfiles.edit : copy.modelProfiles.newProfile}
                 </span>
               </div>
-              <p className="mt-2 text-sm leading-6 text-gray-500 dark:text-gray-400">{copy.modelProfiles.connectionBody}</p>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground dark:text-muted-foreground">{copy.modelProfiles.connectionBody}</p>
             </div>
-            <button
+            <Button
               onClick={resetForm}
-              className="rounded-xl p-2 hover:bg-gray-100 dark:hover:bg-gray-800"
+              className="rounded-xl p-2 hover:bg-muted dark:hover:bg-muted"
               title={copy.modelProfiles.resetForm}
             >
               <RotateCcw className="w-4 h-4" />
-            </button>
+            </Button>
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-2">{copy.modelProfiles.name}</label>
-            <input
+            <Input
               name="name"
               required
               value={draft.name}
               onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
               placeholder={copy.modelProfiles.namePlaceholder}
-              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
+              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-card  outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-2">{copy.modelProfiles.provider}</label>
-            <select
+            <NativeSelect
               name="provider"
               value={draft.provider}
               onChange={(event) => handleProviderChange(event.target.value as ProviderType)}
-              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
+              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-card  outline-none focus:ring-2 focus:ring-ring"
             >
               {providerOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-2">{copy.modelProfiles.baseUrl}</label>
-            <input
+            <Input
               name="baseUrl"
               required
               value={draft.baseUrl}
               onChange={(event) => setDraft((current) => ({ ...current, baseUrl: event.target.value }))}
               placeholder={providerOptions.find((item) => item.value === draft.provider)?.defaultBaseUrl}
-              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
+              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-card  outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-2">{copy.modelProfiles.model}</label>
-            <input
+            <Input
               name="modelName"
               required
               value={draft.modelName}
               onChange={(event) => setDraft((current) => ({ ...current, modelName: event.target.value }))}
               placeholder={copy.modelProfiles.modelPlaceholder}
-              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
+              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-card  outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-2">
-              {copy.modelProfiles.apiKey} {editingId ? <span className="text-xs text-gray-400">{copy.modelProfiles.keepCurrentKey}</span> : null}
+              {copy.modelProfiles.apiKey} {editingId ? <span className="text-xs text-muted-foreground">{copy.modelProfiles.keepCurrentKey}</span> : null}
             </label>
-            <input
+            <Input
               name="apiKey"
               required={!editingId}
               type="password"
               value={draft.apiKey}
               onChange={(event) => setDraft((current) => ({ ...current, apiKey: event.target.value }))}
               placeholder={editingId ? copy.modelProfiles.apiKeyEditPlaceholder : copy.modelProfiles.apiKeyCreatePlaceholder}
-              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
+              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-card  outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
 
           <label className="flex items-center gap-3">
-            <input
+            <Input
               name="isDefault"
               type="checkbox"
               checked={draft.isDefault}
@@ -382,7 +385,7 @@ export function ModelProfileManager() {
           </label>
 
           <label className="flex items-center gap-3">
-            <input
+            <Input
               name="isActive"
               type="checkbox"
               checked={draft.isActive}
@@ -398,7 +401,7 @@ export function ModelProfileManager() {
                 'p-3 rounded-lg text-sm',
                 lastTestResult?.ok
                   ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-300'
-                  : 'bg-gray-50 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+                  : 'bg-muted/40 text-foreground dark:bg-muted dark:text-muted-foreground'
               )}
             >
               {error || (
@@ -410,22 +413,22 @@ export function ModelProfileManager() {
           )}
 
           <div className="grid gap-3 sm:grid-cols-2">
-            <button
+            <Button
               type="button"
               onClick={() => void handleTest()}
               disabled={saving}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-gray-200 px-4 py-3 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-60"
+              className="inline-flex items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 dark:border-border hover:bg-muted dark:hover:bg-muted transition-colors disabled:opacity-60"
             >
               <Wifi className="w-4 h-4" />
               {copy.modelProfiles.testConnection}
-            </button>
-            <button
+            </Button>
+            <Button
               type="submit"
               disabled={saving}
-              className="rounded-xl bg-primary-light px-4 py-3 text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-60 dark:bg-primary-dark"
+              className="rounded-xl bg-primary px-4 py-3 text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-60 "
             >
               {editingId ? copy.modelProfiles.saveChanges : copy.modelProfiles.createProfile}
-            </button>
+            </Button>
           </div>
           </form>
         </aside>
