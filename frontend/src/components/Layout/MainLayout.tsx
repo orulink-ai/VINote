@@ -27,9 +27,9 @@ export function MainLayout() {
 
   return (
     <TooltipProvider delayDuration={150}>
-      <SidebarProvider defaultOpen>
+      <SidebarProvider defaultOpen className="h-full min-h-0">
         <Sidebar />
-        <SidebarInset className="h-svh min-w-0 overflow-hidden bg-background">
+        <SidebarInset className="h-full min-w-0 overflow-hidden bg-background">
           <Header />
           <main className="app-surface stealth-scroll min-h-0 flex-1 overflow-auto"><Outlet /></main>
         </SidebarInset>
