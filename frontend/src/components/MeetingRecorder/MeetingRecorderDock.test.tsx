@@ -179,10 +179,9 @@ describe('MeetingRecorderDock', () => {
     meetingGenerationMock.fetchMeetingAudioBlob.mockResolvedValue(new Blob(['audio-restored'], { type: 'audio/webm' }))
   })
 
-  it('routes the microphone shortcut to meeting setup without starting capture', async () => {
+  it('does not render a global recording shortcut while idle', () => {
     renderDock()
-    await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
-    expect(navigate).toHaveBeenCalledWith('/meetings')
+    expect(screen.queryByRole('button', { name: '开始会议录音' })).not.toBeInTheDocument()
     expect(audioRecorderMock.start).not.toHaveBeenCalled()
   })
 
@@ -392,11 +391,10 @@ describe('MeetingRecorderDock', () => {
     expect(desktopRecorderWindowMock.closeCurrentRecorderWindow).toHaveBeenCalled()
   })
 
-  it('routes the desktop shortcut to the same meeting setup', async () => {
+  it('does not render an idle desktop recording shortcut', () => {
     desktopRecorderWindowMock.isTauriRuntime.mockReturnValue(true)
     renderDock()
-    await userEvent.click(screen.getByRole('button', { name: '开始会议录音' }))
-    expect(navigate).toHaveBeenCalledWith('/meetings')
+    expect(screen.queryByRole('button', { name: '开始会议录音' })).not.toBeInTheDocument()
     expect(desktopRecorderWindowMock.openRecorderWindowWhenReady).not.toHaveBeenCalled()
   })
 

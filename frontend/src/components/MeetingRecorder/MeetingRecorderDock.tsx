@@ -878,7 +878,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       data-testid={isRecorderWindow ? 'meeting-recorder-native-surface' : undefined}
       className={isRecorderWindow ? 'meeting-recorder-native-surface box-border h-screen w-screen overflow-hidden bg-transparent' : undefined}
     >
-      {!isPanelOpen && !isRecorderWindow ? (
+      {!isPanelOpen && !isRecorderWindow && phase !== 'idle' ? (
         <Button
           type="button"
           size="icon"

@@ -5,12 +5,9 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { apiJson } from '@/lib/api'
 import { useI18n } from '@/lib/i18n'
 import { useAuthStore } from '@/stores/authStore'
-
-const brandMarkUrl = import.meta.env.BASE_URL + 'vinote-mark.svg'
 
 export function Login() {
   const [emailLogin, setEmailLogin] = useState<boolean | null>(null)
@@ -31,10 +28,7 @@ export function Login() {
     const load = async (attempt: number) => {
       try {
         const value = await apiJson<{ email_code: boolean }>('/api/auth/config')
-        if (active) {
-          setEmailLogin(value.email_code)
-          setError('')
-        }
+        if (active) { setEmailLogin(value.email_code); setError('') }
       } catch {
         if (!active) return
         if (attempt < 3) timer = setTimeout(() => void load(attempt + 1), 1000)
@@ -43,18 +37,10 @@ export function Login() {
     }
     setError('')
     void load(0)
-    return () => {
-      active = false
-      clearTimeout(timer)
-    }
+    return () => { active = false; clearTimeout(timer) }
   }, [retryConfig])
 
-  const switchMode = (mode: string) => {
-    setIsLogin(mode === 'login')
-    setError('')
-    setConfirmPassword('')
-  }
-
+  const switchMode = (mode: string) => { setIsLogin(mode === 'login'); setError(''); setConfirmPassword('') }
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     setError('')
@@ -76,61 +62,17 @@ export function Login() {
     setIsLogin(true)
   }
 
-  return (
-    <main className="flex min-h-screen flex-col bg-muted/30">
-      <header className="flex h-14 items-center border-b bg-background px-5">
-        <div className="flex items-center gap-2 text-sm font-semibold"><img src={brandMarkUrl} alt="VINote" className="size-7" />VINote</div>
-      </header>
-      <section className="flex flex-1 items-center justify-center px-5 py-10">
-        <div className="w-full max-w-[420px] border bg-background p-6 shadow-sm sm:p-8">
-          <header className="mb-6 flex flex-col gap-2">
-            <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">会议与知识工作空间</p>
-            <h1 className="text-2xl font-semibold tracking-tight">{isLogin ? '欢迎回来' : '创建 VINote 账号'}</h1>
-            <p className="text-sm text-muted-foreground">{isLogin ? '登录后继续处理会议、资料和团队笔记。' : '使用工作邮箱创建个人空间。'}</p>
-          </header>
-
-          <Tabs className="mb-6" value={isLogin ? 'login' : 'register'} onValueChange={switchMode}>
-                <TabsList className="grid w-full grid-cols-2">
-                  <TabsTrigger value="login">登录</TabsTrigger>
-                  <TabsTrigger value="register">注册</TabsTrigger>
-                </TabsList>
-              </Tabs>
-
-          {emailLogin === null ? (
-                <div className="flex flex-col gap-4 text-center">
-                  <p className="text-sm text-muted-foreground">{error || '正在连接登录服务…'}</p>
-                  {error ? <Button onClick={() => setRetryConfig(value => value + 1)}>重试连接</Button> : null}
-                </div>
-              ) : emailLogin ? (
-                <EmailLogin isLogin={isLogin} onSwitch={() => switchMode(isLogin ? 'register' : 'login')} />
-              ) : (
-                <form onSubmit={handleSubmit}>
-                  <FieldGroup>
-                    <Field>
-                      <FieldLabel htmlFor="login-email">{copy.login.email}</FieldLabel>
-                      <Input id="login-email" type="email" value={email} onChange={event => setEmail(event.target.value)} autoComplete="email" placeholder={copy.login.emailPlaceholder} required />
-                    </Field>
-                    <Field>
-                      <FieldLabel htmlFor="login-password">{copy.login.password}</FieldLabel>
-                      <Input id="login-password" type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete={isLogin ? 'current-password' : 'new-password'} placeholder={copy.login.passwordPlaceholder} required minLength={6} />
-                      {!isLogin ? <FieldDescription>{copy.login.passwordRules}</FieldDescription> : null}
-                    </Field>
-                    {!isLogin ? (
-                      <Field>
-                        <FieldLabel htmlFor="login-confirm-password">{copy.login.confirmPassword}</FieldLabel>
-                        <Input id="login-confirm-password" type="password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder={copy.login.confirmPasswordPlaceholder} required minLength={6} />
-                      </Field>
-                    ) : null}
-                    {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-                    <Button type="submit" disabled={loading} size="lg" className="w-full">
-                      {loading ? copy.login.working : isLogin ? copy.login.signIn : copy.login.signUp}
-                    </Button>
-                  </FieldGroup>
-                </form>
-              )}
-        </div>
-      </section>
-      <footer className="px-5 pb-5 text-center text-xs text-muted-foreground">VINote Desktop</footer>
-    </main>
-  )
+  return <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-muted/30 px-5 py-10">
+    <div className="pointer-events-none absolute inset-0 [background-image:linear-gradient(to_right,hsl(var(--border)/.45)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border)/.45)_1px,transparent_1px)] [background-size:32px_32px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_72%)]" />
+    <section className="relative w-full max-w-[420px] animate-in fade-in slide-in-from-bottom-2 duration-500 rounded-2xl border bg-background p-7 shadow-sm sm:p-9">
+      <div className="mb-8 flex items-center gap-3">
+        <img src="/favicon.svg" alt="" className="size-10 rounded-xl shadow-sm" />
+        <div><p className="font-semibold leading-none">VINote</p><p className="mt-1 text-xs text-muted-foreground">桌面工作空间</p></div>
+      </div>
+      <div className="w-full">
+        <header className="mb-7 flex flex-col gap-2"><h1 className="text-2xl font-semibold tracking-tight">{isLogin ? '登录' : '创建账号'}</h1><p className="text-sm leading-6 text-muted-foreground">{isLogin ? '输入账号信息继续。' : '验证邮箱后即可进入工作空间。'}</p></header>
+        {emailLogin === null ? <div className="flex flex-col gap-4 text-center"><p className="text-sm text-muted-foreground">{error || '正在连接登录服务…'}</p>{error ? <Button onClick={() => setRetryConfig(value => value + 1)}>重试连接</Button> : null}</div> : emailLogin ? <EmailLogin isLogin={isLogin} onSwitch={() => switchMode(isLogin ? 'register' : 'login')} /> : <form onSubmit={handleSubmit}><FieldGroup><Field><FieldLabel htmlFor="login-email">{copy.login.email}</FieldLabel><Input id="login-email" type="email" value={email} onChange={event => setEmail(event.target.value)} autoComplete="email" placeholder={copy.login.emailPlaceholder} required /></Field><Field><FieldLabel htmlFor="login-password">{copy.login.password}</FieldLabel><Input id="login-password" type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete={isLogin ? 'current-password' : 'new-password'} placeholder={copy.login.passwordPlaceholder} required minLength={6} />{!isLogin ? <FieldDescription>{copy.login.passwordRules}</FieldDescription> : null}</Field>{!isLogin ? <Field><FieldLabel htmlFor="login-confirm-password">{copy.login.confirmPassword}</FieldLabel><Input id="login-confirm-password" type="password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder={copy.login.confirmPasswordPlaceholder} required minLength={6} /></Field> : null}{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}<Button type="submit" disabled={loading} size="lg" className="w-full transition-transform duration-200 active:scale-[.99]">{loading ? copy.login.working : isLogin ? copy.login.signIn : copy.login.signUp}</Button><p className="text-center text-sm text-muted-foreground">{isLogin ? '还没有账号？' : '已经有账号？'} <Button type="button" variant="link" className="h-auto px-1 py-0" onClick={() => switchMode(isLogin ? 'register' : 'login')}>{isLogin ? copy.login.createAccount : copy.login.signIn}</Button></p></FieldGroup></form>}
+      </div>
+    </section>
+  </main>
 }
