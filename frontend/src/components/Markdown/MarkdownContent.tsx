@@ -150,7 +150,7 @@ export function MarkdownContent({ content, className, videoUrl, mediaUrl, onVide
             <img
               src={src ? resolveContentUrl(src) : undefined}
               alt={alt || 'Screenshot'}
-              className="mb-4 rounded-2xl border border-border shadow-sm"
+              className="mb-4 border border-border"
               loading="lazy"
             />
           ),

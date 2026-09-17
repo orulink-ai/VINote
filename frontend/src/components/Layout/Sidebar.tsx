@@ -6,7 +6,6 @@ import { useI18n } from '../../lib/i18n'
 import { useTeamStore } from '../../stores/teamStore'
 import { useAuthStore } from '../../stores/authStore'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
-import { Badge } from '@/components/ui/badge'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Sidebar as ShadcnSidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupAction, SidebarGroupContent, SidebarGroupLabel, SidebarHeader, SidebarMenu, SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem, SidebarRail, SidebarSeparator, useSidebar } from '@/components/ui/sidebar'
 
@@ -30,15 +29,14 @@ export function Sidebar() {
 
   return (
     <ShadcnSidebar collapsible="icon" variant="sidebar" className="border-r-0">
-      <SidebarHeader className="gap-3 px-3 py-4">
+      <SidebarHeader className="gap-2 px-2 py-3">
         <SidebarMenu><SidebarMenuItem><SidebarMenuButton size="lg" onClick={() => navigate('/')} tooltip="VINote">
-          <span className="flex aspect-square size-9 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm"><AudioLines className="size-5" /></span>
-          <span className="grid flex-1 text-left leading-tight"><span className="truncate text-base font-semibold">VINote</span><span className="truncate text-xs text-muted-foreground">{zh ? '会议与知识空间' : 'Meeting knowledge'}</span></span>
-          <Badge variant="secondary" className="text-[10px]">Beta</Badge>
+          <span className="flex aspect-square size-8 items-center justify-center rounded-lg bg-foreground text-background"><AudioLines /></span>
+          <span className="grid flex-1 text-left leading-tight"><span className="truncate text-sm font-semibold">VINote</span><span className="truncate text-xs text-muted-foreground">{zh ? '工作空间' : 'Workspace'}</span></span>
         </SidebarMenuButton></SidebarMenuItem></SidebarMenu>
       </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup><SidebarGroupLabel>{zh ? '工作' : 'Work'}</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>
+        <SidebarGroup><SidebarGroupLabel>{zh ? '导航' : 'Navigation'}</SidebarGroupLabel><SidebarGroupContent><SidebarMenu>
           {navigation.map(item => { const active = item.path === '/' ? location.pathname === '/' : location.pathname.startsWith(item.path); return <SidebarMenuItem key={item.path}><SidebarMenuButton asChild isActive={active} tooltip={item.label}><NavLink to={item.path}><item.icon /><span>{item.label}</span></NavLink></SidebarMenuButton></SidebarMenuItem> })}
         </SidebarMenu></SidebarGroupContent></SidebarGroup>
         <SidebarSeparator />

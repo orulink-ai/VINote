@@ -3,7 +3,6 @@ import { CheckCircle, Download, FileAudio, FileText, Image, Loader2, Mic, XCircl
 import { useI18n } from '../../lib/i18n'
 import { Alert, AlertDescription } from '../ui/alert'
 import { Badge } from '../ui/badge'
-import { Card, CardContent, CardHeader, CardTitle } from '../ui/card'
 import { cn } from '../../lib/utils'
 
 interface GenerateProgressProps {
@@ -49,17 +48,17 @@ export function GenerateProgress({ status, progress, currentStep, error, message
   if (status === 'idle') return null
 
   return (
-    <Card>
-      <CardHeader className="gap-4 pb-4">
+    <section className="border">
+      <header className="grid gap-4 border-b p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <CardTitle className="flex items-center gap-2 text-lg">
+          <h3 className="flex items-center gap-2 text-base font-semibold">
             {running && <Loader2 aria-hidden="true" className="h-5 w-5 animate-spin text-primary motion-reduce:animate-none" />}
             {status === 'success'
               ? copy.progress.completed
               : status === 'failed'
                 ? copy.progress.failed
                 : stepLabels[currentStep] || copy.progress.preparing}
-          </CardTitle>
+          </h3>
           <Badge variant={status === 'failed' ? 'destructive' : 'secondary'}>{status === 'success' ? '已完成' : `第 ${activeStep} / ${steps.length} 步`}</Badge>
         </div>
         <div className="h-2 overflow-hidden rounded-full bg-secondary">
@@ -76,10 +75,10 @@ export function GenerateProgress({ status, progress, currentStep, error, message
             style={{ width: `${progress}%` }}
           />
         </div>
-      </CardHeader>
-      <CardContent className="grid gap-4">
+      </header>
+      <div className="grid gap-4 p-5">
 
-      {running && detail && <div role="status" className="rounded-xl border bg-muted/40 p-4">
+      {running && detail && <div role="status" className="border-l-2 border-foreground bg-muted/30 p-4">
         <p className="font-medium text-foreground">{detail}</p>
         <p className="mt-2 text-sm tabular-nums text-primary">本界面等待 {Math.floor(waitingSeconds / 60)} 分 {waitingSeconds % 60} 秒 · {message?.includes('无法获取') ? '状态检查异常，正在重试' : '等待服务端返回结果'}</p>
         {currentStep === 'transcribing' && <p className="mt-2 text-sm leading-6 text-muted-foreground">音频转写中，完成当前分段后更新进度。进度条表示处理阶段，不代表已转写的音频比例。</p>}
@@ -94,7 +93,7 @@ export function GenerateProgress({ status, progress, currentStep, error, message
             <div
               key={step.key}
               className={cn(
-                'flex items-center gap-3 p-3 rounded-lg border',
+                'flex items-center gap-3 border-l-2 border-transparent p-3',
                 stepStatus === 'processing' ? 'border-primary/30 bg-primary/5' : 'border-transparent'
               )}
             >
@@ -120,7 +119,7 @@ export function GenerateProgress({ status, progress, currentStep, error, message
       {error && (
         <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>
       )}
-      </CardContent>
-    </Card>
+      </div>
+    </section>
   )
 }

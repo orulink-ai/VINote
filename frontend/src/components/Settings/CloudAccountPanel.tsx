@@ -4,7 +4,6 @@ import { apiJson } from '../../lib/api'
 import { Alert, AlertDescription } from '../ui/alert'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../ui/card'
 import { Input } from '../ui/input'
 import { Label } from '../ui/label'
 
@@ -34,11 +33,11 @@ export function CloudAccountPanel({ onConnected }: { onConnected: () => void }) 
     finally { setBusy(false) }
   }
   if (account && !account.configured) return null
-  return <Card>
-    <CardHeader><div className="flex items-center justify-between gap-3"><div><CardTitle className="flex items-center gap-2"><Cloud className="h-5 w-5 text-primary" />VINote 云端账号</CardTitle><CardDescription>连接云端模型账户，统一使用转写和总结服务。</CardDescription></div>{account?.authenticated && <Badge variant="secondary">已连接</Badge>}</div></CardHeader>
-    <CardContent className="grid gap-4">
+  return <section className="grid gap-5 border-b pb-8">
+    <header className="flex items-start justify-between gap-4"><div><h3 className="flex items-center gap-2 text-base font-semibold"><Cloud className="size-4" />云端账号</h3><p className="mt-1 text-sm leading-6 text-muted-foreground">连接 VINote 云端账户，使用统一的转写和总结服务。</p></div>{account?.authenticated && <Badge variant="secondary">已连接</Badge>}</header>
+    <div className="grid gap-4">
       {account?.authenticated ? <>
-        <div className="rounded-xl border border-border bg-muted/40 p-4"><p className="text-sm font-medium">{account.email}</p><p className="mt-1 text-xs text-muted-foreground">当前桌面端已连接此云端账号</p></div>
+        <div className="border-l-2 border-foreground px-4 py-2"><p className="text-sm font-medium">{account.email}</p><p className="mt-1 text-xs text-muted-foreground">当前桌面端已连接此云端账号</p></div>
         <Button variant="outline" className="w-fit" disabled={busy} onClick={() => void run(async () => {
           const result = await apiJson<{ remote_revoked: boolean }>('/api/vilab/account', { method: 'DELETE' })
           setAccount({ configured: true, authenticated: false }); onConnected()
@@ -51,6 +50,6 @@ export function CloudAccountPanel({ onConnected }: { onConnected: () => void }) 
         <Button className="w-fit" disabled={busy || !email || code.length < 6} onClick={() => void run(async () => { const value = await apiJson<Account>('/api/vilab/account/verify', { method: 'POST', body: JSON.stringify({ email, code }) }); setAccount(value); setCode(''); onConnected() })}>{busy ? '正在连接…' : '注册 / 登录'}</Button>
       </>}
       {message && <Alert><AlertDescription>{message}</AlertDescription></Alert>}
-    </CardContent>
-  </Card>
+    </div>
+  </section>
 }

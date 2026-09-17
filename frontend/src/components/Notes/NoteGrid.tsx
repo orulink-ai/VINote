@@ -1,7 +1,6 @@
 import { FileText, Users } from 'lucide-react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useI18n } from '../../lib/i18n'
@@ -13,11 +12,14 @@ const failedRecording = (note: NoteRecord) => note.sourceType === 'meeting_recor
 export function NoteGrid({ notes, loading = false, emptyTitle, emptyBody, onOpen }: NoteGridProps) {
   const { copy, formatDate, locale } = useI18n()
   const zh = locale.startsWith('zh')
-  if (loading) return <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{[0, 1, 2].map(item => <Card key={item}><CardHeader><Skeleton className="h-5 w-3/4" /></CardHeader><CardContent className="grid gap-2"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-5/6" /><Skeleton className="h-4 w-2/3" /></CardContent></Card>)}</div>
+  if (loading) return <div className="divide-y border-y">{[0, 1, 2].map(item => <div key={item} className="grid gap-2 py-5"><Skeleton className="h-5 w-1/3" /><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-2/3" /></div>)}</div>
   if (!notes.length) return <Empty className="min-h-64 border border-dashed bg-card"><EmptyHeader><EmptyMedia variant="icon"><FileText /></EmptyMedia><EmptyTitle>{emptyTitle}</EmptyTitle><EmptyDescription>{emptyBody}</EmptyDescription></EmptyHeader></Empty>
-  return <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{notes.map(note => <Card key={note.id} className="group flex min-h-56 flex-col transition hover:-translate-y-0.5 hover:border-primary/40 hover:shadow-md">
-    <CardHeader className="flex-row items-start justify-between gap-3"><CardTitle className="line-clamp-2 text-base leading-6">{note.title}</CardTitle><Badge variant={note.scope === 'team' ? 'default' : 'secondary'} className="shrink-0"><Users className="size-3" />{note.scope === 'team' ? note.teamName || (zh ? '团队' : 'Team') : (zh ? '个人' : 'Personal')}</Badge></CardHeader>
-    <CardContent className="flex-1"><p className="line-clamp-4 text-sm leading-6 text-muted-foreground">{note.content || copy.notes.noContent}</p>{failedRecording(note) ? <Badge variant="destructive" className="mt-3">{zh ? '处理失败，可打开重试' : 'Processing failed'}</Badge> : null}</CardContent>
-    <CardFooter className="justify-between border-t pt-4"><span className="text-xs text-muted-foreground">{formatDate(note.updatedAt || note.createdAt)}</span><Button variant="ghost" size="sm" onClick={() => onOpen(note)}>{zh ? '打开' : 'Open'}</Button></CardFooter>
-  </Card>)}</div>
+  return <div className="divide-y border-y">{notes.map(note => <article key={note.id} className="group flex items-start gap-4 py-5">
+    <button type="button" className="min-w-0 flex-1 text-left" onClick={() => onOpen(note)}>
+      <div className="flex items-start justify-between gap-3"><h3 className="line-clamp-2 font-medium leading-6 group-hover:underline group-hover:underline-offset-4">{note.title}</h3><Badge variant={note.scope === 'team' ? 'default' : 'secondary'} className="shrink-0"><Users className="size-3" />{note.scope === 'team' ? note.teamName || (zh ? '团队' : 'Team') : (zh ? '个人' : 'Personal')}</Badge></div>
+      <p className="mt-2 line-clamp-2 text-sm leading-6 text-muted-foreground">{note.content || copy.notes.noContent}</p>
+      <div className="mt-3 flex items-center gap-3 text-xs text-muted-foreground"><span>{formatDate(note.updatedAt || note.createdAt)}</span>{failedRecording(note) ? <Badge variant="destructive">{zh ? '处理失败，可打开重试' : 'Processing failed'}</Badge> : null}</div>
+    </button>
+    <Button variant="ghost" size="sm" onClick={() => onOpen(note)}>{zh ? '打开' : 'Open'}</Button>
+  </article>)}</div>
 }

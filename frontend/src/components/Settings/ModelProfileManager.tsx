@@ -8,6 +8,8 @@ import { Plus, RotateCcw, Trash2, Wifi } from 'lucide-react'
 import { useI18n } from '../../lib/i18n'
 import { type ModelProfile, type ModelProfileDraft, type ProviderType } from '../../lib/modelProfiles'
 import { useModelProfileStore } from '../../stores/modelProfileStore'
+import { Badge } from '../ui/badge'
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../ui/empty'
 
 const providerOptions: Array<{
   value: ProviderType
@@ -162,22 +164,20 @@ export function ModelProfileManager() {
   }
 
   return (
-    <section className="rounded-[28px] border border-border bg-card p-5 text-card-foreground shadow-sm lg:p-6">
+    <section className="py-2">
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_380px]">
         <div className="min-w-0 grid gap-4">
-          <div className="flex flex-col gap-4 rounded-3xl border border-border bg-card p-5 dark:border-border  sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <div className="flex items-center gap-3">
                 <h3 className="text-xl font-semibold">{copy.modelProfiles.title}</h3>
-                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary /10 ">
-                  {profiles.length}
-                </span>
+                <Badge variant="secondary">{profiles.length}</Badge>
               </div>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground dark:text-muted-foreground">{copy.modelProfiles.body}</p>
             </div>
             <Button
               onClick={resetForm}
-              className="inline-flex items-center justify-center gap-2 self-start rounded-xl border border-border px-4 py-2.5 font-medium hover:bg-muted dark:border-border dark:hover:bg-muted transition-colors"
+              variant="outline" className="self-start"
             >
               <Plus className="w-4 h-4" />
               {copy.modelProfiles.newProfile}
@@ -185,11 +185,9 @@ export function ModelProfileManager() {
           </div>
 
           {loading ? (
-            <div className="rounded-3xl border border-border bg-card p-5 dark:border-border ">{copy.modelProfiles.loading}</div>
+            <div className="border-b py-5 text-sm text-muted-foreground">{copy.modelProfiles.loading}</div>
           ) : profiles.length === 0 ? (
-            <div className="rounded-3xl border border-dashed border-border bg-card p-6 text-sm text-muted-foreground dark:border-border  dark:text-muted-foreground">
-              {copy.modelProfiles.empty}
-            </div>
+            <Empty className="border border-dashed"><EmptyHeader><EmptyTitle>{copy.modelProfiles.empty}</EmptyTitle><EmptyDescription>{copy.modelProfiles.body}</EmptyDescription></EmptyHeader></Empty>
           ) : (
             <div className="stealth-scroll max-h-[620px] grid gap-3 overflow-y-auto pr-1">
               {profiles.filter(profile => profile.id !== 'vilab-cloud').map((profile) => {
@@ -198,7 +196,7 @@ export function ModelProfileManager() {
                 return (
                 <div
                   key={profile.id}
-                  className="rounded-3xl border border-border bg-card p-5 transition-colors hover:border-border dark:border-border  dark:hover:border-border"
+                  className="border-b px-1 py-4 last:border-b-0"
                 >
                   <div className="grid gap-4">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -206,14 +204,10 @@ export function ModelProfileManager() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <h4 className="font-medium">{profile.name}</h4>
                         {profile.isDefault && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary /10 ">
-                            {copy.modelProfiles.default}
-                          </span>
+                          <Badge>{copy.modelProfiles.default}</Badge>
                         )}
                         {!profile.isActive && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground">
-                            {copy.modelProfiles.inactive}
-                          </span>
+                          <Badge variant="outline">{copy.modelProfiles.inactive}</Badge>
                         )}
                       </div>
                       <p className="text-sm text-muted-foreground dark:text-muted-foreground mt-1">
@@ -241,7 +235,7 @@ export function ModelProfileManager() {
                       <Button
                         onClick={() => void handleSavedProfileTest(profile)}
                         disabled={isTestingProfile}
-                        className="inline-flex items-center gap-2 rounded-xl border border-border px-3 py-2 text-sm hover:bg-muted dark:border-border dark:hover:bg-muted"
+                        variant="outline" size="sm"
                         title={copy.modelProfiles.testConnection}
                       >
                         <Wifi className="w-4 h-4" />
@@ -249,21 +243,21 @@ export function ModelProfileManager() {
                       </Button>
                       <Button
                         onClick={() => startEdit(profile)}
-                        className="rounded-xl border border-border px-3 py-2 text-sm hover:bg-muted dark:border-border dark:hover:bg-muted"
+                        variant="outline" size="sm"
                       >
                         {copy.modelProfiles.edit}
                       </Button>
                       {!profile.isDefault && (
                         <Button
                           onClick={() => void handleSetDefaultProfile(profile)}
-                          className="rounded-xl border border-border px-3 py-2 text-sm hover:bg-muted dark:border-border dark:hover:bg-muted"
+                          variant="outline" size="sm"
                         >
                           {copy.modelProfiles.setDefault}
                         </Button>
                       )}
                       <Button
                         onClick={() => void deleteProfile(profile.id)}
-                        className="rounded-xl border border-destructive/30 p-2 text-destructive hover:bg-destructive/10 dark:border-red-900/30 dark:hover:bg-red-900/20"
+                        variant="ghost" size="icon" className="text-destructive hover:text-destructive"
                         title={copy.modelProfiles.delete}
                       >
                         <Trash2 className="w-4 h-4" />
@@ -284,21 +278,19 @@ export function ModelProfileManager() {
               event.preventDefault()
               void handleSave()
             }}
-            className="grid gap-4 rounded-3xl border border-border bg-card p-5 shadow-sm dark:border-border "
+            className="grid gap-4 border-l pl-6"
           >
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-lg font-semibold">{editingId ? copy.modelProfiles.editTitle : copy.modelProfiles.createTitle}</h3>
-                <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground dark:bg-muted dark:text-muted-foreground">
-                  {editingId ? copy.modelProfiles.edit : copy.modelProfiles.newProfile}
-                </span>
+                <Badge variant="secondary">{editingId ? copy.modelProfiles.edit : copy.modelProfiles.newProfile}</Badge>
               </div>
               <p className="mt-2 text-sm leading-6 text-muted-foreground dark:text-muted-foreground">{copy.modelProfiles.connectionBody}</p>
             </div>
             <Button
               onClick={resetForm}
-              className="rounded-xl p-2 hover:bg-muted dark:hover:bg-muted"
+              variant="ghost" size="icon"
               title={copy.modelProfiles.resetForm}
             >
               <RotateCcw className="w-4 h-4" />
@@ -417,7 +409,7 @@ export function ModelProfileManager() {
               type="button"
               onClick={() => void handleTest()}
               disabled={saving}
-              className="inline-flex items-center justify-center gap-2 rounded-xl border border-border px-4 py-3 dark:border-border hover:bg-muted dark:hover:bg-muted transition-colors disabled:opacity-60"
+              variant="outline"
             >
               <Wifi className="w-4 h-4" />
               {copy.modelProfiles.testConnection}
@@ -425,7 +417,6 @@ export function ModelProfileManager() {
             <Button
               type="submit"
               disabled={saving}
-              className="rounded-xl bg-primary px-4 py-3 text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-60 "
             >
               {editingId ? copy.modelProfiles.saveChanges : copy.modelProfiles.createProfile}
             </Button>

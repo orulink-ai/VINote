@@ -14,7 +14,6 @@ import { useSTTProfileStore } from '../stores/sttProfileStore'
 import { getWorkspaceLabel, useTeamStore } from '../stores/teamStore'
 import { Alert, AlertDescription } from '../components/ui/alert'
 import { Button } from '../components/ui/button'
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card'
 import { Label } from '../components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 
@@ -274,7 +273,7 @@ export function NoteGenerator() {
   }
 
   return (
-    <div className="mx-auto max-w-[1380px] px-5 py-6 lg:px-8">
+    <div className="mx-auto max-w-[1280px] px-6 py-8 lg:px-10">
       <div className="mb-6 flex items-start gap-3 border-b pb-5">
         <Button
           type="button"
@@ -286,16 +285,16 @@ export function NoteGenerator() {
           <ArrowLeft className="w-5 h-5" />
         </Button>
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">{isMeeting ? '导入会议录制' : '整理新笔记'}</h2>
+          <h2 className="text-2xl font-semibold tracking-tight">{isMeeting ? '导入会议录制' : '整理资料'}</h2>
           <p className="mt-1 text-sm leading-6 text-muted-foreground">
             {isMeeting ? '导入已经录制的音频或视频，生成带说话人、时间戳、决策和待办的会议纪要。' : '从链接或文件提取内容，转写并整理为可编辑、可共享的结构化笔记。'}
           </p>
         </div>
       </div>
 
-      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1.45fr)_minmax(340px,.75fr)]">
-        <Card><CardContent className="grid gap-5 p-5 lg:p-6">
-          <div className="flex items-center gap-3"><span className="flex size-9 items-center justify-center rounded-xl bg-primary/10 text-primary"><FileAudio className="size-4" /></span><div><h3 className="text-sm font-semibold">{isMeeting ? '选择会议文件' : '选择内容来源'}</h3><p className="text-xs text-muted-foreground">{isMeeting ? '支持本地音频、视频和逐字稿文件。' : '链接支持网页、文章和公开视频；文件支持音视频、字幕与文本。'}</p></div></div>
+      <div className="grid items-start gap-6 lg:grid-cols-[minmax(0,1fr)_340px]">
+        <section className="grid gap-5 border-t pt-5">
+          <div className="flex items-center gap-3"><span className="flex size-9 items-center justify-center border bg-muted"><FileAudio className="size-4" /></span><div><h3 className="text-sm font-semibold">{isMeeting ? '选择会议文件' : '选择内容来源'}</h3><p className="text-xs text-muted-foreground">{isMeeting ? '支持本地音频、视频和逐字稿文件。' : '链接支持网页、文章和公开视频；文件支持音视频、字幕与文本。'}</p></div></div>
         <FileUploader
           videoUrl={videoUrl}
           onVideoUrlChange={setVideoUrl}
@@ -306,7 +305,7 @@ export function NoteGenerator() {
           urlEnabled={!isMeeting}
         />
 
-        <div className="flex items-start gap-3 rounded-xl border bg-muted/40 px-4 py-3 text-sm">
+        <div className="flex items-start gap-3 border-l-2 border-foreground bg-muted/30 px-4 py-3 text-sm">
           {uploadMode === 'url' ? <LinkIcon className="h-5 w-5 shrink-0" /> : <FileAudio className="h-5 w-5 shrink-0" />}
           <div>
             <p className="font-medium">{language === 'zh-CN' ? (isMeeting ? '输出会议纪要与说话人逐字稿' : '输出结构化笔记') : (isMeeting ? 'Meeting minutes and speaker transcript' : 'Structured note output')}</p>
@@ -321,10 +320,10 @@ export function NoteGenerator() {
           </div>
         </div>
 
-        </CardContent></Card>
+        </section>
         <aside className="grid gap-4 lg:sticky lg:top-5">
-        <Card><CardHeader className="pb-3"><CardTitle className="flex items-center gap-3 text-base"><span className="flex size-9 items-center justify-center rounded-xl bg-muted"><Settings2 className="size-4" /></span>生成设置</CardTitle></CardHeader><CardContent className="grid gap-4">
-          <div className="rounded-xl border bg-muted/30 p-3">
+        <section className="grid gap-4 border-l pl-5"><header className="flex items-center gap-3"><span className="flex size-9 items-center justify-center border bg-muted"><Settings2 className="size-4" /></span><h3 className="text-base font-semibold">生成设置</h3></header>
+          <div className="border-y py-3">
           <Label className="mb-2 block">
             {copy.generator.saveTargetWorkspace}
           </Label>
@@ -335,7 +334,7 @@ export function NoteGenerator() {
           </div>
 
         {cloudMode ? <ModelSourcePanel compact /> : <>
-        <div className="mt-4 rounded-xl border p-3">
+        <div className="mt-4 border-t pt-4">
           <Label className="mb-2 block">{copy.generator.modelProfileLabel}</Label>
           <Select
             value={selectedProfileId || 'system-default'}
@@ -361,7 +360,7 @@ export function NoteGenerator() {
           </p>
         </div>
 
-        <div className="mt-4 rounded-xl border p-3">
+        <div className="mt-4 border-t pt-4">
           <Label className="mb-2 block">{copy.generator.sttProfileLabel}</Label>
           <Select
             value={selectedSTTProfileId || 'system-default'}
@@ -388,7 +387,7 @@ export function NoteGenerator() {
         </div>
 
         </>}
-        <div className="mt-4 rounded-xl border p-3">
+        <div className="mt-4 border-t pt-4">
           <Label className="mb-2 block">
             {copy.generator.summaryMode}
           </Label>
@@ -423,7 +422,7 @@ export function NoteGenerator() {
               : isMeeting ? 'Generate meeting minutes' : 'Organize notes'}
         </Button>
 
-        </CardContent></Card>
+        </section>
 
         {status === 'failed' ? (
           <Alert variant="destructive">

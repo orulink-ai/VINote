@@ -114,7 +114,7 @@ describe('NoteEditor transcript evidence', () => {
     expect(screen.getAllByTestId('source-audio')).toHaveLength(1)
     expect(screen.queryByText('We agreed to activate Sortformer.')).not.toBeInTheDocument()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Transcript' }))
+    fireEvent.click(screen.getByRole('radio', { name: 'Transcript' }))
 
     expect(await screen.findByText('We agreed to activate Sortformer.')).toBeInTheDocument()
     expect(screen.getByText('asr_model · sensevoice-small')).toBeInTheDocument()

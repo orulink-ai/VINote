@@ -21,6 +21,11 @@ import { resolveContentUrl } from '../lib/videoLinks'
 import { type NoteRecord, type NoteShareRecord, useNoteLibraryStore } from '../stores/noteLibraryStore'
 import { Button } from '../components/ui/button'
 import { Badge } from '../components/ui/badge'
+import { ToggleGroup, ToggleGroupItem } from '../components/ui/toggle-group'
+import { Alert, AlertDescription } from '../components/ui/alert'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog'
+import { Sheet, SheetContent, SheetDescription, SheetFooter, SheetHeader, SheetTitle } from '../components/ui/sheet'
+import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from '../components/ui/resizable'
 
 type WorkspaceMode = 'write' | 'split' | 'preview'
 type NoteView = 'summary' | 'transcript'
@@ -28,10 +33,6 @@ type NoteView = 'summary' | 'transcript'
 const HEADING_RE = /^(#{1,6})\s+(.*)$/
 const TIMESTAMP_LINK_RE = /\[(\d{1,2}:\d{2})(?:-\d{1,2}:\d{2})?\]\(([^)]+)\)/
 const IMAGE_RE = /!\[[^\]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)/
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(Math.max(value, min), max)
-}
 
 function deriveKeyMoments(content: string): KeyMoment[] {
   const lines = content.split(/\r?\n/)
@@ -83,7 +84,6 @@ function deriveKeyMoments(content: string): KeyMoment[] {
     }]
   })
 }
-
 function findTimestamp(heading: string, body: string[]) {
   const headingMatch = heading.match(TIMESTAMP_LINK_RE)
   if (headingMatch) {
@@ -105,7 +105,6 @@ function findTimestamp(heading: string, body: string[]) {
 
   return null
 }
-
 function findImage(lines: string[]) {
   for (const line of lines) {
     const imageMatch = line.match(IMAGE_RE)
@@ -171,12 +170,10 @@ export function NoteEditor() {
   const [deleteError, setDeleteError] = useState('')
   const deleteButtonRef = useRef<HTMLButtonElement>(null)
   const zh = locale.startsWith('zh')
-  const workspaceRef = useRef<HTMLDivElement | null>(null)
   const previewRef = useRef<HTMLDivElement | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
   const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('split')
-  const [editorWidth, setEditorWidth] = useState(40)
   const [localTitle, setLocalTitle] = useState('')
   const [content, setContent] = useState('')
   const [videoUrl, setVideoUrl] = useState('')
@@ -475,28 +472,6 @@ export function NoteEditor() {
     setTranscriptEvidence((current) => current ? { ...current, aliases: result.aliases } : current)
   }
 
-  const handleEditorResizeStart = (event: React.MouseEvent<HTMLButtonElement>) => {
-    if (workspaceMode !== 'split' || !workspaceRef.current) {
-      return
-    }
-
-    event.preventDefault()
-    const rect = workspaceRef.current.getBoundingClientRect()
-
-    const handlePointerMove = (moveEvent: MouseEvent) => {
-      const nextWidth = ((moveEvent.clientX - rect.left) / rect.width) * 100
-      setEditorWidth(clamp(nextWidth, 32, videoUrl ? 52 : 68))
-    }
-
-    const handlePointerUp = () => {
-      document.removeEventListener('mousemove', handlePointerMove)
-      document.removeEventListener('mouseup', handlePointerUp)
-    }
-
-    document.addEventListener('mousemove', handlePointerMove)
-    document.addEventListener('mouseup', handlePointerUp)
-  }
-
   if (loading) {
     return (
       <div className="flex h-full items-center justify-center">
@@ -523,11 +498,12 @@ export function NoteEditor() {
   return (
     <div className="flex h-full flex-col bg-background">
       {id && ['meeting_recording', 'meeting_video'].includes(sourceType) && <SavedRecordingActions key={id} noteId={id} title={localTitle} onDeleted={() => setRecordingDeleted(true)} />}
-      <div className="flex flex-wrap items-center justify-between gap-4 border-b border-border bg-card/90 px-4 py-3 backdrop-blur">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-background px-3 py-2">
         <div className="flex min-w-0 items-center gap-3">
           <Button
             onClick={() => navigate('/notes')}
-            className="rounded-xl p-2 hover:bg-muted"
+            variant="ghost"
+            size="icon"
           >
             <ArrowLeft className="h-5 w-5" />
           </Button>
@@ -538,7 +514,7 @@ export function NoteEditor() {
                 value={localTitle}
                 onChange={(event) => setLocalTitle(event.target.value)}
                 placeholder={copy.noteEditor.untitled}
-                className="w-full min-w-[220px] border-none bg-transparent text-lg font-semibold outline-none focus:ring-0"
+                className="h-8 w-full min-w-[220px] border-none bg-transparent px-0 text-base font-semibold shadow-none focus-visible:ring-0"
               />
               {currentNote ? (
                 <RecordingRetryBar
@@ -560,182 +536,98 @@ export function NoteEditor() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <div className={`flex rounded-xl border border-border bg-muted/60 p-1 ${noteView === 'transcript' ? 'invisible' : ''}`}>
-            <Button
-              type="button"
-              onClick={() => setWorkspaceMode('write')}
-              className={`rounded-lg px-3 py-1.5 text-sm transition ${
-                workspaceMode === 'write' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'
-              }`}
-            >
-              <span className="inline-flex items-center gap-1">
-                <Edit3 className="h-4 w-4" />
-                {copy.common.edit}
-              </span>
-            </Button>
-            <Button
-              type="button"
-              onClick={() => setWorkspaceMode('split')}
-              className={`rounded-lg px-3 py-1.5 text-sm transition ${
-                workspaceMode === 'split' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'
-              }`}
-            >
-              {splitLabel}
-            </Button>
-            <Button
-              type="button"
-              onClick={() => setWorkspaceMode('preview')}
-              className={`rounded-lg px-3 py-1.5 text-sm transition ${
-                workspaceMode === 'preview' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'
-              }`}
-            >
-              <span className="inline-flex items-center gap-1">
-                <Eye className="h-4 w-4" />
-                {copy.common.preview}
-              </span>
-            </Button>
-          </div>
+          <ToggleGroup type="single" value={workspaceMode} onValueChange={value => value && setWorkspaceMode(value as WorkspaceMode)} className={noteView === 'transcript' ? 'invisible' : ''}>
+            <ToggleGroupItem value="write"><Edit3 />{copy.common.edit}</ToggleGroupItem>
+            <ToggleGroupItem value="split">{splitLabel}</ToggleGroupItem>
+            <ToggleGroupItem value="preview"><Eye />{copy.common.preview}</ToggleGroupItem>
+          </ToggleGroup>
 
-          <div className="flex w-[220px] rounded-xl border border-border bg-muted/60 p-1" data-testid="note-view-switcher">
-            <Button
-              type="button"
-              onClick={() => setNoteView('summary')}
-              className={`flex flex-1 items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-sm ${
-                noteView === 'summary' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'
-              }`}
-            >
-              <FileText className="h-4 w-4" />
-              {zh ? '纪要' : 'Summary'}
-            </Button>
-            <Button
-              type="button"
-              onClick={() => setNoteView('transcript')}
-              className={`flex flex-1 items-center justify-center gap-1 rounded-lg px-3 py-1.5 text-sm ${
-                noteView === 'transcript' ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground'
-              }`}
-            >
-              <MessageSquare className="h-4 w-4" />
-              {zh ? '逐字稿' : 'Transcript'}
-            </Button>
-          </div>
-
+          <ToggleGroup type="single" value={noteView} onValueChange={value => value && setNoteView(value as NoteView)} data-testid="note-view-switcher">
+            <ToggleGroupItem value="summary"><FileText />{zh ? '纪要' : 'Summary'}</ToggleGroupItem>
+            <ToggleGroupItem value="transcript"><MessageSquare />{zh ? '逐字稿' : 'Transcript'}</ToggleGroupItem>
+          </ToggleGroup>
           <Button
             onClick={() => void handleSave()}
-            className="rounded-xl border border-border bg-background p-2 hover:bg-muted"
+            variant="outline" size="icon"
             title={saving ? copy.noteEditor.saving : copy.noteEditor.save}
           >
             <Save className="h-5 w-5" />
           </Button>
           <Button
             onClick={handleExport}
-            className="rounded-xl border border-border bg-background p-2 hover:bg-muted"
+            variant="outline" size="icon"
             title={copy.noteEditor.export}
           >
             <Download className="h-5 w-5" />
           </Button>
           <Button
             onClick={() => void handleShareButtonClick()}
-            className="rounded-xl border border-border bg-background p-2 hover:bg-muted"
+            variant="outline" size="icon"
             title={copy.noteEditor.share}
           >
             <Share2 className="h-5 w-5" />
           </Button>
-          <Button ref={deleteButtonRef} onClick={() => { setDeleteError(''); setDeleteOpen(true) }} title={zh ? '删除笔记' : 'Delete note'} aria-label={zh ? '删除笔记' : 'Delete note'} className="rounded-xl border border-border bg-background p-2 text-destructive hover:bg-destructive/10">
+          <Button ref={deleteButtonRef} onClick={() => { setDeleteError(''); setDeleteOpen(true) }} title={zh ? '删除笔记' : 'Delete note'} aria-label={zh ? '删除笔记' : 'Delete note'} variant="outline" size="icon" className="text-destructive">
             <Trash2 className="h-5 w-5" />
           </Button>
         </div>
       </div>
 
-      {deleteOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4">
-          <div role="alertdialog" aria-modal="true" aria-labelledby="delete-note-title" aria-describedby="delete-note-description" className="w-full max-w-md grid gap-4 rounded-2xl border border-border bg-card p-6 shadow-xl" onKeyDown={event => {
-            if (event.key === 'Escape' && !deleting) { setDeleteOpen(false); deleteButtonRef.current?.focus() }
-            if (event.key === 'Tab') {
-              const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('button:not(:disabled)'))
-              const first = buttons[0], last = buttons[buttons.length - 1]
-              if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus() }
-              else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus() }
-            }
-          }}>
-            <h2 id="delete-note-title" className="text-lg font-semibold">{zh ? '删除笔记？' : 'Delete this note?'}</h2>
-            <p id="delete-note-description" className="text-sm leading-6 text-muted-foreground dark:text-muted-foreground">{zh ? `将删除“${localTitle}”，此操作不可撤销，未保存的修改也会丢失。` : `“${localTitle}” will be deleted permanently, including any unsaved changes.`}</p>
-            {deleteError && <p role="alert" className="text-sm text-destructive dark:text-red-400">{deleteError}</p>}
-            <div className="flex justify-end gap-3">
-              <Button autoFocus disabled={deleting} onClick={() => { setDeleteOpen(false); deleteButtonRef.current?.focus() }} className="rounded-xl border border-border px-4 py-2 text-sm hover:bg-muted disabled:opacity-60 dark:border-border dark:hover:bg-muted">{zh ? '取消' : 'Cancel'}</Button>
-              <Button disabled={deleting || !id} onClick={async () => {
+      <AlertDialog open={deleteOpen} onOpenChange={open => { if (!deleting) setDeleteOpen(open) }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>{zh ? '删除笔记？' : 'Delete this note?'}</AlertDialogTitle>
+            <AlertDialogDescription>{zh ? `将永久删除“${localTitle}”，未保存的修改也会丢失。` : `“${localTitle}” and any unsaved changes will be permanently deleted.`}</AlertDialogDescription>
+          </AlertDialogHeader>
+          {deleteError ? <Alert variant="destructive"><AlertDescription>{deleteError}</AlertDescription></Alert> : null}
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleting}>{zh ? '取消' : 'Cancel'}</AlertDialogCancel>
+            <AlertDialogAction disabled={deleting || !id} className="bg-destructive text-destructive-foreground hover:bg-destructive/90" onClick={async event => {
                 if (!id) return
+                event.preventDefault()
                 setDeleting(true); setDeleteError('')
                 try { await deleteNote(id); navigate('/notes', { replace: true }) }
                 catch (cause) { setDeleteError(cause instanceof Error ? cause.message : (zh ? '删除失败，请重试' : 'Could not delete note. Please retry.')) }
                 finally { setDeleting(false) }
-              }} className="rounded-xl bg-red-600 px-4 py-2 text-sm font-medium text-white hover:bg-red-700 disabled:opacity-60">{deleting ? (zh ? '删除中…' : 'Deleting…') : (zh ? '确认删除' : 'Confirm deletion')}</Button>
-            </div>
-          </div>
-        </div>
-      )}
+              }}>{deleting ? (zh ? '删除中…' : 'Deleting…') : (zh ? '确认删除' : 'Confirm deletion')}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
       {error ? (
-        <div className="border-b border-destructive/30 bg-destructive/10 px-4 py-2 text-sm text-destructive dark:border-red-900/40 dark:bg-red-900/20 dark:text-red-300">
-          {error}
-        </div>
+        <Alert variant="destructive" className="rounded-none border-x-0 border-t-0"><AlertDescription>{error}</AlertDescription></Alert>
       ) : null}
 
-      {sharePanelOpen ? (
-        <div className="border-b border-sky-200 bg-sky-50/80 px-4 py-3 text-sm text-sky-900 dark:border-sky-900/40 dark:bg-sky-950/30 dark:text-sky-100">
-          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
-            <div className="grid gap-1">
-              <div className="font-medium">{shareCopy.title}</div>
-              <p className="text-xs text-sky-800/80 dark:text-sky-200/80">{shareCopy.description}</p>
+      <Sheet open={sharePanelOpen} onOpenChange={setSharePanelOpen}>
+        <SheetContent className="flex w-full flex-col sm:max-w-md">
+          <SheetHeader>
+            <SheetTitle>{shareCopy.title}</SheetTitle>
+            <SheetDescription>{shareCopy.description}</SheetDescription>
+          </SheetHeader>
+          <div className="grid flex-1 content-start gap-4 py-6">
               {shareUrl ? (
                 <Input
                   readOnly
                   value={shareUrl}
-                  className="w-full rounded-lg border border-sky-200 bg-card px-3 py-2 text-xs text-slate-700 outline-none dark:border-sky-900/50 dark:bg-slate-900 dark:text-slate-100 md:min-w-[420px]"
+                  className="font-mono text-xs"
                 />
               ) : (
-                <p className="text-xs text-sky-800/80 dark:text-sky-200/80">{shareCopy.disabled}</p>
+                <p className="text-sm text-muted-foreground">{shareCopy.disabled}</p>
               )}
-              {shareMessage ? (
-                <p className="text-xs text-emerald-700 dark:text-emerald-300">{shareMessage}</p>
-              ) : null}
-              {shareError ? <p className="text-xs text-destructive dark:text-red-300">{shareError}</p> : null}
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
+              {shareMessage ? <Alert><AlertDescription>{shareMessage}</AlertDescription></Alert> : null}
+              {shareError ? <Alert variant="destructive"><AlertDescription>{shareError}</AlertDescription></Alert> : null}
+          </div>
+          <SheetFooter className="gap-2">
               {shareUrl ? (
                 <>
-                  <Button
-                    type="button"
-                    onClick={() => {
-                      void copyShareUrl(shareUrl)
-                    }}
-                    disabled={shareLoading}
-                    className="rounded-lg border border-sky-200 px-3 py-2 text-xs font-medium text-sky-800 transition hover:bg-card disabled:cursor-not-allowed disabled:opacity-60 dark:border-sky-800/50 dark:text-sky-100 dark:hover:bg-sky-950/50"
-                  >
-                    {shareCopy.copy}
-                  </Button>
-                  <Button
-                    type="button"
-                    onClick={() => void handleDisableShare()}
-                    disabled={shareLoading}
-                    className="rounded-lg border border-destructive/30 px-3 py-2 text-xs font-medium text-destructive transition hover:bg-card disabled:cursor-not-allowed disabled:opacity-60 dark:border-red-900/40 dark:text-red-300 dark:hover:bg-red-950/30"
-                  >
-                    {shareCopy.disable}
-                  </Button>
+                  <Button type="button" variant="outline" onClick={() => void handleDisableShare()} disabled={shareLoading} className="text-destructive">{shareCopy.disable}</Button>
+                  <Button type="button" onClick={() => void copyShareUrl(shareUrl)} disabled={shareLoading}>{shareCopy.copy}</Button>
                 </>
               ) : (
-                <Button
-                  type="button"
-                  onClick={() => void handleShare()}
-                  disabled={shareLoading}
-                  className="rounded-lg bg-sky-600 px-3 py-2 text-xs font-medium text-white transition hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {shareLoading ? copy.common.loading : shareCopy.create}
-                </Button>
+                <Button type="button" onClick={() => void handleShare()} disabled={shareLoading}>{shareLoading ? copy.common.loading : shareCopy.create}</Button>
               )}
-            </div>
-          </div>
-        </div>
-      ) : null}
+          </SheetFooter>
+        </SheetContent>
+      </Sheet>
 
       {noteView === 'summary' && keyMoments.length > 0 ? (
         <div className="border-b border-border bg-card/70 px-4 py-3 xl:hidden">
@@ -769,52 +661,24 @@ export function NoteEditor() {
           onSelectMoment={handleSelectMoment}
         />
 
-        <div className="flex min-w-0 flex-1 overflow-hidden" ref={workspaceRef}>
+        <ResizablePanelGroup direction="horizontal" className="min-w-0 flex-1">
           {workspaceMode !== 'preview' ? (
-            <section
-              style={workspaceMode === 'split' ? { width: `${editorWidth}%` } : undefined}
-              className={`flex min-w-0 flex-col border-r border-border bg-card ${
-                workspaceMode === 'split' ? 'shrink-0' : 'flex-1'
-              }`}
-            >
-              <div className="border-b border-border px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
-                  Markdown
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {zh ? '直接编辑源内容，时间戳链接保持可见。' : 'Edit the source while keeping timestamp links visible.'}
-                </p>
-              </div>
+            <ResizablePanel defaultSize={workspaceMode === 'split' ? 42 : 100} minSize={30} className="flex min-w-0 flex-col bg-card">
+              <div className="border-b px-4 py-2 text-xs font-medium text-muted-foreground">Markdown</div>
               <Textarea
                 value={content}
                 onChange={(event) => setContent(event.target.value)}
                 className="stealth-scroll min-h-0 flex-1 resize-none bg-card px-4 py-4 font-mono text-[13px] leading-6 outline-none"
                 placeholder={copy.noteEditor.editorPlaceholder}
               />
-            </section>
+            </ResizablePanel>
           ) : null}
 
-          {workspaceMode === 'split' ? (
-            <Button
-              type="button"
-              onMouseDown={handleEditorResizeStart}
-              className="hidden w-3 shrink-0 items-stretch justify-center bg-transparent lg:flex"
-              aria-label="Resize editor and preview panes"
-            >
-              <span className="my-6 w-1 rounded-full bg-border" />
-            </Button>
-          ) : null}
+          {workspaceMode === 'split' ? <ResizableHandle withHandle /> : null}
 
           {workspaceMode !== 'write' ? (
-            <section className="flex min-w-0 flex-1 flex-col bg-muted/25">
-              <div className="border-b border-border px-4 py-3">
-                <p className="text-xs font-semibold uppercase tracking-[0.24em] text-muted-foreground">
-                  {zh ? '预览' : 'Preview'}
-                </p>
-                <p className="mt-1 text-sm text-muted-foreground">
-                  {zh ? '沿关键时间点和截图快速回看来源内容。' : 'Review the source through key timestamps and screenshots.'}
-                </p>
-              </div>
+            <ResizablePanel defaultSize={workspaceMode === 'split' ? 58 : 100} minSize={32} className="flex min-w-0 flex-col bg-muted/20">
+              <div className="border-b px-4 py-2 text-xs font-medium text-muted-foreground">{zh ? '预览' : 'Preview'}</div>
               <div className="flex min-h-0 flex-1 overflow-hidden">
                 <div ref={previewRef} className="stealth-scroll min-w-0 flex-1 overflow-auto">
                   <MarkdownContent
@@ -843,9 +707,9 @@ export function NoteEditor() {
                   </div>
                 ) : null}
               </div>
-            </section>
+            </ResizablePanel>
           ) : null}
-        </div>
+        </ResizablePanelGroup>
       </div>
       ) : (
         <TranscriptEvidencePanel

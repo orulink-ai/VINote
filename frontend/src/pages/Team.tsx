@@ -2,7 +2,6 @@ import { useEffect, useMemo, useState } from 'react'
 import { Building2, Check, Plus, UserPlus, Users } from 'lucide-react'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '../components/ui/card'
 import { Input } from '../components/ui/input'
 import { Alert, AlertDescription } from '../components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '../components/ui/alert-dialog'
@@ -75,12 +74,12 @@ export function Team() {
   }
 
   return (
-    <div className="mx-auto max-w-[1380px] grid gap-6 p-6 lg:p-8">
-      <section className="rounded-[28px] border border-border bg-gradient-to-br from-card to-muted/35 p-7">
+    <div className="mx-auto max-w-[1280px] grid gap-8 p-6 lg:p-10">
+      <section className="border-b pb-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="grid gap-2">
-            <Badge variant="secondary" className="gap-1.5"><Building2 className="h-3.5 w-3.5" />{isZh ? '团队空间' : 'Team workspace'}</Badge>
-            <h2 className="text-3xl font-semibold tracking-tight">{isZh ? '成员、空间和共享笔记' : 'Members, spaces and shared notes'}</h2>
+            <Badge variant="secondary"><Building2 />{isZh ? '团队空间' : 'Team workspace'}</Badge>
+            <h2 className="text-2xl font-semibold tracking-tight">{isZh ? '团队与成员' : 'Teams and members'}</h2>
             <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
               {isZh
                 ? `当前工作区：${workspaceLabel}。团队笔记只会出现在对应团队的工作区里，个人笔记仍保留在个人空间。`
@@ -109,11 +108,11 @@ export function Team() {
         </div>
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[380px_1fr]">
+      <section className="grid gap-6 xl:grid-cols-[320px_1fr]">
         <div className="grid gap-6">
-          <Card>
-            <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Plus className="h-4 w-4 text-primary" />{isZh ? '创建团队' : 'Create a team'}</CardTitle><CardDescription>{isZh ? '创建后自动切换到新的共享空间。' : 'Switch to the shared space after creation.'}</CardDescription></CardHeader>
-            <CardContent className="grid gap-3">
+          <section className="grid gap-4 border-t pt-5">
+            <header><h3 className="flex items-center gap-2 text-sm font-semibold"><Plus className="size-4" />{isZh ? '创建团队' : 'Create a team'}</h3><p className="mt-1 text-sm text-muted-foreground">{isZh ? '创建后自动切换到新的共享空间。' : 'Switch to the shared space after creation.'}</p></header>
+            <div className="grid gap-3">
               <Input
                 value={teamName}
                 onChange={(event) => setTeamName(event.target.value)}
@@ -127,11 +126,11 @@ export function Team() {
               >
                 {submitting ? (isZh ? '处理中...' : 'Working...') : (isZh ? '创建并切换' : 'Create and switch')}
               </Button>
-            </CardContent>
-          </Card>
+            </div>
+          </section>
 
-          <Card>
-            <CardHeader><CardTitle className="flex items-center gap-2 text-base"><Users className="h-4 w-4 text-primary" />{isZh ? '你的团队' : 'Your teams'}</CardTitle></CardHeader><CardContent>
+          <section className="border-t pt-5">
+            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Users className="size-4" />{isZh ? '你的团队' : 'Your teams'}</h3>
             <div className="grid gap-2">
               {loading ? <><Skeleton className="h-16" /><Skeleton className="h-16" /></> : null}
               {teams.map((team) => (
@@ -140,7 +139,7 @@ export function Team() {
                   type="button"
                   onClick={() => selectTeamWorkspace(team.id)}
                   variant={currentWorkspace.scope === 'team' && currentWorkspace.teamId === team.id ? 'secondary' : 'outline'}
-                  className="h-auto w-full justify-between rounded-xl px-4 py-3 text-left"
+                  className="h-auto w-full justify-between rounded-none border-0 border-b px-1 py-3 text-left last:border-b-0"
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -157,12 +156,11 @@ export function Team() {
                 <Empty><EmptyHeader><EmptyMedia variant="icon"><Users /></EmptyMedia><EmptyTitle>{isZh ? '还没有团队' : 'No teams yet'}</EmptyTitle><EmptyDescription>{isZh ? '创建团队后即可共享笔记。' : 'Create one to start saving shared notes.'}</EmptyDescription></EmptyHeader></Empty>
               ) : null}
             </div>
-            </CardContent>
-          </Card>
+          </section>
         </div>
 
-        <Card className="min-h-[520px]">
-          <CardHeader><CardTitle className="flex items-center gap-2"><UserPlus className="h-5 w-5 text-primary" />{isZh ? '团队成员与访问权限' : 'Members and access'}</CardTitle></CardHeader><CardContent>
+        <section className="min-h-[520px] border-l pl-6">
+          <h3 className="flex items-center gap-2 font-semibold"><UserPlus className="size-4" />{isZh ? '团队成员与访问权限' : 'Members and access'}</h3>
           {activeTeam ? (
             <>
               <p className="mt-1 text-sm text-muted-foreground">
@@ -191,7 +189,7 @@ export function Team() {
                 {activeTeam.members.map((member) => (
                   <div
                     key={member.id}
-                    className="flex flex-col gap-3 rounded-xl border px-4 py-3 md:flex-row md:items-center md:justify-between"
+                    className="flex flex-col gap-3 border-b px-1 py-4 md:flex-row md:items-center md:justify-between"
                   >
                     <div>
                       <div className="font-medium">{member.email}</div>
@@ -217,8 +215,7 @@ export function Team() {
           {error ? (
             <Alert variant="destructive" className="mt-4"><AlertDescription>{error}</AlertDescription></Alert>
           ) : null}
-          </CardContent>
-        </Card>
+        </section>
       </section>
     </div>
   )

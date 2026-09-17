@@ -26,7 +26,7 @@ export function SettingsNav({ activeTab, onChange }: SettingsNavProps) {
   ]
 
   return (
-    <nav className="flex w-full shrink-0 gap-1 overflow-x-auto rounded-2xl border border-border bg-card p-2 lg:sticky lg:top-6 lg:w-56 lg:flex-col lg:self-start">
+    <nav className="flex w-full shrink-0 gap-1 overflow-x-auto lg:sticky lg:top-6 lg:w-52 lg:flex-col lg:self-start">
       {tabs.map((tab) => (
         <Button
           key={tab.key}

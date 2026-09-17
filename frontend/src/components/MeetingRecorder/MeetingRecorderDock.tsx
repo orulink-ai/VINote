@@ -863,13 +863,13 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   const dockedStyle = hasCustomPosition ? { left: position.x, top: position.y } : { right: EDGE_PADDING, bottom: EDGE_PADDING }
   const shouldRenderRecorderSurface = isPanelOpen && (!isDesktopMainWindow || useInlineDesktopRecorder)
   const minimizedContainerClass = clsx(
-    'inline-flex h-12 w-[320px] items-center gap-3 rounded-xl border border-border/70 bg-card/95 px-3.5 pr-4 text-base font-medium text-foreground backdrop-blur',
-    isRecorderWindow ? '' : 'shadow-lg',
+    'inline-flex h-12 w-[320px] items-center gap-3 border border-border bg-background px-3.5 pr-4 text-base font-medium text-foreground',
+    isRecorderWindow ? '' : 'shadow-md',
     isRecorderWindow ? 'relative' : 'fixed z-50',
   )
   const expandedContainerClass = clsx(
-    'box-border w-[360px] rounded-2xl border border-border/70 bg-card/95 px-4 py-3 text-foreground backdrop-blur',
-    isRecorderWindow ? '' : 'shadow-xl',
+    'box-border w-[360px] border border-border bg-background px-4 py-3 text-foreground',
+    isRecorderWindow ? '' : 'shadow-md',
     isRecorderWindow ? 'relative min-h-[132px]' : 'fixed z-50 max-w-[calc(100vw-24px)]',
   )
 
@@ -885,7 +885,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
           variant="outline"
           onClick={handleOpenLauncher}
           aria-label={recorderCopy.openPanel}
-          className="fixed bottom-5 right-5 z-50 size-12 rounded-xl shadow-lg"
+          className="fixed bottom-5 right-5 z-50 size-11 rounded-full shadow-md"
         >
           <span data-testid="meeting-recorder-idle-dot" className={clsx('absolute right-1 top-1 h-2.5 w-2.5', recordingDotClass(phase, 'shadow-[0_0_0_3px_rgba(239,43,45,0.12)]'))} />
           <Mic className="h-6 w-6" strokeWidth={2.6} />
@@ -907,10 +907,10 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
               event.stopPropagation()
               beginDrag(event)
             }}
-            className="-ml-1 mr-1 h-6 w-2 shrink-0 cursor-grab rounded-full bg-white shadow-[0_0_0_1px_rgba(15,23,42,0.08),0_2px_8px_rgba(15,23,42,0.16)] transition-all hover:w-3 active:cursor-grabbing"
+            className="-ml-1 mr-1 h-6 w-1 shrink-0 cursor-grab rounded-full bg-border transition-all hover:w-2 active:cursor-grabbing"
           />
           <Button type="button" variant="ghost" onClick={handleRestoreClick} aria-label={recorderCopy.restore} className="h-auto flex-1 justify-start gap-3 px-1 text-left">
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-muted text-foreground">
               <Mic className="h-5 w-5" strokeWidth={2.6} />
             </span>
             <span>{recorderCopy.title}</span>
@@ -980,7 +980,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
             onMouseDown={isRecorderWindow ? handleNativePanelMouseDown : undefined}
             className="flex h-full cursor-grab items-center gap-3"
           >
-            <div className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary/10 text-primary">
+            <div className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-muted text-foreground">
               <Mic className="h-7 w-7" strokeWidth={2.6} />
             </div>
             <div className="h-16 w-px bg-border" />
@@ -1005,7 +1005,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
             </div>
             <div data-testid="meeting-recorder-controls" className="ml-2 mt-1 flex shrink-0 items-center gap-3">
               {isProcessing ? (
-                <div className="flex flex-col items-center gap-2 text-xs text-blue-600" role="status">
+                <div className="flex flex-col items-center gap-2 text-xs text-muted-foreground" role="status">
                   <Loader2 className="h-8 w-8 animate-spin" />
                   <span>{statusLabel}</span>
                 </div>
@@ -1023,7 +1023,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
                     onClick={handleReRecord}
                     disabled={isProcessing}
                     aria-label={recorderCopy.record}
-                    variant="outline" size="icon" className="rounded-xl"
+                    variant="outline" size="icon"
                   >
                     <Mic className="h-5 w-5" strokeWidth={2.4} />
                   </Button>
@@ -1033,7 +1033,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
                       onClick={() => void handleRetry()}
                       disabled={isProcessing}
                       aria-label={recorderCopy.retry}
-                      size="icon" className="rounded-xl"
+                      size="icon"
                     >
                       <RotateCcw className="h-4 w-4" />
                     </Button>
@@ -1046,7 +1046,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
                     onClick={canStart ? () => void handleStart() : phase === 'paused' ? handleResume : handlePause}
                     disabled={isProcessing}
                     aria-label={canStart ? recorderCopy.start : phase === 'paused' ? recorderCopy.resume : recorderCopy.pause}
-                    variant="outline" size="icon" className="rounded-xl"
+                    variant="outline" size="icon"
                   >
                     {canStart || phase === 'paused' ? <Play className="h-5 w-5" fill="currentColor" /> : <Pause className="h-5 w-5" fill="currentColor" />}
                   </Button>
@@ -1055,7 +1055,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
                     onClick={() => void handleStop()}
                     disabled={isProcessing || !canStop}
                     aria-label={recorderCopy.stop}
-                    variant="destructive" size="icon" className="rounded-xl"
+                    variant="destructive" size="icon"
                   >
                     {isProcessing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Square className="h-4 w-4" fill="currentColor" />}
                   </Button>

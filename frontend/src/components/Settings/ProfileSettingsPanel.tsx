@@ -9,10 +9,10 @@ export function ProfileSettingsPanel({ email }: ProfileSettingsPanelProps) {
   const { copy } = useI18n()
 
   return (
-    <div className="grid gap-6">
+    <div>
       <div>
         <label className="mb-2 block text-sm font-medium">{copy.settings.email}</label>
-        <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/45 px-4 py-3 text-muted-foreground">
+        <div className="flex items-center gap-2 border-y px-1 py-4 text-muted-foreground">
           <Mail className="w-4 h-4" />
           {email || copy.settings.notSignedIn}
         </div>

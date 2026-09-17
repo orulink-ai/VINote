@@ -3,7 +3,6 @@ import { useNavigate } from 'react-router-dom'
 import { EmailLogin } from '@/components/EmailLogin'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent } from '@/components/ui/card'
 import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
@@ -78,29 +77,26 @@ export function Login() {
   }
 
   return (
-    <main className="flex min-h-screen items-center justify-center bg-muted p-6 md:p-10">
-      <div className="flex w-full max-w-sm flex-col gap-6">
-        <div className="flex items-center justify-center gap-2 font-semibold tracking-tight">
-          <img src={brandMarkUrl} alt="VINote" className="size-7" />
-          VINote
-        </div>
+    <main className="flex min-h-screen flex-col bg-muted/30">
+      <header className="flex h-14 items-center border-b bg-background px-5">
+        <div className="flex items-center gap-2 text-sm font-semibold"><img src={brandMarkUrl} alt="VINote" className="size-7" />VINote</div>
+      </header>
+      <section className="flex flex-1 items-center justify-center px-5 py-10">
+        <div className="w-full max-w-[420px] border bg-background p-6 shadow-sm sm:p-8">
+          <header className="mb-6 flex flex-col gap-2">
+            <p className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">会议与知识工作空间</p>
+            <h1 className="text-2xl font-semibold tracking-tight">{isLogin ? '欢迎回来' : '创建 VINote 账号'}</h1>
+            <p className="text-sm text-muted-foreground">{isLogin ? '登录后继续处理会议、资料和团队笔记。' : '使用工作邮箱创建个人空间。'}</p>
+          </header>
 
-        <Card>
-          <CardContent className="p-6 md:p-8">
-            <div className="flex flex-col gap-6">
-              <header className="flex flex-col items-center gap-2 text-center">
-                <h1 className="text-2xl font-semibold tracking-tight">{isLogin ? '欢迎回来' : '创建账号'}</h1>
-                <p className="text-sm text-muted-foreground">{isLogin ? '登录并继续你的工作' : '开始记录会议与整理笔记'}</p>
-              </header>
-
-              <Tabs value={isLogin ? 'login' : 'register'} onValueChange={switchMode}>
+          <Tabs className="mb-6" value={isLogin ? 'login' : 'register'} onValueChange={switchMode}>
                 <TabsList className="grid w-full grid-cols-2">
                   <TabsTrigger value="login">登录</TabsTrigger>
                   <TabsTrigger value="register">注册</TabsTrigger>
                 </TabsList>
               </Tabs>
 
-              {emailLogin === null ? (
+          {emailLogin === null ? (
                 <div className="flex flex-col gap-4 text-center">
                   <p className="text-sm text-muted-foreground">{error || '正在连接登录服务…'}</p>
                   {error ? <Button onClick={() => setRetryConfig(value => value + 1)}>重试连接</Button> : null}
@@ -132,10 +128,9 @@ export function Login() {
                   </FieldGroup>
                 </form>
               )}
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+        </div>
+      </section>
+      <footer className="px-5 pb-5 text-center text-xs text-muted-foreground">VINote Desktop</footer>
     </main>
   )
 }

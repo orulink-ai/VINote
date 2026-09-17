@@ -8,6 +8,9 @@ import { Plus, RotateCcw, Trash2 } from 'lucide-react'
 import { useI18n } from '../../lib/i18n'
 import { type STTProfile, type STTProfileDraft, type STTProviderType } from '../../lib/sttProfiles'
 import { useSTTProfileStore } from '../../stores/sttProfileStore'
+import { Badge } from '../ui/badge'
+import { Alert, AlertDescription } from '../ui/alert'
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../ui/empty'
 
 const providerOptions: Array<{
   value: STTProviderType
@@ -239,22 +242,20 @@ export function STTProfileManager() {
   ))
 
   return (
-    <section className="rounded-[28px] border border-border bg-card p-5 text-card-foreground shadow-sm lg:p-6">
+    <section className="py-2">
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_380px]">
         <div className="min-w-0 grid gap-4">
-          <div className="flex flex-col gap-4 rounded-3xl border border-border bg-card p-5 dark:border-border  sm:flex-row sm:items-start sm:justify-between">
+          <div className="flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <div className="flex items-center gap-3">
                 <h3 className="text-xl font-semibold">{copy.sttProfiles.title}</h3>
-                <span className="rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary /10 ">
-                  {profiles.length}
-                </span>
+                <Badge variant="secondary">{profiles.length}</Badge>
               </div>
               <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground dark:text-muted-foreground">{copy.sttProfiles.body}</p>
             </div>
             <Button
               onClick={resetForm}
-              className="inline-flex items-center justify-center gap-2 self-start whitespace-nowrap rounded-xl border border-border px-4 py-2.5 font-medium hover:bg-muted dark:border-border dark:hover:bg-muted transition-colors"
+              variant="outline" className="self-start whitespace-nowrap"
             >
               <Plus className="w-4 h-4" />
               {copy.sttProfiles.newProfile}
@@ -262,17 +263,15 @@ export function STTProfileManager() {
           </div>
 
           {loading ? (
-            <div className="rounded-3xl border border-border bg-card p-5 dark:border-border ">{copy.sttProfiles.loading}</div>
+            <div className="border-b py-5 text-sm text-muted-foreground">{copy.sttProfiles.loading}</div>
           ) : profiles.length === 0 ? (
-            <div className="rounded-3xl border border-dashed border-border bg-card p-6 text-sm text-muted-foreground dark:border-border  dark:text-muted-foreground">
-              {copy.sttProfiles.empty}
-            </div>
+            <Empty className="border border-dashed"><EmptyHeader><EmptyTitle>{copy.sttProfiles.empty}</EmptyTitle><EmptyDescription>{copy.sttProfiles.body}</EmptyDescription></EmptyHeader></Empty>
           ) : (
             <div className="stealth-scroll max-h-[620px] grid gap-3 overflow-y-auto pr-1">
               {profiles.filter(profile => profile.id !== 'vilab-cloud').map((profile) => (
                 <div
                   key={profile.id}
-                  className="rounded-3xl border border-border bg-card p-5 transition-colors hover:border-border dark:border-border  dark:hover:border-border"
+                  className="border-b px-1 py-4 last:border-b-0"
                 >
                   <div className="grid gap-4">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -280,14 +279,10 @@ export function STTProfileManager() {
                       <div className="flex items-center gap-2 flex-wrap">
                         <h4 className="font-medium">{profile.name}</h4>
                         {profile.isDefault && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-primary/10 text-primary /10 ">
-                            {copy.sttProfiles.default}
-                          </span>
+                          <Badge>{copy.sttProfiles.default}</Badge>
                         )}
                         {!profile.isActive && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-muted text-muted-foreground dark:bg-muted dark:text-muted-foreground">
-                            {copy.sttProfiles.inactive}
-                          </span>
+                          <Badge variant="outline">{copy.sttProfiles.inactive}</Badge>
                         )}
                       </div>
                       <p className="mt-1 text-sm text-muted-foreground dark:text-muted-foreground">{formatProfileSummary(profile)}</p>
@@ -298,21 +293,21 @@ export function STTProfileManager() {
                     <div className="flex flex-wrap gap-2">
                       <Button
                         onClick={() => startEdit(profile)}
-                        className="rounded-xl border border-border px-3 py-2 text-sm hover:bg-muted dark:border-border dark:hover:bg-muted"
+                        variant="outline" size="sm"
                       >
                         {copy.sttProfiles.edit}
                       </Button>
                       {!profile.isDefault && (
                         <Button
                           onClick={() => void handleSetDefaultProfile(profile)}
-                          className="rounded-xl border border-border px-3 py-2 text-sm hover:bg-muted dark:border-border dark:hover:bg-muted"
+                          variant="outline" size="sm"
                         >
                           {copy.sttProfiles.setDefault}
                         </Button>
                       )}
                       <Button
                         onClick={() => void deleteProfile(profile.id)}
-                        className="rounded-xl border border-destructive/30 p-2 text-destructive hover:bg-destructive/10 dark:border-red-900/30 dark:hover:bg-red-900/20"
+                        variant="ghost" size="icon" className="text-destructive hover:text-destructive"
                         title={copy.sttProfiles.delete}
                       >
                         <Trash2 className="w-4 h-4" />
@@ -326,20 +321,18 @@ export function STTProfileManager() {
         </div>
 
         <aside className="xl:sticky xl:top-8 xl:self-start">
-          <section className="grid gap-4 rounded-3xl border border-border bg-card p-5 shadow-sm dark:border-border ">
+          <section className="grid gap-4 border-l pl-6">
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
                 <h3 className="text-lg font-semibold">{editingId ? copy.sttProfiles.editTitle : copy.sttProfiles.createTitle}</h3>
-                <span className="rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground dark:bg-muted dark:text-muted-foreground">
-                  {editingId ? copy.sttProfiles.edit : copy.sttProfiles.newProfile}
-                </span>
+                <Badge variant="secondary">{editingId ? copy.sttProfiles.edit : copy.sttProfiles.newProfile}</Badge>
               </div>
               <p className="mt-2 text-sm leading-6 text-muted-foreground dark:text-muted-foreground">{copy.sttProfiles.formBody}</p>
             </div>
             <Button
               onClick={resetForm}
-              className="rounded-xl p-2 hover:bg-muted dark:hover:bg-muted"
+              variant="ghost" size="icon"
               title={copy.sttProfiles.resetForm}
             >
               <RotateCcw className="w-4 h-4" />
@@ -372,14 +365,8 @@ export function STTProfileManager() {
           </div>
 
           {showLocalSupport && (
-            <div
-              className={clsx(
-                'rounded-2xl border p-4 text-sm',
-                localSupport?.installed
-                  ? 'border-green-200 bg-green-50 text-green-800 dark:border-green-900/40 dark:bg-green-900/15 dark:text-green-200'
-                  : 'border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-900/40 dark:bg-amber-900/15 dark:text-amber-200'
-              )}
-            >
+            <Alert>
+              <AlertDescription>
               <p className="font-medium">
                 {localSupportLoading
                   ? copy.sttProfiles.loading
@@ -390,10 +377,11 @@ export function STTProfileManager() {
                   ? copy.sttProfiles.localSupportModelHint
                   : copy.sttProfiles.localSupportManualInstall}
               </p>
-              <code className="mt-3 block rounded-lg bg-card/70 px-3 py-2 text-xs text-foreground dark:bg-black/20 ">
+              <code className="mt-3 block border bg-muted px-3 py-2 text-xs text-foreground">
                 {localSupport?.installCommand || 'pip install -r requirements.local-transcribers.txt'}
               </code>
-            </div>
+              </AlertDescription>
+            </Alert>
           )}
 
           {showModel && (
@@ -525,7 +513,6 @@ export function STTProfileManager() {
             <Button
               onClick={() => void handleSave()}
               disabled={saving || !canSave(draft, editingId)}
-              className="rounded-xl bg-primary px-4 py-3 text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-60 "
             >
               {editingId ? copy.sttProfiles.saveChanges : copy.sttProfiles.createProfile}
             </Button>
