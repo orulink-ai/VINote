@@ -40,9 +40,9 @@ function shutdown(code = 0) {
   }
 }
 function start(command, args, options = {}) {
-  // Isolate Windows consoles too: Uvicorn reload sends a console control event
-  // that must not terminate the sibling Tauri desktop process.
-  const child = run(command, args, { detached: true, ...options })
+  // Windows UI tooling shares the invoking terminal. Only the backend needs
+  // an isolated console, created hidden by windows-backend-dev.py below.
+  const child = run(command, args, { detached: process.platform !== 'win32', ...options })
   children.push(child)
   child.on('exit', code => shutdown(code ?? 1))
   child.on('error', () => shutdown(1))
@@ -58,7 +58,9 @@ try {
       s.on('error', () => resolve(false))
     })
     if (occupied) throw new Error('Port 8900 is occupied by an unhealthy service. Stop it before retrying.')
-    start(python(), ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8900', '--reload'])
+    const backendArgs = ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8900', '--reload']
+    if (process.platform === 'win32') backendArgs.unshift(join(root, 'scripts/windows-backend-dev.py'))
+    start(python(), backendArgs)
     for (let i = 0; i < 60 && !closing; i++) {
       if (await healthy('http://127.0.0.1:8900/healthz')) break
       await new Promise(resolve => setTimeout(resolve, 500))

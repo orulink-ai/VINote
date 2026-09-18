@@ -70,6 +70,7 @@ The backend can also run as a lightweight MCP server through `mcp_server.py`.
 - Frontend install: `cd frontend && npm install`
 - Frontend web dev server only: `cd frontend && npm run web:dev`
 - Tauri desktop hot-reload dev: `yarn dev` from the repository root
+- Windows source development keeps Tauri/Vite output in the invoking terminal. `scripts/windows-backend-dev.py` isolates Uvicorn reload signals in a hidden console with output forwarded to that terminal; do not use Windows `detached: true` for the desktop toolchain.
 - Frontend build: `cd frontend && npm run build`
 - Frontend preview: `cd frontend && npm run preview`
 - Test/release package build: `yarn package:test` / `yarn package:release`
