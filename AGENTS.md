@@ -227,6 +227,10 @@ MeetingMediaService owns GET/DELETE /api/notes/{note_id}/recording. File deletio
 
 OPFS-backed recording blobs reference their source file. After IndexedDB history metadata commits, transfer that file out of the hook's temporary-file cleanup ownership; keep its fileName in PendingMeeting. Delete it only through verified local-history deletion or after a server note is saved. Never remove the OPFS file on reset immediately after saving its Blob to IndexedDB: the Blob becomes unreadable.
 
+Successful local saving sets `localRecordingSaved` independently of generation state and closes capture controls immediately. Background generation failure must restore history retry actions without reopening recording controls; unsaved recordings remain protected. History generation/retry starts directly without a second recorder confirmation. Per-card generation labels must match the active recording ID and processing phase, not the global busy flag.
+
+`TranscriptionService.get_audio_duration` falls back to bounded ffprobe packet-timestamp scanning when container duration is missing, zero or nonfinite (common with MediaRecorder WebM). This does not modify the source recording; media offsets are never substituted for meeting wall-clock metadata.
+
 
 ### Meeting minutes completion (2026-09-18)
 

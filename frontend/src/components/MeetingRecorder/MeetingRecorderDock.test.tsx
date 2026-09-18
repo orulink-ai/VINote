@@ -51,6 +51,7 @@ const desktopRecorderWindowMock = vi.hoisted(() => ({
   setRecorderWindowSize: vi.fn(),
   showMainWindow: vi.fn(),
   closeCurrentRecorderWindow: vi.fn(),
+  hideCurrentRecorderWindow: vi.fn(),
   closeRecorderWindow: vi.fn().mockResolvedValue(undefined),
   startCurrentRecorderWindowDrag: vi.fn(),
   emitRecorderWindowState: vi.fn(),
@@ -148,7 +149,11 @@ vi.mock('../../lib/desktopRecorderWindow', () => desktopRecorderWindowMock)
 vi.mock('../../lib/meetingController', () => ({
   openMeetingController: vi.fn().mockResolvedValue(undefined),
   publishMeetingState: vi.fn().mockResolvedValue(undefined),
-  listenMeetingActions: vi.fn().mockResolvedValue(() => {}),
+  listenMeetingActions: vi.fn(async (handler: (action: string) => void) => {
+    const listener = (event: Event) => handler((event as CustomEvent<string>).detail)
+    window.addEventListener('vinote-meeting-controller-action', listener)
+    return () => window.removeEventListener('vinote-meeting-controller-action', listener)
+  }),
 }))
 
 function renderDock(props?: { autoStart?: boolean }) {
@@ -324,6 +329,27 @@ describe('MeetingRecorderDock', () => {
     expect(screen.queryByTestId('meeting-recorder-idle-dot')).not.toBeInTheDocument()
   })
 
+  it('closes capture controls after saving while summary is still pending', async () => {
+    desktopRecorderWindowMock.isTauriRuntime.mockReturnValue(true)
+    let rejectSummary!: (error: Error) => void
+    meetingGenerationMock.completeMeetingRecordingGeneration.mockImplementationOnce(
+      () => new Promise((_, reject) => { rejectSummary = reject }),
+    )
+    renderDock()
+    await startMeeting({ ...DEFAULT_CAPTURE_OPTIONS, mode: 'minutes', meetingType: 'video', screen: true })
+    await waitFor(() => expect(useMeetingRecorderStore.getState().phase).toBe('recording'))
+    desktopRecorderWindowMock.closeRecorderWindow.mockClear()
+    act(() => window.dispatchEvent(new CustomEvent('vinote-meeting-controller-action', { detail: 'stop' })))
+    await waitFor(() => expect(meetingGenerationMock.completeMeetingRecordingGeneration).toHaveBeenCalled())
+    expect(useMeetingRecorderStore.getState().localRecordingSaved).toBe(true)
+    expect(desktopRecorderWindowMock.closeRecorderWindow).toHaveBeenCalled()
+    expect(screen.queryByRole('button', { name: '暂停' })).not.toBeInTheDocument()
+    await act(async () => rejectSummary(new Error('video analysis failed')))
+    await waitFor(() => expect(useMeetingRecorderStore.getState().phase).toBe('failed'))
+    expect(screen.queryByRole('region', { name: '会议录音' })).not.toBeInTheDocument()
+    expect(deleteLocalRecording).not.toHaveBeenCalled()
+  })
+
   it('preserves the saved minutes recording when live-transcript summarization fails', async () => {
     audioRecorderMock.liveSegments.push({
       id: 'segment-failed',
@@ -417,7 +443,6 @@ describe('MeetingRecorderDock', () => {
     await userEvent.click(screen.getByRole('button', { name: '暂停' }))
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
     await restoreSavedRecording()
-    await userEvent.click(await screen.findByRole('button', { name: '生成会议纪要' }))
 
     await waitFor(() => {
       expect(saveNoteMock).toHaveBeenCalledWith(
@@ -431,7 +456,8 @@ describe('MeetingRecorderDock', () => {
       )
       expect(updateNoteMock).toHaveBeenCalledWith('draft-1', '会议录音 2026/07/01', '# Summary', 'done')
     })
-    expect(screen.getByRole('button', { name: '查看纪要' })).toBeInTheDocument()
+    expect(useMeetingRecorderStore.getState().phase).toBe('completed')
+    expect(screen.queryByRole('region', { name: '会议录音' })).not.toBeInTheDocument()
   })
 
   it('keeps recorded audio after generation failure and offers regenerate vs re-record', async () => {
@@ -442,13 +468,17 @@ describe('MeetingRecorderDock', () => {
     await userEvent.click(screen.getByRole('button', { name: '暂停' }))
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
     await restoreSavedRecording()
-    await userEvent.click(await screen.findByRole('button', { name: '生成会议纪要' }))
-    const statusLine = await screen.findByTestId('meeting-recorder-status')
-    expect(statusLine).toHaveTextContent('音频已保留')
-    expect(statusLine).toHaveTextContent('请先配置可用的 LLM 和 STT API Key')
+    await waitFor(() => expect(useMeetingRecorderStore.getState().phase).toBe('failed'))
+    expect(useMeetingRecorderStore.getState().error).toContain('请先配置可用的 LLM 和 STT API Key')
     expect(useMeetingRecorderStore.getState().recordedAudio).toBeInstanceOf(Blob)
-    expect(screen.getByRole('button', { name: '重试' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '录制' })).toBeInTheDocument()
+    expect(useMeetingRecorderStore.getState().localRecordingSaved).toBe(true)
+    expect(screen.queryByRole('region', { name: '会议录音' })).not.toBeInTheDocument()
+    // A saved failure must not block restoring that recording again.
+    vi.mocked(getRecordedAudio).mockResolvedValueOnce(new Blob(['audio'], { type: 'audio/webm' }))
+    act(() => window.dispatchEvent(new CustomEvent('vinote-restore-meeting', {
+      detail: vi.mocked(savePendingMeeting).mock.calls.at(-1)![0],
+    })))
+    await waitFor(() => expect(meetingGenerationMock.submitMeetingRecording).toHaveBeenCalledTimes(2))
   })
 
   it('does not offer retry when the microphone produced no audio', async () => {

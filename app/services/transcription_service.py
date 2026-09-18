@@ -163,10 +163,33 @@ class TranscriptionService:
                 "default=noprint_wrappers=1:nokey=1",
                 file_path,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            return float(result.stdout.strip())
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=15)
+            duration = float(result.stdout.strip())
+            if math.isfinite(duration) and duration > 0:
+                return duration
         except Exception as exc:
             logger.warning("[FFprobe] failed to read duration: %s", exc)
+        # MediaRecorder WebM often lacks a container Duration element. Packet
+        # timestamps still describe the saved recording; inspect them without
+        # decoding or modifying the original media.
+        try:
+            result = subprocess.run([
+                "ffprobe", "-v", "error", "-show_entries",
+                "packet=pts_time,duration_time", "-of", "csv=p=0", file_path,
+            ], capture_output=True, text=True, check=True, timeout=120)
+            duration = 0.0
+            for row in result.stdout.splitlines():
+                values = row.split(",")
+                try:
+                    timestamp = float(values[0])
+                    length = float(values[1]) if len(values) > 1 and values[1] != "N/A" else 0.0
+                except ValueError:
+                    continue
+                if math.isfinite(timestamp) and math.isfinite(length):
+                    duration = max(duration, timestamp + max(0.0, length))
+            return duration
+        except Exception as exc:
+            logger.warning("[FFprobe] failed to read packet timeline: %s", exc)
             return 0.0
 
     def _is_local_transcriber(self, config: ResolvedSTTConfig | None) -> bool:

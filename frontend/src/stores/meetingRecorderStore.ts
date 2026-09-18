@@ -46,6 +46,7 @@ interface MeetingRecorderState {
   error: string
   retryDescription: string
   hasRecoverableRecording: boolean
+  localRecordingSaved: boolean
   notification: MeetingRecorderNotification | null
   captureOptions?: MeetingCaptureOptions
   liveTranscriptStatus: LiveTranscriptStatus
@@ -107,6 +108,7 @@ const initialState = {
   error: '',
   retryDescription: '',
   hasRecoverableRecording: false,
+  localRecordingSaved: false,
   notification: null as MeetingRecorderNotification | null,
   captureOptions: undefined as MeetingCaptureOptions | undefined,
   liveTranscriptStatus: 'idle' as LiveTranscriptStatus,
@@ -120,6 +122,11 @@ const retryDescriptions: Record<MeetingRecorderStage, string> = {
   transcribing: '录制已经保存在本机，可稍后重新转写。',
   summarizing: '录制和可用逐字稿已经保存在本机，可稍后重新生成纪要。',
   saving: '生成结果尚未保存，可重新保存。',
+}
+
+export function isMeetingBusy(state: Pick<MeetingRecorderState, 'phase' | 'hasRecoverableRecording' | 'localRecordingSaved'>) {
+  return !['idle', 'completed', 'failed'].includes(state.phase)
+    || (state.hasRecoverableRecording && !state.localRecordingSaved)
 }
 
 function hasRecoveryRisk(state: Pick<MeetingRecorderState, 'phase' | 'recordedAudio' | 'generatedNote' | 'noteId'>) {

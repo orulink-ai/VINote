@@ -8,13 +8,13 @@ import { deleteLocalRecording, getRecordedAudio, type PendingMeeting } from '../
 import { downloadRecording } from '../../lib/recordingDownload'
 import { useI18n } from '../../lib/i18n'
 
-interface LocalRecordingCardProps { recording: PendingMeeting; busy: boolean; onDeleted: () => void }
+interface LocalRecordingCardProps { recording: PendingMeeting; busy: boolean; generating?: boolean; generationError?: string; onDeleted: () => void }
 
 function transcriptText(recording: PendingMeeting) {
   return (recording.transcript ?? []).filter(segment => segment.final && segment.text.trim()).map(segment => `${segment.speaker?.trim() || '未识别说话人'}：${segment.text.trim()}`).join('\n')
 }
 
-export function LocalRecordingCard({ recording, busy, onDeleted }: LocalRecordingCardProps) {
+export function LocalRecordingCard({ recording, busy, generating = false, generationError, onDeleted }: LocalRecordingCardProps) {
   const { locale } = useI18n()
   const zh = locale.startsWith('zh')
   const [url, setUrl] = useState('')
@@ -76,7 +76,8 @@ export function LocalRecordingCard({ recording, busy, onDeleted }: LocalRecordin
       </div>
 
       <div className="mt-auto grid gap-2">
-        <Button disabled={busy || deleting} onClick={restore} className="motion-sheen w-full">{minutesMode ? <RotateCcw /> : <Sparkles />}{minutesMode ? (busy ? (zh ? '正在生成会议纪要…' : 'Generating meeting notes…') : (zh ? '重新生成会议纪要' : 'Retry meeting notes')) : (zh ? '稍后生成纪要' : 'Generate notes later')}</Button>
+        {generationError ? <Alert variant="destructive"><AlertDescription>{generationError}</AlertDescription></Alert> : null}
+        <Button disabled={busy || deleting} onClick={restore} className="motion-sheen w-full">{minutesMode ? <RotateCcw /> : <Sparkles />}{minutesMode ? (generating ? (zh ? '正在生成会议纪要…' : 'Generating meeting notes…') : (zh ? '重新生成会议纪要' : 'Retry meeting notes')) : (zh ? '稍后生成纪要' : 'Generate notes later')}</Button>
         <div className="grid grid-cols-3 gap-2"><Button variant="outline" size="sm" onClick={() => void load(false)}><Play />{zh ? '播放' : 'Play'}</Button><Button variant="outline" size="sm" onClick={() => void load(true)}><Download />{zh ? '下载' : 'Download'}</Button>
           <AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="sm" disabled={busy || deleting} className="text-destructive hover:text-destructive"><Trash2 />{zh ? '删除' : 'Delete'}</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{zh ? '删除本地录制？' : 'Delete local recording?'}</AlertDialogTitle><AlertDialogDescription>{zh ? '录音或视频会从此设备永久删除，之后无法回放或生成纪要。' : 'This recording will be permanently removed from this device.'}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{zh ? '取消' : 'Cancel'}</AlertDialogCancel><AlertDialogAction disabled={deleting} onClick={() => void remove()}>{zh ? '确认删除' : 'Delete'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
         </div>{error ? <Alert variant="destructive" className="mt-1"><AlertDescription>{error}</AlertDescription></Alert> : null}

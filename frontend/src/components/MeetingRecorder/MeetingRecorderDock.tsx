@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAudioRecorder } from '../../hooks/useAudioRecorder'
 import {
   closeCurrentRecorderWindow,
+  hideCurrentRecorderWindow,
   closeRecorderWindow,
   emitRecorderWindowReady,
   emitRecorderWindowState,
@@ -34,7 +35,7 @@ import {
 } from '../../lib/meetingGeneration'
 import { useI18n } from '../../lib/i18n'
 import { deleteLocalRecording, savePendingMeeting, type PendingMeeting, generateRecordingId, getRecordedAudio, saveRecordedAudio } from '../../lib/audioStorage'
-import { useMeetingRecorderStore, type MeetingRecorderPhase, type MeetingRecorderStage } from '../../stores/meetingRecorderStore'
+import { isMeetingBusy, useMeetingRecorderStore, type MeetingRecorderPhase, type MeetingRecorderStage } from '../../stores/meetingRecorderStore'
 import { useModelProfileStore } from '../../stores/modelProfileStore'
 import { useNoteLibraryStore } from '../../stores/noteLibraryStore'
 import { useSTTProfileStore } from '../../stores/sttProfileStore'
@@ -349,7 +350,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
       const state = useMeetingRecorderStore.getState()
-      if (state.hasRecoverableRecording) {
+      if (state.hasRecoverableRecording && !state.localRecordingSaved) {
         event.preventDefault()
         event.returnValue = recorderCopy.beforeUnload
       }
@@ -564,6 +565,17 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         realtimeDiagnostics,
       })
       recorder.retainRecordingFile?.()
+      useMeetingRecorderStore.setState({ localRecordingSaved: true })
+      // Native controls only belong to capture. Generation continues in the
+      // main window after the local save, even when it later fails.
+      if (!isRecorderWindow) await closeSavedRecordingSurface()
+      else {
+        // Compatibility window may still own generation: hide it now and
+        // destroy it after work finishes, rather than terminating its worker.
+        await setRecorderActive(false)
+        await showMainWindow('/meetings')
+        await hideCurrentRecorderWindow()
+      }
 
       // Plain recording mode ends after the durable local save. Minutes mode
       // can summarize finalized live speech without repeating STT, while
@@ -665,7 +677,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   useEffect(() => {
     if (isRecorderWindow) return
     const startMeeting = (event: Event) => {
-      if (ACTIVE_RECORDING_PHASES.includes(useMeetingRecorderStore.getState().phase) || useMeetingRecorderStore.getState().hasRecoverableRecording) return
+      if (isMeetingBusy(useMeetingRecorderStore.getState())) return
       captureWorkspaceRef.current = currentWorkspace
       captureOptionsRef.current = (event as CustomEvent<MeetingCaptureOptions>).detail
       draftNoteIdRef.current = null
@@ -677,11 +689,11 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     }
     const restore = (event: Event) => {
       const restoreState = useMeetingRecorderStore.getState()
-      if (restoreState.hasRecoverableRecording || ACTIVE_RECORDING_PHASES.includes(restoreState.phase)) return
+      if (isMeetingBusy(restoreState)) return
       const pending = (event as CustomEvent<PendingMeeting>).detail
       if (pending.ownerId !== user?.id) return
       setPhase('requesting')
-      void getRecordedAudio(pending.id).then(blob => {
+      void getRecordedAudio(pending.id).then(async blob => {
         if (useMeetingRecorderStore.getState().phase !== 'requesting') return
         if (!blob) { failStage('uploading', '找不到本地录制文件。'); return }
         resetSession()
@@ -696,15 +708,22 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         setRecordedAudio(blob)
         setElapsedSeconds(pending.elapsedSeconds)
         useMeetingRecorderStore.setState({
+          localRecordingSaved: true,
           captureOptions: pending.options,
           liveTranscriptSegments: pending.transcript || [],
           liveTranscriptStatus: pending.transcriptStatus || 'idle',
           liveTranscriptError: '',
           liveTranscriptDiagnostics: pending.realtimeDiagnostics,
         })
-        setPhase('stopped')
-        openPanel()
-      })
+        closePanel()
+        try {
+          await generateFromRecording(blob)
+        } catch (error) {
+          const message = formatRecorderFailure(error, recorderCopy)
+          await markDraftFailed(stageFromError(error), message)
+          failStage(stageFromError(error), message)
+        }
+      }).catch(error => failStage('uploading', formatRecorderFailure(error, recorderCopy)))
     }
     window.addEventListener(START_MEETING_EVENT, startMeeting)
     window.addEventListener('vinote-restore-meeting', restore)
@@ -981,7 +1000,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         ? `${recorderCopy.processingHint}: ${statusLabel}`
         : statusLabel
   const dockedStyle = hasCustomPosition ? { left: position.x, top: position.y } : { right: EDGE_PADDING, bottom: EDGE_PADDING }
-  const shouldRenderRecorderSurface = isPanelOpen && (!isDesktopMainWindow || (useInlineDesktopRecorder && !ACTIVE_RECORDING_PHASES.includes(phase)))
+  const shouldRenderRecorderSurface = isPanelOpen && !useMeetingRecorderStore.getState().localRecordingSaved && (!isDesktopMainWindow || (useInlineDesktopRecorder && !ACTIVE_RECORDING_PHASES.includes(phase)))
   const minimizedContainerClass = clsx(
     'inline-flex h-12 w-[320px] items-center gap-3 border border-border bg-background px-3.5 pr-4 text-base font-medium text-foreground',
     isRecorderWindow ? '' : 'shadow-md',
