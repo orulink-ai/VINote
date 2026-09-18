@@ -25,7 +25,7 @@ writeFileSync(lock, String(process.pid), { flag: 'wx' })
 process.on('exit', () => {
   try { if (readFileSync(lock, 'utf8') === String(process.pid)) unlinkSync(lock) } catch {}
 })
-process.env.VILAB_SERVER_URL ||= 'http://127.0.0.1:9878'
+process.env.VILAB_SERVER_URL ||= 'http://192.168.1.143:9876'
 process.env.VINOTE_DESKTOP_RUNTIME = 'true'
 const children = []
 let closing = false

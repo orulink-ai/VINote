@@ -4,7 +4,7 @@
 
 | 运行方式 | 命令 | 默认 ViLab 地址 | 数据位置 |
 | --- | --- | --- | --- |
-| 源码开发 | `yarn dev` | `http://127.0.0.1:9878` | 开发配置指定的位置 |
+| 源码开发 | `yarn dev` | `http://192.168.1.143:9876` | 开发配置指定的位置 |
 | 正式安装包 | `yarn package:release` | `http://192.168.1.143:9876` | `app.vinote.desktop` 对应应用数据目录 |
 | 测试安装包 | `yarn package:test` | `http://192.168.1.143:9876` | `app.vinote.desktop.test` 对应应用数据目录 |
 

@@ -1,13 +1,10 @@
-import { FileText, LogOut, Mic2, Search, Settings2, Users } from 'lucide-react'
+import { FileText, Mic2, Search, Settings2, Users } from 'lucide-react'
 import { useEffect, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useI18n } from '../../lib/i18n'
-import { useAuthStore } from '../../stores/authStore'
-import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { SidebarTrigger } from '@/components/ui/sidebar'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -21,7 +18,6 @@ const destinations = [
 ]
 
 export function Header() {
-  const { user, signOut } = useAuthStore()
   const { copy, locale } = useI18n()
   const navigate = useNavigate()
   const location = useLocation()
@@ -56,7 +52,6 @@ export function Header() {
       </Button>
       <div className="ml-auto flex items-center gap-1">
         <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => setSearchOpen(true)} className="transition-transform duration-200 hover:scale-105 lg:hidden"><Search /></Button></TooltipTrigger><TooltipContent>{zh ? '搜索' : 'Search'}</TooltipContent></Tooltip>
-        <DropdownMenu><DropdownMenuTrigger asChild><Button variant="ghost" size="icon" className="rounded-full transition-transform duration-200 hover:scale-105"><Avatar className="size-8"><AvatarFallback className="bg-foreground text-xs font-semibold text-background">{user?.email?.[0]?.toUpperCase() || 'V'}</AvatarFallback></Avatar></Button></DropdownMenuTrigger><DropdownMenuContent align="end" className="w-60"><DropdownMenuLabel className="truncate">{user?.email}</DropdownMenuLabel><DropdownMenuSeparator /><DropdownMenuGroup><DropdownMenuItem onClick={() => navigate('/settings')}><Settings2 />{copy.sidebar.settings}</DropdownMenuItem><DropdownMenuItem onClick={() => navigate('/team')}><Users />{zh ? '成员与共享' : 'Members & sharing'}</DropdownMenuItem></DropdownMenuGroup><DropdownMenuSeparator /><DropdownMenuGroup><DropdownMenuItem onClick={async () => { await signOut(); navigate('/login') }}><LogOut />{copy.header.signOut}</DropdownMenuItem></DropdownMenuGroup></DropdownMenuContent></DropdownMenu>
       </div>
     </header>
     <Dialog open={searchOpen} onOpenChange={setSearchOpen}><DialogContent className="overflow-hidden p-0 sm:max-w-xl" aria-describedby={undefined}><DialogTitle className="sr-only">{zh ? '全局搜索' : 'Global search'}</DialogTitle><Command><CommandInput placeholder={zh ? '搜索笔记、会议或前往页面…' : 'Search notes, meetings, or pages…'} /><CommandList><CommandEmpty>{zh ? '没有找到结果' : 'No results found'}</CommandEmpty><CommandGroup heading={zh ? '前往' : 'Go to'}>{destinations.map(item => <CommandItem key={item.path} onSelect={() => open(item.path)}><item.icon /><span>{zh ? item.zh : item.en}</span></CommandItem>)}</CommandGroup><CommandSeparator /><CommandGroup heading={zh ? '快捷操作' : 'Shortcuts'}><CommandItem onSelect={() => open('/meetings')}><Mic2 /><span>{zh ? '打开会议录制' : 'Open meeting capture'}</span></CommandItem><CommandItem onSelect={() => open('/generate')}><FileText /><span>{zh ? '打开资料收件箱' : 'Open material inbox'}</span></CommandItem></CommandGroup></CommandList></Command></DialogContent></Dialog>

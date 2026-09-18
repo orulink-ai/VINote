@@ -1,4 +1,6 @@
 import { create } from 'zustand'
+import type { LiveTranscriptDiagnostics, LiveTranscriptSegment, LiveTranscriptStatus } from '../types/liveTranscript'
+import type { MeetingCaptureOptions } from '../lib/meetingCapture'
 
 export type MeetingRecorderPhase =
   | 'idle'
@@ -45,6 +47,11 @@ interface MeetingRecorderState {
   retryDescription: string
   hasRecoverableRecording: boolean
   notification: MeetingRecorderNotification | null
+  captureOptions?: MeetingCaptureOptions
+  liveTranscriptStatus: LiveTranscriptStatus
+  liveTranscriptError: string
+  liveTranscriptSegments: LiveTranscriptSegment[]
+  liveTranscriptDiagnostics?: LiveTranscriptDiagnostics
   openPanel: () => void
   closePanel: () => void
   requestClose: () => void
@@ -101,13 +108,18 @@ const initialState = {
   retryDescription: '',
   hasRecoverableRecording: false,
   notification: null as MeetingRecorderNotification | null,
+  captureOptions: undefined as MeetingCaptureOptions | undefined,
+  liveTranscriptStatus: 'idle' as LiveTranscriptStatus,
+  liveTranscriptError: '',
+  liveTranscriptSegments: [] as LiveTranscriptSegment[],
+  liveTranscriptDiagnostics: undefined as LiveTranscriptDiagnostics | undefined,
 }
 
 const retryDescriptions: Record<MeetingRecorderStage, string> = {
-  uploading: '重新生成将复用这段录音重新上传。',
-  transcribing: '重新生成将复用这段录音重新转写。',
-  summarizing: '重新生成将复用已保留的录音或转写结果继续生成纪要。',
-  saving: '重新生成将复用已生成的纪要内容重新保存。',
+  uploading: '录制已经保存在本机，可重新上传并生成纪要。',
+  transcribing: '录制已经保存在本机，可稍后重新转写。',
+  summarizing: '录制和可用逐字稿已经保存在本机，可稍后重新生成纪要。',
+  saving: '生成结果尚未保存，可重新保存。',
 }
 
 function hasRecoveryRisk(state: Pick<MeetingRecorderState, 'phase' | 'recordedAudio' | 'generatedNote' | 'noteId'>) {
@@ -158,8 +170,8 @@ export const useMeetingRecorderStore = create<MeetingRecorderState>((set, get) =
     hasRecoverableRecording: hasRecoveryRisk({ ...state, phase: 'failed' }),
     notification: {
       kind: 'error',
-      title: '会议总结失败',
-      message: `${retryDescriptions[failedStage]}${error ? ` ${error}` : ''}`,
+      title: '会议纪要生成失败',
+      message: `${retryDescriptions[failedStage]}${error ? ` 错误原因：${error}` : ''}`,
     },
   })),
   complete: (noteId) => set({

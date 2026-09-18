@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Building2, Check, Plus, UserPlus, Users } from 'lucide-react'
+import { Building2, Check, Plus, Trash2, UserPlus, Users } from 'lucide-react'
 import { Badge } from '../components/ui/badge'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
@@ -22,6 +22,7 @@ export function Team() {
     createTeam,
     addMember,
     removeMember,
+    deleteTeam,
     selectPersonalWorkspace,
     selectTeamWorkspace,
   } = useTeamStore()
@@ -73,13 +74,20 @@ export function Team() {
     setSubmitting(false)
   }
 
+  const handleDeleteTeam = async () => {
+    if (!activeTeam) return
+    setSubmitting(true)
+    await deleteTeam(activeTeam.id)
+    setSubmitting(false)
+  }
+
   return (
-    <div className="mx-auto max-w-[1280px] grid gap-8 p-6 lg:p-10">
-      <section className="border-b pb-6">
+    <div className="mx-auto grid max-w-[1180px] gap-7 px-6 py-8 lg:px-8">
+      <section className="motion-rise">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
           <div className="grid gap-2">
             <Badge variant="secondary"><Building2 />{isZh ? '团队空间' : 'Team workspace'}</Badge>
-            <h2 className="text-2xl font-semibold tracking-tight">{isZh ? '团队与成员' : 'Teams and members'}</h2>
+            <h2 className="text-3xl font-semibold tracking-[-0.03em]">{isZh ? '团队与成员' : 'Teams and members'}</h2>
             <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
               {isZh
                 ? `当前工作区：${workspaceLabel}。团队笔记只会出现在对应团队的工作区里，个人笔记仍保留在个人空间。`
@@ -87,7 +95,7 @@ export function Team() {
             </p>
           </div>
 
-          <div className="flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2 rounded-xl border bg-card p-1 shadow-sm">
             <Button
               type="button"
               onClick={() => selectPersonalWorkspace()}
@@ -108,29 +116,30 @@ export function Team() {
         </div>
       </section>
 
-      <section className="grid gap-6 xl:grid-cols-[320px_1fr]">
-        <div className="grid gap-6">
-          <section className="grid gap-4 border-t pt-5">
-            <header><h3 className="flex items-center gap-2 text-sm font-semibold"><Plus className="size-4" />{isZh ? '创建团队' : 'Create a team'}</h3><p className="mt-1 text-sm text-muted-foreground">{isZh ? '创建后自动切换到新的共享空间。' : 'Switch to the shared space after creation.'}</p></header>
+      <section className="motion-rise grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]" style={{ animationDelay: '70ms' }}>
+        <div className="grid content-start gap-4">
+          <section className="interactive-card grid gap-4 rounded-2xl border bg-card p-5 shadow-sm">
+            <header><h3 className="flex items-center gap-2 font-semibold"><Plus className="size-4" />{isZh ? '新建共享空间' : 'Create a shared space'}</h3><p className="mt-1 text-sm leading-6 text-muted-foreground">{isZh ? '为一个项目或小组创建独立空间。' : 'Create a dedicated space for a project or group.'}</p></header>
             <div className="grid gap-3">
               <Input
                 value={teamName}
                 onChange={(event) => setTeamName(event.target.value)}
-                placeholder={isZh ? '例如：产品组 / 内容团队' : 'Example: Product / Research / Content'}
+                className="h-11"
+                placeholder={isZh ? '空间名称' : 'Space name'}
               />
               <Button
                 type="button"
                 onClick={() => void handleCreateTeam()}
                 disabled={!teamName.trim() || submitting}
-                className="w-full"
+                className="w-full rounded-xl"
               >
                 {submitting ? (isZh ? '处理中...' : 'Working...') : (isZh ? '创建并切换' : 'Create and switch')}
               </Button>
             </div>
           </section>
 
-          <section className="border-t pt-5">
-            <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold"><Users className="size-4" />{isZh ? '你的团队' : 'Your teams'}</h3>
+          <section className="rounded-2xl border bg-card p-3 shadow-sm">
+            <h3 className="px-2 pb-3 pt-1 text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">{isZh ? '你的空间' : 'Your spaces'}</h3>
             <div className="grid gap-2">
               {loading ? <><Skeleton className="h-16" /><Skeleton className="h-16" /></> : null}
               {teams.map((team) => (
@@ -138,8 +147,8 @@ export function Team() {
                   key={team.id}
                   type="button"
                   onClick={() => selectTeamWorkspace(team.id)}
-                  variant={currentWorkspace.scope === 'team' && currentWorkspace.teamId === team.id ? 'secondary' : 'outline'}
-                  className="h-auto w-full justify-between rounded-none border-0 border-b px-1 py-3 text-left last:border-b-0"
+                  variant={currentWorkspace.scope === 'team' && currentWorkspace.teamId === team.id ? 'secondary' : 'ghost'}
+                  className="h-auto w-full justify-between rounded-xl border-0 px-3 py-3 text-left"
                 >
                   <div className="flex items-center justify-between gap-3">
                     <div>
@@ -148,7 +157,7 @@ export function Team() {
                         {team.memberCount} {isZh ? '位成员' : team.memberCount === 1 ? 'member' : 'members'}
                       </div>
                     </div>
-                    <Badge variant="outline">{team.currentUserRole}</Badge>
+                    <span className="size-2 rounded-full bg-foreground/25" />
                   </div>
                 </Button>
               ))}
@@ -159,22 +168,36 @@ export function Team() {
           </section>
         </div>
 
-        <section className="min-h-[520px] border-l pl-6">
-          <h3 className="flex items-center gap-2 font-semibold"><UserPlus className="size-4" />{isZh ? '团队成员与访问权限' : 'Members and access'}</h3>
+        <section className="min-h-[480px] overflow-hidden rounded-2xl border bg-card shadow-sm">
+          <div className="flex flex-wrap items-start justify-between gap-4 border-b px-6 py-5">
+            <div><h3 className="flex items-center gap-2 text-lg font-semibold"><UserPlus className="size-5" />{activeTeam ? activeTeam.name : (isZh ? '成员与共享' : 'Members and sharing')}</h3>{activeTeam ? <p className="mt-1 text-sm text-muted-foreground">{activeTeam.memberCount} {isZh ? '位成员可访问此空间' : 'members can access this space'}</p> : null}</div>
+            {activeTeam?.currentUserRole === 'owner' ? (
+              <AlertDialog>
+                <AlertDialogTrigger asChild><Button variant="ghost" size="sm" className="text-destructive hover:bg-destructive/10 hover:text-destructive"><Trash2 />{isZh ? '删除团队' : 'Delete team'}</Button></AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>{isZh ? `删除“${activeTeam.name}”？` : `Delete “${activeTeam.name}”?`}</AlertDialogTitle>
+                    <AlertDialogDescription>{isZh ? '团队空间和成员关系会被删除。团队里的笔记不会丢失，会回到各自创建者的个人空间。此操作无法撤销。' : 'The team space and memberships will be deleted. Team notes are preserved in each creator’s personal workspace. This action cannot be undone.'}</AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter><AlertDialogCancel>{isZh ? '取消' : 'Cancel'}</AlertDialogCancel><AlertDialogAction onClick={() => void handleDeleteTeam()} disabled={submitting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">{isZh ? '确认删除团队' : 'Delete team'}</AlertDialogAction></AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            ) : null}
+          </div>
           {activeTeam ? (
             <>
-              <p className="mt-1 text-sm text-muted-foreground">
+              <p className="px-6 pt-5 text-sm leading-6 text-muted-foreground">
                 {isZh
                   ? `当前选中团队：${activeTeam.name}。把已有账号通过邮箱加入团队后，他们就能看到该团队的团队笔记。`
                   : `Selected team: ${activeTeam.name}. Add existing users by email so they can access notes saved inside this team workspace.`}
               </p>
 
-              <div className="mt-4 flex flex-col gap-3 md:flex-row">
+              <div className="mx-6 mt-4 flex flex-col gap-3 rounded-xl bg-muted/35 p-3 md:flex-row">
                 <Input
                   value={memberEmail}
                   onChange={(event) => setMemberEmail(event.target.value)}
                   placeholder={isZh ? '输入成员邮箱' : 'Enter member email'}
-                  className="flex-1"
+                  className="h-10 flex-1 border-0 bg-background shadow-sm"
                 />
                 <Button
                   type="button"
@@ -185,16 +208,16 @@ export function Team() {
                 </Button>
               </div>
 
-              <div className="mt-6 grid gap-3">
+              <div className="mt-5 divide-y border-t">
                 {activeTeam.members.map((member) => (
                   <div
                     key={member.id}
-                    className="flex flex-col gap-3 border-b px-1 py-4 md:flex-row md:items-center md:justify-between"
+                    className="flex flex-col gap-3 px-6 py-4 transition-colors hover:bg-muted/20 md:flex-row md:items-center md:justify-between"
                   >
                     <div>
                       <div className="font-medium">{member.email}</div>
                       <div className="mt-1 text-xs text-muted-foreground">
-                        {member.role} · {new Date(member.joinedAt).toLocaleString(locale)}
+                        {member.role === 'owner' ? (isZh ? '拥有者' : 'Owner') : (isZh ? '成员' : 'Member')} · {new Date(member.joinedAt).toLocaleString(locale)}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">

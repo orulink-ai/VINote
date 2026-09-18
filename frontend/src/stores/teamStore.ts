@@ -51,6 +51,7 @@ interface TeamState {
   createTeam: (name: string) => Promise<TeamRecord | null>
   addMember: (teamId: string, email: string) => Promise<TeamRecord | null>
   removeMember: (teamId: string, memberId: string) => Promise<TeamRecord | null>
+  deleteTeam: (teamId: string) => Promise<boolean>
   selectPersonalWorkspace: () => void
   selectTeamWorkspace: (teamId: string) => void
   reset: () => void
@@ -189,6 +190,23 @@ export const useTeamStore = create<TeamState>((set) => ({
     } catch (error) {
       set({ error: error instanceof Error ? error.message : 'Failed to remove member' })
       return null
+    }
+  },
+  deleteTeam: async (teamId) => {
+    try {
+      await apiJson<void>(`/api/teams/${teamId}`, { method: 'DELETE' })
+      set((state) => ({
+        teams: state.teams.filter((team) => team.id !== teamId),
+        currentWorkspace: state.currentWorkspace.scope === 'team' && state.currentWorkspace.teamId === teamId
+          ? { scope: 'personal' }
+          : state.currentWorkspace,
+        initialized: true,
+        error: '',
+      }))
+      return true
+    } catch (error) {
+      set({ error: error instanceof Error ? error.message : 'Failed to delete team' })
+      return false
     }
   },
   selectPersonalWorkspace: () => set({ currentWorkspace: { scope: 'personal' } }),

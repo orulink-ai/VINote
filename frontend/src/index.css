@@ -28,6 +28,54 @@ body { margin: 0; min-height: 100vh; background: hsl(var(--background)); color: 
   to { opacity: 1; transform: translateY(0); }
 }
 
+@keyframes vinote-page-enter {
+  from { opacity: 0; transform: translate3d(0, 12px, 0) scale(.995); filter: blur(2px); }
+  to { opacity: 1; transform: translate3d(0, 0, 0) scale(1); filter: blur(0); }
+}
+
+@keyframes vinote-rise {
+  from { opacity: 0; transform: translate3d(0, 16px, 0); }
+  to { opacity: 1; transform: translate3d(0, 0, 0); }
+}
+
+@keyframes vinote-soft-pulse {
+  0%, 100% { opacity: .42; transform: scale(.92); }
+  50% { opacity: 1; transform: scale(1.08); }
+}
+
+@keyframes vinote-wave {
+  0%, 100% { transform: scaleY(.3); opacity: .42; }
+  50% { transform: scaleY(1); opacity: 1; }
+}
+
+@keyframes vinote-sheen {
+  from { transform: translateX(-140%) skewX(-18deg); }
+  to { transform: translateX(340%) skewX(-18deg); }
+}
+
+.page-transition {
+  animation: vinote-page-enter 360ms cubic-bezier(.22, 1, .36, 1) both;
+  transform-origin: 50% 20%;
+}
+
+.motion-rise { animation: vinote-rise 440ms cubic-bezier(.22, 1, .36, 1) both; }
+.motion-pulse { animation: vinote-soft-pulse 1.8s ease-in-out infinite; }
+.motion-wave { transform-origin: center; animation: vinote-wave .9s ease-in-out infinite; }
+.motion-sheen { position: relative; overflow: hidden; }
+.motion-sheen::after {
+  position: absolute; inset: -40% auto -40% -30%; width: 20%; content: '';
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.24), transparent);
+  animation: vinote-sheen 3.8s ease-in-out infinite;
+  pointer-events: none;
+}
+
+.interactive-card {
+  transition: transform 260ms cubic-bezier(.22, 1, .36, 1), box-shadow 260ms ease, border-color 260ms ease, background-color 260ms ease;
+  will-change: transform;
+}
+.interactive-card:hover { transform: translate3d(0, -4px, 0); box-shadow: 0 16px 40px -28px hsl(var(--foreground) / .38); }
+.interactive-card:active { transform: translate3d(0, -1px, 0) scale(.995); }
+
 .animate-in { animation-fill-mode: both; }
 .fade-in { animation-name: vinote-enter; }
 .slide-in-from-bottom-1, .slide-in-from-bottom-2, .slide-in-from-bottom-3 { animation-name: vinote-enter; }

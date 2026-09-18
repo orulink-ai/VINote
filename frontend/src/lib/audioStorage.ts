@@ -90,6 +90,9 @@ export interface PendingMeeting {
   endedAt?: string
   fileName?: string
   elapsedSeconds: number
+  transcript?: import('../types/liveTranscript').LiveTranscriptSegment[]
+  transcriptStatus?: import('../types/liveTranscript').LiveTranscriptStatus
+  realtimeDiagnostics?: import('../types/liveTranscript').LiveTranscriptDiagnostics
 }
 
 export async function savePendingMeeting(meeting: PendingMeeting) {

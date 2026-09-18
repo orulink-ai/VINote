@@ -3,6 +3,7 @@ Note generation API routes.
 """
 import json
 import logging
+import math
 import re
 import uuid
 from pathlib import Path
@@ -50,6 +51,44 @@ _ALLOWED_MEDIA_EXTENSIONS = {
     ".wmv",
 }
 _ALLOWED_TRANSCRIPT_EXTENSIONS = {".txt", ".vtt", ".srt", ".json", ".md"}
+_REALTIME_DIAGNOSTIC_FIELDS = {
+    "connectionLatencyMs",
+    "sessionStartLatencyMs",
+    "firstPartialLatencyMs",
+    "completionLatencyMs",
+    "frameCount",
+    "sentBytes",
+    "partialCount",
+    "finalCount",
+    "audioDurationMs",
+    "closeCode",
+    "errorCode",
+}
+
+
+def _parse_realtime_diagnostics(value: str | None) -> dict | None:
+    if not value:
+        return None
+    try:
+        raw = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("realtime_diagnostics must be a JSON object.") from exc
+    if not isinstance(raw, dict):
+        raise ValueError("realtime_diagnostics must be a JSON object.")
+    result = {}
+    for key in _REALTIME_DIAGNOSTIC_FIELDS:
+        item = raw.get(key)
+        if item is None:
+            continue
+        if key == "errorCode":
+            if isinstance(item, str):
+                result[key] = item.strip()[:100]
+            continue
+        if isinstance(item, bool) or not isinstance(item, (int, float)):
+            continue
+        if math.isfinite(float(item)) and item >= 0:
+            result[key] = item
+    return result or None
 
 
 def _is_desktop_request(request: Request) -> bool:
@@ -68,6 +107,10 @@ def _desktop_trace_context(
     url: str | None = None,
     summary_mode: str = "default",
     output_language: str | None = None,
+    meeting_session_id: str | None = None,
+    meeting_mode: str | None = None,
+    meeting_type: str | None = None,
+    realtime_diagnostics: dict | None = None,
 ) -> DesktopTraceContext | None:
     if not _is_desktop_request(request):
         return None
@@ -90,12 +133,19 @@ def _desktop_trace_context(
         parts = urlsplit(url)
         payload["url"] = urlunsplit((parts.scheme, parts.netloc, parts.path, "", ""))
         payload["platform"] = parts.netloc.lower()
+    if meeting_mode in {"recording", "minutes"}:
+        payload["meeting_mode"] = meeting_mode
+    if meeting_type in {"audio", "video"}:
+        payload["meeting_type"] = meeting_type
+    if realtime_diagnostics:
+        payload["realtime_transcription"] = realtime_diagnostics
     return DesktopTraceContext(
         workflow=normalized_workflow,
         source=source,
         media_type=media_type,
         client_version=request.headers.get("X-VINote-Client-Version", ""),
         channel=settings.langfuse_environment,
+        session_id=(meeting_session_id or "").strip()[:128],
         input=payload,
     )
 
@@ -579,12 +629,17 @@ async def generate_from_upload(
     base_url: str | None = Form(None),
     workflow: str = Form("note_organization"),
     trace_source: str = Form("local_file"),
+    meeting_session_id: str | None = Form(None),
+    meeting_mode: str | None = Form(None),
+    meeting_type: str | None = Form(None),
+    realtime_diagnostics: str | None = Form(None),
     user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
     try:
         normalized_source_type = _normalize_source_type(source_type)
         normalized_summary_mode = _normalize_summary_mode(summary_mode)
         normalized_output_language = _normalize_output_language(output_language)
+        parsed_realtime_diagnostics = _parse_realtime_diagnostics(realtime_diagnostics)
         desktop_request = _is_desktop_request(request)
         diarize = diarize or (desktop_request and normalized_source_type != "transcript")
         if desktop_request:
@@ -604,6 +659,8 @@ async def generate_from_upload(
                 request, workflow=workflow, source=trace_source, media_type="transcript",
                 title=title, filename=file.filename, size_bytes=len(file_bytes),
                 summary_mode=normalized_summary_mode, output_language=normalized_output_language,
+                meeting_session_id=meeting_session_id, meeting_mode=meeting_mode,
+                meeting_type=meeting_type, realtime_diagnostics=parsed_realtime_diagnostics,
             )
             background_tasks.add_task(
                 _run_task_from_transcript,
@@ -669,6 +726,8 @@ async def generate_from_upload(
                 media_type=normalized_source_type, title=title, filename=file.filename,
                 size_bytes=uploaded_size_bytes,
                 summary_mode=normalized_summary_mode, output_language=normalized_output_language,
+                meeting_session_id=meeting_session_id, meeting_mode=meeting_mode,
+                meeting_type=meeting_type, realtime_diagnostics=parsed_realtime_diagnostics,
             )
             background_tasks.add_task(
                 _run_task_from_file,
@@ -706,6 +765,10 @@ async def generate_from_upload_sync(
     base_url: str | None = Form(None),
     workflow: str = Form("note_organization"),
     trace_source: str = Form("local_file"),
+    meeting_session_id: str | None = Form(None),
+    meeting_mode: str | None = Form(None),
+    meeting_type: str | None = Form(None),
+    realtime_diagnostics: str | None = Form(None),
     user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
     task_id = str(uuid.uuid4())
@@ -713,6 +776,7 @@ async def generate_from_upload_sync(
         normalized_source_type = _normalize_source_type(source_type)
         normalized_summary_mode = _normalize_summary_mode(summary_mode)
         normalized_output_language = _normalize_output_language(output_language)
+        parsed_realtime_diagnostics = _parse_realtime_diagnostics(realtime_diagnostics)
         desktop_request = _is_desktop_request(request)
         diarize = diarize or (desktop_request and normalized_source_type != "transcript")
         if desktop_request:
@@ -729,6 +793,8 @@ async def generate_from_upload_sync(
                 request, workflow=workflow, source=trace_source, media_type="transcript",
                 title=title, filename=file.filename, size_bytes=len(file_bytes),
                 summary_mode=normalized_summary_mode, output_language=normalized_output_language,
+                meeting_session_id=meeting_session_id, meeting_mode=meeting_mode,
+                meeting_type=meeting_type, realtime_diagnostics=parsed_realtime_diagnostics,
             )
             with desktop_trace(trace_context):
                 result = _note_service.generate_from_transcript(
@@ -787,6 +853,8 @@ async def generate_from_upload_sync(
                 media_type=normalized_source_type, title=title, filename=file.filename,
                 size_bytes=uploaded_size_bytes,
                 summary_mode=normalized_summary_mode, output_language=normalized_output_language,
+                meeting_session_id=meeting_session_id, meeting_mode=meeting_mode,
+                meeting_type=meeting_type, realtime_diagnostics=parsed_realtime_diagnostics,
             )
             with desktop_trace(trace_context):
                 result = _note_service.generate_from_file(

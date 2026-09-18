@@ -1,8 +1,11 @@
-import { captureMeetingSources, type MeetingCaptureOptions } from '../lib/meetingCapture'
+import { captureMeetingSources, DISPLAY_CAPTURE_FAILED, SYSTEM_AUDIO_UNAVAILABLE, type MeetingCaptureOptions } from '../lib/meetingCapture'
 import { createRecordingFile } from '../lib/recordingFile'
+import { captureDiagnostic, captureFailure } from '../lib/captureDiagnostics'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { requestDesktopMicrophoneAccess } from '../lib/desktopMicrophonePermission'
 import { checkMicrophoneReadiness, mapMicrophoneError } from '../lib/microphonePermission'
+import { VILabRealtimeClient } from '../lib/vilabRealtimeClient'
+import type { LiveTranscriptDiagnostics, LiveTranscriptSegment, LiveTranscriptStatus } from '../types/liveTranscript'
 
 type AudioRecorderStatus = 'idle' | 'requesting' | 'recording' | 'paused' | 'stopped' | 'failed'
 
@@ -32,6 +35,10 @@ export function useAudioRecorder() {
   const [preview, setPreview] = useState<MediaStream | null>(null)
   const [sizeBytes, setSizeBytes] = useState(0)
   const [sourceEnded, setSourceEnded] = useState(false)
+  const [liveStatus, setLiveStatus] = useState<LiveTranscriptStatus>('idle')
+  const [liveError, setLiveError] = useState('')
+  const [liveSegments, setLiveSegments] = useState<LiveTranscriptSegment[]>([])
+  const [liveDiagnostics, setLiveDiagnostics] = useState<LiveTranscriptDiagnostics>({ frameCount: 0, sentBytes: 0, partialCount: 0, finalCount: 0, audioDurationMs: 0 })
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -41,6 +48,29 @@ export function useAudioRecorder() {
   const timerStartedAtRef = useRef(0)
   const accumulatedMsRef = useRef(0)
   const mimeTypeRef = useRef('')
+  const optionsRef = useRef<MeetingCaptureOptions | null>(null)
+  const realtimeRef = useRef<VILabRealtimeClient | null>(null)
+  const liveSegmentsRef = useRef<LiveTranscriptSegment[]>([])
+  const realtimeVersionRef = useRef(0)
+
+  const createRealtimeClient = useCallback(() => {
+    const version = ++realtimeVersionRef.current
+    return new VILabRealtimeClient({
+      onStatus: (next, nextError) => {
+        if (version !== realtimeVersionRef.current) return
+        setLiveStatus(next)
+        setLiveError(nextError || '')
+      },
+      onSegments: segments => {
+        if (version !== realtimeVersionRef.current) return
+        liveSegmentsRef.current = segments
+        setLiveSegments(segments)
+      },
+      onDiagnostics: diagnostics => {
+        if (version === realtimeVersionRef.current) setLiveDiagnostics(diagnostics)
+      },
+    }, liveSegmentsRef.current)
+  }, [])
 
   const isSupported =
     typeof navigator !== 'undefined' &&
@@ -105,16 +135,26 @@ export function useAudioRecorder() {
     timerStartedAtRef.current = 0
     accumulatedMsRef.current = 0
     mimeTypeRef.current = ''
+    optionsRef.current = null
+    realtimeVersionRef.current += 1
+    void realtimeRef.current?.cancel()
+    realtimeRef.current = null
     setElapsedSeconds(0)
     setSizeBytes(0)
     setSourceEnded(false)
     void diskRef.current?.remove()
     diskRef.current = null
     setError('')
+    setLiveStatus('idle')
+    setLiveError('')
+    setLiveSegments([])
+    liveSegmentsRef.current = []
+    setLiveDiagnostics({ frameCount: 0, sentBytes: 0, partialCount: 0, finalCount: 0, audioDurationMs: 0 })
     setStatus('idle')
   }, [cleanupStream, clearTimer, stopActiveRecorder])
 
   const start = useCallback(async (options?: MeetingCaptureOptions) => {
+    const diagnosticStartedAt = Date.now()
     if (!isSupported) {
       const message = 'microphone_unsupported'
       setError(message)
@@ -163,7 +203,9 @@ export function useAudioRecorder() {
         throw new Error('microphone_no-device')
       }
       if (options?.screen) {
+        captureDiagnostic('storage.opening')
         const disk = await createRecordingFile()
+        captureDiagnostic('storage.ready')
         if (requestVersion !== requestVersionRef.current) { await disk.remove(); return false }
         diskRef.current = disk
       }
@@ -194,21 +236,32 @@ export function useAudioRecorder() {
       }
 
       recorder.start(1000)
+      captureDiagnostic('recorder.started', { mimeType: recorder.mimeType })
       accumulatedMsRef.current = 0
       setElapsedSeconds(0)
       setStatus('recording')
       startTimer()
+      optionsRef.current = options || null
+      if (options?.mode === 'minutes') {
+        const realtime = createRealtimeClient()
+        realtimeRef.current = realtime
+        void realtime.start(stream, options.sessionId).catch(() => {
+          // Realtime ASR is fail-open. The local MediaRecorder remains active.
+        })
+      }
       return true
     } catch (recordingError) {
+      captureFailure('recorder.failed', recordingError, diagnosticStartedAt)
       if (requestVersion !== requestVersionRef.current) return false
       cleanupStream()
-      const reason = mapMicrophoneError(recordingError)
+      const isDisplayError = recordingError instanceof Error && [DISPLAY_CAPTURE_FAILED, SYSTEM_AUDIO_UNAVAILABLE].some(message => recordingError.message.includes(message))
+      const reason = isDisplayError ? 'unknown' : mapMicrophoneError(recordingError)
       const message = reason === 'unknown' && recordingError instanceof Error ? recordingError.message : `microphone_${reason}`
       setError(message)
       setStatus('failed')
       throw new Error(message)
     }
-  }, [captureElapsed, clearTimer, cleanupStream, isSupported, reset, startTimer, stopActiveRecorder])
+  }, [captureElapsed, clearTimer, cleanupStream, createRealtimeClient, isSupported, reset, startTimer, stopActiveRecorder])
 
   const pause = useCallback(() => {
     const recorder = recorderRef.current
@@ -217,6 +270,12 @@ export function useAudioRecorder() {
     }
 
     recorder.pause()
+    if (optionsRef.current?.mode === 'minutes') {
+      const version = realtimeVersionRef.current
+      void realtimeRef.current?.finish().finally(() => {
+        if (version === realtimeVersionRef.current) setLiveStatus('paused')
+      })
+    }
     captureElapsed()
     clearTimer()
     setStatus('paused')
@@ -229,9 +288,16 @@ export function useAudioRecorder() {
     }
 
     recorder.resume()
+    const stream = streamRef.current
+    const options = optionsRef.current
+    if (options?.mode === 'minutes' && stream) {
+      const realtime = createRealtimeClient()
+      realtimeRef.current = realtime
+      void realtime.start(stream, options.sessionId).catch(() => undefined)
+    }
     setStatus('recording')
     startTimer()
-  }, [startTimer])
+  }, [createRealtimeClient, startTimer])
 
   const stop = useCallback(async () => {
     const recorder = recorderRef.current
@@ -241,6 +307,7 @@ export function useAudioRecorder() {
 
     captureElapsed()
     clearTimer()
+    if (optionsRef.current?.mode === 'minutes') await realtimeRef.current?.finish().catch(() => undefined)
 
     return new Promise<Blob>((resolve, reject) => {
       let settled = false
@@ -284,6 +351,7 @@ export function useAudioRecorder() {
         // source artifact and creates a separate normalized copy only when the
         // selected transcriber cannot decode the original container.
         setStatus('stopped')
+        captureDiagnostic('recording.saved', { bytes: rawBlob.size, mimeType: rawBlob.type })
         resolve(rawBlob)
       }
 
@@ -325,6 +393,9 @@ export function useAudioRecorder() {
     clearTimer()
     stopActiveRecorder()
     cleanupStream()
+    realtimeVersionRef.current += 1
+    void realtimeRef.current?.cancel()
+    realtimeRef.current = null
     void diskRef.current?.remove()
   }, [cleanupStream, clearTimer, stopActiveRecorder])
 
@@ -335,6 +406,10 @@ export function useAudioRecorder() {
     preview,
     sizeBytes,
     sourceEnded,
+    liveStatus,
+    liveError,
+    liveSegments,
+    liveDiagnostics,
     elapsedSeconds,
     error,
     isSupported,

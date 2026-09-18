@@ -23,11 +23,11 @@ export function MeetingRecorderController() {
   const phase = state.phase || 'requesting'
   const seconds = state.elapsedSeconds || 0
   const notePath = state.noteId ? '/note/' + state.noteId : '/meetings'
-  return <section className="flex h-full flex-col overflow-hidden border bg-background text-foreground">
+  return <section className="flex h-full flex-col overflow-hidden rounded-2xl border bg-background/95 text-foreground shadow-2xl backdrop-blur-xl">
     <header className="flex h-10 items-center justify-between border-b px-3">
       <button type="button" onPointerDown={() => void startCurrentRecorderWindowDrag()} className="flex min-w-0 flex-1 cursor-grab items-center gap-2 text-left text-sm font-medium">
-        <span className="relative flex size-3"><span className="absolute inline-flex size-full animate-ping rounded-full bg-destructive/50" /><span className="relative inline-flex size-3 rounded-full bg-destructive" /></span>
-        {zh ? '会议录制' : 'Meeting recording'}
+        <span className="relative flex size-3"><span className="absolute inline-flex size-full motion-pulse rounded-full bg-destructive/50" /><span className="relative inline-flex size-3 rounded-full bg-destructive" /></span>
+        {phase === 'paused' ? (zh ? '录制已暂停' : 'Recording paused') : (zh ? '正在录制会议' : 'Recording meeting')}
       </button>
       <Button size="icon" variant="ghost" aria-label={zh ? '隐藏悬浮窗' : 'Hide controls'} onClick={() => void getCurrentWindow().hide()}><Minus /></Button>
     </header>
@@ -37,10 +37,10 @@ export function MeetingRecorderController() {
         <p className="max-w-36 truncate text-xs text-muted-foreground" title={state.error}>{state.error || copy.meetingRecorder.phases[phase]}</p>
       </div>
       <div className="flex items-center gap-2">
-        {phase === 'recording' && <Button size="sm" variant="outline" onClick={() => void sendMeetingAction('pause')}><Pause />{copy.meetingRecorder.pause}</Button>}
-        {phase === 'paused' && <Button size="sm" onClick={() => void sendMeetingAction('resume')}><Play />{copy.meetingRecorder.resume}</Button>}
-        {['paused', 'recording'].includes(phase) && <Button size="sm" variant="destructive" onClick={() => void sendMeetingAction('stop')}><Square />{copy.meetingRecorder.stop}</Button>}
-        {phase === 'stopped' && <Button size="sm" onClick={() => void sendMeetingAction('generate')}><Play />{zh ? '生成纪要' : 'Generate notes'}</Button>}
+        {phase === 'recording' && <Button className="min-h-11 px-3" variant="outline" onClick={() => void sendMeetingAction('pause')}><Pause />{copy.meetingRecorder.pause}</Button>}
+        {phase === 'paused' && <Button className="min-h-11 px-3" onClick={() => void sendMeetingAction('resume')}><Play />{copy.meetingRecorder.resume}</Button>}
+        {['paused', 'recording'].includes(phase) && <Button className="min-h-11" variant="destructive" onClick={() => void sendMeetingAction('request-stop')}><Square />{zh ? '结束' : copy.meetingRecorder.stop}</Button>}
+        {phase === 'stopped' && <Button size="sm" onClick={() => void showMainWindow('/meetings')}><Play />{zh ? '查看录制' : 'View recording'}</Button>}
         {phase === 'failed' && <Button size="sm" variant="outline" onClick={() => void sendMeetingAction('retry')}><RotateCcw />{zh ? '重试' : 'Retry'}</Button>}
         <Button size="icon" variant="outline" aria-label={zh ? '打开工作台' : 'Open workspace'} onClick={() => void showMainWindow(notePath)}><ExternalLink /></Button>
       </div>

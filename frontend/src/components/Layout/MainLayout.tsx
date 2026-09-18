@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { Outlet } from 'react-router-dom'
+import { Outlet, useLocation } from 'react-router-dom'
 import { Header } from './Header'
 import { Sidebar } from './Sidebar'
 import { MeetingRecorderDock } from '../MeetingRecorder/MeetingRecorderDock'
@@ -9,6 +9,7 @@ import { APP_MODE_EVENT, useAppModeStore } from '../../stores/appModeStore'
 import { useAuthStore } from '../../stores/authStore'
 
 export function MainLayout() {
+  const location = useLocation()
   const userId = useAuthStore(state => state.user?.id)
   useEffect(() => {
     useAppModeStore.getState().reset()
@@ -31,7 +32,11 @@ export function MainLayout() {
         <Sidebar />
         <SidebarInset className="h-full min-w-0 overflow-hidden bg-background">
           <Header />
-          <main className="app-surface stealth-scroll min-h-0 flex-1 overflow-auto"><Outlet /></main>
+          <main className="app-surface stealth-scroll min-h-0 flex-1 overflow-auto">
+            <div key={location.pathname} className="page-transition min-h-full">
+              <Outlet />
+            </div>
+          </main>
         </SidebarInset>
         <MeetingRecorderDock />
       </SidebarProvider>

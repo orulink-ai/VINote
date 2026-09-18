@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 
 from app.models.auth import AuthenticatedUser
 from app.models.team import TeamCreateRequest, TeamMemberCreateRequest, TeamSummaryResponse
@@ -56,3 +56,15 @@ def remove_team_member(team_id: str, member_id: str, user: AuthenticatedUser = D
     if not team:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team or member not found")
     return team
+
+
+@router.delete("/teams/{team_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_team(team_id: str, user: AuthenticatedUser = Depends(get_current_user)):
+    try:
+        deleted = _repository.delete_team(user.user_id, team_id)
+    except PermissionError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+
+    if not deleted:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Team not found")
+    return Response(status_code=status.HTTP_204_NO_CONTENT)

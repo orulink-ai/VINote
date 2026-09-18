@@ -1,5 +1,6 @@
 import type { NoteRecord } from '../stores/noteLibraryStore'
 import type { WorkspaceSelection } from '../stores/teamStore'
+import type { LiveTranscriptDiagnostics, LiveTranscriptSegment } from '../types/liveTranscript'
 import {
   fetchTaskStatus,
   submitUploadedSource,
@@ -33,6 +34,14 @@ interface SubmitMeetingRecordingInput {
   summaryMode: SummaryMode
   modelProfileId?: string
   sttProfileId?: string
+  meetingSessionId?: string
+  meetingMode?: 'recording' | 'minutes'
+  meetingType?: 'audio' | 'video'
+  realtimeDiagnostics?: LiveTranscriptDiagnostics
+}
+
+interface SubmitMeetingTranscriptInput extends Omit<SubmitMeetingRecordingInput, 'audioBlob' | 'diarize' | 'speakerCount' | 'sttProfileId'> {
+  segments: LiveTranscriptSegment[]
 }
 
 interface SubmitMeetingRecordingDependencies {
@@ -92,9 +101,51 @@ export async function submitMeetingRecording(
       outputLanguage: input.outputLanguage,
       modelProfileId: input.modelProfileId,
       sttProfileId: input.sttProfileId,
+      meetingSessionId: input.meetingSessionId,
+      meetingMode: input.meetingMode,
+      meetingType: input.meetingType,
+      realtimeDiagnostics: input.realtimeDiagnostics,
     })
   } catch (error) {
     throw new MeetingGenerationError('uploading', error instanceof Error ? error.message : 'Upload failed')
+  }
+}
+
+export async function submitMeetingTranscript(
+  input: SubmitMeetingTranscriptInput,
+  dependencies: SubmitMeetingRecordingDependencies = {},
+) {
+  dependencies.onStage?.('uploading')
+  const finalSegments = input.segments.filter(segment => segment.final && segment.text.trim())
+  if (!finalSegments.length) throw new MeetingGenerationError('transcribing', '实时转写中没有可用于生成纪要的内容。')
+  const transcript = {
+    language: input.outputLanguage || 'zh-CN',
+    full_text: finalSegments.map(segment => segment.text.trim()).join(' '),
+    segments: finalSegments.map((segment) => ({
+      start: Math.max(0, segment.startMs || 0) / 1000,
+      end: Math.max(segment.startMs || 0, segment.endMs || segment.startMs || 0) / 1000,
+      text: segment.text.trim(),
+      speaker_id: segment.speaker || 'unknown',
+      speaker_label: segment.speaker || '未识别说话人',
+    })),
+  }
+  const timestamp = input.startedAt.toISOString().replace(/\.\d{3}Z$/, '').replace(/[T:]/g, '-')
+  const file = new File([JSON.stringify(transcript)], `meeting-live-transcript-${timestamp}.json`, { type: 'application/json' })
+  const submit = dependencies.submitUploadedSource || submitUploadedSource
+  try {
+    return await submit({
+      file, sourceType: 'transcript',
+      title: input.title?.trim() || createMeetingRecordingTitle(input.startedAt, input.outputLanguage || 'zh-CN'),
+      style: 'meeting', workflow: 'meeting', traceSource: 'desktop_live_transcript',
+      extras: `录制开始时间：${input.startedAt.toISOString()}。${input.endedAt ? `录制结束时间：${input.endedAt.toISOString()}。` : '录制结束时间未知。'}实时逐字稿时间为录制偏移，禁止用它推算会议实际起止。`,
+      summaryMode: input.summaryMode, outputLanguage: input.outputLanguage,
+      modelProfileId: input.modelProfileId, meetingSessionId: input.meetingSessionId,
+      meetingMode: input.meetingMode, meetingType: input.meetingType,
+      realtimeDiagnostics: input.realtimeDiagnostics,
+    })
+  } catch (error) {
+    if (error instanceof MeetingGenerationError) throw error
+    throw new MeetingGenerationError('uploading', error instanceof Error ? error.message : 'Transcript upload failed')
   }
 }
 

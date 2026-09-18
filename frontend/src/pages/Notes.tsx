@@ -30,10 +30,10 @@ export function Notes() {
   }), [filter, notes, query])
   const filters: Array<[Filter, string]> = [['all', zh ? '全部' : 'All'], ['meeting', zh ? '会议' : 'Meetings'], ['media', zh ? '音视频' : 'Media'], ['text', zh ? '文章与文本' : 'Text']]
 
-  return <div className="mx-auto flex max-w-7xl flex-col gap-6 p-6 lg:p-10">
-    <header className="flex flex-wrap items-end justify-between gap-4 border-b pb-6"><div><p className="text-sm text-muted-foreground">{workspaceLabel}</p><h1 className="mt-2 text-2xl font-semibold tracking-tight">{copy.notes.title}</h1><p className="mt-2 text-sm text-muted-foreground">{zh ? '会议、链接、文件和团队共享内容。' : 'Meetings, links, files and shared content.'}</p></div><Button onClick={() => navigate('/generate')}><Plus />{zh ? '新建笔记' : 'New note'}</Button></header>
-    <div className="flex flex-col gap-3 border-b pb-5 lg:flex-row lg:items-center">
-      <div className="relative flex-1"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"/><Input value={query} onChange={event => setQuery(event.target.value)} placeholder={zh ? '搜索标题和内容' : 'Search title and content'} className="border-0 bg-muted pl-9 shadow-none"/></div>
+  return <div className="mx-auto flex max-w-7xl flex-col gap-7 p-6 lg:p-10">
+    <header className="motion-rise flex flex-wrap items-end justify-between gap-4"><div><Badge variant="secondary">{workspaceLabel}</Badge><h1 className="mt-4 text-3xl font-semibold tracking-tight">{copy.notes.title}</h1><p className="mt-2 text-sm text-muted-foreground">{zh ? '会议纪要、链接资料、文件笔记与团队共享内容。' : 'Meetings, links, files and shared content.'}</p></div><Button onClick={() => navigate('/generate')} size="lg"><Plus />{zh ? '整理新资料' : 'New note'}</Button></header>
+    <div className="motion-rise flex flex-col gap-3 rounded-2xl border bg-card p-3 shadow-sm lg:flex-row lg:items-center" style={{ animationDelay: '70ms' }}>
+      <div className="relative flex-1"><Search className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"/><Input value={query} onChange={event => setQuery(event.target.value)} placeholder={zh ? '搜索标题和内容' : 'Search title and content'} className="border-0 bg-transparent pl-9 shadow-none focus-visible:ring-0"/></div>
       <ToggleGroup type="single" value={filter} onValueChange={value => value && setFilter(value as Filter)}>{filters.map(([value,label]) => <ToggleGroupItem key={value} value={value}>{label}</ToggleGroupItem>)}</ToggleGroup>
       <div className="flex gap-1"><Button variant={view==='grid'?'secondary':'ghost'} size="icon" onClick={() => setView('grid')}><Grid2X2/></Button><Button variant={view==='list'?'secondary':'ghost'} size="icon" onClick={() => setView('list')}><List/></Button></div>
     </div>

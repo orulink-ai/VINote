@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { captureMeetingSources, DEFAULT_CAPTURE_OPTIONS as AUTOMATIC_CAPTURE_OPTIONS } from './meetingCapture'
+import { acquireMeetingMicrophone, captureMeetingSources, DISPLAY_CAPTURE_FAILED, SYSTEM_AUDIO_UNAVAILABLE, DEFAULT_CAPTURE_OPTIONS as AUTOMATIC_CAPTURE_OPTIONS } from './meetingCapture'
 
 const DEFAULT_CAPTURE_OPTIONS = { ...AUTOMATIC_CAPTURE_OPTIONS, systemAudio: false }
 
@@ -13,6 +13,39 @@ class TestStream {
 afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers() })
 
 describe('meeting source capture', () => {
+  it('waits for screen selection beyond 20 seconds and remains cancellable', async () => {
+    vi.useFakeTimers()
+    const stop = vi.fn()
+    vi.stubGlobal('navigator', { mediaDevices: {
+      getUserMedia: vi.fn().mockResolvedValue(new TestStream([{ kind: 'audio', stop }])),
+      getDisplayMedia: vi.fn(() => new Promise(() => {})),
+    } })
+    const controller = new AbortController()
+    const pending = captureMeetingSources(AUTOMATIC_CAPTURE_OPTIONS, controller.signal)
+    const settled = vi.fn()
+    void pending.then(settled, settled)
+    const failure = expect(pending).rejects.toThrow('display_request_cancelled')
+    await vi.advanceTimersByTimeAsync(60000)
+    expect(settled).not.toHaveBeenCalled()
+    controller.abort()
+    await failure
+    expect(navigator.mediaDevices.getUserMedia).not.toHaveBeenCalled()
+    expect(stop).not.toHaveBeenCalled()
+  })
+
+  it('allows a temporarily muted microphone without requesting screen sharing', async () => {
+    const track = { kind: 'audio', muted: true, stop: vi.fn() }
+    const getDisplayMedia = vi.fn()
+    vi.stubGlobal('navigator', { mediaDevices: {
+      getUserMedia: vi.fn().mockResolvedValue(new TestStream([track])), getDisplayMedia,
+    } })
+    vi.stubGlobal('MediaStream', TestStream)
+    const capture = await captureMeetingSources(DEFAULT_CAPTURE_OPTIONS)
+    expect(capture.stream.getAudioTracks()).toEqual([track])
+    expect(getDisplayMedia).not.toHaveBeenCalled()
+    capture.cleanup()
+  })
+
   it('releases the screen on cancellation and stops a late microphone result', async () => {
     const stopScreen = vi.fn()
     const stopMic = vi.fn()
@@ -53,12 +86,48 @@ describe('meeting source capture', () => {
     expect(stop).toHaveBeenCalledOnce()
   })
 
-  it('rejects missing system audio instead of silently recording only the microphone', async () => {
-    const stop = vi.fn()
+  it('falls back to the system default when the selected endpoint is stale', async () => {
+    const stream = new TestStream([{ kind: 'audio', stop: vi.fn() }])
     const getUserMedia = vi.fn()
-    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia, getDisplayMedia: vi.fn().mockResolvedValue(new TestStream([{ kind: 'video', stop }])) } })
-    await expect(captureMeetingSources({ ...DEFAULT_CAPTURE_OPTIONS, systemAudio: true })).rejects.toThrow('无法录制电脑播放的声音')
-    expect(stop).toHaveBeenCalledOnce()
+      .mockRejectedValueOnce(new DOMException('', 'OverconstrainedError'))
+      .mockResolvedValueOnce(stream)
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+
+    await expect(acquireMeetingMicrophone('old-headset-id')).resolves.toBe(stream)
+    expect(getUserMedia).toHaveBeenNthCalledWith(1, { audio: { deviceId: { exact: 'old-headset-id' } } })
+    expect(getUserMedia).toHaveBeenNthCalledWith(2, { audio: true })
+  })
+
+  it('retries a temporary Windows audio endpoint failure once', async () => {
+    vi.useFakeTimers()
+    const stream = new TestStream([{ kind: 'audio', stop: vi.fn() }])
+    const getUserMedia = vi.fn()
+      .mockRejectedValueOnce(new DOMException('', 'NotReadableError'))
+      .mockResolvedValueOnce(stream)
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+
+    const pending = acquireMeetingMicrophone('headset-id')
+    await vi.advanceTimersByTimeAsync(250)
+    await expect(pending).resolves.toBe(stream)
+    expect(getUserMedia).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not retry when microphone permission is denied', async () => {
+    const getUserMedia = vi.fn().mockRejectedValue(new DOMException('', 'NotAllowedError'))
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia } })
+
+    await expect(acquireMeetingMicrophone('headset-id')).rejects.toMatchObject({ name: 'NotAllowedError' })
+    expect(getUserMedia).toHaveBeenCalledOnce()
+  })
+
+  it('rejects missing system audio instead of silently recording only the microphone', async () => {
+    const stopDisplay = vi.fn()
+    const stopMic = vi.fn()
+    const getUserMedia = vi.fn().mockResolvedValue(new TestStream([{ kind: 'audio', stop: stopMic }]))
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia, getDisplayMedia: vi.fn().mockResolvedValue(new TestStream([{ kind: 'video', stop: stopDisplay }])) } })
+    await expect(captureMeetingSources({ ...DEFAULT_CAPTURE_OPTIONS, systemAudio: true })).rejects.toThrow(SYSTEM_AUDIO_UNAVAILABLE)
+    expect(stopDisplay).toHaveBeenCalledOnce()
+    expect(stopMic).not.toHaveBeenCalled()
     expect(getUserMedia).not.toHaveBeenCalled()
   })
 

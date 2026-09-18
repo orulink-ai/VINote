@@ -1,8 +1,8 @@
-import { Bell, Bot, Palette, Shield, User, type LucideIcon } from 'lucide-react'
+import { Bell, Bot, Palette, User, type LucideIcon } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useI18n } from '../../lib/i18n'
 
-export type SettingsTab = 'profile' | 'models' | 'team' | 'appearance' | 'notifications'
+export type SettingsTab = 'profile' | 'models' | 'appearance' | 'notifications'
 
 type TabConfig = {
   key: SettingsTab
@@ -20,7 +20,6 @@ export function SettingsNav({ activeTab, onChange }: SettingsNavProps) {
   const tabs: TabConfig[] = [
     { key: 'profile', label: copy.settings.profile, icon: User },
     { key: 'models', label: copy.settings.models, icon: Bot },
-    { key: 'team', label: copy.settings.team, icon: Shield },
     { key: 'appearance', label: copy.settings.appearance, icon: Palette },
     { key: 'notifications', label: copy.settings.notifications, icon: Bell },
   ]

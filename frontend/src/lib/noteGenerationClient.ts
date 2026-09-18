@@ -1,4 +1,5 @@
 import { apiJson } from './api'
+import type { LiveTranscriptDiagnostics } from '../types/liveTranscript'
 
 export type SummaryMode = 'default' | 'accurate' | 'oneshot'
 export type UploadSourceType = 'audio' | 'video' | 'transcript'
@@ -33,7 +34,11 @@ export interface UploadGenerationInput {
   diarize?: boolean
   speakerCount?: number
   workflow?: 'meeting' | 'note_organization'
-  traceSource?: 'desktop_recording' | 'local_file'
+  traceSource?: 'desktop_recording' | 'desktop_live_transcript' | 'local_file'
+  meetingSessionId?: string
+  meetingMode?: 'recording' | 'minutes'
+  meetingType?: 'audio' | 'video'
+  realtimeDiagnostics?: LiveTranscriptDiagnostics
 }
 
 export async function submitUploadedSource(input: UploadGenerationInput) {
@@ -46,8 +51,12 @@ export async function submitUploadedSource(input: UploadGenerationInput) {
   formData.append('summary_mode', input.summaryMode)
   formData.append('workflow', input.workflow || 'note_organization')
   formData.append('trace_source', input.traceSource || 'local_file')
-  if (input.sourceType !== 'transcript') formData.append('diarize', 'true')
+  if (input.diarize !== undefined) formData.append('diarize', String(input.diarize))
   if (input.speakerCount) formData.append('speaker_count', String(input.speakerCount))
+  if (input.meetingSessionId) formData.append('meeting_session_id', input.meetingSessionId)
+  if (input.meetingMode) formData.append('meeting_mode', input.meetingMode)
+  if (input.meetingType) formData.append('meeting_type', input.meetingType)
+  if (input.realtimeDiagnostics) formData.append('realtime_diagnostics', JSON.stringify(input.realtimeDiagnostics))
 
   if (input.outputLanguage) {
     formData.append('output_language', input.outputLanguage)

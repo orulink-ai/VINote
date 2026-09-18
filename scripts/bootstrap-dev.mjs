@@ -44,7 +44,7 @@ export function bootstrap() {
   if (!existsSync(config)) {
     const publicConfig = JSON.parse(readFileSync(join(root, 'config/desktop-public.json'), 'utf8'))
     const initial = {
-      ...publicConfig, VILAB_SERVER_URL: 'http://127.0.0.1:9878',
+      ...publicConfig, VILAB_SERVER_URL: 'http://192.168.1.143:9876',
       APP_JWT_SECRET: randomBytes(48).toString('hex'),
       MODEL_PROFILE_ENCRYPTION_KEY: randomBytes(32).toString('base64url') + '=',
     }

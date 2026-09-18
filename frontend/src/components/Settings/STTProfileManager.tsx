@@ -243,8 +243,8 @@ export function STTProfileManager() {
 
   return (
     <section className="py-2">
-      <div className="grid gap-6 xl:grid-cols-[minmax(0,1.45fr)_380px]">
-        <div className="min-w-0 grid gap-4">
+      <div className="grid gap-6 lg:grid-cols-[minmax(280px,0.8fr)_minmax(420px,1.2fr)]">
+        <div className="min-w-0 rounded-2xl border bg-card p-5">
           <div className="flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <div className="flex items-center gap-3">
@@ -267,11 +267,11 @@ export function STTProfileManager() {
           ) : profiles.length === 0 ? (
             <Empty className="border border-dashed"><EmptyHeader><EmptyTitle>{copy.sttProfiles.empty}</EmptyTitle><EmptyDescription>{copy.sttProfiles.body}</EmptyDescription></EmptyHeader></Empty>
           ) : (
-            <div className="stealth-scroll max-h-[620px] grid gap-3 overflow-y-auto pr-1">
+            <div className="stealth-scroll mt-4 grid max-h-[620px] gap-3 overflow-y-auto pr-1">
               {profiles.filter(profile => profile.id !== 'vilab-cloud').map((profile) => (
                 <div
                   key={profile.id}
-                  className="border-b px-1 py-4 last:border-b-0"
+                  className={clsx('rounded-xl border p-4 transition-colors hover:bg-muted/35', editingId === profile.id && 'border-foreground/30 bg-muted/45')}
                 >
                   <div className="grid gap-4">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -320,8 +320,8 @@ export function STTProfileManager() {
           )}
         </div>
 
-        <aside className="xl:sticky xl:top-8 xl:self-start">
-          <section className="grid gap-4 border-l pl-6">
+        <aside className="lg:sticky lg:top-8 lg:self-start">
+          <section className="grid gap-5 rounded-2xl border bg-card p-5 shadow-sm sm:p-6">
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">
