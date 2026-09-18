@@ -12,7 +12,7 @@ function check(label, command, args, cwd = root) {
 
 check('Backend tests', python(), ['-m', 'pytest', 'tests', '-q'])
 check('Desktop script contracts', process.execPath, ['--test',
-  'scripts/desktop-build-profile.test.mjs', 'scripts/project-scripts.test.mjs'])
+  'scripts/desktop-build-profile.test.mjs', 'scripts/desktop-dev-profile.test.mjs', 'scripts/project-scripts.test.mjs'])
 check('Frontend tests', process.execPath,
   [join(root, 'frontend/node_modules/vitest/vitest.mjs'), 'run'], join(root, 'frontend'))
 check('Frontend type check', process.execPath,

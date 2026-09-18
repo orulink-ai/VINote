@@ -65,7 +65,7 @@ API 参考：
 
 ### 云端模型部署配置
 
-由部署管理员在根目录 `.env` 中设置可选的 `VILAB_SERVER_URL`、`VINOTE_SUPABASE_URL` 和 `VINOTE_SUPABASE_PUBLISHABLE_KEY`。源码开发、测试包和正式包默认连接已部署的 `http://192.168.1.143:9876`；只有显式设置 `VILAB_SERVER_URL` 时才覆盖源码默认地址，例如独立调试 VILab Server 时使用 `http://127.0.0.1:9878`。在模型设置中注册/登录 VINote 云端账号，后端加密保存并刷新个人令牌；模型供应商密钥只配置在 VILab Server。未配置 Supabase 时保留 `VILAB_API_KEY` 部署凭证兼容路径。
+由部署管理员在根目录 `.env` 中设置可选的 `VILAB_SERVER_URL`、`VINOTE_SUPABASE_URL` 和 `VINOTE_SUPABASE_PUBLISHABLE_KEY`。测试开发、测试包和正式包默认连接内网 `http://192.168.1.143:9876`；普通开发默认连接本机 `http://127.0.0.1:9878`。桌面端分别使用 `VINOTE_TEST_VILAB_SERVER_URL`、`VINOTE_DEV_VILAB_SERVER_URL`、`VINOTE_RELEASE_VILAB_SERVER_URL` 覆盖对应渠道地址，独立后端仍读取 `VILAB_SERVER_URL`。详见[运行脚本规范](docs/running-scripts.md)。在模型设置中注册/登录 VINote 云端账号，后端加密保存并刷新个人令牌；模型供应商密钥只配置在 VILab Server。未配置 Supabase 时保留 `VILAB_API_KEY` 部署凭证兼容路径。
 
 「设置 → 模型服务」提供云端与本地/自定义运行模式切换，并按 VINote 用户保存。视频链接、文件上传、文字稿和会议录音统一遵循该模式；进行中的任务保持开始处理时的配置，切换只影响后续任务。
 
@@ -109,11 +109,12 @@ cp .env.example .env.local
 npm run web:dev
 ```
 
-建议统一从仓库根目录运行：
+建议统一从仓库根目录运行；完整命令、配置优先级和兼容入口见[运行脚本规范](docs/running-scripts.md)：
 
 ```bash
 yarn setup        # 首次初始化依赖、配置和说话人模型，不启动应用
-yarn dev          # 后端热重载 + Vite HMR + Tauri 桌面客户端
+yarn client:test:dev # 测试开发版桌面端，连接内网，支持热更新
+yarn client:dev      # 普通开发版桌面端，连接本地开发服务
 yarn dev:api      # 仅后端
 yarn dev:web      # 仅浏览器 Web 客户端
 yarn verify        # 后端、前端、脚本和文档的合并前检查
@@ -165,15 +166,15 @@ yarn dev
 打包前只查看渠道配置，不构建：
 
 ```bash
-yarn package:test:plan
-yarn package:release:plan
+yarn client:test:plan
+yarn client:production:plan
 ```
 
 生成测试版或正式版安装包：
 
 ```bash
-yarn package:test
-yarn package:release
+yarn client:test
+yarn client:production
 ```
 
 构建产物按渠道和版本归档到 `.desktop-build/artifacts/<channel>/<version>/<buildId>/`，包含校验清单；详见 [桌面打包](docs/desktop-packaging.md)。
@@ -337,7 +338,7 @@ npm run build
 
 模型请求只发送到 `VILAB_SERVER_URL`，不会从 VINote 直接请求供应商。云端 ASR 上传前会用 ffmpeg 转成 16 kHz 单声道 PCM WAV。短期令牌与刷新令牌加密保存在 `cloud_accounts`，不返回浏览器。退出会清理该用户的云端会话；数据库使用 SQLite 时请使用单个后端 worker。
 
-本地服务端启动及联调结果见 `docs/plans/2026-09-09-cloud-account-integration.md`。尚未把服务器 LAN 地址设为发行默认值。
+本地服务端启动及联调结果见 `docs/plans/2026-09-09-cloud-account-integration.md`。当前开发渠道与发行默认地址以[运行脚本规范](docs/running-scripts.md)为准。
 
 
 ### VINote 统一云端登录
@@ -356,7 +357,7 @@ VINote 云端模式通过 VILab Server 的已认证接口读取当前可用 LLM 
 
 会议草稿会额外调用 LLM 对照转写复核主体、决策和行动后再返回，增加一次模型调用；长会议先逐块复核，再合并并核对一致性。云端复核优先使用 `MEETING_REVIEW_MODEL`（默认 `gpt-6-astra`），仅在服务列为可用时选择；未提供该模型或设为空值则沿用原模型，本地/自定义模式始终使用当前模型。全局模型选择不变。复核失败不静默返回未复核稿；这项复核不能恢复录音缺失信息或保证所有识别错误都已消除。
 
-正式版使用 `yarn package:release`，测试版使用 `yarn package:test`。源码开发和两种安装包默认均连接 `http://192.168.1.143:9876`；源码可用 `VILAB_SERVER_URL` 覆盖，测试包和正式包可分别用 `VINOTE_TEST_VILAB_SERVER_URL`、`VINOTE_RELEASE_VILAB_SERVER_URL` 覆盖。测试版使用独立安装身份和数据目录。产物与校验清单位于 `.desktop-build/artifacts/`，详见[打包说明](docs/desktop-packaging.md)。
+正式版使用 `yarn client:production`，测试版使用 `yarn client:test`。测试开发和两种安装包默认连接 `http://192.168.1.143:9876`；普通开发默认连接本机 `9878`，可用 `VINOTE_DEV_VILAB_SERVER_URL` 覆盖。测试开发/测试包和正式包可分别用 `VINOTE_TEST_VILAB_SERVER_URL`、`VINOTE_RELEASE_VILAB_SERVER_URL` 覆盖。测试版使用独立安装身份和数据目录。产物与校验清单位于 `.desktop-build/artifacts/`，详见[打包说明](docs/desktop-packaging.md)。
 
 真实会议生成验证可运行 `python scripts/check_meeting_generation.py data/diarization-four-speakers.wav --live --speakers 4 --output data/meeting-live-report.json`。它调用桌面端共用的上传、任务、保存、逐字稿和媒体接口，真实消耗云端 STT/LLM，并在当前唯一关联账号的个人空间保存一条标注「测试」的笔记；多账号需传 `--user-id`。该后台检查不验证原生麦克风、录屏权限或桌面窗口交互。
 
@@ -364,10 +365,10 @@ VINote 云端模式通过 VILab Server 的已认证接口读取当前可用 LLM 
 
 需要 Node.js 22+、Rust，以及 Windows C++ Build Tools/WebView2 或 macOS Xcode Command Line Tools。两个项目分别运行，VINote 不启动或打包 VILab Server。
 
-1. VILab Server 仓库：`yarn dev`，模型 API 为 `http://127.0.0.1:9878`，管理界面为 `http://127.0.0.1:5174/admin/`。
-2. VINote 仓库：直接运行 `yarn dev`：首次自动安装前端依赖、创建 `.venv`、安装后端依赖并生成忽略提交的 `.env`（不覆盖已有配置）。自动启动 VINote API、Vite 和一个桌面开发实例。先登录/注册邮箱账号，再在应用中选择云端或本地。
-3. VINote 未配置地址时默认连接 `http://192.168.1.143:9876`。只有单独调试本机 VILab Server 时，才在 VINote `.env` 显式设置 `VILAB_SERVER_URL=http://127.0.0.1:9878`。先设置 `VINOTE_SUPABASE_URL` 和 `VINOTE_SUPABASE_PUBLISHABLE_KEY`。
-4. 安装 FFmpeg/FFprobe 并加入 PATH，然后运行根目录 `yarn package:release` 或 `yarn package:test`，脚本会自动初始化依赖和安装 PyInstaller。Windows 生成 NSIS `.exe`，macOS 生成 `.app` 和 `.dmg`，归档到 `.desktop-build/artifacts/`。必须在对应系统上构建；签名/公证需要各平台的发布证书。
+1. 仅调试本地服务时，在 VILab Server 仓库运行 `yarn dev`，模型 API 为 `http://127.0.0.1:9878`，管理界面为 `http://127.0.0.1:5174/admin/`。
+2. VINote 仓库：内网调试运行 `yarn client:test:dev`，本地联调运行 `yarn client:dev`：首次自动安装前端依赖、创建 `.venv`、安装后端依赖并生成忽略提交的 `.env`（不覆盖已有配置）。自动启动 VINote API、Vite 和一个桌面开发实例。先登录/注册邮箱账号，再在应用中选择云端或本地。
+3. 两个开发渠道的地址、应用身份和追踪环境独立选择，配置规则见[运行脚本规范](docs/running-scripts.md)。先设置 `VINOTE_SUPABASE_URL` 和 `VINOTE_SUPABASE_PUBLISHABLE_KEY`。
+4. 安装 FFmpeg/FFprobe 并加入 PATH，然后运行根目录 `yarn client:production` 或 `yarn client:test`，脚本会自动初始化依赖和安装 PyInstaller。Windows 生成 NSIS `.exe`，macOS 生成 `.app` 和 `.dmg`，归档到 `.desktop-build/artifacts/`。必须在对应系统上构建；签名/公证需要各平台的发布证书。
 5. 安装包的云端默认地址为 `http://192.168.1.143:9876`。可在构建时分别设置 `VINOTE_TEST_VILAB_SERVER_URL` 或 `VINOTE_RELEASE_VILAB_SERVER_URL`。打包只读取 Supabase URL 和 publishable key，不打包 `.env`、模型密钥或个人数据。
 
 `VINOTE_PYTHON` 可指定 Python；`VINOTE_FFMPEG_PATH`、`VINOTE_FFPROBE_PATH` 可指定打包用的二进制文件。macOS 请使用可分发的同架构 FFmpeg（其动态依赖也须可分发）。

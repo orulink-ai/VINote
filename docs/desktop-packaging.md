@@ -1,12 +1,15 @@
 # 正式版与测试版打包
 
+完整的启动、配置和旧入口映射见[运行脚本规范](running-scripts.md)。
+
 ## 入口与默认服务
 
 | 运行方式 | 命令 | 默认 ViLab 地址 | 数据位置 |
 | --- | --- | --- | --- |
-| 源码开发 | `yarn dev` | `http://192.168.1.143:9876` | 开发配置指定的位置 |
-| 正式安装包 | `yarn package:release` | `http://192.168.1.143:9876` | `app.vinote.desktop` 对应应用数据目录 |
-| 测试安装包 | `yarn package:test` | `http://192.168.1.143:9876` | `app.vinote.desktop.test` 对应应用数据目录 |
+| 测试源码开发 | `yarn client:test:dev` | `http://192.168.1.143:9876` | 开发配置指定的位置 |
+| 普通源码开发 | `yarn client:dev` | `http://127.0.0.1:9878` | 开发配置指定的位置 |
+| 正式安装包 | `yarn client:production` | `http://192.168.1.143:9876` | `app.vinote.desktop` 对应应用数据目录 |
+| 测试安装包 | `yarn client:test` | `http://192.168.1.143:9876` | `app.vinote.desktop.test` 对应应用数据目录 |
 
 `yarn desktop:build` 保持兼容，等同于正式版。测试安装包同样连接已部署服务，不能自动继承源码 `.env` 的本地 `VILAB_SERVER_URL`。确有需要时，分别使用 `VINOTE_RELEASE_VILAB_SERVER_URL`、`VINOTE_TEST_VILAB_SERVER_URL` 显式覆盖，值必须是没有账号密码、路径和查询参数的 HTTP(S) Origin。
 
@@ -15,10 +18,10 @@
 ## 构建检查与产物
 
 ```powershell
-yarn desktop:check
-yarn package:release:plan
-yarn package:test:plan
-yarn package:test
+yarn client:check
+yarn client:production:plan
+yarn client:test:plan
+yarn client:test
 ```
 
 `--plan` 仅显示渠道、版本、安装身份及默认服务，不安装依赖或启动应用。`--build-id <标识>` 可覆盖构建标识，默认使用 UTC 时间。

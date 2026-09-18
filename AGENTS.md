@@ -61,7 +61,7 @@ The backend can also run as a lightweight MCP server through `mcp_server.py`.
 - Backend dev server: `uvicorn main:app --host 0.0.0.0 --port 8900 --reload`
 - Backend direct run: `python main.py`
 - Fresh-checkout setup without starting the app: `yarn setup`
-- Root desktop + backend entry point: `yarn dev`
+- Desktop + backend entry points: `yarn client:test:dev` (LAN test development), `yarn client:dev` (local development). `yarn dev` remains a test-development compatibility alias. See `docs/running-scripts.md`.
 - Root backend-only entry point: `yarn dev:api`
 - Root browser frontend entry point: `yarn dev:web`
 - Merge-ready project validation: `yarn verify`
@@ -69,11 +69,11 @@ The backend can also run as a lightweight MCP server through `mcp_server.py`.
   - Configured database failures are reported; the startup script does not switch to another database. Without DATABASE_URL the backend uses its SQLite default.
 - Frontend install: `cd frontend && npm install`
 - Frontend web dev server only: `cd frontend && npm run web:dev`
-- Tauri desktop hot-reload dev: `yarn dev` from the repository root
+- Tauri desktop hot-reload dev: `yarn client:test:dev` or `yarn client:dev` from the repository root
 - Windows source development keeps Tauri/Vite output in the invoking terminal. `scripts/windows-backend-dev.py` isolates Uvicorn reload signals in a hidden console with output forwarded to that terminal; do not use Windows `detached: true` for the desktop toolchain.
 - Frontend build: `cd frontend && npm run build`
 - Frontend preview: `cd frontend && npm run preview`
-- Test/release package build: `yarn package:test` / `yarn package:release`
+- Test/release package build: `yarn client:test` / `yarn client:production`; legacy `package:test` / `package:release` remain aliases.
 - Package configuration preview: `yarn package:test:plan` / `yarn package:release:plan`
 - Docs install: `cd docs && npm install`
 - Docs dev server: `cd docs && npm run docs:dev`
@@ -186,7 +186,7 @@ Update `README.md`, this `AGENTS.md`, or both whenever you change:
 - Cloud account endpoints under `/api/vilab/account` require local VINote authentication. `cloud_accounts` maps local users to unique `(issuer, subject)` identities.
 - Source development and desktop packages use the deployed LAN VILab Server at `http://192.168.1.143:9876` by default. An explicit `VILAB_SERVER_URL` override remains available for isolated service development.
 
-Desktop packaging: scripts/desktop_backend.py initializes per-install secrets and SQLite in the user app data directory. Release-only desktop_backend.rs starts the bundled backend on a persisted per-install loopback port and stops it on exit. Source development and packaged builds default to http://192.168.1.143:9876; `VILAB_SERVER_URL` can explicitly override source development. The two products remain independent processes/repos.
+Desktop packaging: scripts/desktop_backend.py initializes per-install secrets and SQLite in the user app data directory. Release-only desktop_backend.rs starts the bundled backend on a persisted per-install loopback port and stops it on exit. Test development and packaged builds default to http://192.168.1.143:9876; ordinary development defaults to http://127.0.0.1:9878. Desktop channels use VINOTE_TEST_VILAB_SERVER_URL / VINOTE_DEV_VILAB_SERVER_URL / VINOTE_RELEASE_VILAB_SERVER_URL rather than the generic VILAB_SERVER_URL; standalone backend commands still use the generic variable. The two products remain independent processes/repos.
 
 Fresh-checkout startup: yarn dev runs bootstrap-dev.mjs to install frontend dependencies, create .venv and install requirements, and create .env with unique local secrets and config/desktop-public.json account defaults. Existing .env is preserved. --setup-only performs initialization without opening a window. Node 22+, Python, Rust/platform compilers and FFmpeg are system prerequisites.
 
@@ -200,7 +200,7 @@ Fresh-checkout startup: yarn dev runs bootstrap-dev.mjs to install frontend depe
 - `speaker_clustering_service.py` refines automatic grouping using sustained-turn embeddings, average linkage and silhouette selection. Short uncertain turns remain unknown; overlap remains explicit. Group count and silhouette are not identity accuracy guarantees.
 - Meeting summaries synthesize themes, confirmed decisions and explicit actions; omit unsupported owners/deadlines/open questions. Both one-shot and hierarchical prompts keep wall-clock metadata separate from media offsets and avoid a duplicate closing AI summary.
 - `app/llm/meeting_review.py` owns fact-review prompts. Meeting one-shot drafts are reviewed against original transcripts; hierarchical chunks are reviewed before merge, and final consistency is checked against reviewed chunks. Empty/failed reviews fail rather than returning the draft. Cloud review prefers available `MEETING_REVIEW_MODEL` (default `gpt-6-astra`), falls back to the primary model when absent, and never changes global preferences. Custom/local providers reuse their current model. Packaging includes this non-secret preference; calls and actual review model remain traced.
-- `bootstrap-dev.mjs` checks/prepares local speaker runtime/models. `desktop-build-profile.mjs` owns release/test identity and configuration isolation. Source development, test packages and release packages default to the deployed LAN ViLab Origin at `http://192.168.1.143:9876`; source development may explicitly override it with `VILAB_SERVER_URL`. Build entry points and artifacts are documented in `docs/desktop-packaging.md`; never package `.env` or private meeting artifacts.
+- `bootstrap-dev.mjs` checks/prepares local speaker runtime/models. `desktop-build-profile.mjs` owns release/test identity and configuration isolation. Test development, test packages and release packages default to the deployed LAN ViLab Origin at `http://192.168.1.143:9876`; ordinary development defaults to local port 9878. Channel-specific overrides and command semantics are documented in `docs/running-scripts.md`. Build entry points and artifacts are documented in `docs/desktop-packaging.md`; never package `.env` or private meeting artifacts.
 
 - `/meetings` owns meeting setup/history; `meetingCapture.ts` captures selected microphone plus optional display/system audio. Main-window `MeetingRecorderDock` owns the stream; `MeetingRecorderController` forwards native floating-window actions via Tauri events.
 - `MeetingCaptureWorkspace` renders the active capture preview and controls. User end actions send `request-stop`; `MeetingRecorderDock` presents the confirmation in the main window, never in the small native controller. The internal `stop` action remains available for source-ended/save flows. Minutes mode automatically starts real live ASR from the existing capture stream without requesting a second microphone; recording mode does not start live ASR. Live-ASR failure is fail-open and local recording continues. Pause/resume creates a new realtime connection when needed and merges transcript segments across connections. Never render simulated transcript messages, speakers or audio levels as real input.
@@ -237,3 +237,5 @@ OPFS-backed recording blobs reference their source file. After IndexedDB history
 - Desktop main capture uses the native controller without a simultaneous in-page recording dock. Terminal main-window states close the native controller. A saved server note must retain the original recording before deleting the local pending copy.
 
 - Desktop source startup isolates child process groups/consoles on Windows as well as Unix, so Python reload control signals cannot terminate the sibling Tauri window. Shutdown still terminates each owned process tree.
+
+Development channels use separate Tauri identities (`app.vinote.desktop.dev` and `app.vinote.desktop.test.dev`) and tracing environments, while the source backend database still follows repository configuration. Run one source instance at a time; the launcher rejects an occupied backend port rather than reusing unknown settings. `client:*:dev:plan` is a read-only configuration preview without bootstrapping or launching services.
