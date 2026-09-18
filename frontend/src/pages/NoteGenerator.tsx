@@ -20,7 +20,6 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 import { Badge } from '../components/ui/badge'
 
 type TaskResponse = { task_id: string }
-type SummaryMode = 'default' | 'accurate' | 'oneshot'
 type TaskStatusResponse = {
   status: string
   message: string
@@ -38,7 +37,6 @@ export function NoteGenerator() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const requestedMode = searchParams.get('mode') === 'file' ? 'file' : 'url'
   const [uploadMode, setUploadMode] = useState<UploadMode>(isMeeting ? 'file' : requestedMode)
-  const [summaryMode, setSummaryMode] = useState<SummaryMode>('default')
   const [taskMessage, setTaskMessage] = useState('')
   const [, setTaskId] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -178,7 +176,7 @@ export function NoteGenerator() {
           body: JSON.stringify({
             video_url: videoUrl,
             workflow: isMeeting ? 'meeting' : 'note_organization',
-            summary_mode: summaryMode,
+            summary_mode: 'default',
             output_language: language,
             model_profile_id: selectedProfileId || undefined,
             stt_profile_id: selectedSTTProfileId || undefined,
@@ -203,7 +201,7 @@ export function NoteGenerator() {
         formData.append('workflow', isMeeting ? 'meeting' : 'note_organization')
         formData.append('trace_source', 'local_file')
         if (sourceType !== 'transcript') formData.append('diarize', 'true')
-        formData.append('summary_mode', summaryMode)
+        formData.append('summary_mode', 'default')
         formData.append('output_language', language)
         if (selectedProfileId) {
           formData.append('model_profile_id', selectedProfileId)
@@ -251,24 +249,6 @@ export function NoteGenerator() {
     teams,
     copy.sidebar.home,
   )
-  const summaryModeOptions: Array<{ value: SummaryMode; label: string; description: string }> = [
-    {
-      value: 'default' as SummaryMode,
-      label: copy.generator.summaryModeDefaultLabel,
-      description: copy.generator.summaryModeDefaultDesc,
-    },
-    {
-      value: 'accurate' as SummaryMode,
-      label: copy.generator.summaryModeAccurateLabel,
-      description: copy.generator.summaryModeAccurateDesc,
-    },
-    {
-      value: 'oneshot' as SummaryMode,
-      label: copy.generator.summaryModeOneshotLabel,
-      description: copy.generator.summaryModeOneshotDesc,
-    },
-  ]
-  const selectedSummaryMode = summaryModeOptions.find((option) => option.value === summaryMode)
   const formatSTTProfileLabel = (name: string, profile: { provider: string; modelName: string | null; language: string | null }) => {
     const detail = profile.modelName || profile.language || profile.provider
     return `${name} / ${detail}`
@@ -282,7 +262,6 @@ export function NoteGenerator() {
       <div><Label className="mb-2 block">{copy.generator.modelProfileLabel}</Label><Select value={selectedProfileId || 'system-default'} onValueChange={value => selectProfile(value === 'system-default' ? '' : value)}><SelectTrigger><SelectValue placeholder={copy.generator.systemDefaultModel} /></SelectTrigger><SelectContent><SelectItem value="system-default">{copy.generator.systemDefaultModel}</SelectItem>{profiles.map(profile => <SelectItem key={profile.id} value={profile.id}>{profile.name} / {profile.modelName}{profile.isDefault ? ' (default)' : ''}</SelectItem>)}</SelectContent></Select><p className="mt-2 text-xs leading-5 text-muted-foreground">{selectedProfile ? copy.generator.activeModelSelected(selectedProfile.name, selectedProfile.modelName) : defaultProfile ? copy.generator.activeModelDefault(defaultProfile.name, defaultProfile.modelName) : copy.generator.activeModelBackend}</p></div>
       <div><Label className="mb-2 block">{copy.generator.sttProfileLabel}</Label><Select value={selectedSTTProfileId || 'system-default'} onValueChange={value => selectSTTProfile(value === 'system-default' ? '' : value)}><SelectTrigger><SelectValue placeholder={copy.generator.systemDefaultSTT} /></SelectTrigger><SelectContent><SelectItem value="system-default">{copy.generator.systemDefaultSTT}</SelectItem>{sttProfiles.map(profile => <SelectItem key={profile.id} value={profile.id}>{formatSTTProfileLabel(profile.name, profile)}{profile.isDefault ? ' (default)' : ''}</SelectItem>)}</SelectContent></Select><p className="mt-2 text-xs leading-5 text-muted-foreground">{selectedSTTProfile ? copy.generator.activeSTTSelected(selectedSTTProfile.name, formatSTTProfileLabel(selectedSTTProfile.name, selectedSTTProfile)) : defaultSTTProfile ? copy.generator.activeSTTDefault(defaultSTTProfile.name, formatSTTProfileLabel(defaultSTTProfile.name, defaultSTTProfile)) : copy.generator.activeSTTBackend}</p></div>
     </div>}
-    <div><Label className="mb-2 block">{copy.generator.summaryMode}</Label><Select value={summaryMode} onValueChange={value => setSummaryMode(value as SummaryMode)}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{summaryModeOptions.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select><p className="mt-2 text-xs leading-5 text-muted-foreground">{selectedSummaryMode?.description}</p></div>
   </div>
 
   const running = status === 'uploading' || status === 'processing'
@@ -291,7 +270,7 @@ export function NoteGenerator() {
     <header className="motion-rise max-w-2xl">
       <Badge variant="secondary" className="mb-3">{isMeeting ? '会议导入' : '资料整理'}</Badge>
       <h1 className="text-3xl font-semibold tracking-[-0.03em]">{isMeeting ? '从已有录制生成会议纪要' : '整理一份资料'}</h1>
-      <p className="mt-2 text-[15px] leading-6 text-muted-foreground">{isMeeting ? '选择音频、视频或逐字稿。系统会完成转写、说话人整理和纪要生成。' : '先选择来源，再确认处理方式。完成后直接进入编辑器继续修改和分享。'}</p>
+      <p className="mt-2 text-[15px] leading-6 text-muted-foreground">{isMeeting ? '选择音频、视频或逐字稿。系统会完成转写、说话人整理和纪要生成。' : '选择来源并确认保存位置。完成后直接进入编辑器继续修改和分享。'}</p>
     </header>
 
     {running ? <section className="motion-rise overflow-hidden rounded-2xl border bg-card shadow-sm">
@@ -304,15 +283,14 @@ export function NoteGenerator() {
       </section>
 
       <section className="motion-rise rounded-2xl border bg-card p-6 shadow-sm sm:p-7" style={{ animationDelay: '120ms' }}>
-        <div className="flex flex-wrap items-center justify-between gap-4"><div><h2 className="text-lg font-semibold">确认整理方式</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">确认保存位置和处理模式后即可开始。</p></div><Sheet><SheetTrigger asChild><Button variant="outline"><Settings2 />处理设置</Button></SheetTrigger><SheetContent className="overflow-y-auto sm:max-w-md"><SheetHeader><SheetTitle>处理设置</SheetTitle><SheetDescription>设置保存位置、转写模型和笔记生成方式。</SheetDescription></SheetHeader><div className="py-8">{generationSettings}</div></SheetContent></Sheet></div>
-        <div className="mt-5 grid overflow-hidden rounded-xl border sm:grid-cols-3 sm:divide-x">
+        <div className="flex flex-wrap items-center justify-between gap-4"><div><h2 className="text-lg font-semibold">确认资料</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">确认来源和保存位置后即可开始。</p></div><Sheet><SheetTrigger asChild><Button variant="outline"><Settings2 />处理设置</Button></SheetTrigger><SheetContent className="overflow-y-auto sm:max-w-md"><SheetHeader><SheetTitle>处理设置</SheetTitle><SheetDescription>查看保存位置，选择转写与总结服务。</SheetDescription></SheetHeader><div className="py-8">{generationSettings}</div></SheetContent></Sheet></div>
+        <div className="mt-5 grid overflow-hidden rounded-xl border sm:grid-cols-2 sm:divide-x">
           <div className="flex min-w-0 items-center gap-3 px-4 py-3"><Check className="size-4 shrink-0 text-muted-foreground" /><div className="min-w-0"><p className="text-xs text-muted-foreground">保存到</p><p className="mt-0.5 truncate text-sm font-medium">{workspaceLabel}</p></div></div>
-          <div className="flex min-w-0 items-center gap-3 border-t px-4 py-3 sm:border-t-0"><Check className="size-4 shrink-0 text-muted-foreground" /><div className="min-w-0"><p className="text-xs text-muted-foreground">整理方式</p><p className="mt-0.5 truncate text-sm font-medium">{selectedSummaryMode?.label}</p></div></div>
           <div className="flex min-w-0 items-center gap-3 border-t px-4 py-3 sm:border-t-0">{uploadMode === 'url' ? <LinkIcon className="size-4 shrink-0 text-muted-foreground" /> : <FileAudio className="size-4 shrink-0 text-muted-foreground" />}<div className="min-w-0"><p className="text-xs text-muted-foreground">当前来源</p><p className="mt-0.5 truncate text-sm font-medium">{uploadMode === 'url' ? (videoUrl || '等待粘贴链接') : (selectedFile?.name || '等待选择文件')}</p></div></div>
         </div>
       </section>
 
-      {status === 'failed' ? <Alert variant="destructive"><AlertDescription>{copy.generator.failedRecoveryHint}</AlertDescription><div className="mt-4 flex gap-3"><Button onClick={() => void handleGenerate()} disabled={!sourceReady}>{copy.generator.retryGeneration}</Button><Button variant="outline" onClick={handleEditInput}>{copy.generator.editInput}</Button></div></Alert> : null}
+      {status === 'failed' ? <Alert variant="destructive"><AlertDescription><p>{error}</p><p className="mt-2">{copy.generator.failedRecoveryHint}</p></AlertDescription><div className="mt-4 flex gap-3"><Button onClick={() => void handleGenerate()} disabled={!sourceReady}>{copy.generator.retryGeneration}</Button><Button variant="outline" onClick={handleEditInput}>{copy.generator.editInput}</Button></div></Alert> : null}
 
       <div className="motion-rise flex flex-col items-center justify-between gap-4 rounded-2xl bg-foreground px-6 py-5 text-background sm:flex-row" style={{ animationDelay: '170ms' }}><div><p className="font-medium">{sourceReady ? (isMeeting ? '会议文件已准备好' : '资料已准备好') : (isMeeting ? '先选择一个会议文件' : '先提供链接或文件')}</p><p className="mt-1 text-sm text-background/60">{sourceReady ? '开始后会显示真实处理阶段和失败恢复入口。' : '选好来源后即可开始，模型设置可在上方调整。'}</p></div><Button onClick={() => void handleGenerate()} disabled={!['idle', 'failed'].includes(status) || !sourceReady} variant="secondary" size="lg" className="motion-sheen min-w-52 rounded-full"><Wand2 />{language === 'zh-CN' ? (isMeeting ? '生成会议纪要' : '开始整理') : (isMeeting ? 'Generate meeting minutes' : 'Organize notes')}</Button></div>
     </>}

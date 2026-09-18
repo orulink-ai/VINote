@@ -174,7 +174,7 @@ Update `README.md`, this `AGENTS.md`, or both whenever you change:
 ## Notes for Agents
 - Cloud generation validates model selections before downloading/preparing input. Task directory titles are trimmed after truncation for Windows compatibility; `.task_id` is written before renaming so subsequent failures remain discoverable. The generator treats `not_found` as a terminal error.
 - The current frontend supports local audio/video uploads and direct transcript uploads from the browser.
-- The note generator UI exposes both LLM profile selection and STT profile selection; `default` summary mode still auto-switches to hierarchical summarization for longer transcripts.
+- The note generator UI exposes LLM and STT service selection, but no summary-strategy selector. Meeting minutes and note organization always submit `default`; the backend automatically chooses one-shot or hierarchical processing by transcript length. Legacy API strategy values remain supported.
 - Share links are public read-only links backed by `notes.share_token` and can be disabled from the note editor.
 - Saved notes are now explicitly scoped as either personal notes or team notes. Team notes require `scope="team"` plus a valid `team_id`, and any signed-in team member can open them through the normal note APIs.
 - If documentation and code disagree, trust the code, then fix the documentation in the same change.
