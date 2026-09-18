@@ -1,4 +1,4 @@
-import { captureMeetingSources, DISPLAY_CAPTURE_FAILED, SYSTEM_AUDIO_UNAVAILABLE, type MeetingCaptureOptions } from '../lib/meetingCapture'
+import { captureMeetingSources, DISPLAY_CAPTURE_FAILED, type MeetingCaptureOptions } from '../lib/meetingCapture'
 import { createRecordingFile } from '../lib/recordingFile'
 import { captureDiagnostic, captureFailure } from '../lib/captureDiagnostics'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -254,7 +254,7 @@ export function useAudioRecorder() {
       captureFailure('recorder.failed', recordingError, diagnosticStartedAt)
       if (requestVersion !== requestVersionRef.current) return false
       cleanupStream()
-      const isDisplayError = recordingError instanceof Error && [DISPLAY_CAPTURE_FAILED, SYSTEM_AUDIO_UNAVAILABLE].some(message => recordingError.message.includes(message))
+      const isDisplayError = recordingError instanceof Error && recordingError.message.includes(DISPLAY_CAPTURE_FAILED)
       const reason = isDisplayError ? 'unknown' : mapMicrophoneError(recordingError)
       const message = reason === 'unknown' && recordingError instanceof Error ? recordingError.message : `microphone_${reason}`
       setError(message)

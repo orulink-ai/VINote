@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { acquireMeetingMicrophone, captureMeetingSources, DISPLAY_CAPTURE_FAILED, SYSTEM_AUDIO_UNAVAILABLE, DEFAULT_CAPTURE_OPTIONS as AUTOMATIC_CAPTURE_OPTIONS } from './meetingCapture'
+import { acquireMeetingMicrophone, captureMeetingSources, DISPLAY_CAPTURE_FAILED, DEFAULT_CAPTURE_OPTIONS as AUTOMATIC_CAPTURE_OPTIONS } from './meetingCapture'
 
 const DEFAULT_CAPTURE_OPTIONS = { ...AUTOMATIC_CAPTURE_OPTIONS, systemAudio: false }
 
@@ -21,7 +21,7 @@ describe('meeting source capture', () => {
       getDisplayMedia: vi.fn(() => new Promise(() => {})),
     } })
     const controller = new AbortController()
-    const pending = captureMeetingSources(AUTOMATIC_CAPTURE_OPTIONS, controller.signal)
+    const pending = captureMeetingSources({ ...AUTOMATIC_CAPTURE_OPTIONS, screen: true }, controller.signal)
     const settled = vi.fn()
     void pending.then(settled, settled)
     const failure = expect(pending).rejects.toThrow('display_request_cancelled')
@@ -120,15 +120,23 @@ describe('meeting source capture', () => {
     expect(getUserMedia).toHaveBeenCalledOnce()
   })
 
-  it('rejects missing system audio instead of silently recording only the microphone', async () => {
+  it('records screen video with microphone audio without requesting display audio', async () => {
     const stopDisplay = vi.fn()
     const stopMic = vi.fn()
     const getUserMedia = vi.fn().mockResolvedValue(new TestStream([{ kind: 'audio', stop: stopMic }]))
-    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia, getDisplayMedia: vi.fn().mockResolvedValue(new TestStream([{ kind: 'video', stop: stopDisplay }])) } })
-    await expect(captureMeetingSources({ ...DEFAULT_CAPTURE_OPTIONS, systemAudio: true })).rejects.toThrow(SYSTEM_AUDIO_UNAVAILABLE)
+    const getDisplayMedia = vi.fn().mockResolvedValue(new TestStream([{ kind: 'video', stop: stopDisplay }]))
+    vi.stubGlobal('navigator', { mediaDevices: { getUserMedia, getDisplayMedia } })
+    vi.stubGlobal('MediaStream', TestStream)
+
+    const capture = await captureMeetingSources({ ...DEFAULT_CAPTURE_OPTIONS, screen: true, systemAudio: true })
+
+    expect(getDisplayMedia).toHaveBeenCalledWith(expect.objectContaining({ audio: false }))
+    expect(getUserMedia).toHaveBeenCalledWith({ audio: true })
+    expect(capture.stream.getVideoTracks()).toHaveLength(1)
+    expect(capture.stream.getAudioTracks()).toHaveLength(1)
+    capture.cleanup()
     expect(stopDisplay).toHaveBeenCalledOnce()
-    expect(stopMic).not.toHaveBeenCalled()
-    expect(getUserMedia).not.toHaveBeenCalled()
+    expect(stopMic).toHaveBeenCalledOnce()
   })
 
   it('releases the selected screen when microphone access fails', async () => {

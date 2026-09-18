@@ -1,6 +1,6 @@
 import { openMeetingController, publishMeetingState, listenMeetingActions, type MeetingControlAction } from '../../lib/meetingController'
 import { useAuthStore } from '../../stores/authStore'
-import { DEFAULT_CAPTURE_OPTIONS, START_MEETING_EVENT, SYSTEM_AUDIO_UNAVAILABLE, type MeetingCaptureOptions } from '../../lib/meetingCapture'
+import { DEFAULT_CAPTURE_OPTIONS, START_MEETING_EVENT, type MeetingCaptureOptions } from '../../lib/meetingCapture'
 import { useEffect, useRef, useState, type MouseEvent as ReactMouseEvent, type PointerEvent as ReactPointerEvent } from 'react'
 import { ChevronDown, Loader2, Mic, Minus, Pause, Play, RotateCcw, Square, X } from 'lucide-react'
 import clsx from 'clsx'
@@ -453,22 +453,6 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         if (options && isTauriRuntime()) void openMeetingController().catch(() => undefined)
       }
     } catch (startError) {
-      if (startError instanceof Error && startError.message.includes(SYSTEM_AUDIO_UNAVAILABLE)) {
-        recorder.reset()
-        useMeetingRecorderStore.setState({
-          phase: 'failed',
-          error: SYSTEM_AUDIO_UNAVAILABLE,
-          failedStage: undefined,
-          retryDescription: '',
-          hasRecoverableRecording: false,
-          isPanelOpen: false,
-          isMinimized: false,
-          notification: null,
-        })
-        setUseInlineDesktopRecorder(false)
-        void setRecorderActive(false)
-        return
-      }
       recorder.reset()
       useMeetingRecorderStore.setState({
         phase: 'failed',

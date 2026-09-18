@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { AudioLines, FileText, Mic2, Monitor, RotateCcw, Settings2, Sparkles, Upload, Volume2 } from 'lucide-react'
+import { FileText, Mic2, Monitor, Settings2, Sparkles, Upload, Volume2 } from 'lucide-react'
 import { apiJson } from '../lib/api'
 import { listPendingMeetings, type PendingMeeting } from '../lib/audioStorage'
-import { acquireMeetingMicrophone, DISPLAY_CAPTURE_FAILED, DEFAULT_CAPTURE_OPTIONS, START_MEETING_EVENT, SYSTEM_AUDIO_UNAVAILABLE } from '../lib/meetingCapture'
+import { acquireMeetingMicrophone, DEFAULT_CAPTURE_OPTIONS, START_MEETING_EVENT } from '../lib/meetingCapture'
 import { mapMicrophoneError } from '../lib/microphonePermission'
 import { useAuthStore } from '../stores/authStore'
 import { useMeetingRecorderStore } from '../stores/meetingRecorderStore'
@@ -47,8 +47,6 @@ export function Meetings() {
   const workspace = getWorkspaceLabel(currentWorkspace, teams, zh ? '个人空间' : 'Personal workspace')
   const workspacePending = pending.filter(item => item.workspace.scope === currentWorkspace.scope && (item.workspace.scope === 'personal' || currentWorkspace.scope === 'team' && item.workspace.teamId === currentWorkspace.teamId))
   const meetingNotes = notes.filter(note => ['meeting_recording', 'meeting_video'].includes(note.sourceType || ''))
-  const displayFailed = Boolean(session.error?.includes(DISPLAY_CAPTURE_FAILED))
-  const needsAudioFallback = displayFailed || Boolean(session.error?.includes(SYSTEM_AUDIO_UNAVAILABLE))
 
   useEffect(() => {
     void loadNotes(currentWorkspace)
@@ -84,7 +82,7 @@ export function Meetings() {
           : (zh ? '暂时无法启动这个麦克风。请重新检测，或改用“系统默认麦克风”。' : 'This microphone could not start. Check again or use the system default microphone.'))
     }
   }
-  const startRecording = (systemAudio = true) => {
+  const startRecording = () => {
     if (busy) return
     setError('')
     const nextOptions = {
@@ -93,7 +91,9 @@ export function Meetings() {
       mode,
       meetingType,
       screen: meetingType === 'video',
-      systemAudio: meetingType === 'video' ? systemAudio : false,
+      // The microphone is the required meeting audio source. Screen capture must
+      // never be blocked by optional WebView/Windows system-audio capture.
+      systemAudio: false,
       diarize: true,
       speakerCount: undefined,
     }
@@ -130,7 +130,7 @@ export function Meetings() {
               <div className="mb-5 flex items-start gap-4"><span className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-sm font-semibold">2</span><div className="min-w-0"><h3 className="font-semibold">{zh ? '选择录制范围' : 'Choose the capture range'}</h3><p className="mt-1 text-sm leading-6 text-muted-foreground">{zh ? '录音只采集麦克风；录屏会让你选择屏幕或窗口。' : 'Audio captures the microphone; screen recording opens the picker.'}</p></div></div>
               <ToggleGroup type="single" value={meetingType} onValueChange={value => value && setMeetingType(value as 'audio' | 'video')} className="grid min-w-0 gap-3 sm:grid-cols-2">
                 <ToggleGroupItem value="audio" className="h-auto min-h-24 min-w-0 items-start justify-start whitespace-normal rounded-2xl border p-4 text-left data-[state=on]:border-foreground data-[state=on]:bg-muted"><span className="flex min-w-0 items-start gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-background shadow-sm"><Mic2 className="size-4" /></span><span className="min-w-0"><strong className="block leading-6">{mode === 'minutes' ? (zh ? '语音会议' : 'Audio meeting') : (zh ? '仅录音' : 'Audio only')}</strong><span className="mt-1 block text-xs leading-5 text-muted-foreground">{zh ? '使用麦克风记录现场声音' : 'Capture sound from the microphone'}</span></span></span></ToggleGroupItem>
-                <ToggleGroupItem value="video" className="h-auto min-h-24 min-w-0 items-start justify-start whitespace-normal rounded-2xl border p-4 text-left data-[state=on]:border-foreground data-[state=on]:bg-muted"><span className="flex min-w-0 items-start gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-background shadow-sm"><Monitor className="size-4" /></span><span className="min-w-0"><strong className="block leading-6">{mode === 'minutes' ? (zh ? '视频会议' : 'Video meeting') : (zh ? '录音和屏幕' : 'Audio and screen')}</strong><span className="mt-1 block text-xs leading-5 text-muted-foreground">{zh ? '记录麦克风、电脑声音和画面' : 'Capture microphone, system audio and screen'}</span></span></span></ToggleGroupItem>
+                <ToggleGroupItem value="video" className="h-auto min-h-24 min-w-0 items-start justify-start whitespace-normal rounded-2xl border p-4 text-left data-[state=on]:border-foreground data-[state=on]:bg-muted"><span className="flex min-w-0 items-start gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-background shadow-sm"><Monitor className="size-4" /></span><span className="min-w-0"><strong className="block leading-6">{mode === 'minutes' ? (zh ? '视频会议' : 'Video meeting') : (zh ? '录音和屏幕' : 'Audio and screen')}</strong><span className="mt-1 block text-xs leading-5 text-muted-foreground">{zh ? '记录屏幕画面，并通过麦克风收录现场可听声音' : 'Capture the screen and audible meeting sound through the microphone'}</span></span></span></ToggleGroupItem>
               </ToggleGroup>
             </section>
           </div>
@@ -142,12 +142,12 @@ export function Meetings() {
             </section>
             <section className="min-w-0 border-t pt-7">
               <Field><div className="flex flex-wrap items-center justify-between gap-2"><FieldLabel>{zh ? '麦克风' : 'Microphone'}</FieldLabel><Button variant="ghost" size="sm" className="shrink-0" disabled={busy} onClick={() => void refreshDevices()}>{zh ? '检测设备' : 'Check device'}</Button></div><Select disabled={busy} value={options.microphoneId || 'default'} onValueChange={value => setOptions({ ...options, microphoneId: value === 'default' ? '' : value })}><SelectTrigger className="h-12 min-w-0"><SelectValue className="truncate" /></SelectTrigger><SelectContent><SelectItem value="default">{zh ? '系统默认麦克风' : 'Default microphone'}</SelectItem>{devices.filter(device => device.deviceId && device.deviceId !== 'default').map((device, index) => <SelectItem key={device.deviceId} value={device.deviceId}>{device.label || 'Microphone ' + String(index + 1)}</SelectItem>)}</SelectContent></Select></Field>
-              <p className="mt-4 text-sm leading-6 text-muted-foreground">{mode === 'minutes' ? (zh ? '实时转写服务异常时，本地录制仍会继续并安全保存。' : 'Local recording continues if live transcription is unavailable.') : (zh ? '结束后可回放、下载、复制、分享或稍后生成纪要。' : 'Replay, download, copy, share or generate notes later.')}</p>
+              <p className="mt-4 text-sm leading-6 text-muted-foreground">{meetingType === 'video' ? (zh ? '麦克风会记录你和现场可听到的会议声音；屏幕选择只决定录制哪部分画面。' : 'The microphone captures audible meeting sound; screen selection only chooses the picture.') : mode === 'minutes' ? (zh ? '实时转写服务异常时，本地录制仍会继续并安全保存。' : 'Local recording continues if live transcription is unavailable.') : (zh ? '结束后可回放、下载、复制、分享或稍后生成纪要。' : 'Replay, download, copy, share or generate notes later.')}</p>
             </section>
           </div>
         </div>
 
-        <div className="border-t px-6 py-5 sm:px-8 lg:px-10">{diarizationReady === false ? <Alert className="mb-4"><AlertDescription>{zh ? '说话人识别服务当前不可用，但仍可正常录制并稍后重试生成。' : 'Speaker identification is unavailable, but recording still works.'}</AlertDescription></Alert> : null}{error || (session.error && !needsAudioFallback) ? <Alert variant="destructive" className="mb-4"><AlertDescription>{error || session.error}</AlertDescription></Alert> : null}{needsAudioFallback ? <Alert className="motion-rise p-5"><AudioLines /><AlertDescription className="flex flex-col gap-4"><div className="flex flex-col gap-1"><strong className="text-base text-foreground">{displayFailed ? (zh ? '屏幕共享未能启动' : 'Screen sharing could not start') : (zh ? '当前共享未包含电脑音频' : 'The current share does not include computer audio')}</strong><span className="leading-6">{zh ? '静音或会议停顿不会阻止录制。你可以继续记录屏幕和麦克风，或重新选择共享以包含电脑声音。' : 'Silence never blocks recording. Continue with screen and microphone, or choose sharing again to include system audio.'}</span></div><details className="text-xs text-muted-foreground"><summary className="cursor-pointer">{zh ? '查看失败详情' : 'Failure details'}</summary><p className="mt-2 break-words">{session.error}</p></details><div className="flex flex-wrap gap-3"><Button className="h-auto min-h-10 whitespace-normal" onClick={() => startRecording(false)}><Mic2 data-icon="inline-start" />{meetingType === 'video' ? (zh ? '继续录屏（不含电脑声音）' : 'Record screen without computer audio') : (zh ? '继续录音（仅麦克风）' : 'Record microphone only')}</Button><Button variant="outline" className="h-auto min-h-10 whitespace-normal" onClick={() => startRecording(true)}><RotateCcw data-icon="inline-start" />{zh ? '重新选择共享并包含电脑音频' : 'Choose sharing again'}</Button></div></AlertDescription></Alert> : <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="font-medium">{mode === 'minutes' ? (zh ? '实时转写并生成会议纪要' : 'Transcribe and generate meeting notes') : (zh ? '保存会议记录' : 'Save meeting recording')}</p><p className="mt-1 text-sm leading-6 text-muted-foreground">{zh ? '保存到 ' + workspace + '，录制结束前不会上传媒体。' : 'Save to ' + workspace + '. Media is not uploaded before recording ends.'}</p></div><Button size="lg" disabled={busy} className="motion-sheen h-12 w-full shrink-0 rounded-full px-7 sm:w-auto sm:min-w-52" onClick={() => startRecording(true)}><Mic2 data-icon="inline-start" />{mode === 'minutes' ? meetingType === 'video' ? (zh ? '开始视频会议' : 'Start video meeting') : (zh ? '开始语音会议' : 'Start audio meeting') : meetingType === 'video' ? (zh ? '开始录屏' : 'Start screen recording') : (zh ? '开始录音' : 'Start audio recording')}</Button></div>}</div>
+        <div className="border-t px-6 py-5 sm:px-8 lg:px-10">{diarizationReady === false ? <Alert className="mb-4"><AlertDescription>{zh ? '说话人识别服务当前不可用，但仍可正常录制并稍后重试生成。' : 'Speaker identification is unavailable, but recording still works.'}</AlertDescription></Alert> : null}{error || session.error ? <Alert variant="destructive" className="mb-4"><AlertDescription>{error || session.error}</AlertDescription></Alert> : null}<div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="font-medium">{mode === 'minutes' ? (zh ? '实时转写并生成会议纪要' : 'Transcribe and generate meeting notes') : (zh ? '保存会议记录' : 'Save meeting recording')}</p><p className="mt-1 text-sm leading-6 text-muted-foreground">{meetingType === 'video' ? (zh ? '下一步只需选择要录制的屏幕或窗口；声音由当前麦克风记录。' : 'Next, choose a screen or window. Sound is recorded by the microphone.') : zh ? '保存到 ' + workspace + '，录制结束前不会上传媒体。' : 'Save to ' + workspace + '. Media is not uploaded before recording ends.'}</p></div><Button size="lg" disabled={busy} className="motion-sheen h-12 w-full shrink-0 rounded-full px-7 sm:w-auto sm:min-w-52" onClick={startRecording}><Mic2 data-icon="inline-start" />{mode === 'minutes' ? meetingType === 'video' ? (zh ? '选择屏幕并开始' : 'Choose screen and start') : (zh ? '开始语音会议' : 'Start audio meeting') : meetingType === 'video' ? (zh ? '选择屏幕并开始' : 'Choose screen and start') : (zh ? '开始录音' : 'Start audio recording')}</Button></div></div>
       </article>
     </section>}
 

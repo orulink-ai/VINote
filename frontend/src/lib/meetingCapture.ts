@@ -10,18 +10,18 @@ export interface MeetingCaptureOptions {
   title: string
   microphoneId: string
   screen: boolean
+  /** @deprecated Kept only for persisted recording compatibility. Screen capture ignores it. */
   systemAudio: boolean
   diarize: boolean
   speakerCount?: number
 }
 
-export const SYSTEM_AUDIO_UNAVAILABLE = '当前共享未包含电脑音频。可以继续录制麦克风，但不会录到电脑中播放的其他参会人声音。'
 export const DISPLAY_CAPTURE_FAILED = '屏幕共享未能启动。请重新选择共享，或仅录麦克风继续。'
 
 export const START_MEETING_EVENT = 'vinote-start-meeting'
 export const DEFAULT_CAPTURE_OPTIONS: MeetingCaptureOptions = {
   sessionId: '', mode: 'recording', meetingType: 'audio',
-  title: '', microphoneId: '', screen: false, systemAudio: true, diarize: true,
+  title: '', microphoneId: '', screen: false, systemAudio: false, diarize: true,
 }
 
 /** Permission prompts cannot be dismissed programmatically; dispose late results after cancellation. */
@@ -129,10 +129,12 @@ export async function acquireMeetingMicrophone(microphoneId = '', signal?: Abort
 /** Call in the originating click handler: screen capture requires user activation. */
 export async function captureMeetingSources(options: MeetingCaptureOptions, signal?: AbortSignal) {
   const startedAt = Date.now()
-  captureDiagnostic('capture.started', { screen: options.screen, systemAudio: options.systemAudio, selectedMicrophone: Boolean(options.microphoneId) })
+  captureDiagnostic('capture.started', {
+    screen: options.screen,
+    audioSource: 'microphone',
+    selectedMicrophone: Boolean(options.microphoneId),
+  })
   const streams: MediaStream[] = []
-  let context: AudioContext | undefined
-  let closed = false
   let disposed = false
   const registerStream = (stream: MediaStream) => {
     if (disposed) {
@@ -147,7 +149,6 @@ export async function captureMeetingSources(options: MeetingCaptureOptions, sign
     disposed = true
     streams.forEach(stream => stream.getTracks().forEach(track => track.stop()))
     streams.length = 0
-    if (!closed && context) { closed = true; void context.close().catch(() => undefined) }
     signal?.removeEventListener('abort', cleanup)
   }
   const checkCancelled = () => { if (signal?.aborted) throw new Error('microphone_request_cancelled') }
@@ -155,41 +156,25 @@ export async function captureMeetingSources(options: MeetingCaptureOptions, sign
   try {
     checkCancelled()
     let display: MediaStream | undefined
-    if (options.screen || options.systemAudio) {
+    if (options.screen) {
       if (!navigator.mediaDevices?.getDisplayMedia) throw new Error(`${DISPLAY_CAPTURE_FAILED}（当前桌面环境不支持屏幕采集 API）`)
-      // Request display capture from the click, then open the microphone once
-      // display acquisition completes. Do not initialize both audio sources concurrently.
+      // The display picker only chooses the recorded picture. Meeting sound always
+      // comes from the selected microphone, including for persisted legacy options
+      // that still carry systemAudio=true.
       display = await acquireStream(navigator.mediaDevices.getDisplayMedia({
         video: { frameRate: { ideal: 10, max: 15 }, width: { ideal: 1920 }, height: { ideal: 1080 } },
-        audio: options.systemAudio,
-        systemAudio: 'include',
-      } as DisplayMediaStreamOptions & { systemAudio: string }), signal, 'display').then(registerStream).catch(error => {
+        audio: false,
+      }), signal, 'display').then(registerStream).catch(error => {
         if (signal?.aborted) throw error
         const reason = error instanceof Error ? `${error.name}: ${error.message}` : String(error)
         throw new Error(`${DISPLAY_CAPTURE_FAILED}（${reason}）`)
       })
     }
     checkCancelled()
-    if (options.systemAudio && display && !display.getAudioTracks().length) {
-      throw new Error(SYSTEM_AUDIO_UNAVAILABLE)
-    }
     const microphone = await acquireMeetingMicrophone(options.microphoneId, signal).then(registerStream)
     checkCancelled()
-    let audioTracks = microphone.getAudioTracks()
-    if (display?.getAudioTracks().length) {
-      captureDiagnostic('mixing.started')
-      context = new AudioContext()
-      await context.resume()
-      checkCancelled()
-      const destination = context.createMediaStreamDestination()
-      streams.push(destination.stream)
-      context.createMediaStreamSource(microphone).connect(destination)
-      context.createMediaStreamSource(new MediaStream(display.getAudioTracks())).connect(destination)
-      audioTracks = destination.stream.getAudioTracks()
-      captureDiagnostic('mixing.ready')
-    }
     return {
-      stream: new MediaStream([...audioTracks, ...(options.screen ? display?.getVideoTracks() || [] : [])]),
+      stream: new MediaStream([...microphone.getAudioTracks(), ...(options.screen ? display?.getVideoTracks() || [] : [])]),
       display,
       cleanup,
     }

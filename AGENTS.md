@@ -218,7 +218,7 @@ Meeting setup automatically enables speaker diarization with automatic speaker c
 
 ## Recording history and media lifecycle
 
-Meeting capture defaults to attempting system audio plus the selected microphone; do not show a system-audio configuration checkbox. If system audio is unavailable, offer an explicit retry without computer audio (never silently omit remote voices). This retry preserves the selected screen-recording option; its label must distinguish screen plus microphone from microphone-only recording. Display capture support depends on the runtime and screen picker.
+Meeting capture uses the selected microphone as its required audio source. Screen recording requests video only, and the screen picker chooses only the recorded window or display. Persisted legacy options may still contain a system-audio flag, but capture ignores it so Windows/WebView system-audio failures never block recording. Display capture support depends on the runtime and screen picker.
 
 Stopping a meeting saves its blob and PendingMeeting metadata in IndexedDB, releases capture resources, and returns to /meetings without calling STT/LLM. LocalRecordingCard owns replay/download/confirmed deletion/later generation. A saved recording is visible without a note; generation removes its local pending copy only after the server note has been saved. Preserve actual recording start/end separately from generation time and meeting wall-clock context.
 
