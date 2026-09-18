@@ -86,10 +86,14 @@ def realtime_connection(response: Response, user=Depends(get_current_user)):
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
         raise HTTPException(503, "云端实时转写服务地址无效")
 
+    model = service.defaults(user.user_id).get("asr_model")
+    if not model:
+        raise HTTPException(400, "请选择可用的云端语音转写模型")
+    service._validate_selection(service.models(user.user_id), model, "asr")
     token = accounts.access_token(user.user_id)
     websocket_scheme = "wss" if parsed.scheme == "https" else "ws"
     base_path = parsed.path.rstrip("/")
     path = f"{base_path}/v1/asr/transcriptions"
     url = urlunsplit((websocket_scheme, parsed.netloc, path, urlencode({"token": token}), ""))
     response.headers["Cache-Control"] = "no-store"
-    return {"url": url, "language": "zh-CN"}
+    return {"url": url, "language": "zh-CN", "model": model}

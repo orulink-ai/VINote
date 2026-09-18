@@ -51,6 +51,7 @@ const desktopRecorderWindowMock = vi.hoisted(() => ({
   setRecorderWindowSize: vi.fn(),
   showMainWindow: vi.fn(),
   closeCurrentRecorderWindow: vi.fn(),
+  closeRecorderWindow: vi.fn().mockResolvedValue(undefined),
   startCurrentRecorderWindowDrag: vi.fn(),
   emitRecorderWindowState: vi.fn(),
   emitRecorderOpenPanel: vi.fn(),
@@ -273,7 +274,7 @@ describe('MeetingRecorderDock', () => {
     await waitFor(() => expect(deleteLocalRecording).toHaveBeenCalled())
   })
 
-  it('keeps minutes recording local when live transcript has no confirmed segment', async () => {
+  it('automatically uploads minutes recording when live transcript has no confirmed segment', async () => {
     audioRecorderMock.liveSegments.push({
       id: 'partial-1',
       text: '仍在识别中的内容',
@@ -296,9 +297,31 @@ describe('MeetingRecorderDock', () => {
       expect.objectContaining({ transcript: [] }),
     )
     expect(meetingGenerationMock.submitMeetingTranscript).not.toHaveBeenCalled()
-    expect(meetingGenerationMock.submitMeetingRecording).not.toHaveBeenCalled()
-    expect(deleteLocalRecording).not.toHaveBeenCalled()
+    await waitFor(() => expect(meetingGenerationMock.submitMeetingRecording).toHaveBeenCalled())
+    await waitFor(() => expect(deleteLocalRecording).toHaveBeenCalled())
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/meetings'))
+  })
+
+  it('uploads full video even when confirmed live speech is available', async () => {
+    audioRecorderMock.liveSegments.push({ id: 'final', text: '看屏幕上的图表', final: true })
+    audioRecorderMock.stop.mockResolvedValueOnce(new Blob(['video'], { type: 'video/webm' }))
+    renderDock()
+    await startMeeting({ ...DEFAULT_CAPTURE_OPTIONS, mode: 'minutes', meetingType: 'video', screen: true })
+    await userEvent.click(screen.getByRole('button', { name: '停止' }))
+    await waitFor(() => expect(meetingGenerationMock.submitMeetingRecording).toHaveBeenCalledWith(
+      expect.objectContaining({ audioBlob: expect.any(Blob), meetingType: 'video' }), expect.any(Object)))
+    expect(meetingGenerationMock.submitMeetingTranscript).not.toHaveBeenCalled()
+    await waitFor(() => expect(deleteLocalRecording).toHaveBeenCalled())
+  })
+
+  it('closes native controls on terminal state and never adds a second launcher', async () => {
+    desktopRecorderWindowMock.isTauriRuntime.mockReturnValue(true)
+    renderDock()
+    await startMeeting()
+    desktopRecorderWindowMock.closeRecorderWindow.mockClear()
+    act(() => useMeetingRecorderStore.getState().complete('note-completed'))
+    await waitFor(() => expect(desktopRecorderWindowMock.closeRecorderWindow).toHaveBeenCalled())
+    expect(screen.queryByTestId('meeting-recorder-idle-dot')).not.toBeInTheDocument()
   })
 
   it('preserves the saved minutes recording when live-transcript summarization fails', async () => {
@@ -331,7 +354,7 @@ describe('MeetingRecorderDock', () => {
     await startMeeting()
     expect(audioRecorderMock.start).toHaveBeenCalledWith(DEFAULT_CAPTURE_OPTIONS)
     expect(desktopRecorderWindowMock.openRecorderWindowWhenReady).not.toHaveBeenCalled()
-    expect(screen.getByRole('region', { name: '会议录音' })).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '会议录音' })).not.toBeInTheDocument()
   })
 
   it('auto-starts recording when mounted inside the native recorder window', async () => {

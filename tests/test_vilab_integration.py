@@ -166,14 +166,14 @@ def test_model_preferences_are_resolved_per_user(monkeypatch):
 
 
 @pytest.mark.parametrize("runtime_status", ["unavailable", "loading", ""])
-def test_unavailable_selection_fails_before_generation(monkeypatch, runtime_status):
+def test_saved_unavailable_selection_uses_available_default_but_explicit_selection_fails(monkeypatch, runtime_status):
     service = VILabCloudService()
     monkeypatch.setattr(service, "status", lambda uid: {"llm_model": "chosen"})
     monkeypatch.setattr(service, "request", lambda *a, **k: {"llm_model": "default"})
     monkeypatch.setattr(service, "models", lambda uid: [
         {"id": "chosen", "modelType": "llm", "runtimeStatus": runtime_status},
+        {"id": "default", "modelType": "llm", "runtimeStatus": "available"},
     ])
-    with pytest.raises(HTTPException, match="不可用"):
-        service.defaults("user-a")
+    assert service.defaults("user-a")["llm_model"] == "default"
     with pytest.raises(HTTPException, match="不可用"):
         service.select("user-a", "cloud", "", "chosen")

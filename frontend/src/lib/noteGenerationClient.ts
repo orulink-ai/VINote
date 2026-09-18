@@ -23,6 +23,7 @@ export interface TaskStatusResponse {
 
 export interface UploadGenerationInput {
   file: File
+  recordingFile?: File
   sourceType: UploadSourceType
   title: string
   style?: string
@@ -44,6 +45,7 @@ export interface UploadGenerationInput {
 export async function submitUploadedSource(input: UploadGenerationInput) {
   const formData = new FormData()
   formData.append('file', input.file)
+  if (input.recordingFile) formData.append('recording', input.recordingFile)
   formData.append('source_type', input.sourceType)
   formData.append('title', input.title)
   formData.append('style', input.style || 'meeting')

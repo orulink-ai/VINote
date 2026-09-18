@@ -40,7 +40,9 @@ function shutdown(code = 0) {
   }
 }
 function start(command, args, options = {}) {
-  const child = run(command, args, { detached: process.platform !== 'win32', ...options })
+  // Isolate Windows consoles too: Uvicorn reload sends a console control event
+  // that must not terminate the sibling Tauri desktop process.
+  const child = run(command, args, { detached: true, ...options })
   children.push(child)
   child.on('exit', code => shutdown(code ?? 1))
   child.on('error', () => shutdown(1))

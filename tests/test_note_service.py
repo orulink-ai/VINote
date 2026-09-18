@@ -146,8 +146,9 @@ class NoteServiceTest(unittest.TestCase):
                                   transcription_service=FakeTranscriptionService(),
                                   llm_service=FakeLLMService(), artifact_service=artifacts,
                                   screenshot_service=screenshots)
-            with patch.object(screenshots, "prepare_local_video", side_effect=AssertionError("Must not download")):
+            with patch.object(screenshots, "prepare_local_video", side_effect=AssertionError("Must not download")), patch("app.services.meeting_video_analysis_service.MeetingVideoAnalysisService.analyze", return_value="视觉证据：进度表") as vision:
                 result = service.generate_from_file(str(video), "screen-test", title="Screen meeting")
+            vision.assert_called_once()
             assert "![Screenshot" in result.markdown
             assert "/source_video.webm" in result.markdown
             assert artifacts.resolve_source_media(Path(result.output_dir)).read_bytes() == b"original recording"

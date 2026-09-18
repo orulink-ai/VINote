@@ -40,7 +40,8 @@ it('cloud mode offers VINote login and permits local mode during an outage', asy
   expect(screen.queryByText('ViTalk')).not.toBeInTheDocument()
   await userEvent.click(screen.getByRole('radio', { name: '本地 / 自定义' }))
   expect(await screen.findByText('自定义 LLM 表单')).toBeInTheDocument()
-  expect(screen.getByText('自定义 STT 表单')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('tab', { name: '语音转写' }))
+  expect(await screen.findByText('自定义 STT 表单')).toBeInTheDocument()
 })
 
 it('loads a saved key only on demand and clears it when hidden', async () => {

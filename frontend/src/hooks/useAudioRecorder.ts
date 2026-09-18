@@ -52,12 +52,14 @@ export function useAudioRecorder() {
   const realtimeRef = useRef<VILabRealtimeClient | null>(null)
   const liveSegmentsRef = useRef<LiveTranscriptSegment[]>([])
   const realtimeVersionRef = useRef(0)
+  const liveStateRef = useRef<{ status: LiveTranscriptStatus; error: string }>({ status: 'idle', error: '' })
 
   const createRealtimeClient = useCallback(() => {
     const version = ++realtimeVersionRef.current
     return new VILabRealtimeClient({
       onStatus: (next, nextError) => {
         if (version !== realtimeVersionRef.current) return
+        liveStateRef.current = { status: next, error: nextError || '' }
         setLiveStatus(next)
         setLiveError(nextError || '')
       },
@@ -145,6 +147,7 @@ export function useAudioRecorder() {
     void diskRef.current?.remove()
     diskRef.current = null
     setError('')
+    liveStateRef.current = { status: 'idle', error: '' }
     setLiveStatus('idle')
     setLiveError('')
     setLiveSegments([])
@@ -400,6 +403,8 @@ export function useAudioRecorder() {
   }, [cleanupStream, clearTimer, stopActiveRecorder])
 
   return {
+    getLiveSnapshot: () => ({ ...liveStateRef.current, diagnostics: realtimeRef.current?.getDiagnostics() }),
+    getLiveSegments: () => [...liveSegmentsRef.current],
     getRecordingFileName: () => diskRef.current?.name,
     retainRecordingFile: () => { diskRef.current = null },
     status,

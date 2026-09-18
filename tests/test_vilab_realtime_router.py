@@ -20,6 +20,8 @@ def make_client():
 def test_realtime_connection_uses_personal_token(monkeypatch):
     monkeypatch.setattr(vilab, "settings", SimpleNamespace(vilab_server_url="http://192.168.1.143:9876"))
     monkeypatch.setattr(vilab.accounts, "access_token", lambda user_id: f"token for {user_id}")
+    monkeypatch.setattr(vilab.service, "defaults", lambda uid: {"asr_model": "available-asr"})
+    monkeypatch.setattr(vilab.service, "models", lambda uid: [{"id": "available-asr", "modelType": "asr", "runtimeStatus": "available"}])
 
     response = make_client().get("/api/vilab/realtime-connection")
 
@@ -28,6 +30,7 @@ def test_realtime_connection_uses_personal_token(monkeypatch):
     assert response.json() == {
         "url": "ws://192.168.1.143:9876/v1/asr/transcriptions?token=token+for+user-1",
         "language": "zh-CN",
+        "model": "available-asr",
     }
 
 

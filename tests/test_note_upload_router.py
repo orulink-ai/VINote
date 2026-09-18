@@ -60,6 +60,19 @@ class GenerateFromUploadRouterTest(unittest.TestCase):
         self.assertEqual(kwargs["req"].title, "Meeting recording")
         self.assertFalse(kwargs["req"].diarize)
 
+    def test_transcript_upload_preserves_associated_recording(self):
+        self.app.dependency_overrides[note.get_optional_current_user] = lambda: SimpleNamespace(user_id="user-test")
+        fake_service = SimpleNamespace(artifact_service=self.artifact_service)
+        with patch.object(note, "_note_service", fake_service), patch.object(note, "_run_task_from_transcript") as run:
+            response = self.client.post("/api/generate_from_upload", data={"source_type": "transcript"},
+                files={"file": ("speech.txt", b"Meeting discussion", "text/plain"),
+                       "recording": ("meeting.webm", b"original-audio", "audio/webm")})
+        self.assertEqual(response.status_code, 200, response.text)
+        task_dir = self.output_dir / response.json()["task_id"]
+        self.assertEqual((task_dir / "media/source_audio.webm").read_bytes(), b"original-audio")
+        self.assertEqual((task_dir / "recording_owner").read_text(), "user-test")
+        run.assert_called_once()
+
     def test_desktop_media_upload_always_uses_automatic_diarization(self):
         fake_note_service = SimpleNamespace(artifact_service=self.artifact_service)
 

@@ -41,6 +41,7 @@ interface SubmitMeetingRecordingInput {
 }
 
 interface SubmitMeetingTranscriptInput extends Omit<SubmitMeetingRecordingInput, 'audioBlob' | 'diarize' | 'speakerCount' | 'sttProfileId'> {
+  audioBlob?: Blob
   segments: LiveTranscriptSegment[]
 }
 
@@ -135,6 +136,7 @@ export async function submitMeetingTranscript(
   try {
     return await submit({
       file, sourceType: 'transcript',
+      recordingFile: input.audioBlob ? buildMeetingRecordingFile(input.audioBlob, input.startedAt) : undefined,
       title: input.title?.trim() || createMeetingRecordingTitle(input.startedAt, input.outputLanguage || 'zh-CN'),
       style: 'meeting', workflow: 'meeting', traceSource: 'desktop_live_transcript',
       extras: `录制开始时间：${input.startedAt.toISOString()}。${input.endedAt ? `录制结束时间：${input.endedAt.toISOString()}。` : '录制结束时间未知。'}实时逐字稿时间为录制偏移，禁止用它推算会议实际起止。`,

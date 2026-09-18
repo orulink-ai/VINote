@@ -3,7 +3,7 @@ import { startLivePcmCapture } from './livePcmCapture'
 import { encodeVla2AudioFrame, parseRealtimeEvent } from './vilabRealtimeProtocol'
 import type { LiveTranscriptDiagnostics, LiveTranscriptSegment, LiveTranscriptStatus } from '../types/liveTranscript'
 
-interface RealtimeConnection { url: string; language: string }
+interface RealtimeConnection { url: string; language: string; model: string }
 interface RealtimeCallbacks {
   onStatus: (status: LiveTranscriptStatus, error?: string) => void
   onSegments: (segments: LiveTranscriptSegment[]) => void
@@ -59,7 +59,7 @@ export class VILabRealtimeClient {
         this.diagnostics.connectionLatencyMs = Math.round(performance.now() - this.connectedAt)
         this.callbacks.onStatus('starting')
         socket.send(JSON.stringify({
-          type: 'session.start', language: connection.language || 'zh-CN', profileId: 'meeting',
+          type: 'session.start', language: connection.language || 'zh-CN', model: connection.model,
           clientSessionId: sessionId, audio: { encoding: 'pcm_s16le', sampleRate: 16000, channels: 1 },
         }))
       }, { once: true })
@@ -68,7 +68,11 @@ export class VILabRealtimeClient {
         if (this.socket !== socket) return
         this.diagnostics.closeCode = event.code
         this.callbacks.onDiagnostics?.({ ...this.diagnostics })
-        if (!this.finishing && event.code !== 1000) this.fail(new Error(`realtime_websocket_closed_${event.code}`))
+        if (!this.finishing) {
+          const error = new Error(`realtime_websocket_closed_${event.code}`)
+          fail(error)
+          this.fail(error)
+        }
       })
       socket.addEventListener('message', async message => {
         if (typeof message.data !== 'string') return
@@ -84,6 +88,7 @@ export class VILabRealtimeClient {
           } catch (error) { reject(error) }
           return
         }
+        if (event.type === 'error') fail(new Error(String(event.message || event.code || 'realtime_service_failed')))
         this.handleEvent(event)
       })
     }).catch(error => {
@@ -144,9 +149,7 @@ export class VILabRealtimeClient {
     await new Promise<void>(resolve => {
       this.completion = resolve
       this.completionTimer = window.setTimeout(() => {
-        this.completionTimer = null
-        this.completion = null
-        resolve()
+        this.fail(new Error('realtime_finalize_timeout'))
       }, 8000)
     })
     this.closeSocket(1000, 'client finished')

@@ -614,6 +614,7 @@ async def generate_from_upload(
     background_tasks: BackgroundTasks,
     request: Request,
     file: UploadFile = File(...),
+    recording: UploadFile | None = File(None),
     source_type: str = Form("media"),
     diarize: bool = Form(False),
     speaker_count: int | None = Form(None, ge=1, le=20),
@@ -655,6 +656,22 @@ async def generate_from_upload(
             if not file_bytes:
                 raise ValueError("Uploaded file is empty.")
             transcript = _build_transcript_from_upload(file.filename, file_bytes)
+            if recording is not None:
+                if not user:
+                    raise HTTPException(401, "保存会议录制需要登录")
+                _ensure_media_extension("audio", recording.filename)
+                task_dir = _note_service.artifact_service.create_task_dir(task_id)
+                media_dir = task_dir / "media"
+                media_dir.mkdir(parents=True, exist_ok=True)
+                suffix = Path(_sanitize_filename(recording.filename)).suffix.lower()
+                recording_path = media_dir / f"source_audio{suffix}"
+                with recording_path.open("wb") as destination:
+                    while chunk := await recording.read(1024 * 1024):
+                        destination.write(chunk)
+                if not recording_path.stat().st_size:
+                    raise ValueError("会议录音为空，无法保存")
+                _note_service.artifact_service.record_source_media(task_dir, recording_path, media_kind="audio")
+                (task_dir / "recording_owner").write_text(user.user_id, encoding="utf-8")
             trace_context = _desktop_trace_context(
                 request, workflow=workflow, source=trace_source, media_type="transcript",
                 title=title, filename=file.filename, size_bytes=len(file_bytes),

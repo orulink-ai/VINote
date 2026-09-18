@@ -8,6 +8,7 @@ import { useNavigate } from 'react-router-dom'
 import { useAudioRecorder } from '../../hooks/useAudioRecorder'
 import {
   closeCurrentRecorderWindow,
+  closeRecorderWindow,
   emitRecorderWindowReady,
   emitRecorderWindowState,
   isRecorderWindowRoute,
@@ -507,6 +508,29 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     setPhase('recording')
   }
 
+  const closeSavedRecordingSurface = async () => {
+    closePanel()
+    try {
+      await setRecorderActive(false)
+      if (isRecorderWindow) {
+        await showMainWindow('/meetings')
+        await closeCurrentRecorderWindow()
+      } else {
+        await closeRecorderWindow()
+      }
+    } catch (error) {
+      // A window cleanup error must not turn a saved note into a failed task.
+      console.error('[meeting-recorder] window cleanup failed', error)
+    }
+    if (!isRecorderWindow) navigate('/meetings')
+  }
+
+  useEffect(() => {
+    if (isDesktopMainWindow && ['idle', 'stopped', 'completed', 'failed'].includes(phase)) {
+      void closeRecorderWindow().catch(console.error)
+    }
+  }, [isDesktopMainWindow, phase])
+
   const handleStop = async () => {
     if (phase !== 'paused' && phase !== 'recording') return
     if (finishInFlightRef.current) return
@@ -515,11 +539,13 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       endedAtRef.current = new Date()
       const options = captureOptionsRef.current
       const startedAt = startedAtRef.current || new Date()
-      const liveSegments = recorder.liveSegments.filter(segment => segment.final && segment.text.trim())
-      const transcriptStatus = recorder.liveStatus
-      const realtimeDiagnostics = recorder.liveDiagnostics
       setPhase('stopping')
       const audioBlob = await recorder.stop()
+      const liveSnapshot = recorder.getLiveSnapshot?.()
+      const transcriptStatus = liveSnapshot?.status ?? recorder.liveStatus
+      const realtimeDiagnostics = liveSnapshot?.diagnostics ?? recorder.liveDiagnostics
+      const liveError = liveSnapshot?.error ?? recorder.liveError
+      const liveSegments = (recorder.getLiveSegments?.() ?? recorder.liveSegments).filter(segment => segment.final && segment.text.trim())
       if (audioBlob.size === 0) throw new Error('microphone_no_audio')
       setRecordedAudio(audioBlob)
       // Persist the audio locally so it survives a page reload, window close, or restart.
@@ -540,11 +566,12 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       recorder.retainRecordingFile?.()
 
       // Plain recording mode ends after the durable local save. Minutes mode
-      // can immediately summarize the real live transcript without uploading
-      // and transcribing the complete recording again.
-      if (options.mode === 'minutes' && liveSegments.length > 0) {
+      // can summarize finalized live speech without repeating STT, while
+      // retaining the original media alongside the server-side transcript.
+      if (options.mode === 'minutes' && !options.screen && options.meetingType !== 'video' && transcriptStatus !== 'failed' && !liveError && liveSegments.length > 0) {
         setPhase('uploading')
         const response = await submitMeetingTranscript({
+          audioBlob,
           segments: liveSegments,
           startedAt,
           endedAt: endedAtRef.current,
@@ -569,6 +596,14 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         await deleteLocalRecording(persistedId, user?.id || '').catch(() => undefined)
         complete(note.id)
         recorder.reset()
+        await closeSavedRecordingSurface()
+        return
+      }
+
+      if (options.mode === 'minutes') {
+        await generateFromRecording(audioBlob)
+        recorder.reset()
+        await closeSavedRecordingSurface()
         return
       }
 
@@ -590,7 +625,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     }
   }
 
-  const generateFromAudio = async (audioBlob: Blob, sttProfileIdOverride?: string) => {
+  const generateFromRecording = async (audioBlob: Blob, sttProfileIdOverride?: string) => {
     setPhase('uploading')
     const startedAt = startedAtRef.current || new Date()
     const activeSTTProfileId = sttProfileIdOverride ?? useSTTProfileStore.getState().selectedProfileId
@@ -688,7 +723,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     if (phase !== 'stopped' || !recordedAudio || finishInFlightRef.current) return
     finishInFlightRef.current = true
     try {
-      await generateFromAudio(recordedAudio)
+      await generateFromRecording(recordedAudio)
     } catch (error) {
       const message = formatRecorderFailure(error, recorderCopy)
       await markDraftFailed(stageFromError(error), message)
@@ -812,7 +847,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       // fixing their API key, network, etc.
       const retrySTTProfileId = await resolveRetrySTTProfileId(state.error)
       setPhase('uploading')
-      await generateFromAudio(audio, retrySTTProfileId)
+      await generateFromRecording(audio, retrySTTProfileId)
     } catch (retryError) {
       failStage(stageFromError(retryError), formatRecorderFailure(retryError, recorderCopy))
     } finally {
@@ -946,7 +981,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         ? `${recorderCopy.processingHint}: ${statusLabel}`
         : statusLabel
   const dockedStyle = hasCustomPosition ? { left: position.x, top: position.y } : { right: EDGE_PADDING, bottom: EDGE_PADDING }
-  const shouldRenderRecorderSurface = isPanelOpen && (!isDesktopMainWindow || useInlineDesktopRecorder)
+  const shouldRenderRecorderSurface = isPanelOpen && (!isDesktopMainWindow || (useInlineDesktopRecorder && !ACTIVE_RECORDING_PHASES.includes(phase)))
   const minimizedContainerClass = clsx(
     'inline-flex h-12 w-[320px] items-center gap-3 border border-border bg-background px-3.5 pr-4 text-base font-medium text-foreground',
     isRecorderWindow ? '' : 'shadow-md',
@@ -967,7 +1002,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         <AlertDialogContent className="max-h-[calc(100dvh-48px)] w-[calc(100%-32px)] overflow-y-auto">
           <AlertDialogHeader>
             <AlertDialogTitle>{language === 'zh-CN' ? '结束并保存录制？' : 'End and save recording?'}</AlertDialogTitle>
-            <AlertDialogDescription>{language === 'zh-CN' ? '录制将保存到本机。保存完成后可以回放或生成会议纪要。' : 'Save locally, then replay or generate meeting notes.'}</AlertDialogDescription>
+            <AlertDialogDescription>{language === 'zh-CN' ? (captureOptionsRef.current.mode === 'minutes' ? '结束后保存录制，并自动生成会议纪要。' : '结束后保存到本机，可回放、下载或稍后生成纪要。') : 'Save locally, then replay or generate meeting notes.'}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="gap-3">
             <AlertDialogCancel className="min-h-11">{language === 'zh-CN' ? '继续录制' : 'Keep recording'}</AlertDialogCancel>
@@ -975,7 +1010,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>}
-      {!isPanelOpen && !isRecorderWindow && phase !== 'idle' ? (
+      {!isTauriRuntime() && !isPanelOpen && !isRecorderWindow && phase !== 'idle' ? (
         <Button
           type="button"
           size="icon"
