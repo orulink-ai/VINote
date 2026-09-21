@@ -1,3 +1,3 @@
-[submodule "vinoteAPP"]
-	path = vinoteAPP
-	url = https://github.com/orulink-ai/vinoteAPP.git
+[submodule "VINote-app"]
+	path = VINote-app
+	url = https://github.com/orulink-ai/VINote-app.git
