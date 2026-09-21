@@ -2,7 +2,7 @@ import { ModelSourcePanel } from "../components/Settings/ModelSourcePanel"
 import { useAppModeStore } from "../stores/appModeStore"
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, FileAudio, Link as LinkIcon, Wand2 } from 'lucide-react'
+import { FileAudio, Link as LinkIcon, Settings2, Wand2, Check, Sparkles } from 'lucide-react'
 import { FileUploader, type UploadMode } from '../components/NoteGenerator/FileUploader'
 import { GenerateProgress } from '../components/NoteGenerator/GenerateProgress'
 import { useI18n } from '../lib/i18n'
@@ -12,9 +12,14 @@ import { useNoteGenerationStore } from '../stores/noteGenerationStore'
 import { useNoteLibraryStore } from '../stores/noteLibraryStore'
 import { useSTTProfileStore } from '../stores/sttProfileStore'
 import { getWorkspaceLabel, useTeamStore } from '../stores/teamStore'
+import { Alert, AlertDescription } from '../components/ui/alert'
+import { Button } from '../components/ui/button'
+import { Label } from '../components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '../components/ui/sheet'
+import { Badge } from '../components/ui/badge'
 
 type TaskResponse = { task_id: string }
-type SummaryMode = 'default' | 'accurate' | 'oneshot'
 type TaskStatusResponse = {
   status: string
   message: string
@@ -30,8 +35,8 @@ export function NoteGenerator() {
   const isMeeting = searchParams.get('meeting') === '1'
   const [videoUrl, setVideoUrl] = useState('')
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
-  const [uploadMode, setUploadMode] = useState<UploadMode>(isMeeting ? 'file' : 'url')
-  const [summaryMode, setSummaryMode] = useState<SummaryMode>('default')
+  const requestedMode = searchParams.get('mode') === 'file' ? 'file' : 'url'
+  const [uploadMode, setUploadMode] = useState<UploadMode>(isMeeting ? 'file' : requestedMode)
   const [taskMessage, setTaskMessage] = useState('')
   const [, setTaskId] = useState('')
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -79,9 +84,9 @@ export function NoteGenerator() {
   }, [reset])
 
   useEffect(() => {
-    setUploadMode(isMeeting ? 'file' : 'url')
+    setUploadMode(isMeeting ? 'file' : requestedMode)
     setSelectedFile(null)
-  }, [isMeeting])
+  }, [isMeeting, requestedMode])
 
   const pollTaskStatus = (
     id: string,
@@ -171,7 +176,7 @@ export function NoteGenerator() {
           body: JSON.stringify({
             video_url: videoUrl,
             workflow: isMeeting ? 'meeting' : 'note_organization',
-            summary_mode: summaryMode,
+            summary_mode: 'default',
             output_language: language,
             model_profile_id: selectedProfileId || undefined,
             stt_profile_id: selectedSTTProfileId || undefined,
@@ -196,7 +201,7 @@ export function NoteGenerator() {
         formData.append('workflow', isMeeting ? 'meeting' : 'note_organization')
         formData.append('trace_source', 'local_file')
         if (sourceType !== 'transcript') formData.append('diarize', 'true')
-        formData.append('summary_mode', summaryMode)
+        formData.append('summary_mode', 'default')
         formData.append('output_language', language)
         if (selectedProfileId) {
           formData.append('model_profile_id', selectedProfileId)
@@ -244,200 +249,50 @@ export function NoteGenerator() {
     teams,
     copy.sidebar.home,
   )
-  const summaryModeOptions: Array<{ value: SummaryMode; label: string; description: string }> = [
-    {
-      value: 'default' as SummaryMode,
-      label: copy.generator.summaryModeDefaultLabel,
-      description: copy.generator.summaryModeDefaultDesc,
-    },
-    {
-      value: 'accurate' as SummaryMode,
-      label: copy.generator.summaryModeAccurateLabel,
-      description: copy.generator.summaryModeAccurateDesc,
-    },
-    {
-      value: 'oneshot' as SummaryMode,
-      label: copy.generator.summaryModeOneshotLabel,
-      description: copy.generator.summaryModeOneshotDesc,
-    },
-  ]
-  const selectedSummaryMode = summaryModeOptions.find((option) => option.value === summaryMode)
   const formatSTTProfileLabel = (name: string, profile: { provider: string; modelName: string | null; language: string | null }) => {
     const detail = profile.modelName || profile.language || profile.provider
     return `${name} / ${detail}`
   }
 
-  return (
-    <div className="mx-auto max-w-3xl p-8">
-      <div className="mb-6 flex items-start gap-4">
-        <button
-          onClick={() => navigate('/')}
-          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
-        >
-          <ArrowLeft className="w-5 h-5" />
-        </button>
-        <div>
-          <h2 className="text-2xl font-bold">{isMeeting ? copy.generator.meetingTitle : copy.generator.title}</h2>
-          <p className="mt-1 text-sm leading-6 text-gray-500 dark:text-gray-400">
-            {isMeeting ? copy.generator.meetingSubtitle : copy.generator.subtitle}
-          </p>
+  const sourceReady = uploadMode === 'url' ? Boolean(videoUrl.trim()) : Boolean(selectedFile)
+
+  const generationSettings = <div className="grid gap-6">
+    <div className="rounded-xl border bg-muted/25 p-4"><Label>{copy.generator.saveTargetWorkspace}</Label><p className="mt-2 text-sm font-medium">{workspaceLabel}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{copy.generator.saveTargetWorkspaceHint}</p></div>
+    {cloudMode ? <ModelSourcePanel compact /> : <div className="grid gap-5">
+      <div><Label className="mb-2 block">{copy.generator.modelProfileLabel}</Label><Select value={selectedProfileId || 'system-default'} onValueChange={value => selectProfile(value === 'system-default' ? '' : value)}><SelectTrigger><SelectValue placeholder={copy.generator.systemDefaultModel} /></SelectTrigger><SelectContent><SelectItem value="system-default">{copy.generator.systemDefaultModel}</SelectItem>{profiles.map(profile => <SelectItem key={profile.id} value={profile.id}>{profile.name} / {profile.modelName}{profile.isDefault ? ' (default)' : ''}</SelectItem>)}</SelectContent></Select><p className="mt-2 text-xs leading-5 text-muted-foreground">{selectedProfile ? copy.generator.activeModelSelected(selectedProfile.name, selectedProfile.modelName) : defaultProfile ? copy.generator.activeModelDefault(defaultProfile.name, defaultProfile.modelName) : copy.generator.activeModelBackend}</p></div>
+      <div><Label className="mb-2 block">{copy.generator.sttProfileLabel}</Label><Select value={selectedSTTProfileId || 'system-default'} onValueChange={value => selectSTTProfile(value === 'system-default' ? '' : value)}><SelectTrigger><SelectValue placeholder={copy.generator.systemDefaultSTT} /></SelectTrigger><SelectContent><SelectItem value="system-default">{copy.generator.systemDefaultSTT}</SelectItem>{sttProfiles.map(profile => <SelectItem key={profile.id} value={profile.id}>{formatSTTProfileLabel(profile.name, profile)}{profile.isDefault ? ' (default)' : ''}</SelectItem>)}</SelectContent></Select><p className="mt-2 text-xs leading-5 text-muted-foreground">{selectedSTTProfile ? copy.generator.activeSTTSelected(selectedSTTProfile.name, formatSTTProfileLabel(selectedSTTProfile.name, selectedSTTProfile)) : defaultSTTProfile ? copy.generator.activeSTTDefault(defaultSTTProfile.name, formatSTTProfileLabel(defaultSTTProfile.name, defaultSTTProfile)) : copy.generator.activeSTTBackend}</p></div>
+    </div>}
+  </div>
+
+  const running = status === 'uploading' || status === 'processing'
+
+  return <div className="mx-auto flex min-h-full max-w-[960px] flex-col gap-7 px-6 py-8 pb-24 lg:px-8">
+    <header className="motion-rise max-w-2xl">
+      <Badge variant="secondary" className="mb-3">{isMeeting ? '会议导入' : '资料整理'}</Badge>
+      <h1 className="text-3xl font-semibold tracking-[-0.03em]">{isMeeting ? '从已有录制生成会议纪要' : '整理一份资料'}</h1>
+      <p className="mt-2 text-[15px] leading-6 text-muted-foreground">{isMeeting ? '选择音频、视频或逐字稿。系统会完成转写、说话人整理和纪要生成。' : '选择来源并确认保存位置。完成后直接进入编辑器继续修改和分享。'}</p>
+    </header>
+
+    {running ? <section className="motion-rise overflow-hidden rounded-2xl border bg-card shadow-sm">
+      <div className="border-b bg-muted/20 px-6 py-5"><div className="flex items-center gap-3"><span className="relative flex size-3"><span className="absolute inline-flex size-full animate-ping rounded-full bg-foreground/40" /><span className="relative inline-flex size-3 rounded-full bg-foreground" /></span><div><h2 className="text-lg font-semibold">{isMeeting ? '正在生成会议纪要' : '正在整理资料'}</h2><p className="mt-1 text-sm text-muted-foreground">处理期间可以留在此页查看每个阶段。</p></div></div></div>
+      <div className="p-6"><GenerateProgress status={status} progress={progress} currentStep={currentStep} error={error} message={taskMessage} /></div>
+    </section> : <>
+      <section className="motion-rise rounded-2xl border bg-card p-6 shadow-sm sm:p-7" style={{ animationDelay: '70ms' }}>
+        <div className="mb-5 flex items-start justify-between gap-4"><div className="flex items-start gap-3"><div className="grid size-9 shrink-0 place-items-center rounded-xl bg-foreground text-background">{isMeeting ? <FileAudio className="size-4" /> : <Sparkles className="size-4" />}</div><div><h2 className="text-lg font-semibold">{isMeeting ? '选择会议文件' : '资料从哪里来？'}</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">{isMeeting ? '支持音频、视频和已有逐字稿。' : '链接适合网页、文章和公开视频；文件适合音视频、字幕和文本。'}</p></div></div><span className="shrink-0 rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground">1 / 2</span></div>
+        <FileUploader videoUrl={videoUrl} onVideoUrlChange={setVideoUrl} onFileSelect={setSelectedFile} onModeChange={setUploadMode} fileUploadEnabled initialMode={isMeeting ? 'file' : requestedMode} urlEnabled={!isMeeting} />
+      </section>
+
+      <section className="motion-rise rounded-2xl border bg-card p-6 shadow-sm sm:p-7" style={{ animationDelay: '120ms' }}>
+        <div className="flex flex-wrap items-center justify-between gap-4"><div><h2 className="text-lg font-semibold">确认资料</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">确认来源和保存位置后即可开始。</p></div><Sheet><SheetTrigger asChild><Button variant="outline"><Settings2 />处理设置</Button></SheetTrigger><SheetContent className="overflow-y-auto sm:max-w-md"><SheetHeader><SheetTitle>处理设置</SheetTitle><SheetDescription>查看保存位置，选择转写与总结服务。</SheetDescription></SheetHeader><div className="py-8">{generationSettings}</div></SheetContent></Sheet></div>
+        <div className="mt-5 grid overflow-hidden rounded-xl border sm:grid-cols-2 sm:divide-x">
+          <div className="flex min-w-0 items-center gap-3 px-4 py-3"><Check className="size-4 shrink-0 text-muted-foreground" /><div className="min-w-0"><p className="text-xs text-muted-foreground">保存到</p><p className="mt-0.5 truncate text-sm font-medium">{workspaceLabel}</p></div></div>
+          <div className="flex min-w-0 items-center gap-3 border-t px-4 py-3 sm:border-t-0">{uploadMode === 'url' ? <LinkIcon className="size-4 shrink-0 text-muted-foreground" /> : <FileAudio className="size-4 shrink-0 text-muted-foreground" />}<div className="min-w-0"><p className="text-xs text-muted-foreground">当前来源</p><p className="mt-0.5 truncate text-sm font-medium">{uploadMode === 'url' ? (videoUrl || '等待粘贴链接') : (selectedFile?.name || '等待选择文件')}</p></div></div>
         </div>
-      </div>
+      </section>
 
-      <div className="space-y-6">
-        <FileUploader
-          videoUrl={videoUrl}
-          onVideoUrlChange={setVideoUrl}
-          onFileSelect={setSelectedFile}
-          onModeChange={setUploadMode}
-          fileUploadEnabled={true}
-          initialMode={isMeeting ? 'file' : 'url'}
-          urlEnabled={!isMeeting}
-        />
+      {status === 'failed' ? <Alert variant="destructive"><AlertDescription><p>{error}</p><p className="mt-2">{copy.generator.failedRecoveryHint}</p></AlertDescription><div className="mt-4 flex gap-3"><Button onClick={() => void handleGenerate()} disabled={!sourceReady}>{copy.generator.retryGeneration}</Button><Button variant="outline" onClick={handleEditInput}>{copy.generator.editInput}</Button></div></Alert> : null}
 
-        <div className="flex items-center gap-3 rounded-xl border border-blue-100 bg-blue-50/60 px-4 py-3 text-sm text-blue-900 dark:border-blue-900/60 dark:bg-blue-950/20 dark:text-blue-100">
-          {uploadMode === 'url' ? <LinkIcon className="h-5 w-5 shrink-0" /> : <FileAudio className="h-5 w-5 shrink-0" />}
-          <div>
-            <p className="font-medium">{language === 'zh-CN' ? (isMeeting ? '将生成会议纪要' : '将整理为结构化笔记') : (isMeeting ? 'Meeting minutes output' : 'Structured note output')}</p>
-            <p className="mt-0.5 text-xs opacity-75">{language === 'zh-CN'
-              ? (uploadMode === 'url' ? '输入视频链接后，将自动下载、转写并提取关键画面。' : selectedFile ? `已选择：${selectedFile.name}` : '请选择本地音频、视频或文字文件。')
-              : (uploadMode === 'url' ? 'The video will be downloaded, transcribed, and illustrated with key frames.' : selectedFile ? `Selected: ${selectedFile.name}` : 'Choose a local audio, video, or transcript file.')}</p>
-            {uploadMode !== 'transcript' && (
-              <p className="mt-1 text-xs opacity-75">
-                {language === 'zh-CN' ? '音频与视频会自动降噪并区分说话人，无需设置人数。' : 'Audio and video automatically use denoising and speaker detection.'}
-              </p>
-            )}
-          </div>
-        </div>
-
-        <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#202020]">
-          <label className="block text-sm font-medium mb-2">
-            {copy.generator.saveTargetWorkspace}
-          </label>
-          <p className="text-sm text-gray-600 dark:text-gray-300">{workspaceLabel}</p>
-          <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-            {copy.generator.saveTargetWorkspaceHint}
-          </p>
-        </div>
-
-        {cloudMode ? <ModelSourcePanel compact /> : <>
-        <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#202020]">
-          <label className="block text-sm font-medium mb-2">{copy.generator.modelProfileLabel}</label>
-          <select
-            value={selectedProfileId}
-            onChange={(event) => selectProfile(event.target.value)}
-            className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
-          >
-            <option value="">{copy.generator.systemDefaultModel}</option>
-            {profiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {profile.name} / {profile.modelName}
-                {profile.isDefault ? ' (default)' : ''}
-              </option>
-            ))}
-          </select>
-          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            {copy.generator.activeModelPrefix}
-            {selectedProfile
-              ? copy.generator.activeModelSelected(selectedProfile.name, selectedProfile.modelName)
-              : defaultProfile
-                ? copy.generator.activeModelDefault(defaultProfile.name, defaultProfile.modelName)
-                : copy.generator.activeModelBackend}
-          </p>
-        </div>
-
-        <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#202020]">
-          <label className="block text-sm font-medium mb-2">{copy.generator.sttProfileLabel}</label>
-          <select
-            value={selectedSTTProfileId}
-            onChange={(event) => selectSTTProfile(event.target.value)}
-            className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
-          >
-            <option value="">{copy.generator.systemDefaultSTT}</option>
-            {sttProfiles.map((profile) => (
-              <option key={profile.id} value={profile.id}>
-                {formatSTTProfileLabel(profile.name, profile)}
-                {profile.isDefault ? ' (default)' : ''}
-              </option>
-            ))}
-          </select>
-          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            {copy.generator.activeSTTPrefix}
-            {selectedSTTProfile
-              ? copy.generator.activeSTTSelected(selectedSTTProfile.name, formatSTTProfileLabel(selectedSTTProfile.name, selectedSTTProfile))
-              : defaultSTTProfile
-                ? copy.generator.activeSTTDefault(defaultSTTProfile.name, formatSTTProfileLabel(defaultSTTProfile.name, defaultSTTProfile))
-                : copy.generator.activeSTTBackend}
-          </p>
-        </div>
-
-        </>}
-        <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#202020]">
-          <label className="block text-sm font-medium mb-2">
-            {copy.generator.summaryMode}
-          </label>
-          <select
-            value={summaryMode}
-            onChange={(event) => setSummaryMode(event.target.value as SummaryMode)}
-            className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
-          >
-            {summaryModeOptions.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-          <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-            {selectedSummaryMode?.description}
-          </p>
-        </div>
-
-        <button
-          onClick={() => void handleGenerate()}
-          disabled={!['idle', 'failed'].includes(status) || (uploadMode === 'url' ? !videoUrl : !selectedFile)}
-          className="w-full flex items-center justify-center gap-2 py-3 px-6 bg-primary-light dark:bg-primary-dark text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          <Wand2 className="w-5 h-5" />
-          {status === 'uploading' || status === 'processing'
-            ? copy.generator.generating
-            : language === 'zh-CN'
-              ? isMeeting ? '生成会议纪要' : '开始整理'
-              : isMeeting ? 'Generate meeting minutes' : 'Organize notes'}
-        </button>
-
-        {status === 'failed' ? (
-          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-900/60 dark:bg-amber-950/30">
-            <p className="text-sm text-amber-800 dark:text-amber-200">
-              {copy.generator.failedRecoveryHint}
-            </p>
-            <div className="mt-3 flex flex-col gap-2 sm:flex-row">
-              <button
-                type="button"
-                onClick={() => void handleGenerate()}
-                disabled={uploadMode === 'url' ? !videoUrl : !selectedFile}
-                className="flex-1 rounded-lg bg-primary-light px-4 py-2 text-sm font-medium text-white transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-dark"
-              >
-                {copy.generator.retryGeneration}
-              </button>
-              <button
-                type="button"
-                onClick={handleEditInput}
-                className="flex-1 rounded-lg border border-amber-300 px-4 py-2 text-sm font-medium text-amber-800 transition-colors hover:bg-amber-100 dark:border-amber-800 dark:text-amber-100 dark:hover:bg-amber-900/40"
-              >
-                {copy.generator.editInput}
-              </button>
-            </div>
-          </div>
-        ) : null}
-
-        <GenerateProgress
-          status={status}
-          progress={progress}
-          currentStep={currentStep}
-          error={error}
-          message={taskMessage}
-        />
-      </div>
-    </div>
-  )
+      <div className="motion-rise flex flex-col items-center justify-between gap-4 rounded-2xl bg-foreground px-6 py-5 text-background sm:flex-row" style={{ animationDelay: '170ms' }}><div><p className="font-medium">{sourceReady ? (isMeeting ? '会议文件已准备好' : '资料已准备好') : (isMeeting ? '先选择一个会议文件' : '先提供链接或文件')}</p><p className="mt-1 text-sm text-background/60">{sourceReady ? '开始后会显示真实处理阶段和失败恢复入口。' : '选好来源后即可开始，模型设置可在上方调整。'}</p></div><Button onClick={() => void handleGenerate()} disabled={!['idle', 'failed'].includes(status) || !sourceReady} variant="secondary" size="lg" className="motion-sheen min-w-52 rounded-full"><Wand2 />{language === 'zh-CN' ? (isMeeting ? '生成会议纪要' : '开始整理') : (isMeeting ? 'Generate meeting minutes' : 'Organize notes')}</Button></div>
+    </>}
+  </div>
 }

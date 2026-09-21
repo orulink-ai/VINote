@@ -111,6 +111,10 @@ export async function closeCurrentRecorderWindow() {
   }
 }
 
+export async function hideCurrentRecorderWindow() {
+  if (isTauriRuntime() && isRecorderWindowRoute()) await getCurrentWindow().hide()
+}
+
 export async function startCurrentRecorderWindowDrag() {
   if (!isTauriRuntime() || !isRecorderWindowRoute()) return
   await getCurrentWindow().startDragging()

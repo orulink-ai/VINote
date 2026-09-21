@@ -1,90 +1,59 @@
-import { Bell, LogOut, PanelLeftClose, PanelLeftOpen, Plus, Search, User } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
+import { FileText, Mic2, Search, Settings2, Users } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { useI18n } from '../../lib/i18n'
-import { useAuthStore } from '../../stores/authStore'
-import { ThemeToggle } from './ThemeToggle'
-import { AppModeSwitch } from './AppModeSwitch'
+import { Button } from '@/components/ui/button'
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList, CommandSeparator } from '@/components/ui/command'
+import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
+import { SidebarTrigger } from '@/components/ui/sidebar'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
-const brandMarkUrl = `${import.meta.env.BASE_URL}vinote-mark.svg`
+const destinations = [
+  { path: '/', icon: FileText, zh: '动态', en: 'Activity' },
+  { path: '/meetings', icon: Mic2, zh: '会议', en: 'Meetings' },
+  { path: '/generate', icon: FileText, zh: '链接与文件', en: 'Links & files' },
+  { path: '/notes', icon: FileText, zh: '笔记库', en: 'Notes' },
+  { path: '/team', icon: Users, zh: '成员与共享', en: 'Members & sharing' },
+  { path: '/settings', icon: Settings2, zh: '设置', en: 'Settings' },
+]
 
-interface HeaderProps {
-  sidebarCollapsed: boolean
-  onToggleSidebar: () => void
-}
-
-export function Header({ sidebarCollapsed, onToggleSidebar }: HeaderProps) {
-  const { user, signOut } = useAuthStore()
+export function Header() {
   const { copy, locale } = useI18n()
   const navigate = useNavigate()
-  const isZh = locale.startsWith('zh')
+  const location = useLocation()
+  const zh = locale.startsWith('zh')
+  const [searchOpen, setSearchOpen] = useState(false)
+  const current = location.pathname.startsWith('/note/')
+    ? { zh: '笔记', en: 'Note' }
+    : destinations.find(item => item.path === '/' ? location.pathname === '/' : location.pathname.startsWith(item.path))
 
-  const handleSignOut = async () => {
-    await signOut()
-    navigate('/login')
-  }
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'k') {
+        event.preventDefault()
+        setSearchOpen(value => !value)
+      }
+    }
+    window.addEventListener('keydown', onKeyDown)
+    return () => window.removeEventListener('keydown', onKeyDown)
+  }, [])
 
-  return (
-    <header className="h-14 px-4 flex items-center justify-between border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-[#202020]">
-      <div className="flex items-center gap-3">
-        <button
-          type="button"
-          onClick={onToggleSidebar}
-          className="inline-flex h-9 w-9 items-center justify-center rounded-xl text-gray-500 transition hover:bg-gray-100 hover:text-gray-800 dark:text-gray-400 dark:hover:bg-[#2a2a2a] dark:hover:text-gray-100"
-          title={sidebarCollapsed ? (isZh ? '展开侧边栏' : 'Expand sidebar') : (isZh ? '收起侧边栏' : 'Collapse sidebar')}
-        >
-          {sidebarCollapsed ? <PanelLeftOpen className="h-[18px] w-[18px]" /> : <PanelLeftClose className="h-[18px] w-[18px]" />}
-        </button>
-        <div className="flex items-center gap-2">
-          <img src={brandMarkUrl} alt="" className="h-8 w-8" />
-          <h1 className="text-xl font-bold text-gray-900 dark:text-gray-100">VINote</h1>
-        </div>
-        <div className="ml-2 border-l border-gray-200 pl-4 dark:border-gray-700"><AppModeSwitch /></div>
+  const open = (path: string) => { setSearchOpen(false); navigate(path) }
+
+  return <>
+    <header className="flex h-14 shrink-0 items-center gap-3 border-b bg-background/95 px-4 backdrop-blur supports-[backdrop-filter]:bg-background/80">
+      <SidebarTrigger className="-ml-1 text-muted-foreground transition-transform duration-200 hover:scale-105 hover:text-foreground" />
+      <div className="min-w-0 animate-in fade-in slide-in-from-left-1 duration-300">
+        <p className="truncate text-sm font-medium">{zh ? current?.zh : current?.en}</p>
+        <p className="hidden text-[11px] text-muted-foreground sm:block">VINote</p>
       </div>
-
-      <div className="flex items-center gap-2">
-        <div className="relative hidden xl:block">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-          <input
-            type="text"
-            placeholder={copy.header.searchPlaceholder}
-            className="w-64 pl-9 pr-4 py-1.5 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-[#191919] focus:ring-2 focus:ring-primary-light dark:focus:ring-primary-dark focus:border-transparent outline-none transition-all"
-          />
-        </div>
-
-        <button className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-600 dark:text-gray-400">
-          <Bell className="w-5 h-5" />
-        </button>
-
-        <ThemeToggle />
-
-        <div className="flex items-center gap-2 ml-2">
-          <button
-            onClick={() => navigate('/generate')}
-            className="flex items-center gap-1 px-3 py-1.5 bg-primary-light dark:bg-primary-dark text-white text-sm rounded-lg hover:opacity-90 transition-opacity"
-          >
-            <Plus className="w-4 h-4" />
-            {copy.header.newButton}
-          </button>
-        </div>
-
-        <button
-          onClick={handleSignOut}
-          className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 ml-2"
-          title={copy.header.signOut}
-        >
-          <LogOut className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-        </button>
-
-        <button className="p-1 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800">
-          {user?.email ? (
-            <div className="w-8 h-8 rounded-full bg-primary-light dark:bg-primary-dark flex items-center justify-center text-white text-sm font-medium">
-              {user.email[0].toUpperCase()}
-            </div>
-          ) : (
-            <User className="w-5 h-5 text-gray-600 dark:text-gray-400" />
-          )}
-        </button>
+      <Button variant="ghost" className="mx-auto hidden h-9 w-full max-w-md justify-start border bg-muted/35 text-muted-foreground shadow-none transition-all duration-200 hover:-translate-y-px hover:border-foreground/20 hover:bg-muted lg:flex" onClick={() => setSearchOpen(true)}>
+        <Search data-icon="inline-start" /><span className="flex-1 text-left">{zh ? '搜索笔记、会议和页面' : copy.header.searchPlaceholder}</span><kbd className="rounded border bg-background px-1.5 py-0.5 text-[10px]">Ctrl K</kbd>
+      </Button>
+      <div className="ml-auto flex items-center gap-1">
+        <Tooltip><TooltipTrigger asChild><Button variant="ghost" size="icon" onClick={() => setSearchOpen(true)} className="transition-transform duration-200 hover:scale-105 lg:hidden"><Search /></Button></TooltipTrigger><TooltipContent>{zh ? '搜索' : 'Search'}</TooltipContent></Tooltip>
       </div>
     </header>
-  )
+    <Dialog open={searchOpen} onOpenChange={setSearchOpen}><DialogContent className="overflow-hidden p-0 sm:max-w-xl" aria-describedby={undefined}><DialogTitle className="sr-only">{zh ? '全局搜索' : 'Global search'}</DialogTitle><Command><CommandInput placeholder={zh ? '搜索笔记、会议或前往页面…' : 'Search notes, meetings, or pages…'} /><CommandList><CommandEmpty>{zh ? '没有找到结果' : 'No results found'}</CommandEmpty><CommandGroup heading={zh ? '前往' : 'Go to'}>{destinations.map(item => <CommandItem key={item.path} onSelect={() => open(item.path)}><item.icon /><span>{zh ? item.zh : item.en}</span></CommandItem>)}</CommandGroup><CommandSeparator /><CommandGroup heading={zh ? '快捷操作' : 'Shortcuts'}><CommandItem onSelect={() => open('/meetings')}><Mic2 /><span>{zh ? '打开会议录制' : 'Open meeting capture'}</span></CommandItem><CommandItem onSelect={() => open('/generate')}><FileText /><span>{zh ? '打开资料收件箱' : 'Open material inbox'}</span></CommandItem></CommandGroup></CommandList></Command></DialogContent></Dialog>
+  </>
 }

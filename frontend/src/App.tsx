@@ -5,6 +5,7 @@ import { BrowserRouter, Route, Routes } from 'react-router-dom'
 import { AuthGuard } from './components/Auth/AuthGuard'
 import { MainLayout } from './components/Layout/MainLayout'
 import { MeetingRecorderDock } from './components/MeetingRecorder/MeetingRecorderDock'
+import { DesktopTitleBar } from './components/Layout/DesktopTitleBar'
 import { isRecorderWindowRoute } from './lib/desktopRecorderWindow'
 import { useAuthStore } from './stores/authStore'
 import { useThemeStore } from './stores/themeStore'
@@ -20,8 +21,8 @@ const Team = lazy(async () => ({ default: (await import('./pages/Team')).Team })
 
 function RouteFallback() {
   return (
-    <div className="min-h-screen flex items-center justify-center bg-white dark:bg-[#191919]">
-      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary-light"></div>
+    <div className="flex min-h-screen items-center justify-center bg-background">
+      <div className="size-8 animate-spin rounded-full border-2 border-muted border-t-primary" />
     </div>
   )
 }
@@ -63,26 +64,31 @@ function App() {
   }
 
   return (
-    <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
-      <Suspense fallback={<RouteFallback />}>
-        <Routes>
-          <Route path="/login" element={<Login />} />
-          <Route element={
-            <AuthGuard>
-              <MainLayout />
-            </AuthGuard>
-          }>
-            <Route index element={<Home />} />
-            <Route path="meetings" element={<Meetings />} />
-            <Route path="notes" element={<Notes />} />
-            <Route path="generate" element={<NoteGenerator />} />
-            <Route path="note/:id" element={<NoteEditor />} />
-            <Route path="settings" element={<Settings />} />
-            <Route path="team" element={<Team />} />
-          </Route>
-        </Routes>
-      </Suspense>
-    </BrowserRouter>
+    <div className="flex h-screen min-h-0 flex-col overflow-hidden bg-background">
+      <DesktopTitleBar />
+      <div className="min-h-0 flex-1">
+        <BrowserRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
+          <Suspense fallback={<RouteFallback />}>
+            <Routes>
+              <Route path="/login" element={<Login />} />
+              <Route element={
+                <AuthGuard>
+                  <MainLayout />
+                </AuthGuard>
+              }>
+                <Route index element={<Home />} />
+                <Route path="meetings" element={<Meetings />} />
+                <Route path="notes" element={<Notes />} />
+                <Route path="generate" element={<NoteGenerator />} />
+                <Route path="note/:id" element={<NoteEditor />} />
+                <Route path="settings" element={<Settings />} />
+                <Route path="team" element={<Team />} />
+              </Route>
+            </Routes>
+          </Suspense>
+        </BrowserRouter>
+      </div>
+    </div>
   )
 }
 

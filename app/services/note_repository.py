@@ -1,9 +1,11 @@
 import json
 import re
 import secrets
+import uuid
 from datetime import datetime, timezone
 
 from sqlalchemy import desc, select
+from sqlalchemy.exc import IntegrityError
 
 from app.db import session_scope
 from app.db_models import NoteDB, TeamDB, TeamMemberDB
@@ -71,6 +73,12 @@ class NoteRepository:
             return record
         return None
 
+    def can_access_task(self, user_id: str, task_id: str) -> bool:
+        with session_scope() as db:
+            ids = db.scalars(select(NoteDB.id).where(NoteDB.task_id == task_id)).all()
+            return any(self._get_accessible_record(db, user_id=user_id, note_id=note_id) is not None
+                       for note_id in ids)
+
     def list_notes(self, user_id: str, *, scope: str = "personal", team_id: str | None = None) -> list[NoteRecordResponse]:
         with session_scope() as db:
             statement = select(NoteDB)
@@ -98,7 +106,22 @@ class NoteRepository:
                     raise ValueError("Team not found or access denied")
                 team_id = payload.team_id
 
+            meeting_key = None
+            if payload.task_id and payload.source_type in {"meeting_recording", "meeting_video"}:
+                existing = db.scalar(select(NoteDB).where(
+                    NoteDB.created_by == user_id, NoteDB.task_id == payload.task_id,
+                    NoteDB.scope == scope, NoteDB.team_id == team_id,
+                    NoteDB.source_type.in_(["meeting_recording", "meeting_video"]),
+                ).order_by(NoteDB.created_at).limit(1))
+                if existing:
+                    return self._to_response(existing, team_name=self._get_team_name(db, team_id))
+                # The primary key also serializes simultaneous retries across workers.
+                meeting_key = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(
+                    ["vinote-meeting", user_id, payload.task_id, scope, team_id],
+                )))
+
             record = NoteDB(
+                **({"id": meeting_key} if meeting_key else {}),
                 title=payload.title.strip(),
                 content=payload.content,
                 video_url=payload.video_url,
@@ -109,8 +132,15 @@ class NoteRepository:
                 team_id=team_id,
                 created_by=user_id,
             )
-            db.add(record)
-            db.flush()
+            try:
+                with db.begin_nested():
+                    db.add(record)
+                    db.flush()
+            except IntegrityError:
+                existing = db.get(NoteDB, meeting_key) if meeting_key else None
+                if not existing or existing.created_by != user_id or existing.scope != scope or existing.team_id != team_id:
+                    raise
+                return self._to_response(existing, team_name=self._get_team_name(db, team_id))
             return self._to_response(record, team_name=self._get_team_name(db, record.team_id))
 
     def update_note(self, user_id: str, note_id: str, payload: NoteUpdateRequest) -> NoteRecordResponse | None:
@@ -118,8 +148,10 @@ class NoteRepository:
             record = self._get_accessible_record(db, user_id=user_id, note_id=note_id)
             if not record:
                 return None
-            record.title = payload.title.strip()
-            record.content = payload.content
+            if payload.title is not None:
+                record.title = payload.title.strip()
+            if payload.content is not None:
+                record.content = payload.content
             if payload.status:
                 record.status = payload.status
             db.flush()

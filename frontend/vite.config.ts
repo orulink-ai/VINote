@@ -1,5 +1,7 @@
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import path from 'node:path'
+import { captureDiagnosticsPlugin } from './captureDiagnosticsPlugin'
 
 const host = process.env.TAURI_DEV_HOST
 
@@ -7,7 +9,12 @@ export default defineConfig({
   base: process.env.VINOTE_DESKTOP_BUILD ? './' : '/',
   clearScreen: false,
   envPrefix: ['VITE_', 'TAURI_ENV_*'],
-  plugins: [react()],
+  plugins: [react(), captureDiagnosticsPlugin()],
+  resolve: {
+    alias: {
+      '@': path.resolve(__dirname, './src'),
+    },
+  },
   build: {
     rollupOptions: {
       output: {

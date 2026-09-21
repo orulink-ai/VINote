@@ -56,7 +56,7 @@ function createHeading(level: 'h1' | 'h2' | 'h3', className: string) {
         <span>{children}</span>
         <a
           href={`#${id}`}
-          className="ml-2 align-middle text-sm text-gray-400 no-underline opacity-0 transition hover:text-primary-light group-hover:opacity-100"
+          className="ml-2 align-middle text-sm text-muted-foreground no-underline opacity-0 transition hover:text-primary group-hover:opacity-100"
           aria-label={`Link to ${id}`}
         >
           #
@@ -76,17 +76,17 @@ export function MarkdownContent({ content, className, videoUrl, mediaUrl, onVide
             <table className="w-full border-collapse my-4 text-sm overflow-x-auto block">{children}</table>
           ),
           thead: ({ children }) => (
-            <thead className="bg-gray-100 dark:bg-gray-800">{children}</thead>
+            <thead className="bg-muted">{children}</thead>
           ),
           tbody: ({ children }) => <tbody>{children}</tbody>,
           tr: ({ children }) => (
-            <tr className="border-b border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">{children}</tr>
+            <tr className="border-b border-border transition-colors hover:bg-muted/50">{children}</tr>
           ),
           th: ({ children }) => (
-            <th className="px-4 py-2.5 text-left font-semibold text-gray-700 dark:text-gray-200 border-b-2 border-gray-300 dark:border-gray-600">{children}</th>
+            <th className="border-b-2 border-border px-4 py-2.5 text-left font-semibold text-foreground">{children}</th>
           ),
           td: ({ children }) => (
-            <td className="px-4 py-2.5 text-gray-600 dark:text-gray-300">{children}</td>
+            <td className="px-4 py-2.5 text-muted-foreground">{children}</td>
           ),
           code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || '')
@@ -100,7 +100,7 @@ export function MarkdownContent({ content, className, videoUrl, mediaUrl, onVide
                 {String(children).replace(/\n$/, '')}
               </CodeHighlighter>
             ) : (
-              <code className={`${className} bg-gray-200 dark:bg-gray-700 px-1 py-0.5 rounded`} {...props}>
+              <code className={`${className} rounded bg-muted px-1 py-0.5`} {...props}>
                 {children}
               </code>
             )
@@ -119,7 +119,7 @@ export function MarkdownContent({ content, className, videoUrl, mediaUrl, onVide
                 href={resolvedHref}
                 target="_blank"
                 rel="noreferrer"
-                className="text-primary-light underline underline-offset-2"
+                className="text-primary underline underline-offset-2"
                 onClick={(event) => {
                   if (!resolvedHref || !onVideoJump) {
                     return
@@ -150,12 +150,12 @@ export function MarkdownContent({ content, className, videoUrl, mediaUrl, onVide
             <img
               src={src ? resolveContentUrl(src) : undefined}
               alt={alt || 'Screenshot'}
-              className="mb-4 rounded-2xl border border-gray-200 shadow-sm dark:border-gray-700"
+              className="mb-4 border border-border"
               loading="lazy"
             />
           ),
           blockquote: ({ children }) => (
-            <blockquote className="border-l-4 border-primary-light dark:border-primary-dark pl-4 italic my-4">
+            <blockquote className="my-4 border-l-4 border-primary pl-4 italic text-muted-foreground">
               {children}
             </blockquote>
           ),

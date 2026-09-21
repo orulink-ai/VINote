@@ -1,7 +1,7 @@
 {
   "name": "vinote",
   "private": true,
-  "version": "0.5.2",
+  "version": "0.6.0",
   "description": "VINote workspace command shortcuts",
   "packageManager": "yarn@1.22.22",
   "scripts": {
@@ -11,20 +11,29 @@
     "dev:api": "node scripts/dev-api.mjs",
     "dev:web": "yarn --cwd frontend web:dev",
     "verify": "node scripts/verify-project.mjs",
+    "check": "yarn --cwd frontend build && yarn desktop:check",
     "package:release:plan": "node scripts/build-desktop.mjs --channel release --plan",
     "package:test:plan": "node scripts/build-desktop.mjs --channel test --plan",
     "package:release": "node scripts/build-desktop.mjs --channel release",
     "package:test": "node scripts/build-desktop.mjs --channel test",
     "api:dev": "node scripts/dev-api.mjs",
-    "client:dev": "node scripts/dev-desktop.mjs",
+    "client:dev": "node scripts/dev-desktop.mjs --channel development",
     "web:dev": "yarn --cwd frontend web:dev",
     "build": "yarn --cwd frontend build",
     "preview": "yarn --cwd frontend preview",
     "desktop:build": "node scripts/build-desktop.mjs",
     "desktop:build:release": "node scripts/build-desktop.mjs --channel release",
     "desktop:build:test": "node scripts/build-desktop.mjs --channel test",
-    "desktop:check": "node --test scripts/desktop-build-profile.test.mjs scripts/project-scripts.test.mjs",
+    "desktop:check": "yarn client:check",
     "docs:dev": "yarn --cwd docs docs:dev",
-    "docs:build": "yarn --cwd docs docs:build"
+    "docs:build": "yarn --cwd docs docs:build",
+    "client:test:dev": "node scripts/dev-desktop.mjs --channel test",
+    "client:test:dev:plan": "node scripts/dev-desktop.mjs --channel test --plan",
+    "client:dev:plan": "node scripts/dev-desktop.mjs --channel development --plan",
+    "client:test": "node scripts/build-desktop.mjs --channel test",
+    "client:production": "node scripts/build-desktop.mjs --channel release",
+    "client:test:plan": "node scripts/build-desktop.mjs --channel test --plan",
+    "client:production:plan": "node scripts/build-desktop.mjs --channel release --plan",
+    "client:check": "node --test scripts/desktop-build-profile.test.mjs scripts/desktop-dev-profile.test.mjs scripts/project-scripts.test.mjs"
   }
 }

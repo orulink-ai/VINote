@@ -11,7 +11,7 @@ The backend can also run as a lightweight MCP server through `mcp_server.py`.
 
 ## Project Structure
 - `app/`
-  - `routers/`: FastAPI route modules. `note.py` exposes generation/status APIs, browser upload generation endpoints, plus task-artifact media routes. `note_library.py` also exposes authenticated saved-note media playback routes. `teams.py` exposes authenticated team and membership APIs. `share.py` exposes authenticated share-link APIs plus public shared-note routes. `model_profiles.py` exposes authenticated LLM model-profile APIs. `stt_profiles.py` exposes authenticated STT profile APIs. `mcp.py` exposes the LAN HTTP MCP endpoint at `/mcp`.
+  - `routers/`: FastAPI route modules. `note.py` exposes generation/status APIs, browser upload generation endpoints, plus task-artifact media routes. `note_library.py` also exposes authenticated saved-note media playback routes. `teams.py` exposes authenticated team and membership APIs, including owner-only team deletion that returns team notes to their creators' personal workspaces. `share.py` exposes authenticated share-link APIs plus public shared-note routes. `model_profiles.py` exposes authenticated LLM model-profile APIs. `stt_profiles.py` exposes authenticated STT profile APIs. `mcp.py` exposes the LAN HTTP MCP endpoint at `/mcp`.
   - `services/`: orchestration and domain services.
     - `note_service.py`: main pipeline coordinator.
     - `mcp_service.py`: shared MCP tool definitions and JSON-RPC request handling used by both the stdio server and the HTTP `/mcp` endpoint.
@@ -61,7 +61,7 @@ The backend can also run as a lightweight MCP server through `mcp_server.py`.
 - Backend dev server: `uvicorn main:app --host 0.0.0.0 --port 8900 --reload`
 - Backend direct run: `python main.py`
 - Fresh-checkout setup without starting the app: `yarn setup`
-- Root desktop + backend entry point: `yarn dev`
+- Desktop + backend entry points: `yarn client:test:dev` (LAN test development), `yarn client:dev` (local development). `yarn dev` remains a test-development compatibility alias. See `docs/running-scripts.md`.
 - Root backend-only entry point: `yarn dev:api`
 - Root browser frontend entry point: `yarn dev:web`
 - Merge-ready project validation: `yarn verify`
@@ -69,10 +69,11 @@ The backend can also run as a lightweight MCP server through `mcp_server.py`.
   - Configured database failures are reported; the startup script does not switch to another database. Without DATABASE_URL the backend uses its SQLite default.
 - Frontend install: `cd frontend && npm install`
 - Frontend web dev server only: `cd frontend && npm run web:dev`
-- Tauri desktop hot-reload dev: `yarn dev` from the repository root
+- Tauri desktop hot-reload dev: `yarn client:test:dev` or `yarn client:dev` from the repository root
+- Windows source development keeps Tauri/Vite output in the invoking terminal. `scripts/windows-backend-dev.py` isolates Uvicorn reload signals in a hidden console with output forwarded to that terminal; do not use Windows `detached: true` for the desktop toolchain.
 - Frontend build: `cd frontend && npm run build`
 - Frontend preview: `cd frontend && npm run preview`
-- Test/release package build: `yarn package:test` / `yarn package:release`
+- Test/release package build: `yarn client:test` / `yarn client:production`; legacy `package:test` / `package:release` remain aliases.
 - Package configuration preview: `yarn package:test:plan` / `yarn package:release:plan`
 - Docs install: `cd docs && npm install`
 - Docs dev server: `cd docs && npm run docs:dev`
@@ -174,7 +175,7 @@ Update `README.md`, this `AGENTS.md`, or both whenever you change:
 ## Notes for Agents
 - Cloud generation validates model selections before downloading/preparing input. Task directory titles are trimmed after truncation for Windows compatibility; `.task_id` is written before renaming so subsequent failures remain discoverable. The generator treats `not_found` as a terminal error.
 - The current frontend supports local audio/video uploads and direct transcript uploads from the browser.
-- The note generator UI exposes both LLM profile selection and STT profile selection; `default` summary mode still auto-switches to hierarchical summarization for longer transcripts.
+- The note generator UI exposes LLM and STT service selection, but no summary-strategy selector. Meeting minutes and note organization always submit `default`; the backend automatically chooses one-shot or hierarchical processing by transcript length. Legacy API strategy values remain supported.
 - Share links are public read-only links backed by `notes.share_token` and can be disabled from the note editor.
 - Saved notes are now explicitly scoped as either personal notes or team notes. Team notes require `scope="team"` plus a valid `team_id`, and any signed-in team member can open them through the normal note APIs.
 - If documentation and code disagree, trust the code, then fix the documentation in the same change.
@@ -183,9 +184,9 @@ Update `README.md`, this `AGENTS.md`, or both whenever you change:
 - Cloud session linking must match the current local user's normalized email and must never replace an existing issuer/subject. Registration keeps email/password fixed after sending the code; switching back to login resets the form.
 - `cloud_account_service.py` owns VINote Supabase email OTP linking, encrypted sessions and token rotation. `VINOTE_SUPABASE_URL` / `VINOTE_SUPABASE_PUBLISHABLE_KEY` enable personal authentication; configured personal auth never falls back to the deployment key.
 - Cloud account endpoints under `/api/vilab/account` require local VINote authentication. `cloud_accounts` maps local users to unique `(issuer, subject)` identities.
-- Local VILab Server integration uses configurable `http://127.0.0.1:9878`; do not change the deployed LAN server until the user deploys the modified branch.
+- Source development and desktop packages use the deployed LAN VILab Server at `http://192.168.1.143:9876` by default. An explicit `VILAB_SERVER_URL` override remains available for isolated service development.
 
-Desktop packaging: scripts/desktop_backend.py initializes per-install secrets and SQLite in the user app data directory. Release-only desktop_backend.rs starts the bundled backend on a persisted per-install loopback port and stops it on exit. Packaged cloud defaults to http://192.168.1.143:9876; source development uses VILAB_SERVER_URL or http://127.0.0.1:9878. The two products remain independent processes/repos.
+Desktop packaging: scripts/desktop_backend.py initializes per-install secrets and SQLite in the user app data directory. Release-only desktop_backend.rs starts the bundled backend on a persisted per-install loopback port and stops it on exit. Test development and packaged builds default to http://192.168.1.143:9876; ordinary development defaults to http://127.0.0.1:9878. Desktop channels use VINOTE_TEST_VILAB_SERVER_URL / VINOTE_DEV_VILAB_SERVER_URL / VINOTE_RELEASE_VILAB_SERVER_URL rather than the generic VILAB_SERVER_URL; standalone backend commands still use the generic variable. The two products remain independent processes/repos.
 
 Fresh-checkout startup: yarn dev runs bootstrap-dev.mjs to install frontend dependencies, create .venv and install requirements, and create .env with unique local secrets and config/desktop-public.json account defaults. Existing .env is preserved. --setup-only performs initialization without opening a window. Node 22+, Python, Rust/platform compilers and FFmpeg are system prerequisites.
 
@@ -199,27 +200,55 @@ Fresh-checkout startup: yarn dev runs bootstrap-dev.mjs to install frontend depe
 - `speaker_clustering_service.py` refines automatic grouping using sustained-turn embeddings, average linkage and silhouette selection. Short uncertain turns remain unknown; overlap remains explicit. Group count and silhouette are not identity accuracy guarantees.
 - Meeting summaries synthesize themes, confirmed decisions and explicit actions; omit unsupported owners/deadlines/open questions. Both one-shot and hierarchical prompts keep wall-clock metadata separate from media offsets and avoid a duplicate closing AI summary.
 - `app/llm/meeting_review.py` owns fact-review prompts. Meeting one-shot drafts are reviewed against original transcripts; hierarchical chunks are reviewed before merge, and final consistency is checked against reviewed chunks. Empty/failed reviews fail rather than returning the draft. Cloud review prefers available `MEETING_REVIEW_MODEL` (default `gpt-6-astra`), falls back to the primary model when absent, and never changes global preferences. Custom/local providers reuse their current model. Packaging includes this non-secret preference; calls and actual review model remain traced.
-- `bootstrap-dev.mjs` checks/prepares local speaker runtime/models. `desktop-build-profile.mjs` owns release/test identity and configuration isolation. Both packages default to the deployed LAN ViLab Origin; source development uses localhost. Build entry points and artifacts are documented in `docs/desktop-packaging.md`; never package `.env` or private meeting artifacts.
+- `bootstrap-dev.mjs` checks/prepares local speaker runtime/models. `desktop-build-profile.mjs` owns release/test identity and configuration isolation. Test development, test packages and release packages default to the deployed LAN ViLab Origin at `http://192.168.1.143:9876`; ordinary development defaults to local port 9878. Channel-specific overrides and command semantics are documented in `docs/running-scripts.md`. Build entry points and artifacts are documented in `docs/desktop-packaging.md`; never package `.env` or private meeting artifacts.
 
 - `/meetings` owns meeting setup/history; `meetingCapture.ts` captures selected microphone plus optional display/system audio. Main-window `MeetingRecorderDock` owns the stream; `MeetingRecorderController` forwards native floating-window actions via Tauri events.
-- Capture acquisition is cancellable with a 20-second permission timeout; cancel/reset/unmount releases acquired sources and stops late permission results. Runtime recorder errors release tracks and update the dock; stopping releases devices before async file finalization. Pausing retains capture for resuming; stopping/discarding releases it.
-- `speaker_diarization_service.py` runs whole-recording local sherpa-onnx Pyannote/3D-Speaker clustering independently from one complete-recording STT request. Provider timestamps are aligned by interval overlap; whole-file-only text is aligned in sequence by detected speaking duration and marked estimated. IDs are local to the recording; overlap labels indicate uncertain attribution, not separated overlapping audio.
+- Capture acquisition is cancellable. Screen selection waits for the user without a fixed timeout; microphone acquisition has a 20-second timeout. Cancel/reset/unmount releases acquired sources and stops late permission results. Runtime recorder errors release tracks and update the dock; stopping releases devices before async file finalization. Pausing retains capture for resuming; stopping/discarding releases it.
+- Source development writes capture-stage events and original exceptions through Vite's local WebSocket to `data/desktop-capture.log` (bounded to approximately 1 MiB). These diagnostics exclude device IDs, device labels and media content; they are disabled in production builds. Backend logs do not contain WebView capture failures.
+- `speaker_diarization_service.py` runs whole-recording local sherpa-onnx Pyannote/3D-Speaker clustering independently from cloud STT covering the entire recording (chunked when necessary). Provider timestamps are aligned by interval overlap; whole-file-only text is aligned in sequence by detected speaking duration and marked estimated. IDs are local to the recording; overlap labels indicate uncertain attribution, not separated overlapping audio.
 - Media generation routes accept `diarize` and optional `speaker_count` (1–20); authenticated `GET /api/meeting-capabilities` returns `diarization.available`. Source development installs optional `requirements.diarization.txt` and models via `scripts/setup_diarization.py`; `DIARIZATION_MODEL_DIR` defaults to `data/models/diarization`. Desktop packaging stages these models.
 - Uploaded video reuses its source file for screenshot extraction. Audio-only notes remove screenshot placeholders. Meeting video notes use `meeting_video`; audio uses `meeting_recording`.
-- `scripts/check_meeting_generation.py --live` uses real cloud services through in-process desktop API routes and saves a personal test note. This is not a native capture/UI test. Explicit transient STT HTTP 502/503/504 responses retry at most twice; other errors fail immediately.
+- `scripts/check_meeting_generation.py --live` uses real cloud services through in-process desktop API routes and saves a personal test note. This is not a native capture/UI test. Explicit transient STT HTTP 502/503/504 and transport/timeouts retry at most twice; authentication and unknown errors fail immediately. VILab transcription requests are capped at 300 seconds (approximately 9.6 MB PCM WAV), including when optional generic chunking is disabled. Successful chunks are cached for retry; explicit no-speech sections are retained as unrecognized intervals. This bound is not a guarantee against upstream outages.
 
 ## Langfuse observability
 
 `app/services/tracing_service.py` owns Langfuse SDK 4 tracing for desktop requests only. Tauri identifies itself with `X-VINote-Client: desktop`; browser, Pi and ordinary backend calls must not initialize tracing. Business root names are exactly `桌面端｜会议纪要` and `桌面端｜笔记整理`, selected by product workflow rather than media type. Source desktop, test packages and release packages all trace; source desktop startup and packaging reject missing project configuration, while ordinary backend startup does not. Network/export failures remain fail-open for business tasks. Root chains correlate task_id/sessionId, hash local user IDs, use Chinese stage names, and record complete STT/LLM inputs and outputs, actual model parameters, usage and latency. Never record media binary, credentials, auth headers, local absolute paths or raw speaker embeddings. Configure LANGFUSE_BASE_URL, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and optional LANGFUSE_RELEASE. Both package profiles bundle the build-managed Langfuse credentials in backend resources; these are extractable by package holders, never commit or log them. This exception does not permit bundling .env, model keys or user credentials. Old per-install langfuse.env is ignored. Environments are development/test/production. Both builds require frozen-backend synthetic trace ingestion plus API readback and store a credential-free receipt in manifest.json. See docs/langfuse.md for scope and limitations.
 
-Meeting setup automatically enables speaker diarization with automatic speaker count; do not expose diarization/count controls in the meeting UI. Users rename speakers in the transcript. Cloud ModelSourcePanel lists deployed ASR/LLM choices, persists selections per user and applies them to the next task. VILabCloudService.defaults resolves explicit selections over service defaults and rejects unavailable/wrong-type selections before input preparation; running task snapshots remain unchanged.
+Meeting setup automatically enables speaker diarization with automatic speaker count; do not expose diarization/count controls in the meeting UI. Users rename speakers in the transcript. Cloud ModelSourcePanel lists deployed ASR/LLM choices, persists selections per user and applies them to the next task. VILabCloudService.defaults resolves saved selections over service defaults, falling back only to a validated available service default when a saved selection is unavailable; explicit select() requests still reject invalid models; running task snapshots remain unchanged.
 
 ## Recording history and media lifecycle
 
-Meeting capture defaults to attempting system audio plus the selected microphone; do not show a system-audio configuration checkbox. If system audio is unavailable, offer an explicit microphone-only retry (never silently omit remote voices). Display capture support depends on the runtime and screen picker.
+Meeting capture uses the selected microphone as its required audio source. Screen recording requests video only, and the screen picker chooses only the recorded window or display. Persisted legacy options may still contain a system-audio flag, but capture ignores it so Windows/WebView system-audio failures never block recording. Display capture support depends on the runtime and screen picker.
 
-Stopping a meeting saves its blob and PendingMeeting metadata in IndexedDB, releases capture resources, and returns to /meetings without calling STT/LLM. LocalRecordingCard owns replay/download/confirmed deletion/later generation. A saved recording is visible without a note; generation removes its local pending copy only after the server note has been saved. Preserve actual recording start/end separately from generation time and meeting wall-clock context.
+Stopping saves its blob and PendingMeeting metadata in IndexedDB and releases capture resources. Recording-only mode returns to /meetings without STT/LLM; minutes mode automatically generates and saves the note, always using complete media for audio and video. LocalRecordingCard owns replay/download/confirmed deletion/later generation. A saved recording is visible without a note; generation retains the local original and history until explicit user deletion. Preserve actual recording start/end separately from generation time and meeting wall-clock context.
 
 MeetingMediaService owns GET/DELETE /api/notes/{note_id}/recording. File deletion preserves notes, transcripts, screenshots and the user's imported original. Deletion requires the note creator, matching recording_owner marker, and a single referencing note; unverified legacy/shared recordings remain downloadable. Only regular audio/video files under the task's media directory may be deleted. A recording_deleted marker prevents playback fallback to cached source audio. Local user-visible deletion uses a strict IndexedDB transaction and reports failures.
 
-OPFS-backed recording blobs reference their source file. After IndexedDB history metadata commits, transfer that file out of the hook's temporary-file cleanup ownership; keep its fileName in PendingMeeting. Delete it only through verified local-history deletion or after a server note is saved. Never remove the OPFS file on reset immediately after saving its Blob to IndexedDB: the Blob becomes unreadable.
+OPFS-backed recording blobs reference their source file. After IndexedDB history metadata commits, transfer that file out of the hook's temporary-file cleanup ownership; keep its fileName in PendingMeeting. Delete it only through verified local-history deletion. Automatic post-generation cleanup is disabled. Never remove the OPFS file on reset immediately after saving its Blob to IndexedDB: the Blob becomes unreadable.
+
+Successful local saving sets `localRecordingSaved` independently of generation state and closes capture controls immediately. Background generation failure must restore history retry actions without reopening recording controls; unsaved recordings remain protected. History generation/retry starts directly without a second recorder confirmation. Per-card generation labels must match the active recording ID and processing phase, not the global busy flag.
+
+`TranscriptionService.get_audio_duration` falls back to bounded ffprobe packet-timestamp scanning when container duration is missing, zero or nonfinite (common with MediaRecorder WebM). This does not modify the source recording; media offsets are never substituted for meeting wall-clock metadata.
+
+
+### Meeting minutes completion (2026-09-18)
+
+- `meeting_video_analysis_service.py` samples up to 24 timestamped frames and sends actual images to the deployed `gpt-5.6-luna` model. Visual evidence is included in summary and fact review separately from speech. This is sampled frame analysis, not exhaustive video understanding; absent vision service fails the task while local media remains available. `visual_observations.json` records evidence and offsets. Langfuse records offsets/text/model/usage, never image binaries.
+- Saved unavailable cloud model preferences resolve to a validated service default for new tasks. Explicit invalid selections still fail; running snapshots do not change. The fallback has its own trace stage.
+- Desktop main capture uses the native controller without a simultaneous in-page recording dock. Terminal main-window states close the native controller. A saved server note must retain the original recording before deleting the local pending copy.
+
+- Desktop source startup isolates child process groups/consoles on Windows as well as Unix, so Python reload control signals cannot terminate the sibling Tauri window. Shutdown still terminates each owned process tree.
+
+Development channels use separate Tauri identities (`app.vinote.desktop.dev` and `app.vinote.desktop.test.dev`) and tracing environments, while the source backend database still follows repository configuration. Run one source instance at a time; the launcher rejects an occupied backend port rather than reusing unknown settings. `client:*:dev:plan` is a read-only configuration preview without bootstrapping or launching services.
+
+## 会后统一处理（2026-09-21）
+
+两种模式在录制期间均不调用 ASR 或总结模型。结束后先保存完整原始媒体、释放设备并关闭控制；纪要模式自动执行会后处理。说话人区分继续使用本地模型，VILab 负责完整音频转写和总结，结果按时间戳对齐。视频使用实际代表帧证据，不代表逐帧理解。
+
+分段转写显示已完成音频时长、比例及基于实际分段耗时估算的剩余转写时间；整段请求没有中间结果时不虚构进度。所有进度采集仅在录制结束后运行。
+
+本地历史持久化任务 ID、草稿 ID、失败阶段和进度。POST /api/task/{task_id}/retry 校验录制所有者与媒体后复用任务和有效产物。旧进程中断任务显示可重试。保存笔记后保留本地原始媒体直到用户明确删除。
+
+MeetingCaptureWorkspace renders capture preview and controls. User end actions send request-stop; MeetingRecorderDock confirms in the main window, never in the native controller. The internal stop action remains available for source-ended/save flows. Recording uses no realtime ASR. Audio-meter failures are fail-open and must never stop media capture.
+
+Meeting postprocessing workers live in frontend/src/lib/meetingProcessing.ts and never own capture state. Both history and note retry reuse the task. PATCH /api/notes/{note_id} accepts status-only changes, preserving title/content. Verification scope and remaining media-management gaps are documented in docs/plans/2026-09-21-meeting-postprocessing.md.

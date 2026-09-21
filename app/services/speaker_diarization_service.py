@@ -1,7 +1,7 @@
 """Independent whole-recording transcription and local speaker diarization.
 
-The configured STT receives the complete preprocessed recording once so it can
-retain meeting context. Local diarization runs on the same timeline and its
+The configured STT covers the complete preprocessed recording, with chunks
+when necessary. Local diarization runs on the same timeline and its
 turns are aligned with provider timestamps when available. Whole-file text is
 only duration-aligned and is reported as estimated evidence.
 """
@@ -37,7 +37,7 @@ def _speaker_label(speaker_id: str) -> str:
         return "重叠发言（归属待确认）"
     if speaker_id == "speaker_unknown":
         return "说话人待确认"
-    return f"说话人 {speaker_id.split('_')[-1]}"
+    return f"说话人{speaker_id.split('_')[-1]}"
 
 
 def _split_transcript_sentences(text: str) -> list[str]:
@@ -65,6 +65,18 @@ def align_transcript_to_speaker_turns(
         and bool(transcript.segments)
     )
     aligned: list[TranscriptSegment] = []
+    if transcript.metadata.get("timestamp_granularity") == "chunk":
+        # Whole-file-only ASR results still have trustworthy chunk boundaries.
+        # Estimate inside each boundary, never redistribute text across the meeting.
+        for segment in transcript.segments:
+            local_turns = [SpeakerTurn(max(segment.start, turn.start), min(segment.end, turn.end), turn.speaker_id)
+                           for turn in turns if min(segment.end, turn.end) > max(segment.start, turn.start)]
+            if not local_turns:
+                local_turns = [SpeakerTurn(segment.start, segment.end, "speaker_unknown")]
+            local, _ = align_transcript_to_speaker_turns(
+                TranscriptResult(transcript.language, segment.text, [], {"timestamp_granularity": "file"}), local_turns)
+            aligned.extend(local)
+        return aligned, "estimated_by_speaking_duration"
     if has_provider_timestamps:
         for segment in transcript.segments:
             if not segment.text.strip():
@@ -73,8 +85,8 @@ def align_transcript_to_speaker_turns(
                 (max(0.0, min(segment.end, turn.end) - max(segment.start, turn.start)), turn)
                 for turn in turns
             ]
-            overlap, selected = max(overlaps, key=lambda item: item[0])
-            speaker_id = selected.speaker_id if overlap > 0 else "speaker_unknown"
+            overlap, selected = max(overlaps, key=lambda item: item[0], default=(0, None))
+            speaker_id = selected.speaker_id if overlap > 0 and selected else "speaker_unknown"
             aligned.append(TranscriptSegment(
                 start=segment.start,
                 end=segment.end,
@@ -192,7 +204,7 @@ class SpeakerDiarizationService:
         with tempfile.TemporaryDirectory(prefix="diarization-", dir=settings.data_dir) as folder:
             pcm_path = Path(folder) / "audio.f32"
             if update_status:
-                update_status("transcribing", "正在准备音频并区分说话人…")
+                update_status("transcribing", "正在准备音频并区分说话人…", stage="diarizing")
             with observation(
                 "音频预处理",
                 input={"source_format": Path(audio_path).suffix.lower().lstrip("."),
@@ -233,7 +245,7 @@ class SpeakerDiarizationService:
                             nonlocal last_progress
                             progress = int(done * 100 / max(total, 1)) // 5 * 5
                             if update_status and progress != last_progress:
-                                update_status("transcribing", f"正在区分说话人：{progress}%")
+                                update_status("transcribing", f"正在区分说话人：{progress}%", stage="diarizing")
                                 last_progress = progress
                             return 0
 
@@ -248,7 +260,7 @@ class SpeakerDiarizationService:
                 if speaker_count is None:
                     from app.services.speaker_clustering_service import refine_speaker_turns
                     if update_status:
-                        update_status("transcribing", "正在核对完整发言的声音特征并自动判断人数…")
+                        update_status("transcribing", "正在核对完整发言的声音特征并自动判断人数…", stage="diarizing")
                     with observation(
                         "说话人聚类",
                         input={"model": embedding.name, "turn_count": len(turns),
@@ -279,7 +291,10 @@ class SpeakerDiarizationService:
                     )
                 except NoSpeechDetectedError:
                     raise ValueError("说话人分离完成，但完整录音转写未返回有效文本。") from None
-                result_segments, alignment = align_transcript_to_speaker_turns(transcript, turns)
+                if update_status:
+                    update_status("transcribing", "正在对齐逐字稿…", stage="aligning")
+                with observation("逐字稿对齐", as_type="span"):
+                    result_segments, alignment = align_transcript_to_speaker_turns(transcript, turns)
                 if not result_segments:
                     raise ValueError("完整录音转写成功，但无法与说话人时间区间对齐。")
                 result = TranscriptResult(
@@ -291,20 +306,20 @@ class SpeakerDiarizationService:
                               "timestamp_granularity": transcript.metadata.get("timestamp_granularity", "file"),
                               "speaker_alignment": alignment,
                               "speaker_alignment_estimated": alignment == "estimated_by_speaking_duration",
-                              "stt_request_count": 1,
+                              "stt_request_count": transcript.metadata.get("stt_request_count", 1),
                               "speaker_turn_count": len(turns), "overlap_detected": any(
                                   turn.speaker_id == "speaker_overlap" for turn in turns),
                               "cluster_threshold": settings.diarization_cluster_threshold,
                               "audio_preprocessing": preprocessing,
-                              "unrecognized_segments": []},
+                              "unrecognized_segments": transcript.metadata.get("unrecognized_segments", [])},
                 )
                 update_current(output={
                     "speaker_count": result.metadata["speaker_count"],
                     "clustering": clustering,
-                    "stt_request_count": 1,
+                    "stt_request_count": result.metadata["stt_request_count"],
                     "speaker_alignment": alignment,
                     "overlap_detected": result.metadata["overlap_detected"],
-                    "unrecognized_segments": [],
+                    "unrecognized_segments": result.metadata["unrecognized_segments"],
                     "turns": [{"start": turn.start, "end": turn.end,
                                "speaker": turn.speaker_id} for turn in turns],
                     "transcript": result.full_text,

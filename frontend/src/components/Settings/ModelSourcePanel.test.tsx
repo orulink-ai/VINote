@@ -1,12 +1,10 @@
-import { act, render, screen } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, expect, it, vi } from 'vitest'
 import { ModelSourcePanel } from './ModelSourcePanel'
 import { SavedApiKey } from './SavedApiKey'
 import { apiJson } from '../../lib/api'
 import { useAppModeStore } from '../../stores/appModeStore'
-import { AppModeSwitch } from '../Layout/AppModeSwitch'
-import { MemoryRouter } from 'react-router-dom'
 
 vi.mock('../../lib/api', () => ({ apiJson: vi.fn() }))
 vi.mock('../../lib/i18n', () => ({ useI18n: () => ({ locale: 'zh-CN', copy: { locale: 'zh-CN' } }) }))
@@ -26,7 +24,7 @@ it('cloud mode exposes model choices without asking for credentials', async () =
   useAppModeStore.setState({ config: { configured: true, mode: 'cloud', asr_model: '', llm_model: 'minimax-m2.7' } })
   render(<ModelSourcePanel compact />)
   expect(screen.getAllByRole('combobox')).toHaveLength(2)
-  expect(await screen.findByRole('option', { name: 'minimax-m2.7' })).toBeInTheDocument()
+  expect(await screen.findByText('minimax-m2.7')).toBeInTheDocument()
   expect(screen.queryByLabelText(/密钥/)).not.toBeInTheDocument()
   expect(apiJson).toHaveBeenCalledWith('/api/vilab/models')
 })
@@ -40,9 +38,10 @@ it('cloud mode offers VINote login and permits local mode during an outage', asy
   expect(screen.queryByLabelText('云端账号邮箱')).not.toBeInTheDocument()
   expect(screen.queryByText('发送验证码')).not.toBeInTheDocument()
   expect(screen.queryByText('ViTalk')).not.toBeInTheDocument()
-  await userEvent.click(screen.getByRole('button', { name: '本地 / 自定义' }))
+  await userEvent.click(screen.getByRole('radio', { name: '本地 / 自定义' }))
   expect(await screen.findByText('自定义 LLM 表单')).toBeInTheDocument()
-  expect(screen.getByText('自定义 STT 表单')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('tab', { name: '语音转写' }))
+  expect(await screen.findByText('自定义 STT 表单')).toBeInTheDocument()
 })
 
 it('loads a saved key only on demand and clears it when hidden', async () => {
@@ -53,20 +52,6 @@ it('loads a saved key only on demand and clears it when hidden', async () => {
   expect(await screen.findByText('test-secret-value')).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: '隐藏密钥' }))
   expect(screen.queryByText('test-secret-value')).not.toBeInTheDocument()
-})
-
-it('the global header immediately saves mode and updates the settings panel', async () => {
-  vi.mocked(apiJson).mockImplementation(async (path, init) => {
-    if (path.endsWith('/models')) return []
-    return { configured: true, mode: init?.body ? JSON.parse(String(init.body)).mode : 'local', asr_model: '', llm_model: '' }
-  })
-  render(<MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><AppModeSwitch /><ModelSourcePanel /></MemoryRouter>)
-  await userEvent.click(screen.getByRole('button', { name: '本地', exact: true }))
-  expect(await screen.findByText('自定义 LLM 表单')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: '本地', exact: true })).toHaveAttribute('aria-pressed', 'true')
-  expect(apiJson).toHaveBeenCalledWith('/api/vilab/mode', expect.objectContaining({ method: 'PUT', body: '{"mode":"local"}' }))
-  await act(async () => { useAppModeStore.getState().reset(); await useAppModeStore.getState().load() })
-  expect(useAppModeStore.getState().config?.mode).toBe('local')
 })
 
 it('a failed mode save retains the confirmed global mode', async () => {

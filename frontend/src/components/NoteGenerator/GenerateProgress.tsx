@@ -1,7 +1,9 @@
-import clsx from 'clsx'
 import { useEffect, useState } from 'react'
 import { CheckCircle, Download, FileAudio, FileText, Image, Loader2, Mic, XCircle } from 'lucide-react'
 import { useI18n } from '../../lib/i18n'
+import { Alert, AlertDescription } from '../ui/alert'
+import { Badge } from '../ui/badge'
+import { cn } from '../../lib/utils'
 
 interface GenerateProgressProps {
   status: 'idle' | 'uploading' | 'processing' | 'success' | 'failed'
@@ -46,24 +48,24 @@ export function GenerateProgress({ status, progress, currentStep, error, message
   if (status === 'idle') return null
 
   return (
-    <div className="space-y-5 rounded-2xl border border-blue-200 bg-blue-50/50 p-5 dark:border-blue-900 dark:bg-blue-950/20 sm:p-6">
-      <div className="space-y-4">
+    <section className="border">
+      <header className="grid gap-4 border-b p-5">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <span className="flex items-center gap-2 text-lg font-semibold text-gray-900 dark:text-gray-100">
-            {running && <Loader2 aria-hidden="true" className="h-5 w-5 animate-spin text-primary-light motion-reduce:animate-none" />}
+          <h3 className="flex items-center gap-2 text-base font-semibold">
+            {running && <Loader2 aria-hidden="true" className="h-5 w-5 animate-spin text-primary motion-reduce:animate-none" />}
             {status === 'success'
               ? copy.progress.completed
               : status === 'failed'
                 ? copy.progress.failed
                 : stepLabels[currentStep] || copy.progress.preparing}
-          </span>
-          <span className="rounded-full bg-white px-3 py-1 text-sm font-semibold text-blue-700 dark:bg-gray-900 dark:text-blue-300">{status === 'success' ? '已完成' : `第 ${activeStep} / ${steps.length} 步`}</span>
+          </h3>
+          <Badge variant={status === 'failed' ? 'destructive' : 'secondary'}>{status === 'success' ? '已完成' : `第 ${activeStep} / ${steps.length} 步`}</Badge>
         </div>
-        <div className="h-4 rounded-full bg-blue-100 ring-1 ring-inset ring-blue-200 overflow-hidden dark:bg-gray-800 dark:ring-gray-700">
+        <div className="h-2 overflow-hidden rounded-full bg-secondary">
           <div
-            className={clsx(
+            className={cn(
               'h-full rounded-full transition-all duration-300',
-              status === 'failed' ? 'bg-red-500' : 'bg-primary-light dark:bg-primary-dark'
+              status === 'failed' ? 'bg-destructive' : 'bg-primary'
             )}
             role="progressbar"
             aria-label="生成笔记阶段进度"
@@ -73,12 +75,13 @@ export function GenerateProgress({ status, progress, currentStep, error, message
             style={{ width: `${progress}%` }}
           />
         </div>
-      </div>
+      </header>
+      <div className="grid gap-4 p-5">
 
-      {running && detail && <div role="status" className="rounded-xl bg-white p-4 dark:bg-gray-900">
-        <p className="font-medium text-gray-800 dark:text-gray-200">{detail}</p>
-        <p className="mt-2 text-sm tabular-nums text-blue-700 dark:text-blue-300">本界面等待 {Math.floor(waitingSeconds / 60)} 分 {waitingSeconds % 60} 秒 · {message?.includes('无法获取') ? '状态检查异常，正在重试' : '等待服务端返回结果'}</p>
-        {currentStep === 'transcribing' && <p className="mt-2 text-sm leading-6 text-gray-600 dark:text-gray-400">音频转写中，完成当前分段后更新进度。进度条表示处理阶段，不代表已转写的音频比例。</p>}
+      {running && detail && <div role="status" className="border-l-2 border-foreground bg-muted/30 p-4">
+        <p className="font-medium text-foreground">{detail}</p>
+        <p className="mt-2 text-sm tabular-nums text-primary">本界面等待 {Math.floor(waitingSeconds / 60)} 分 {waitingSeconds % 60} 秒 · {message?.includes('无法获取') ? '状态检查异常，正在重试' : '等待服务端返回结果'}</p>
+        {currentStep === 'transcribing' && <p className="mt-2 text-sm leading-6 text-muted-foreground">音频转写中，完成当前分段后更新进度。进度条表示处理阶段，不代表已转写的音频比例。</p>}
       </div>}
 
       <div className="grid gap-2 sm:grid-cols-2">
@@ -89,22 +92,22 @@ export function GenerateProgress({ status, progress, currentStep, error, message
           return (
             <div
               key={step.key}
-              className={clsx(
-                'flex items-center gap-3 p-3 rounded-lg border',
-                stepStatus === 'processing' ? 'border-blue-300 bg-blue-100 dark:border-blue-700 dark:bg-blue-950' : 'border-transparent'
+              className={cn(
+                'flex items-center gap-3 border-l-2 border-transparent p-3',
+                stepStatus === 'processing' ? 'border-primary/30 bg-primary/5' : 'border-transparent'
               )}
             >
-              {stepStatus === 'completed' && <CheckCircle className="w-5 h-5 text-green-500" />}
-              {stepStatus === 'processing' && <Loader2 className="w-5 h-5 animate-spin text-primary-light dark:text-primary-dark" />}
-              {stepStatus === 'failed' && <XCircle className="w-5 h-5 text-red-500" />}
-              {stepStatus === 'pending' && <Icon className="w-5 h-5 text-gray-300 dark:text-gray-600" />}
+              {stepStatus === 'completed' && <CheckCircle className="w-5 h-5 text-emerald-600" />}
+              {stepStatus === 'processing' && <Loader2 className="w-5 h-5 animate-spin text-primary" />}
+              {stepStatus === 'failed' && <XCircle className="w-5 h-5 text-destructive" />}
+              {stepStatus === 'pending' && <Icon className="w-5 h-5 text-muted-foreground/50" />}
 
-              <span className={clsx(
+              <span className={cn(
                 'text-sm',
-                stepStatus === 'completed' && 'text-green-600 dark:text-green-400',
-                stepStatus === 'processing' && 'text-primary-light dark:text-primary-dark font-medium',
-                stepStatus === 'failed' && 'text-red-600 dark:text-red-400',
-                stepStatus === 'pending' && 'text-gray-400'
+                stepStatus === 'completed' && 'text-emerald-600',
+                stepStatus === 'processing' && 'text-primary font-medium',
+                stepStatus === 'failed' && 'text-destructive',
+                stepStatus === 'pending' && 'text-muted-foreground'
               )}>
                 {step.label}
               </span>
@@ -114,10 +117,9 @@ export function GenerateProgress({ status, progress, currentStep, error, message
       </div>
 
       {error && (
-        <div className="p-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-lg">
-          <p className="text-red-600 dark:text-red-400 text-sm">{error}</p>
-        </div>
+        <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert>
       )}
-    </div>
+      </div>
+    </section>
   )
 }

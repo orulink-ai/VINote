@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ExternalLink, PlayCircle } from 'lucide-react'
 import { buildVideoJumpUrl, formatTimestampLabel, resolveContentUrl } from '../../lib/videoLinks'
+import { Button } from '../ui/button'
 
 interface VideoReferencePanelProps {
   noteId?: string
@@ -79,31 +80,23 @@ export function VideoReferencePanel({
 
   return (
     <aside className={className}>
-      <div className="space-y-3 xl:sticky xl:top-4">
-        <div>
-          <p className="text-xs font-semibold uppercase tracking-[0.2em] text-gray-500 dark:text-gray-400">
-            Source Media
-          </p>
-          <h3 className="mt-1 text-base font-semibold">Jump from note to local source context</h3>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Current position: {timestampLabel}
-          </p>
-          {activeMomentTitle ? (
-            <p className="mt-2 rounded-xl bg-gray-100 px-3 py-2 text-sm text-gray-700 dark:bg-[#222222] dark:text-gray-200">
-              Active focus: {activeMomentTitle}
-            </p>
-          ) : null}
-        </div>
-
-        {localMediaUrl ? (
-          <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm dark:border-gray-700 dark:bg-[#111111]">
+      <section className="border xl:sticky xl:top-4">
+        <header className="border-b p-4">
+          <p className="text-xs font-medium text-muted-foreground">源媒体</p>
+          <h2 className="mt-1 text-sm font-semibold">从笔记跳回录制现场</h2>
+          <p className="text-sm text-muted-foreground">当前位置 · {timestampLabel}</p>
+          {activeMomentTitle ? <p className="mt-3 border-l-2 border-foreground pl-3 text-sm text-foreground">当前片段 · {activeMomentTitle}</p> : null}
+        </header>
+        <div className="grid gap-4 p-4">
+          {localMediaUrl ? (
+          <div className="border bg-muted/20 p-2">
             {playerKind === 'video' ? (
               <video
                 ref={videoRef}
                 controls
                 preload="metadata"
                 src={localMediaUrl}
-                className="aspect-video w-full rounded-xl bg-black"
+                className="aspect-video w-full bg-black"
                 onError={() => setPlayerKind('audio')}
                 onTimeUpdate={(event) => {
                   onTimestampChange?.(Math.floor(event.currentTarget.currentTime))
@@ -121,27 +114,18 @@ export function VideoReferencePanel({
                 }}
               />
             )}
-            <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">
-              Timestamp links now seek the downloaded local media instead of reopening the original page.
-            </p>
+            <p className="mt-3 text-sm text-muted-foreground">点击纪要时间戳会直接定位到这份本地媒体。</p>
           </div>
         ) : (
-          <div className="rounded-2xl border border-dashed border-gray-300 p-4 text-sm text-gray-500 dark:border-gray-600 dark:text-gray-400">
-            Local media is unavailable for this note, so only the original source link can be opened.
+          <div className="border border-dashed p-4 text-sm text-muted-foreground">
+            这条笔记没有可播放的本地媒体，可以打开原始来源查看。
           </div>
         )}
-
-        <a
-          href={jumpUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="inline-flex items-center gap-2 rounded-lg bg-primary-light px-4 py-2 text-sm font-medium text-white transition hover:opacity-90 dark:bg-primary-dark"
-        >
-          <PlayCircle className="h-4 w-4" />
-          Open at {timestampLabel}
-          <ExternalLink className="h-4 w-4" />
-        </a>
-      </div>
+          <Button asChild className="w-full">
+            <a href={jumpUrl} target="_blank" rel="noreferrer"><PlayCircle className="size-4" />打开 {timestampLabel}<ExternalLink className="size-4" /></a>
+          </Button>
+        </div>
+      </section>
     </aside>
   )
 }

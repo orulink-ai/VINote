@@ -90,3 +90,23 @@ def test_whole_file_transcript_is_aligned_without_additional_stt_calls():
     assert alignment == 'estimated_by_speaking_duration'
     assert [segment.text for segment in segments] == ['短句。', '这里是明显更长的第二句话。']
     assert [segment.speaker_id for segment in segments] == ['speaker_1', 'speaker_2']
+
+
+def test_chunk_text_cannot_drift_into_another_speakers_time_window():
+    transcript = TranscriptResult('zh', '长的第一段发言。短。', [
+        TranscriptSegment(0, 300, '长的第一段发言。'),
+        TranscriptSegment(300, 600, '短。'),
+    ], {'timestamp_granularity': 'chunk'})
+    segments, alignment = align_transcript_to_speaker_turns(transcript, [
+        SpeakerTurn(0, 10, 'speaker_1'), SpeakerTurn(300, 590, 'speaker_2')])
+    assert alignment == 'estimated_by_speaking_duration'
+    assert [segment.speaker_id for segment in segments] == ['speaker_1', 'speaker_2']
+    assert segments[0].end <= 300
+    assert segments[1].start >= 300
+
+
+def test_missing_speaker_turns_keep_timestamped_speech_unknown():
+    transcript = TranscriptResult('zh', '保留发言', [TranscriptSegment(1, 2, '保留发言')],
+                                  {'timestamp_granularity': 'segment'})
+    segments, _ = align_transcript_to_speaker_turns(transcript, [])
+    assert segments[0].speaker_id == 'speaker_unknown'

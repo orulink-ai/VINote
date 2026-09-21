@@ -22,6 +22,8 @@ def test_transient_gateway_failure_retries_same_normalized_audio():
 
 @pytest.mark.parametrize("detail,count", [
     ("云端模型请求失败（HTTP 503）", 3),
+    ("无法连接云端模型服务，请稍后重试", 3),
+    ("VILab STT connection failed or timed out", 3),
     ("云端服务未接受当前身份", 1),
 ])
 def test_retries_are_bounded_and_do_not_hide_authentication_failure(detail, count):

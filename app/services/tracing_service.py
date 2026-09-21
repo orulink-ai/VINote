@@ -30,6 +30,7 @@ class DesktopTraceContext:
     media_type: str
     client_version: str = ""
     channel: str = ""
+    session_id: str = ""
     input: dict | None = None
 
     @property
@@ -146,7 +147,7 @@ def observation(name, *, root=None, **fields):
                     user_id = hmac.new(settings.app_jwt_secret.encode(),
                                        str(user_id).encode(), hashlib.sha256).hexdigest()
                 stack.enter_context(propagate_attributes(
-                    session_id=root.get("task_id"), user_id=user_id,
+                    session_id=trace_context.session_id or root.get("task_id"), user_id=user_id,
                     trace_name=name, tags=["vinote", "desktop", trace_context.workflow],
                 ))
             span = stack.enter_context(client.start_as_current_observation(name=name, **fields))

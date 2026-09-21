@@ -1,17 +1,27 @@
 import { useEffect, useState } from 'react'
-import { EmailLogin } from '../components/EmailLogin'
-import { apiJson } from '../lib/api'
 import { useNavigate } from 'react-router-dom'
-import { Eye, EyeOff, Lock, Mail } from 'lucide-react'
-import { AppFooter } from '../components/Layout/AppFooter'
-import { useI18n } from '../lib/i18n'
-import { useAuthStore } from '../stores/authStore'
-
-const brandMarkUrl = `${import.meta.env.BASE_URL}vinote-mark.svg`
+import { EmailLogin } from '@/components/EmailLogin'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Button } from '@/components/ui/button'
+import { Field, FieldDescription, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
+import { apiJson } from '@/lib/api'
+import { useI18n } from '@/lib/i18n'
+import { useAuthStore } from '@/stores/authStore'
 
 export function Login() {
   const [emailLogin, setEmailLogin] = useState<boolean | null>(null)
   const [retryConfig, setRetryConfig] = useState(0)
+  const [isLogin, setIsLogin] = useState(true)
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const { signIn, signUp } = useAuthStore()
+  const { copy } = useI18n()
+  const navigate = useNavigate()
+
   useEffect(() => {
     let active = true
     let timer: ReturnType<typeof setTimeout>
@@ -29,178 +39,37 @@ export function Login() {
     void load(0)
     return () => { active = false; clearTimeout(timer) }
   }, [retryConfig])
-  const [isLogin, setIsLogin] = useState(true)
-  const [email, setEmail] = useState('')
-  const [password, setPassword] = useState('')
-  const [confirmPassword, setConfirmPassword] = useState('')
-  const [showPassword, setShowPassword] = useState(false)
-  const [error, setError] = useState('')
-  const [loading, setLoading] = useState(false)
 
-  const { signIn, signUp } = useAuthStore()
-  const { copy } = useI18n()
-  const navigate = useNavigate()
-
+  const switchMode = (mode: string) => { setIsLogin(mode === 'login'); setError(''); setConfirmPassword('') }
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     setError('')
-
     if (isLogin) {
       setLoading(true)
       const { error: signInError } = await signIn(email, password)
-
-      if (signInError) {
-        setError(signInError.message)
-        setLoading(false)
-        return
-      }
-
       setLoading(false)
+      if (signInError) return setError(signInError.message)
       navigate('/')
       return
     }
-
-    if (password !== confirmPassword) {
-      setError(copy.login.passwordMismatch)
-      return
-    }
-
+    if (password !== confirmPassword) return setError(copy.login.passwordMismatch)
     setLoading(true)
-
     const { error: signUpError, user } = await signUp(email, password)
-
-    if (signUpError) {
-      setError(signUpError.message)
-      setLoading(false)
-      return
-    }
-
     setLoading(false)
-
-    if (user) {
-      navigate('/')
-      return
-    }
-
+    if (signUpError) return setError(signUpError.message)
+    if (user) return navigate('/')
     setError(copy.login.accountCreated)
     setIsLogin(true)
   }
 
-  return (
-    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-[#191919] p-4 pb-24">
-      <AppFooter />
-      <div className="w-full max-w-md">
-        <div className="text-center mb-8">
-          <img src={brandMarkUrl} alt="" className="mx-auto mb-4 h-16 w-16" />
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white mb-2">VINote</h1>
-          <p className="text-gray-600 dark:text-gray-400">{copy.login.subtitle}</p>
-        </div>
-
-        <div className="rounded-2xl border border-gray-200 bg-white p-8 text-gray-900 shadow-lg dark:border-[#2f2f2f] dark:bg-[#202020] dark:text-gray-100 dark:shadow-black/20">
-          <h2 className="mb-6 text-xl font-semibold text-gray-900 dark:text-gray-100">{isLogin ? copy.login.signIn : copy.login.signUp}</h2>
-
-          {emailLogin === null ? <div className="space-y-4"><p>{error || '正在连接登录服务…'}</p>{error && <button className="rounded-lg bg-primary-light px-4 py-2 text-white" onClick={() => setRetryConfig(value => value + 1)}>重试连接</button>}</div> : emailLogin ? <EmailLogin isLogin={isLogin} onSwitch={() => setIsLogin(value => !value)} /> : <>
-          <form onSubmit={handleSubmit} className="space-y-4">
-            <div>
-              <label htmlFor="login-email" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                {copy.login.email}
-              </label>
-              <div className="relative">
-                <Mail className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input
-                  id="login-email"
-                  type="email"
-                  value={email}
-                  onChange={(event) => setEmail(event.target.value)}
-                  autoComplete="email"
-                  className="w-full rounded-lg border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-gray-900 placeholder:text-gray-400 outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-primary-light dark:border-gray-700 dark:bg-[#191919] dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:ring-primary-dark"
-                  placeholder={copy.login.emailPlaceholder}
-                  required
-                />
-              </div>
-            </div>
-
-            <div>
-              <label htmlFor="login-password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                {copy.login.password}
-              </label>
-              <div className="relative">
-                <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                <input
-                  id="login-password"
-                  type={showPassword ? 'text' : 'password'}
-                  value={password}
-                  onChange={(event) => setPassword(event.target.value)}
-                  autoComplete={isLogin ? 'current-password' : 'new-password'}
-                  className="w-full rounded-lg border border-gray-200 bg-white py-2.5 pl-10 pr-12 text-gray-900 placeholder:text-gray-400 outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-primary-light dark:border-gray-700 dark:bg-[#191919] dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:ring-primary-dark"
-                  placeholder={copy.login.passwordPlaceholder}
-                  required
-                  minLength={6}
-                />
-                <button
-                  type="button"
-                  onClick={() => setShowPassword(!showPassword)}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300"
-                >
-                  {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
-                </button>
-              </div>
-              {!isLogin ? (
-                <p className="mt-2 text-xs text-gray-500 dark:text-gray-400">
-                  {copy.login.passwordRules}
-                </p>
-              ) : null}
-            </div>
-
-            {!isLogin ? (
-              <div>
-                <label htmlFor="login-confirm-password" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  {copy.login.confirmPassword}
-                </label>
-                <div className="relative">
-                  <Lock className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-400" />
-                  <input
-                    id="login-confirm-password"
-                    type={showPassword ? 'text' : 'password'}
-                    value={confirmPassword}
-                    onChange={(event) => setConfirmPassword(event.target.value)}
-                    autoComplete="new-password"
-                    className="w-full rounded-lg border border-gray-200 bg-white py-2.5 pl-10 pr-4 text-gray-900 placeholder:text-gray-400 outline-none transition-all focus:border-transparent focus:ring-2 focus:ring-primary-light dark:border-gray-700 dark:bg-[#191919] dark:text-gray-100 dark:placeholder:text-gray-500 dark:focus:ring-primary-dark"
-                    placeholder={copy.login.confirmPasswordPlaceholder}
-                    required
-                    minLength={6}
-                  />
-                </div>
-              </div>
-            ) : null}
-
-            {error ? <p className="text-sm text-red-500 dark:text-red-300">{error}</p> : null}
-
-            <button
-              type="submit"
-              disabled={loading}
-              className="w-full py-3 px-4 bg-primary-light dark:bg-primary-dark text-white font-medium rounded-lg hover:opacity-90 transition-opacity disabled:opacity-50"
-            >
-              {loading ? copy.login.working : isLogin ? copy.login.signIn : copy.login.signUp}
-            </button>
-          </form>
-
-          <p className="mt-6 text-center text-sm text-gray-600 dark:text-gray-400">
-            {isLogin ? copy.login.noAccount : copy.login.hasAccount}
-            <button
-              onClick={() => {
-                setIsLogin(!isLogin)
-                setError('')
-                setConfirmPassword('')
-              }}
-              className="ml-1 text-primary-light dark:text-primary-dark hover:underline"
-            >
-              {isLogin ? copy.login.createAccount : copy.login.backToSignIn}
-            </button>
-          </p>
-          </>}
-        </div>
+  return <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-muted/30 px-5 py-10">
+    <div className="pointer-events-none absolute inset-0 [background-image:linear-gradient(to_right,hsl(var(--border)/.45)_1px,transparent_1px),linear-gradient(to_bottom,hsl(var(--border)/.45)_1px,transparent_1px)] [background-size:32px_32px] [mask-image:radial-gradient(ellipse_at_center,black,transparent_72%)]" />
+    <section className="relative w-full max-w-[420px] animate-in fade-in slide-in-from-bottom-2 duration-500 rounded-2xl border bg-background p-7 shadow-sm sm:p-9">
+      <div className="mb-8"><p className="text-sm font-medium tracking-wide">VINote</p><p className="mt-1 text-xs text-muted-foreground">桌面工作空间</p></div>
+      <div className="w-full">
+        <header className="mb-7 flex flex-col gap-2"><h1 className="text-2xl font-semibold tracking-tight">{isLogin ? '登录' : '创建账号'}</h1><p className="text-sm leading-6 text-muted-foreground">{isLogin ? '输入账号信息继续。' : '验证邮箱后即可进入工作空间。'}</p></header>
+        {emailLogin === null ? <div className="flex flex-col gap-4 text-center"><p className="text-sm text-muted-foreground">{error || '正在连接登录服务…'}</p>{error ? <Button onClick={() => setRetryConfig(value => value + 1)}>重试连接</Button> : null}</div> : emailLogin ? <EmailLogin isLogin={isLogin} onSwitch={() => switchMode(isLogin ? 'register' : 'login')} /> : <form onSubmit={handleSubmit}><FieldGroup><Field><FieldLabel htmlFor="login-email">{copy.login.email}</FieldLabel><Input id="login-email" type="email" value={email} onChange={event => setEmail(event.target.value)} autoComplete="email" placeholder={copy.login.emailPlaceholder} required /></Field><Field><FieldLabel htmlFor="login-password">{copy.login.password}</FieldLabel><Input id="login-password" type="password" value={password} onChange={event => setPassword(event.target.value)} autoComplete={isLogin ? 'current-password' : 'new-password'} placeholder={copy.login.passwordPlaceholder} required minLength={6} />{!isLogin ? <FieldDescription>{copy.login.passwordRules}</FieldDescription> : null}</Field>{!isLogin ? <Field><FieldLabel htmlFor="login-confirm-password">{copy.login.confirmPassword}</FieldLabel><Input id="login-confirm-password" type="password" value={confirmPassword} onChange={event => setConfirmPassword(event.target.value)} autoComplete="new-password" placeholder={copy.login.confirmPasswordPlaceholder} required minLength={6} /></Field> : null}{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}<Button type="submit" disabled={loading} size="lg" className="w-full transition-transform duration-200 active:scale-[.99]">{loading ? copy.login.working : isLogin ? copy.login.signIn : copy.login.signUp}</Button><p className="text-center text-sm text-muted-foreground">{isLogin ? '还没有账号？' : '已经有账号？'} <Button type="button" variant="link" className="h-auto px-1 py-0" onClick={() => switchMode(isLogin ? 'register' : 'login')}>{isLogin ? copy.login.createAccount : copy.login.signIn}</Button></p></FieldGroup></form>}
       </div>
-    </div>
-  )
+    </section>
+  </main>
 }

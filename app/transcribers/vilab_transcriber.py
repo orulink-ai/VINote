@@ -13,6 +13,9 @@ from app.transcribers.base import Transcriber
 
 class VILabTranscriber(Transcriber):
     provider = "vilab-server"
+    # 16 kHz mono PCM16 is 32 kB/s: at most ~9.6 MB per cloud request,
+    # regardless of the original compressed audio/video file size.
+    max_request_duration_seconds = 300.0
     def __init__(self, base_url: str, api_key: str, model: str | None = None, language: str | None = None, cloud_user_id: str | None = None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
@@ -34,10 +37,14 @@ class VILabTranscriber(Transcriber):
                 try:
                     return self._transcribe_normalized(normalized)
                 except (HTTPException, RuntimeError) as exc:
-                    # Retry only explicit transient gateway failures. Authentication,
+                    # Retry explicit gateway and transport failures. Authentication,
                     # validation and unknown failures remain visible immediately.
                     detail = str(exc.detail) if isinstance(exc, HTTPException) else str(exc)
                     transient = any(f"HTTP {code}" in detail for code in (502, 503, 504))
+                    transient = transient or detail in {
+                        "无法连接云端模型服务，请稍后重试",
+                        "VILab STT connection failed or timed out",
+                    }
                     if not transient or attempt == 2:
                         raise
                     time.sleep(attempt + 1)

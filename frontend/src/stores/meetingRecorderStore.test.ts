@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest'
-import { useMeetingRecorderStore } from './meetingRecorderStore'
+import { isMeetingBusy, useMeetingRecorderStore } from './meetingRecorderStore'
 
 describe('meetingRecorderStore', () => {
   beforeEach(() => {
@@ -52,4 +52,10 @@ describe('meetingRecorderStore', () => {
     expect(state.taskId).toBeUndefined()
     expect(state.notification).toBeNull()
   })
+})
+
+it('allows retry after saved failure but protects unsaved failures and in-flight generation', () => {
+  expect(isMeetingBusy({ phase: 'failed', hasRecoverableRecording: true, localRecordingSaved: true })).toBe(false)
+  expect(isMeetingBusy({ phase: 'failed', hasRecoverableRecording: true, localRecordingSaved: false })).toBe(true)
+  expect(isMeetingBusy({ phase: 'summarizing', hasRecoverableRecording: true, localRecordingSaved: true })).toBe(true)
 })

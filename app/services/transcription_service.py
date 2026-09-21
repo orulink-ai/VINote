@@ -2,10 +2,13 @@
 Audio transcription helpers.
 """
 import importlib.util
+import hashlib
+import json
 import math
 import logging
 import subprocess
 import tempfile
+import time
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,7 +23,7 @@ from app.transcribers.base import Transcriber
 
 logger = logging.getLogger(__name__)
 
-StatusCallback = Callable[[str, str], None]
+StatusCallback = Callable[..., None]
 
 
 @dataclass
@@ -132,7 +135,18 @@ class TranscriptionService:
             suffix = "完整音频"
         with observation(f"STT｜{model}｜{suffix}", as_type="generation", model=model,
                          metadata=metadata, input=input_payload):
-            result = transcriber.transcribe(file_path=file_path)
+            from app.models.transcript import NoSpeechDetectedError
+            try:
+                result = transcriber.transcribe(file_path=file_path)
+            except NoSpeechDetectedError:
+                if chunk is None:
+                    raise
+                # An explicitly empty recognition for a silent section must not
+                # discard speech in the rest of a long recording.
+                result = TranscriptResult(None, "", [], metadata={
+                    "unrecognized_segments": [{"start": chunk.trim_start,
+                                               "end": chunk.trim_end,
+                                               "reason": "upstream_no_speech"}]})
             update_current(output={
                 "text": content_summary(result.full_text),
                 "language": result.language,
@@ -163,10 +177,33 @@ class TranscriptionService:
                 "default=noprint_wrappers=1:nokey=1",
                 file_path,
             ]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            return float(result.stdout.strip())
+            result = subprocess.run(cmd, capture_output=True, text=True, check=True, timeout=15)
+            duration = float(result.stdout.strip())
+            if math.isfinite(duration) and duration > 0:
+                return duration
         except Exception as exc:
             logger.warning("[FFprobe] failed to read duration: %s", exc)
+        # MediaRecorder WebM often lacks a container Duration element. Packet
+        # timestamps still describe the saved recording; inspect them without
+        # decoding or modifying the original media.
+        try:
+            result = subprocess.run([
+                "ffprobe", "-v", "error", "-show_entries",
+                "packet=pts_time,duration_time", "-of", "csv=p=0", file_path,
+            ], capture_output=True, text=True, check=True, timeout=120)
+            duration = 0.0
+            for row in result.stdout.splitlines():
+                values = row.split(",")
+                try:
+                    timestamp = float(values[0])
+                    length = float(values[1]) if len(values) > 1 and values[1] != "N/A" else 0.0
+                except ValueError:
+                    continue
+                if math.isfinite(timestamp) and math.isfinite(length):
+                    duration = max(duration, timestamp + max(0.0, length))
+            return duration
+        except Exception as exc:
+            logger.warning("[FFprobe] failed to read packet timeline: %s", exc)
             return 0.0
 
     def _is_local_transcriber(self, config: ResolvedSTTConfig | None) -> bool:
@@ -198,11 +235,14 @@ class TranscriptionService:
         effective_max = min(configured_max, size_limited_max)
         return max(180.0, effective_max)
 
-    def _build_chunk_specs(self, *, audio_path: str, duration: float, temp_dir: Path) -> list[ChunkSpec]:
-        if not settings.transcription_chunking_enabled or duration <= 0:
+    def _build_chunk_specs(self, *, audio_path: str, duration: float, temp_dir: Path,
+                           request_duration_limit: float | None = None) -> list[ChunkSpec]:
+        if duration <= 0 or (not settings.transcription_chunking_enabled and request_duration_limit is None):
             return []
 
         max_chunk_duration = self._get_effective_chunk_duration(audio_path=audio_path, duration=duration)
+        if request_duration_limit is not None:
+            max_chunk_duration = min(max_chunk_duration, request_duration_limit)
         target_size_bytes = settings.transcription_chunk_target_file_size_mb * 1024 * 1024
         file_size_bytes = Path(audio_path).stat().st_size
         if duration <= max_chunk_duration and file_size_bytes <= target_size_bytes:
@@ -350,7 +390,13 @@ class TranscriptionService:
 
         full_text = " ".join(segment.text for segment in deduped_segments).strip()
         language = Counter(languages).most_common(1)[0][0] if languages else None
-        metadata = next((result.metadata for _, result in chunk_results if result.metadata), {})
+        metadata = next((result.metadata for _, result in chunk_results if result.full_text.strip() and result.metadata), {})
+        metadata = {**metadata, "stt_request_count": len(chunk_results),
+                    "unrecognized_segments": [item for _, result in chunk_results
+                                              for item in result.metadata.get("unrecognized_segments", [])]}
+        if any(result.full_text.strip() and result.metadata.get("timestamp_granularity") != "segment"
+               for _, result in chunk_results):
+            metadata["timestamp_granularity"] = "chunk"
         return TranscriptResult(
             language=language,
             full_text=full_text,
@@ -365,17 +411,49 @@ class TranscriptionService:
         duration: float,
         transcriber: Transcriber,
         update_status: StatusCallback | None = None,
+        chunk_cache_dir: Path | None = None,
+        cache_identity: str = "",
+        trace_context: dict | None = None,
     ) -> TranscriptResult:
         with tempfile.TemporaryDirectory(prefix="transcribe_chunks_", dir=settings.data_dir) as temp_dir:
+            cloud_request_limit = getattr(transcriber, "max_request_duration_seconds", None)
+            if cloud_request_limit is not None and (not math.isfinite(duration) or duration <= 0):
+                raise ValueError("无法读取录音时长，已保留原始媒体，请重试；未向云端提交未校验的大文件。")
             chunk_specs = self._build_chunk_specs(
                 audio_path=audio_path,
                 duration=duration,
                 temp_dir=Path(temp_dir),
+                request_duration_limit=cloud_request_limit,
             )
             if not chunk_specs:
-                return self._transcribe_chunk(transcriber, audio_path)
+                if update_status:
+                    update_status("transcribing", "正在转写完整录音，等待服务返回结果…",
+                                  stage="transcribing", processed_seconds=0, total_seconds=duration)
+                result = None
+                if chunk_cache_dir is not None:
+                    from app.services.task_artifact_service import TaskArtifactService
+                    artifacts = TaskArtifactService()
+                    cache_key = hashlib.sha256((cache_identity + artifacts._sha256(Path(audio_path))).encode()).hexdigest()
+                    cache_folder = chunk_cache_dir / cache_key
+                    try:
+                        result = artifacts.load_transcript(cache_folder)
+                    except (ValueError, TypeError, OSError):
+                        result = None
+                if result is None:
+                    result = self._transcribe_chunk(transcriber, audio_path, trace_context=trace_context)
+                    if chunk_cache_dir is not None:
+                        cache_folder.mkdir(parents=True, exist_ok=True)
+                        artifacts.save_transcript(cache_folder, result)
+                else:
+                    update_current(metadata={"whole_audio_cache_hit": True})
+                if update_status:
+                    update_status("transcribing", "完整录音转写完成", stage="transcribing",
+                                  processed_seconds=duration, total_seconds=duration, eta_seconds=None)
+                return result
 
             chunk_results: list[tuple[ChunkSpec, TranscriptResult]] = []
+            transcription_started_at = time.monotonic()
+            reused_chunks = False
             for chunk in chunk_specs:
                 self._extract_chunk(audio_path=audio_path, chunk=chunk)
                 logger.info(
@@ -389,14 +467,48 @@ class TranscriptionService:
                     self._format_seconds(chunk.trim_end),
                 )
                 if update_status:
+                    processed_before = max(0.0, chunk.trim_start)
+                    progress_before = processed_before / duration if duration > 0 else 0.0
                     update_status(
                         "transcribing",
                         (
                             f"Transcribing chunk {chunk.index}/{chunk.total} "
                             f"({self._format_seconds(chunk.trim_start)} - {self._format_seconds(chunk.trim_end)})..."
                         ),
+                        stage="transcribing", progress=progress_before,
+                        processed_seconds=processed_before, total_seconds=duration,
+                        eta_seconds=((time.monotonic() - transcription_started_at) / progress_before) * (1 - progress_before) if progress_before > 0 and not reused_chunks else None,
                     )
-                chunk_results.append((chunk, self._transcribe_chunk(transcriber, str(chunk.file_path), chunk)))
+                if chunk_cache_dir is not None:
+                    from app.services.task_artifact_service import TaskArtifactService
+                    cache_key = hashlib.sha256((cache_identity + TaskArtifactService._sha256(chunk.file_path)).encode()).hexdigest()
+                    cache_folder = chunk_cache_dir / cache_key
+                    artifacts = TaskArtifactService()
+                    try:
+                        result = artifacts.load_transcript(cache_folder)
+                    except (ValueError, TypeError, OSError):
+                        result = None
+                    if result is None:
+                        result = self._transcribe_chunk(transcriber, str(chunk.file_path), chunk, trace_context)
+                        cache_folder.mkdir(parents=True, exist_ok=True)
+                        artifacts.save_transcript(cache_folder, result)
+                    else:
+                        reused_chunks = True
+                        update_current(metadata={"chunk_cache_hit": True, "chunk_index": chunk.index})
+                else:
+                    result = self._transcribe_chunk(transcriber, str(chunk.file_path), chunk, trace_context)
+                chunk_results.append((chunk, result))
+                if update_status:
+                    processed = min(duration, max(0.0, chunk.trim_end))
+                    progress = processed / duration if duration > 0 else chunk.index / chunk.total
+                    elapsed = max(0.001, time.monotonic() - transcription_started_at)
+                    eta = (elapsed / progress) * (1.0 - progress) if progress > 0 and not reused_chunks else None
+                    update_status(
+                        "transcribing",
+                        f"Transcribed {self._format_seconds(processed)} of {self._format_seconds(duration)}",
+                        stage="transcribing", progress=progress, processed_seconds=processed,
+                        total_seconds=duration, eta_seconds=eta,
+                    )
 
             return self._merge_chunk_results(chunk_results=chunk_results)
 
@@ -411,6 +523,7 @@ class TranscriptionService:
         stt_profile_id: str | None = None,
         diarize: bool = False,
         speaker_count: int | None = None,
+        chunk_cache_dir: Path | None = None,
     ) -> TranscriptResult:
         cached = load_cached()
         if cached and bool(cached.metadata.get("speaker_diarization")) == diarize:
@@ -423,6 +536,7 @@ class TranscriptionService:
             stt_profile_id=stt_profile_id,
         )
         transcriber = self.transcriber or create_transcriber(resolved_config)
+        cache_identity = json.dumps(resolved_config.model_dump(exclude={"api_key"}) if resolved_config else {"type": type(transcriber).__name__}, sort_keys=True)
         if resolved_config:
             update_current(metadata={"provider": resolved_config.provider,
                                      "model": resolved_config.model_name, "cache_hit": False})
@@ -432,10 +546,17 @@ class TranscriptionService:
 
         if diarize:
             from app.services.speaker_diarization_service import SpeakerDiarizationService
+            duration = self.get_audio_duration(audio_path)
             transcript = SpeakerDiarizationService().transcribe(
                 audio_path=audio_path,
-                transcribe=lambda path, **context: self._transcribe_chunk(
-                    transcriber, path, trace_context=context),
+                transcribe=lambda path, **context: self._transcribe_in_chunks(
+                    audio_path=path,
+                    duration=float(context.get("audio_duration_seconds") or duration),
+                    transcriber=transcriber,
+                    update_status=update_status,
+                    chunk_cache_dir=chunk_cache_dir, cache_identity=cache_identity,
+                    trace_context=context,
+                ),
                 speaker_count=speaker_count, update_status=update_status,
             )
         else:
@@ -443,6 +564,7 @@ class TranscriptionService:
             transcript = self._transcribe_in_chunks(
                 audio_path=audio_path, duration=duration, transcriber=transcriber,
                 update_status=update_status,
+                chunk_cache_dir=chunk_cache_dir, cache_identity=cache_identity,
             )
         if update_status:
             update_status("transcribing", "Saving transcription...")

@@ -1,3 +1,5 @@
+
+import { processSavedMeeting } from '../../lib/meetingProcessing'
 import { openMeetingController, publishMeetingState, listenMeetingActions, type MeetingControlAction } from '../../lib/meetingController'
 import { useAuthStore } from '../../stores/authStore'
 import { DEFAULT_CAPTURE_OPTIONS, START_MEETING_EVENT, type MeetingCaptureOptions } from '../../lib/meetingCapture'
@@ -8,6 +10,8 @@ import { useNavigate } from 'react-router-dom'
 import { useAudioRecorder } from '../../hooks/useAudioRecorder'
 import {
   closeCurrentRecorderWindow,
+  hideCurrentRecorderWindow,
+  closeRecorderWindow,
   emitRecorderWindowReady,
   emitRecorderWindowState,
   isRecorderWindowRoute,
@@ -25,23 +29,24 @@ import {
 import {
   MEETING_NOTE_SOURCE_TYPE,
   MeetingGenerationError,
-  completeMeetingRecordingGeneration,
+
   createMeetingRecordingTitle,
   fetchMeetingAudioBlob,
-  submitMeetingRecording,
+
 } from '../../lib/meetingGeneration'
 import { useI18n } from '../../lib/i18n'
-import { deleteLocalRecording, savePendingMeeting, type PendingMeeting, generateRecordingId, getRecordedAudio, saveRecordedAudio } from '../../lib/audioStorage'
-import { useMeetingRecorderStore, type MeetingRecorderPhase, type MeetingRecorderStage } from '../../stores/meetingRecorderStore'
+import { deleteLocalRecording, savePendingMeeting, getPendingMeeting, updatePendingMeeting, type PendingMeeting, generateRecordingId, getRecordedAudio, saveRecordedAudio } from '../../lib/audioStorage'
+import { isMeetingBusy, useMeetingRecorderStore, type MeetingRecorderPhase, type MeetingRecorderStage } from '../../stores/meetingRecorderStore'
 import { useModelProfileStore } from '../../stores/modelProfileStore'
 import { useNoteLibraryStore } from '../../stores/noteLibraryStore'
 import { useSTTProfileStore } from '../../stores/sttProfileStore'
 import { useTeamStore } from '../../stores/teamStore'
+import { Button } from '../ui/button'
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../ui/alert-dialog'
 
 const PANEL_WIDTH = 360
 const PANEL_HEIGHT = 132
 const EDGE_PADDING = 20
-const WAVEFORM_BAR_HEIGHTS = [4, 7, 5, 14, 21, 10, 5, 7, 17, 24, 10, 16, 8, 11, 6, 5, 18, 22, 11, 8, 5, 4] as const
 const PROCESSING_PHASES: MeetingRecorderPhase[] = ['requesting', 'stopping', 'uploading', 'transcribing', 'summarizing', 'saving']
 const NATIVE_PROTECTED_PHASES: MeetingRecorderPhase[] = ['requesting', 'recording', 'paused', 'stopping', 'uploading', 'transcribing', 'summarizing', 'saving']
 const ACTIVE_RECORDING_PHASES: MeetingRecorderPhase[] = ['recording', 'paused', 'requesting', 'uploading', 'transcribing', 'summarizing', 'saving', 'stopping']
@@ -98,7 +103,9 @@ function formatRecorderFailure(error: unknown, copy: ReturnType<typeof useI18n>[
 }
 
 function stageFromError(error: unknown): MeetingRecorderStage {
-  if (error instanceof MeetingGenerationError) return error.stage
+  if (error instanceof MeetingGenerationError) {
+    return error.stage
+  }
   const message = error instanceof Error ? error.message : String(error || '')
   if (message.toLowerCase().includes('microphone_')) return 'uploading'
   return 'summarizing'
@@ -112,8 +119,8 @@ function recordingDotClass(phase: MeetingRecorderPhase, activeShadow: string) {
   return clsx(
     'rounded-full transition-colors',
     phase === 'recording'
-      ? `bg-[#EF2B2D] ${activeShadow}`
-      : phase === 'paused' ? 'bg-amber-400' : 'bg-gray-300',
+      ? 'bg-destructive ' + activeShadow
+      : phase === 'paused' ? 'bg-amber-400' : 'bg-muted-foreground/30',
   )
 }
 
@@ -170,7 +177,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   const { saveNote, updateNote, deleteNote } = useNoteLibraryStore()
   const { currentWorkspace } = useTeamStore()
   const captureWorkspaceRef = useRef(currentWorkspace)
-  const { selectedProfileId: selectedModelProfileId, loadProfiles: loadModelProfiles } = useModelProfileStore()
+  const { loadProfiles: loadModelProfiles } = useModelProfileStore()
   const { loadProfiles: loadSTTProfiles } = useSTTProfileStore()
   const {
     isPanelOpen,
@@ -194,10 +201,10 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     restorePanel,
     setPhase,
     setElapsedSeconds,
-    setTaskId,
+
     setRecordingId,
     setRecordedAudio,
-    setGeneratedNote,
+
     complete,
     failStage,
     dismissNotification,
@@ -207,6 +214,10 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   const [position, setPosition] = useState(getInitialPosition)
   const [hasCustomPosition, setHasCustomPosition] = useState(false)
   const [useInlineDesktopRecorder, setUseInlineDesktopRecorder] = useState(false)
+  const [confirmEndOpen, setConfirmEndOpen] = useState(false)
+  useEffect(() => {
+    if (!['recording', 'paused'].includes(phase)) setConfirmEndOpen(false)
+  }, [phase])
   const dragOffsetRef = useRef<{ x: number; y: number } | null>(null)
   const minimizedPointerRef = useRef<{ startX: number; startY: number; baseX: number; baseY: number; dragging: boolean } | null>(null)
   const suppressRestoreRef = useRef(false)
@@ -222,6 +233,8 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       failStage('uploading', formatRecorderFailure(new Error(recorder.error), recorderCopy))
     }
   }, [recorder.status, recorder.error, failStage, recorderCopy])
+
+  useEffect(() => { useMeetingRecorderStore.setState({ audioLevel: recorder.audioLevel }) }, [recorder.audioLevel])
 
   useEffect(() => {
     if (!isRecorderWindow) return
@@ -307,7 +320,8 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   useEffect(() => {
     if (!isRecorderWindow && !useInlineDesktopRecorder) return
     const shouldProtectRecorder =
-      NATIVE_PROTECTED_PHASES.includes(phase) || Boolean(recordedAudio)
+      !useMeetingRecorderStore.getState().localRecordingSaved &&
+      (NATIVE_PROTECTED_PHASES.includes(phase) || Boolean(recordedAudio))
     void setRecorderActive(shouldProtectRecorder)
   }, [isRecorderWindow, useInlineDesktopRecorder, phase, recordedAudio])
 
@@ -332,7 +346,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   useEffect(() => {
     const beforeUnload = (event: BeforeUnloadEvent) => {
       const state = useMeetingRecorderStore.getState()
-      if (state.hasRecoverableRecording) {
+      if (state.hasRecoverableRecording && !state.localRecordingSaved) {
         event.preventDefault()
         event.returnValue = recorderCopy.beforeUnload
       }
@@ -426,6 +440,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   }
 
   const startLocalRecording = async (options?: MeetingCaptureOptions) => {
+    if (options) useMeetingRecorderStore.setState({ captureOptions: options })
     endedAtRef.current = undefined
     setPhase('requesting')
     try {
@@ -436,7 +451,19 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         if (options && isTauriRuntime()) void openMeetingController().catch(() => undefined)
       }
     } catch (startError) {
-      failStage('uploading', formatRecorderFailure(startError, recorderCopy))
+      recorder.reset()
+      useMeetingRecorderStore.setState({
+        phase: 'failed',
+        error: formatRecorderFailure(startError, recorderCopy),
+        failedStage: undefined,
+        retryDescription: '',
+        hasRecoverableRecording: false,
+        isPanelOpen: false,
+        isMinimized: false,
+        notification: null,
+      })
+      setUseInlineDesktopRecorder(false)
+      void setRecorderActive(false)
     }
   }
 
@@ -478,29 +505,87 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     setPhase('recording')
   }
 
+  const closeSavedRecordingSurface = async () => {
+    closePanel()
+    try {
+      await setRecorderActive(false)
+      if (isRecorderWindow) {
+        await showMainWindow('/meetings')
+        await closeCurrentRecorderWindow()
+      } else {
+        await closeRecorderWindow()
+      }
+    } catch (error) {
+      // A window cleanup error must not turn a saved note into a failed task.
+      console.error('[meeting-recorder] window cleanup failed', error)
+    }
+    if (!isRecorderWindow) navigate('/meetings')
+  }
+
+  useEffect(() => {
+    if (isDesktopMainWindow && ['idle', 'stopped', 'completed', 'failed'].includes(phase)) {
+      void closeRecorderWindow().catch(console.error)
+    }
+  }, [isDesktopMainWindow, phase])
+
+  const persistRecording = async (audioBlob: Blob) => {
+    const options = captureOptionsRef.current
+    const startedAt = startedAtRef.current || new Date()
+    const persistedId = recordingIdRef.current || generateRecordingId()
+    recordingIdRef.current = persistedId
+    setRecordingId(persistedId)
+    await saveRecordedAudio(persistedId, audioBlob)
+    await savePendingMeeting({ id: persistedId, ownerId: user?.id || '', workspace: captureWorkspaceRef.current,
+      options, startedAt: startedAt.toISOString(),
+      endedAt: (endedAtRef.current || new Date()).toISOString(),
+      fileName: recorder.getRecordingFileName?.(),
+      elapsedSeconds: useMeetingRecorderStore.getState().elapsedSeconds,
+      recordingStatus: 'saved',
+      processingStatus: options.mode === 'minutes' ? 'queued' : 'idle',
+      processingUpdatedAt: new Date().toISOString(),
+    })
+    recorder.retainRecordingFile?.()
+    useMeetingRecorderStore.setState({ localRecordingSaved: true })
+  }
+
   const handleStop = async () => {
     if (phase !== 'paused' && phase !== 'recording') return
     if (finishInFlightRef.current) return
     finishInFlightRef.current = true
     try {
       endedAtRef.current = new Date()
+      const options = captureOptionsRef.current
       setPhase('stopping')
       const audioBlob = await recorder.stop()
       if (audioBlob.size === 0) throw new Error('microphone_no_audio')
       setRecordedAudio(audioBlob)
-      // Persist the audio locally so it survives a page reload, window close, or restart.
-      // History is independent of generation; retain both bytes and owner/workspace metadata.
-      const persistedId = recordingIdRef.current || generateRecordingId()
-      recordingIdRef.current = persistedId
-      setRecordingId(persistedId)
-      await saveRecordedAudio(persistedId, audioBlob)
-      await savePendingMeeting({ id: persistedId, ownerId: user?.id || '', workspace: captureWorkspaceRef.current,
-        options: captureOptionsRef.current, startedAt: (startedAtRef.current || new Date()).toISOString(),
-        endedAt: endedAtRef.current.toISOString(),
-        fileName: recorder.getRecordingFileName?.(),
-        elapsedSeconds: useMeetingRecorderStore.getState().elapsedSeconds })
-      recorder.retainRecordingFile?.()
-      // Recording history exists independently of STT/LLM generation.
+      await persistRecording(audioBlob)
+      // Native controls only belong to capture. Generation continues in the
+      // main window after the local save, even when it later fails.
+      if (!isRecorderWindow) await closeSavedRecordingSurface()
+      else {
+        // Compatibility window may still own generation: hide it now and
+        // destroy it after work finishes, rather than terminating its worker.
+        await setRecorderActive(false)
+        await showMainWindow('/meetings')
+        await hideCurrentRecorderWindow()
+      }
+
+      if (options.mode === 'minutes' && !isRecorderWindow) {
+        const pending = await getPendingMeeting(recordingIdRef.current!)
+        if (!pending) throw new Error('无法读取已保存的录制记录。')
+        recorder.reset()
+        resetSession()
+        void processSavedMeeting(pending, language, audioBlob)
+        return
+      }
+      if (options.mode === 'minutes') {
+        await generateFromRecording(audioBlob)
+        recorder.reset()
+        await closeSavedRecordingSurface()
+        return
+      }
+
       recorder.reset()
       resetSession()
       closePanel()
@@ -510,7 +595,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         await closeCurrentRecorderWindow()
       } else navigate('/meetings')
     } catch (stopError) {
-      const failedStage = stageFromError(stopError)
+      const failedStage = useMeetingRecorderStore.getState().localRecordingSaved ? stageFromError(stopError) : 'uploading'
       const failureMessage = formatRecorderFailure(stopError, recorderCopy)
       await markDraftFailed(failedStage, failureMessage)
       failStage(failedStage, failureMessage)
@@ -519,43 +604,18 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     }
   }
 
-  const generateFromAudio = async (audioBlob: Blob, sttProfileIdOverride?: string) => {
-    setPhase('uploading')
-    const startedAt = startedAtRef.current || new Date()
-    const activeSTTProfileId = sttProfileIdOverride ?? useSTTProfileStore.getState().selectedProfileId
-    const response = await submitMeetingRecording({
-      audioBlob,
-      title: captureOptionsRef.current.title,
-      diarize: captureOptionsRef.current.diarize,
-      speakerCount: captureOptionsRef.current.speakerCount,
-      startedAt,
-      endedAt: endedAtRef.current,
-      outputLanguage: language,
-      summaryMode: 'default',
-      modelProfileId: selectedModelProfileId || undefined,
-      sttProfileId: activeSTTProfileId || undefined,
-    }, { onStage: setPhase })
-    setTaskId(response.task_id)
-    await createMeetingDraft(response.task_id, audioBlob, startedAt)
-    const note = await completeMeetingRecordingGeneration({
-      taskId: response.task_id,
-      workspace: captureWorkspaceRef.current,
-      saveNote: saveCompletedMeetingNote,
-      onStage: setPhase,
-    })
-    setGeneratedNote({ title: note.title, markdown: note.content, taskId: response.task_id })
-    if (recordingIdRef.current) {
-      // A cleanup failure must not turn an already saved note into a failed task.
-      // Its local history entry remains available for a later explicit deletion.
-      await deleteLocalRecording(recordingIdRef.current, user?.id || '').catch(() => undefined)
-    }
-    complete(note.id)
+  const generateFromRecording = async (audioBlob: Blob) => {
+    const id = recordingIdRef.current || useMeetingRecorderStore.getState().recordingId
+    const pending = id ? await getPendingMeeting(id) : null
+    if (!pending) throw new Error('找不到已保存的录制，请先重试保存。')
+    recorder.reset()
+    resetSession()
+    await processSavedMeeting(pending, language, audioBlob)
   }
-
   useEffect(() => {
     if (isRecorderWindow) return
     const startMeeting = (event: Event) => {
-      if (ACTIVE_RECORDING_PHASES.includes(useMeetingRecorderStore.getState().phase) || useMeetingRecorderStore.getState().hasRecoverableRecording) return
+      if (isMeetingBusy(useMeetingRecorderStore.getState())) return
       captureWorkspaceRef.current = currentWorkspace
       captureOptionsRef.current = (event as CustomEvent<MeetingCaptureOptions>).detail
       draftNoteIdRef.current = null
@@ -566,28 +626,9 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       void startLocalRecording(captureOptionsRef.current)
     }
     const restore = (event: Event) => {
-      const restoreState = useMeetingRecorderStore.getState()
-      if (restoreState.hasRecoverableRecording || ACTIVE_RECORDING_PHASES.includes(restoreState.phase)) return
       const pending = (event as CustomEvent<PendingMeeting>).detail
       if (pending.ownerId !== user?.id) return
-      setPhase('requesting')
-      void getRecordedAudio(pending.id).then(blob => {
-        if (useMeetingRecorderStore.getState().phase !== 'requesting') return
-        if (!blob) { failStage('uploading', '找不到本地录制文件。'); return }
-        resetSession()
-        captureOptionsRef.current = pending.options
-        captureWorkspaceRef.current = pending.workspace
-        startedAtRef.current = new Date(pending.startedAt)
-        endedAtRef.current = pending.endedAt ? new Date(pending.endedAt) : undefined
-        recordingIdRef.current = pending.id
-        draftNoteIdRef.current = null
-        setUseInlineDesktopRecorder(true)
-        setRecordingId(pending.id)
-        setRecordedAudio(blob)
-        setElapsedSeconds(pending.elapsedSeconds)
-        setPhase('stopped')
-        openPanel()
-      })
+      void processSavedMeeting(pending, language)
     }
     window.addEventListener(START_MEETING_EVENT, startMeeting)
     window.addEventListener('vinote-restore-meeting', restore)
@@ -606,7 +647,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     if (phase !== 'stopped' || !recordedAudio || finishInFlightRef.current) return
     finishInFlightRef.current = true
     try {
-      await generateFromAudio(recordedAudio)
+      await generateFromRecording(recordedAudio)
     } catch (error) {
       const message = formatRecorderFailure(error, recorderCopy)
       await markDraftFailed(stageFromError(error), message)
@@ -616,38 +657,17 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     }
   }
 
-  const createMeetingDraft = async (draftTaskId: string, audioBlob: Blob, startedAt: Date) => {
-    const title = captureOptionsRef.current.title.trim() || createMeetingRecordingTitle(startedAt, language)
-    draftTitleRef.current = title
-    const body = buildMeetingDraftContent({
-      taskId: draftTaskId,
-      audioBlob,
-      startedAt,
-      statusText: recorderCopy.phases.transcribing,
-    })
-    // Embed the recordingId in the note body so the note detail page can
-    // recover the persisted audio from IndexedDB even after a reload.
-    const draft = await saveNote(
-      title,
-      `${body}\n\n<!-- recording_id: ${recordingIdRef.current || ''} -->`,
-      undefined,
-      draftTaskId,
-      captureWorkspaceRef.current,
-      audioBlob.type.startsWith('video/') ? 'meeting_video' : MEETING_NOTE_SOURCE_TYPE,
-      'pending',
-    )
-    if (draft) draftNoteIdRef.current = draft.id
-  }
-
   const saveCompletedMeetingNote = async (title: string, content: string) => {
     if (draftNoteIdRef.current) {
       const updated = await updateNote(draftNoteIdRef.current, title, content, 'done')
-      if (updated) return updated
+      if (!updated) throw new MeetingGenerationError('saving', recorderCopy.saveFailed)
+      return updated
     }
     return saveNote(title, content, undefined, useMeetingRecorderStore.getState().taskId || undefined, captureWorkspaceRef.current, captureOptionsRef.current.screen ? 'meeting_video' : MEETING_NOTE_SOURCE_TYPE, 'done')
   }
 
   const markDraftFailed = async (failedStage: MeetingRecorderStage, failureMessage: string) => {
+    if (recordingIdRef.current) await updatePendingMeeting(recordingIdRef.current, { processingStatus: 'failed', failedStage, processingError: failureMessage, processingUpdatedAt: new Date().toISOString() }).catch(() => undefined)
     if (!draftNoteIdRef.current) return
     const state = useMeetingRecorderStore.getState()
     const statusText = failedStage === 'transcribing' ? recorderCopy.phases.transcribingFailed : recorderCopy.phases.generationFailed
@@ -662,19 +682,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         errorMessage: failureMessage,
       }),
       failedStage === 'transcribing' ? 'transcribing_failed' : 'generation_failed',
-    )
-  }
-
-  const resolveRetrySTTProfileId = async (failureMessage: string) => {
-    if (!failureMessage.toLowerCase().includes('openai-whisper')) return undefined
-
-    await loadSTTProfiles()
-    const sttState = useSTTProfileStore.getState()
-    const defaultProfile = sttState.profiles.find((profile) => profile.isDefault && profile.isActive)
-    if (!defaultProfile || defaultProfile.id === sttState.selectedProfileId) return undefined
-
-    sttState.selectProfile(defaultProfile.id)
-    return defaultProfile.id
+    ).catch(() => undefined) // Local failure state must remain recoverable when the server is offline.
   }
 
   const handleRetry = async () => {
@@ -686,7 +694,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       // existing note text again without re-running the pipeline.
       if (state.failedStage === 'saving' && state.generatedNote) {
         setPhase('saving')
-        const note = await saveNote(state.generatedNote.title, state.generatedNote.markdown, undefined, state.generatedNote.taskId, captureWorkspaceRef.current, captureOptionsRef.current.screen ? 'meeting_video' : MEETING_NOTE_SOURCE_TYPE, 'done')
+        const note = await saveCompletedMeetingNote(state.generatedNote.title, state.generatedNote.markdown)
         if (!note) throw new MeetingGenerationError('saving', recorderCopy.saveFailed)
         complete(note.id)
         return
@@ -724,14 +732,29 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
           throw new Error(recorderCopy.noRecoverableAudio)
         }
       }
-      // Always re-upload and re-generate from the audio. This is the only path
-      // that works regardless of whether the previous task is still running or
-      // already failed server-side — and it gives the user a fresh chance after
-      // fixing their API key, network, etc.
-      const retrySTTProfileId = await resolveRetrySTTProfileId(state.error)
+      if (!state.localRecordingSaved) {
+        await persistRecording(audio)
+        await closeSavedRecordingSurface()
+        if (captureOptionsRef.current.mode === 'recording') {
+          recorder.reset()
+          resetSession()
+          return
+        }
+      }
+      // Resume the existing task and reuse valid artifacts when available.
+      if (!isRecorderWindow && recordingIdRef.current) {
+        const pending = await getPendingMeeting(recordingIdRef.current)
+        if (!pending) throw new Error('无法读取已保存的录制记录。')
+        recorder.reset()
+        resetSession()
+        void processSavedMeeting(pending, language, audio)
+        return
+      }
+
       setPhase('uploading')
-      await generateFromAudio(audio, retrySTTProfileId)
+      await generateFromRecording(audio)
     } catch (retryError) {
+      await markDraftFailed(stageFromError(retryError), formatRecorderFailure(retryError, recorderCopy))
       failStage(stageFromError(retryError), formatRecorderFailure(retryError, recorderCopy))
     } finally {
       finishInFlightRef.current = false
@@ -812,12 +835,16 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     if (action === 'sync') void publishMeetingState({ phase: state.phase, elapsedSeconds: state.elapsedSeconds, noteId: state.noteId, error: state.error })
     if (action === 'pause') handlePause()
     if (action === 'resume') handleResume()
+    if (action === 'request-stop' && ['recording', 'paused'].includes(state.phase)) {
+      setConfirmEndOpen(true)
+      if (isTauriRuntime()) void showMainWindow('/meetings')
+    }
     if (action === 'stop') void handleStop()
     if (action === 'generate') void handleGenerate()
     if (action === 'retry') void handleRetry()
   }
   useEffect(() => {
-    if (!isTauriRuntime() || isRecorderWindow) return
+    if (isRecorderWindow) return
     let disposed = false
     let unsubscribe: (() => void) | undefined
     void listenMeetingActions(action => controlsRef.current(action)).then(cleanup => {
@@ -860,15 +887,15 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         ? `${recorderCopy.processingHint}: ${statusLabel}`
         : statusLabel
   const dockedStyle = hasCustomPosition ? { left: position.x, top: position.y } : { right: EDGE_PADDING, bottom: EDGE_PADDING }
-  const shouldRenderRecorderSurface = isPanelOpen && (!isDesktopMainWindow || useInlineDesktopRecorder)
+  const shouldRenderRecorderSurface = isPanelOpen && !useMeetingRecorderStore.getState().localRecordingSaved && (!isDesktopMainWindow || (useInlineDesktopRecorder && !ACTIVE_RECORDING_PHASES.includes(phase)))
   const minimizedContainerClass = clsx(
-    'inline-flex h-12 w-[320px] items-center gap-3 rounded-full border border-white/80 bg-white px-3.5 pr-4 text-base font-medium text-[#111827]',
-    isRecorderWindow ? '' : 'shadow-[0_8px_22px_rgba(15,23,42,0.14)]',
+    'inline-flex h-12 w-[320px] items-center gap-3 border border-border bg-background px-3.5 pr-4 text-base font-medium text-foreground',
+    isRecorderWindow ? '' : 'shadow-md',
     isRecorderWindow ? 'relative' : 'fixed z-50',
   )
   const expandedContainerClass = clsx(
-    'box-border w-[360px] rounded-[22px] border border-white/80 bg-white px-4 py-3 text-[#111827]',
-    isRecorderWindow ? '' : 'shadow-[0_12px_28px_rgba(15,23,42,0.14)]',
+    'box-border w-[360px] border border-border bg-background px-4 py-3 text-foreground',
+    isRecorderWindow ? '' : 'shadow-md',
     isRecorderWindow ? 'relative min-h-[132px]' : 'fixed z-50 max-w-[calc(100vw-24px)]',
   )
 
@@ -877,18 +904,30 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       data-testid={isRecorderWindow ? 'meeting-recorder-native-surface' : undefined}
       className={isRecorderWindow ? 'meeting-recorder-native-surface box-border h-screen w-screen overflow-hidden bg-transparent' : undefined}
     >
-      {!isPanelOpen && !isRecorderWindow ? (
-        <button
+      {!isRecorderWindow && <AlertDialog open={confirmEndOpen} onOpenChange={setConfirmEndOpen}>
+        <AlertDialogContent className="max-h-[calc(100dvh-48px)] w-[calc(100%-32px)] overflow-y-auto">
+          <AlertDialogHeader>
+            <AlertDialogTitle>{language === 'zh-CN' ? '结束并保存录制？' : 'End and save recording?'}</AlertDialogTitle>
+            <AlertDialogDescription>{language === 'zh-CN' ? (captureOptionsRef.current.mode === 'minutes' ? '结束后保存录制，并自动生成会议纪要。' : '结束后保存到本机，可回放、下载或稍后生成纪要。') : 'Save locally, then replay or generate meeting notes.'}</AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter className="gap-3">
+            <AlertDialogCancel className="min-h-11">{language === 'zh-CN' ? '继续录制' : 'Keep recording'}</AlertDialogCancel>
+            <AlertDialogAction className="min-h-11" onClick={() => void handleStop()}>{language === 'zh-CN' ? '结束并保存' : 'End and save'}</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>}
+      {!isTauriRuntime() && !isPanelOpen && !isRecorderWindow && phase !== 'idle' ? (
+        <Button
           type="button"
+          size="icon"
+          variant="outline"
           onClick={handleOpenLauncher}
           aria-label={recorderCopy.openPanel}
-          className="fixed bottom-5 right-5 z-50 inline-flex h-[52px] w-[52px] items-center justify-center rounded-full border border-white/80 bg-white text-[#0EA5A6] shadow-[0_8px_20px_rgba(15,23,42,0.16)] transition hover:-translate-y-0.5 hover:shadow-[0_12px_26px_rgba(15,23,42,0.16)]"
+          className="fixed bottom-5 right-5 z-50 size-11 rounded-full shadow-md"
         >
           <span data-testid="meeting-recorder-idle-dot" className={clsx('absolute right-1 top-1 h-2.5 w-2.5', recordingDotClass(phase, 'shadow-[0_0_0_3px_rgba(239,43,45,0.12)]'))} />
-          <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-[#F9FAFB] ring-1 ring-gray-100">
-            <Mic className="h-6 w-6" strokeWidth={2.6} />
-          </span>
-        </button>
+          <Mic className="h-6 w-6" strokeWidth={2.6} />
+        </Button>
       ) : null}
 
       {shouldRenderRecorderSurface && isMinimized ? (
@@ -906,17 +945,17 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
               event.stopPropagation()
               beginDrag(event)
             }}
-            className="-ml-1 mr-1 h-6 w-2 shrink-0 cursor-grab rounded-full bg-white shadow-[0_0_0_1px_rgba(15,23,42,0.08),0_2px_8px_rgba(15,23,42,0.16)] transition-all hover:w-3 active:cursor-grabbing"
+            className="-ml-1 mr-1 h-6 w-1 shrink-0 cursor-grab rounded-full bg-border transition-all hover:w-2 active:cursor-grabbing"
           />
-          <button type="button" onClick={handleRestoreClick} aria-label={recorderCopy.restore} className="inline-flex flex-1 items-center gap-3 text-left">
-            <span className="inline-flex h-9 w-9 items-center justify-center rounded-full bg-[#E5F7F5] text-[#0EA5A6]">
+          <Button type="button" variant="ghost" onClick={handleRestoreClick} aria-label={recorderCopy.restore} className="h-auto flex-1 justify-start gap-3 px-1 text-left">
+            <span className="inline-flex h-9 w-9 items-center justify-center rounded-md bg-muted text-foreground">
               <Mic className="h-5 w-5" strokeWidth={2.6} />
             </span>
             <span>{recorderCopy.title}</span>
             <span data-testid="meeting-recorder-minimized-dot" className={clsx('h-2.5 w-2.5', recordingDotClass(phase, 'shadow-[0_0_0_4px_rgba(239,43,45,0.10)]'))} />
-            <span className="font-mono text-sm font-normal tabular-nums text-[#8B9099]">{elapsedLabel}</span>
-            <ChevronDown className="h-5 w-5 text-[#111827]" />
-          </button>
+            <span className="font-mono text-sm font-normal tabular-nums text-muted-foreground">{elapsedLabel}</span>
+            <ChevronDown className="h-5 w-5" />
+          </Button>
         </div>
       ) : null}
 
@@ -934,27 +973,27 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
               className="flex min-h-[108px] items-center justify-between gap-3"
             >
               <div className="min-w-0 flex-1">
-                <div className="text-sm font-semibold text-[#111827]">{recorderCopy.discardTitle}</div>
-                <p className="mt-1 line-clamp-2 text-xs leading-4 text-[#6B7280]">{recorderCopy.discardBody}</p>
+                <div className="text-sm font-semibold text-foreground">{recorderCopy.discardTitle}</div>
+                <p className="mt-1 line-clamp-2 text-xs leading-4 text-muted-foreground">{recorderCopy.discardBody}</p>
               </div>
               <div className="flex shrink-0 flex-col gap-2">
-                <button
+                <Button
                   type="button"
                   onClick={() => {
                     cancelCloseRequest()
                     if (phase === 'paused') handleResume()
                   }}
-                  className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-[#111827] hover:bg-gray-50"
+                  size="sm" variant="outline"
                 >
                   {recorderCopy.keepRecording}
-                </button>
-                <button
+                </Button>
+                <Button
                   type="button"
                   onClick={() => void handleConfirmDiscard()}
-                  className="rounded-lg bg-[#EF2B2D] px-3 py-1.5 text-xs font-medium text-white hover:bg-[#dc2626]"
+                  size="sm" variant="destructive"
                 >
                   {recorderCopy.discard}
-                </button>
+                </Button>
               </div>
             </div>
           ) : (
@@ -967,22 +1006,22 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
             aria-label={recorderCopy.dragRegion}
           />
           <div className="absolute right-3 top-2.5 z-10 flex items-center gap-2.5">
-            <button type="button" onClick={handleMinimize} aria-label={recorderCopy.minimize} className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[#8B9099] hover:bg-gray-100">
+            <Button type="button" size="icon" variant="ghost" onClick={handleMinimize} aria-label={recorderCopy.minimize} className="size-7 text-muted-foreground">
               <Minus className="h-4 w-4" />
-            </button>
-            <button type="button" onClick={() => void handleRequestClose()} aria-label={recorderCopy.close} className="inline-flex h-6 w-6 items-center justify-center rounded-full text-[#8B9099] hover:bg-gray-100">
+            </Button>
+            <Button type="button" size="icon" variant="ghost" onClick={() => void handleRequestClose()} aria-label={recorderCopy.close} className="size-7 text-muted-foreground">
               <X className="h-4 w-4" />
-            </button>
+            </Button>
           </div>
           <div
             data-tauri-drag-region={isRecorderWindow ? 'true' : undefined}
             onMouseDown={isRecorderWindow ? handleNativePanelMouseDown : undefined}
             className="flex h-full cursor-grab items-center gap-3"
           >
-            <div className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-full bg-[#E5F7F5] text-[#0EA5A6]">
+            <div className="inline-flex h-12 w-12 shrink-0 items-center justify-center rounded-md bg-muted text-foreground">
               <Mic className="h-7 w-7" strokeWidth={2.6} />
             </div>
-            <div className="h-16 w-px bg-gray-200" />
+            <div className="h-16 w-px bg-border" />
             <div className="min-w-0 flex-1">
               <div className="text-sm font-semibold leading-5">{isProcessing || phase === 'failed' ? statusLabel : recorderCopy.title}</div>
               <div className="mt-2 flex items-center gap-2.5">
@@ -990,89 +1029,69 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
                 <span className="font-mono text-xl font-semibold leading-none tabular-nums tracking-tight">{elapsedLabel}</span>
               </div>
               {(phase === 'recording' || phase === 'paused') && <div className="mt-3 flex h-6 items-center gap-0.5 overflow-hidden" aria-label={recorderCopy.waveformLabel}>
-                {WAVEFORM_BAR_HEIGHTS.map((height, index) => (
-                  <span
-                    key={`wave-${index}`}
-                    className={clsx('w-0.5 rounded-full bg-[#0EA5A6]', phase === 'recording' ? 'animate-pulse' : 'opacity-45')}
-                    style={{ height, animationDelay: `${index * 60}ms` }}
-                  />
-                ))}
+                <meter min={0} max={1} value={phase === 'recording' ? recorder.audioLevel : 0}
+                  aria-label={recorderCopy.waveformLabel} className="h-4 w-full" />
               </div>}
-              <div role={phase === 'failed' ? 'alert' : 'status'} data-testid="meeting-recorder-status" className={clsx('mt-1 line-clamp-2 max-w-[150px] text-[11px] leading-4', phase === 'failed' ? 'text-red-600' : 'text-[#8B9099]')} title={statusText}>
+              <div role={phase === 'failed' ? 'alert' : 'status'} data-testid="meeting-recorder-status" className={clsx('mt-1 line-clamp-2 max-w-[150px] text-[11px] leading-4', phase === 'failed' ? 'text-destructive' : 'text-muted-foreground')} title={statusText}>
                 {statusText}
               </div>
             </div>
             <div data-testid="meeting-recorder-controls" className="ml-2 mt-1 flex shrink-0 items-center gap-3">
               {isProcessing ? (
-                <div className="flex flex-col items-center gap-2 text-xs text-blue-600" role="status">
+                <div className="flex flex-col items-center gap-2 text-xs text-muted-foreground" role="status">
                   <Loader2 className="h-8 w-8 animate-spin" />
                   <span>{statusLabel}</span>
                 </div>
               ) : phase === 'stopped' ? (
                 <div className="flex flex-col gap-2">
-                  <button type="button" onClick={() => void handleGenerate()} className="rounded-lg bg-primary-light px-3 py-2 text-xs text-white">{language === 'zh-CN' ? '生成会议纪要' : 'Generate minutes'}</button>
-                  <button type="button" onClick={() => void handleRequestClose()} className="text-xs text-red-600">{recorderCopy.discard}</button>
+                  <Button type="button" size="sm" onClick={() => void handleGenerate()}>{language === 'zh-CN' ? '生成会议纪要' : 'Generate minutes'}</Button>
+                  <Button type="button" size="sm" variant="ghost" className="text-destructive" onClick={() => void handleRequestClose()}>{recorderCopy.discard}</Button>
                 </div>
               ) : phase === 'completed' ? (
-                <button type="button" onClick={() => void handleViewNote()} className="rounded-lg bg-primary-light px-3 py-2 text-xs text-white">{recorderCopy.viewNote}</button>
+                <Button type="button" size="sm" onClick={() => void handleViewNote()}>{recorderCopy.viewNote}</Button>
               ) : phase === 'failed' ? (
                 <>
-                  <button
+                  <Button
                     type="button"
                     onClick={handleReRecord}
                     disabled={isProcessing}
                     aria-label={recorderCopy.record}
-                    className="group flex flex-col items-center gap-1 text-xs text-[#111827] disabled:cursor-not-allowed disabled:opacity-40"
+                    variant="outline" size="icon"
                   >
-                    <span className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 bg-white shadow-sm group-hover:bg-gray-50">
-                      <Mic className="h-5 w-5" strokeWidth={2.4} />
-                    </span>
-                    {recorderCopy.record}
-                  </button>
+                    <Mic className="h-5 w-5" strokeWidth={2.4} />
+                  </Button>
                   {canRetry ? (
-                    <button
+                    <Button
                       type="button"
                       onClick={() => void handleRetry()}
                       disabled={isProcessing}
                       aria-label={recorderCopy.retry}
-                      className="group flex flex-col items-center gap-1 text-xs text-[#111827] disabled:cursor-not-allowed disabled:opacity-40"
+                      size="icon"
                     >
-                      <span className="inline-flex h-10 w-10 items-center justify-center rounded-full bg-[#111827] text-white shadow-[0_8px_16px_rgba(17,24,39,0.22)] group-hover:bg-[#0b1220]">
-                        <RotateCcw className="h-4 w-4" />
-                      </span>
-                      {recorderCopy.retry}
-                    </button>
+                      <RotateCcw className="h-4 w-4" />
+                    </Button>
                   ) : null}
                 </>
               ) : (
                 <>
-                  <button
+                  <Button
                     type="button"
                     onClick={canStart ? () => void handleStart() : phase === 'paused' ? handleResume : handlePause}
                     disabled={isProcessing}
                     aria-label={canStart ? recorderCopy.start : phase === 'paused' ? recorderCopy.resume : recorderCopy.pause}
-                    className="group flex flex-col items-center gap-1 text-xs text-[#111827] disabled:cursor-not-allowed disabled:opacity-40"
+                    variant="outline" size="icon"
                   >
-                    <span className="inline-flex h-10 w-10 items-center justify-center rounded-full border border-gray-200 bg-white shadow-sm group-hover:bg-gray-50">
-                      {canStart || phase === 'paused' ? <Play className="h-5 w-5" fill="currentColor" /> : <Pause className="h-5 w-5" fill="currentColor" />}
-                    </span>
-                    {canStart ? recorderCopy.start : phase === 'paused' ? recorderCopy.resume : recorderCopy.pause}
-                  </button>
-                  <button
+                    {canStart || phase === 'paused' ? <Play className="h-5 w-5" fill="currentColor" /> : <Pause className="h-5 w-5" fill="currentColor" />}
+                  </Button>
+                  <Button
                     type="button"
                     onClick={() => void handleStop()}
                     disabled={isProcessing || !canStop}
                     aria-label={recorderCopy.stop}
-                    className="group flex flex-col items-center gap-1 text-xs text-[#111827] disabled:cursor-not-allowed disabled:opacity-40"
+                    variant="destructive" size="icon"
                   >
-                    <span className={clsx(
-                      'inline-flex h-10 w-10 items-center justify-center rounded-full text-white shadow-[0_8px_16px_rgba(239,43,45,0.22)]',
-                      phase === 'recording' ? 'bg-[#FCA5A5]' : 'bg-[#EF2B2D] group-hover:bg-[#dc2626]',
-                    )}>
-                      {isProcessing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Square className="h-4 w-4" fill="currentColor" />}
-                    </span>
-                    {recorderCopy.stop}
-                  </button>
+                    {isProcessing ? <Loader2 className="h-5 w-5 animate-spin" /> : <Square className="h-4 w-4" fill="currentColor" />}
+                  </Button>
                 </>
               )}
             </div>

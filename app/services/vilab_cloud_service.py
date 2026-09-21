@@ -36,8 +36,17 @@ class VILabCloudService:
             for key, kind in (("asr_model", "asr"), ("llm_model", "llm")):
                 selected = selections[key]
                 if selected:
-                    self._validate_selection(models, selected, kind)
-                    defaults[key] = selected
+                    try:
+                        self._validate_selection(models, selected, kind)
+                    except HTTPException:
+                        fallback = defaults.get(key)
+                        self._validate_selection(models, fallback, kind)
+                        from app.services.tracing_service import observation, update_current
+                        with observation("云端模型选择回退"):
+                            update_current(input={"kind": kind, "unavailable_model": selected},
+                                           output={"model": fallback, "reason": "saved_selection_unavailable"})
+                    else:
+                        defaults[key] = selected
         return defaults
 
     @staticmethod

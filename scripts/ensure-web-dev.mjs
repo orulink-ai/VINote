@@ -40,6 +40,7 @@ if (await isViteRunning()) {
   const child = spawn(process.execPath, [viteEntry, '--host', '127.0.0.1', '--port', '3100'], {
     cwd: frontendDir,
     stdio: 'inherit',
+    windowsHide: true,
   })
   child.once('error', (error) => {
     console.error(`[ERROR] Could not start Vite: ${error.message}`)

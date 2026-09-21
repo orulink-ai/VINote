@@ -88,6 +88,17 @@ describe('useAudioRecorder', () => {
     expect(result.current.status).toBe('stopped')
   })
 
+  it('records normally when the optional volume monitor cannot initialize', async () => {
+    vi.stubGlobal('AudioContext', class { constructor() { throw new Error('monitor unavailable') } })
+    const { result } = renderHook(() => useAudioRecorder())
+    await act(async () => { await result.current.start() })
+    expect(result.current.status).toBe('recording')
+    expect(result.current.audioLevel).toBe(0)
+    const blob = await act(async () => result.current.stop())
+    expect(blob.size).toBeGreaterThan(0)
+    expect(stopTrack).toHaveBeenCalledOnce()
+  })
+
   it('releases the microphone immediately when the recorder fails at runtime', async () => {
     const { result } = renderHook(() => useAudioRecorder())
     await act(async () => { await result.current.start() })

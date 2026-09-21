@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "VINote",
-  "version": "0.5.2",
+  "version": "0.6.0",
   "identifier": "app.vinote.desktop",
   "build": {
     "beforeDevCommand": "node ../scripts/ensure-web-dev.mjs",
@@ -20,7 +20,8 @@
         "minWidth": 1040,
         "minHeight": 680,
         "resizable": true,
-        "center": true
+        "center": true,
+        "decorations": false
       }
     ],
     "security": {

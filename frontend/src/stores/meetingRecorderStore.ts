@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { MeetingCaptureOptions } from '../lib/meetingCapture'
 
 export type MeetingRecorderPhase =
   | 'idle'
@@ -16,7 +17,11 @@ export type MeetingRecorderPhase =
 
 export type MeetingRecorderStage =
   | 'uploading'
+  | 'preparing_media'
   | 'transcribing'
+  | 'diarizing'
+  | 'aligning'
+  | 'analyzing_video'
   | 'summarizing'
   | 'saving'
 
@@ -44,7 +49,10 @@ interface MeetingRecorderState {
   error: string
   retryDescription: string
   hasRecoverableRecording: boolean
+  localRecordingSaved: boolean
   notification: MeetingRecorderNotification | null
+  captureOptions?: MeetingCaptureOptions
+  audioLevel: number
   openPanel: () => void
   closePanel: () => void
   requestClose: () => void
@@ -100,14 +108,26 @@ const initialState = {
   error: '',
   retryDescription: '',
   hasRecoverableRecording: false,
+  localRecordingSaved: false,
   notification: null as MeetingRecorderNotification | null,
+  captureOptions: undefined as MeetingCaptureOptions | undefined,
+  audioLevel: 0,
 }
 
 const retryDescriptions: Record<MeetingRecorderStage, string> = {
-  uploading: '重新生成将复用这段录音重新上传。',
-  transcribing: '重新生成将复用这段录音重新转写。',
-  summarizing: '重新生成将复用已保留的录音或转写结果继续生成纪要。',
-  saving: '重新生成将复用已生成的纪要内容重新保存。',
+  uploading: '录制已经保存在本机，可重新上传并生成纪要。',
+  preparing_media: '原始录制已保留，可重试媒体准备。',
+  transcribing: '录制已经保存在本机，可稍后重新转写。',
+  diarizing: '原始录制已保留，可重试本地说话人区分。',
+  aligning: '原始录制及有效产物已保留，可重试逐字稿对齐。',
+  analyzing_video: '原始录制及有效逐字稿已保留，可重试画面分析。',
+  summarizing: '录制和可用逐字稿已经保存在本机，可稍后重新生成纪要。',
+  saving: '生成结果尚未保存，可重新保存。',
+}
+
+export function isMeetingBusy(state: Pick<MeetingRecorderState, 'phase' | 'hasRecoverableRecording' | 'localRecordingSaved'>) {
+  return !['idle', 'completed', 'failed'].includes(state.phase)
+    || (state.hasRecoverableRecording && !state.localRecordingSaved)
 }
 
 function hasRecoveryRisk(state: Pick<MeetingRecorderState, 'phase' | 'recordedAudio' | 'generatedNote' | 'noteId'>) {
@@ -153,13 +173,13 @@ export const useMeetingRecorderStore = create<MeetingRecorderState>((set, get) =
     failedStage,
     error,
     retryDescription: retryDescriptions[failedStage],
-    isPanelOpen: true,
+    isPanelOpen: !state.localRecordingSaved,
     isMinimized: false,
     hasRecoverableRecording: hasRecoveryRisk({ ...state, phase: 'failed' }),
     notification: {
       kind: 'error',
-      title: '会议总结失败',
-      message: `${retryDescriptions[failedStage]}${error ? ` ${error}` : ''}`,
+      title: '会议纪要生成失败',
+      message: `${retryDescriptions[failedStage]}${error ? ` 错误原因：${error}` : ''}`,
     },
   })),
   complete: (noteId) => set({

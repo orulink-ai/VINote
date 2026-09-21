@@ -12,6 +12,7 @@ def build_meeting_review_prompts(
     rules = """Review the meeting draft against the supplied evidence and return only the corrected Markdown.
 The draft is not evidence. Reconstruct supported conclusions rather than preserving its sentences.
 Check actors, objects, negations, scope, conditions, and proposals versus confirmed decisions.
+When evidence has speaker labels, preserve those exact labels on key viewpoints, disagreements and explicit commitments in the final thematic report and intermediate chunks. Do not strip attribution during review or merge, conflate different speakers into consensus, infer real identities, or treat the person mentioning a task as its owner. Unknown, overlapping or uncertain attribution must remain explicitly uncertain.
 Do not turn an instruction to an automated tool into an instruction for a person to perform it manually.
 Do not turn separately described channels or capabilities into an unresolved either/or choice.
 For example, 'download through A; B can also publish to a store' supports two capabilities, not 'final selection remains undecided'. This example is a rule, not a meeting fact.

@@ -1,3 +1,4 @@
+import { apiJson } from './api'
 import type { NoteRecord } from '../stores/noteLibraryStore'
 import type { WorkspaceSelection } from '../stores/teamStore'
 import {
@@ -10,7 +11,7 @@ import {
 } from './noteGenerationClient'
 
 export const MEETING_NOTE_SOURCE_TYPE = 'meeting_recording'
-export type MeetingGenerationStage = 'uploading' | 'transcribing' | 'summarizing' | 'saving' | 'completed'
+export type MeetingGenerationStage = 'uploading' | 'preparing_media' | 'transcribing' | 'diarizing' | 'aligning' | 'analyzing_video' | 'summarizing' | 'saving' | 'completed'
 
 type SaveNote = (
   title: string,
@@ -33,6 +34,9 @@ interface SubmitMeetingRecordingInput {
   summaryMode: SummaryMode
   modelProfileId?: string
   sttProfileId?: string
+  meetingSessionId?: string
+  meetingMode?: 'recording' | 'minutes'
+  meetingType?: 'audio' | 'video'
 }
 
 interface SubmitMeetingRecordingDependencies {
@@ -41,13 +45,17 @@ interface SubmitMeetingRecordingDependencies {
 }
 
 export class MeetingGenerationError extends Error {
-  stage: 'uploading' | 'transcribing' | 'summarizing' | 'saving'
+  stage: Exclude<MeetingGenerationStage, 'completed'>
 
   constructor(stage: MeetingGenerationError['stage'], message: string) {
     super(message)
     this.name = 'MeetingGenerationError'
     this.stage = stage
   }
+}
+
+export class MissingMeetingTaskError extends MeetingGenerationError {
+  constructor() { super('uploading', '服务端任务不存在，将使用保留的原始录制重新提交。') }
 }
 
 export function createMeetingRecordingTitle(date = new Date(), locale = 'zh-CN') {
@@ -92,6 +100,9 @@ export async function submitMeetingRecording(
       outputLanguage: input.outputLanguage,
       modelProfileId: input.modelProfileId,
       sttProfileId: input.sttProfileId,
+      meetingSessionId: input.meetingSessionId,
+      meetingMode: input.meetingMode,
+      meetingType: input.meetingType,
     })
   } catch (error) {
     throw new MeetingGenerationError('uploading', error instanceof Error ? error.message : 'Upload failed')
@@ -115,21 +126,35 @@ export async function waitForMeetingTaskCompletion({
   onProgress?: (status: TaskStatusResponse) => void
   delay?: () => Promise<void>
 }) {
-  let lastRunningStage: 'transcribing' | 'summarizing' = 'transcribing'
+  let lastRunningStage: Exclude<MeetingGenerationStage, 'uploading' | 'completed'> = 'transcribing'
 
   for (;;) {
     const status = await fetchStatus(taskId)
     onProgress?.(status)
-    if (status.status === 'transcribing') {
+    if (status.status === 'success') return status
+    if (status.status === 'failed' || status.status === 'not_found') {
+      const failed = status.failed_stage
+      const known = ['preparing_media', 'transcribing', 'diarizing', 'aligning', 'analyzing_video', 'summarizing', 'saving']
+      throw new MeetingGenerationError(known.includes(failed || '') ? failed as typeof lastRunningStage : lastRunningStage, status.message || 'Meeting generation failed')
+    }
+    const stage = status.stage || status.status
+    if (stage === 'preparing' || stage === 'preparing_media' || stage === 'uploaded') {
+      lastRunningStage = 'preparing_media'
+      onStage?.('preparing_media')
+    } else if (stage === 'transcribing') {
       lastRunningStage = 'transcribing'
       onStage?.('transcribing')
-    } else if (status.status === 'summarizing' || status.status === 'screenshots') {
+    } else if (stage === 'diarizing') {
+      lastRunningStage = 'diarizing'; onStage?.('diarizing')
+    } else if (stage === 'aligning') {
+      lastRunningStage = 'aligning'; onStage?.('aligning')
+    } else if (stage === 'analyzing_video') {
+      lastRunningStage = 'analyzing_video'; onStage?.('analyzing_video')
+    } else if (stage === 'saving' || stage === 'saving_result') {
+      lastRunningStage = 'saving'; onStage?.('saving')
+    } else if (status.status === 'summarizing' || status.status === 'screenshots' || stage === 'summarizing') {
       lastRunningStage = 'summarizing'
       onStage?.('summarizing')
-    } else if (status.status === 'success') {
-      return status
-    } else if (status.status === 'failed' || status.status === 'not_found') {
-      throw new MeetingGenerationError(lastRunningStage, status.message || 'Meeting generation failed')
     }
 
     await delay()
@@ -186,7 +211,7 @@ export async function completeMeetingRecordingGeneration({
 
 function resolveAudioExtension(mimeType: string) {
   const normalized = mimeType.toLowerCase()
-  if (normalized.includes('mp4')) return 'm4a'
+  if (normalized.includes('mp4')) return normalized.startsWith('video/') ? 'mp4' : 'm4a'
   if (normalized.includes('mpeg')) return 'mp3'
   if (normalized.includes('ogg')) return 'ogg'
   if (normalized.includes('wav')) return 'wav'
@@ -215,4 +240,11 @@ export async function fetchMeetingAudioBlob(taskId: string): Promise<Blob> {
     'uploading',
     `无法加载已保留的录音 (${lastError instanceof Error ? lastError.message : 'unknown'})`,
   )
+}
+
+export async function resumeMeetingTask(taskId: string): Promise<TaskResponse> {
+  const status = await fetchTaskStatus(taskId)
+  if (status.status === 'not_found') throw new MissingMeetingTaskError()
+  if (status.status === 'failed') return apiJson<TaskResponse>('/api/task/' + taskId + '/retry', { method: 'POST' })
+  return { task_id: taskId }
 }

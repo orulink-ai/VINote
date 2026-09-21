@@ -1,94 +1,201 @@
-import { openMeetingController } from '../lib/meetingController'
-import { apiJson } from '../lib/api'
-import { listPendingMeetings, type PendingMeeting } from '../lib/audioStorage'
-import { useAuthStore } from '../stores/authStore'
-import { useEffect, useRef, useState } from 'react'
-import { Mic, Monitor, Upload, FileText } from 'lucide-react'
+import { isMeetingProcessing } from '../lib/meetingProcessing'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { ModelSourcePanel } from '../components/Settings/ModelSourcePanel'
-import { LocalRecordingCard } from '../components/MeetingRecorder/LocalRecordingCard'
-import { NoteGrid } from '../components/Notes/NoteGrid'
-import { DEFAULT_CAPTURE_OPTIONS, START_MEETING_EVENT, SYSTEM_AUDIO_UNAVAILABLE } from '../lib/meetingCapture'
-import { useI18n } from '../lib/i18n'
-import { useMeetingRecorderStore } from '../stores/meetingRecorderStore'
+import { FileText, Mic2, Monitor, Settings2, Sparkles, Upload, Volume2 } from 'lucide-react'
+import { apiJson } from '../lib/api'
+import { fetchTaskStatus } from '../lib/noteGenerationClient'
+import { listPendingMeetings, updatePendingMeeting, type PendingMeeting } from '../lib/audioStorage'
+import { acquireMeetingMicrophone, DEFAULT_CAPTURE_OPTIONS, START_MEETING_EVENT } from '../lib/meetingCapture'
+import { mapMicrophoneError } from '../lib/microphonePermission'
+import { useAuthStore } from '../stores/authStore'
+import { isMeetingBusy, useMeetingRecorderStore } from '../stores/meetingRecorderStore'
 import { useNoteLibraryStore } from '../stores/noteLibraryStore'
 import { getWorkspaceLabel, useTeamStore } from '../stores/teamStore'
+import { useI18n } from '../lib/i18n'
+import { LocalRecordingCard } from '../components/MeetingRecorder/LocalRecordingCard'
+import { NoteGrid } from '../components/Notes/NoteGrid'
+import { ModelSourcePanel } from '../components/Settings/ModelSourcePanel'
+import { Alert, AlertDescription } from '@/components/ui/alert'
+import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
+import { Field, FieldLabel } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '@/components/ui/sheet'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
+import { MeetingCaptureWorkspace } from '../components/MeetingRecorder/MeetingCaptureWorkspace'
+
+const capturePhases = ['requesting', 'recording', 'paused', 'stopping']
 
 export function Meetings() {
   const userId = useAuthStore(state => state.user?.id)
   const [pending, setPending] = useState<PendingMeeting[]>([])
-  const navigate = useNavigate()
-  const { locale, copy } = useI18n()
-  const zh = locale.startsWith('zh')
   const [options, setOptions] = useState(DEFAULT_CAPTURE_OPTIONS)
+  const [mode, setMode] = useState<'recording' | 'minutes'>('recording')
+  const [meetingType, setMeetingType] = useState<'audio' | 'video'>('audio')
   const [diarizationReady, setDiarizationReady] = useState<boolean | null>(null)
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([])
   const [error, setError] = useState('')
+  const navigate = useNavigate()
+  const { locale } = useI18n()
+  const zh = locale.startsWith('zh')
   const { notes, loading, loadNotes } = useNoteLibraryStore()
   const { currentWorkspace, teams } = useTeamStore()
   const session = useMeetingRecorderStore()
-  const previewRef = useRef<HTMLVideoElement>(null)
-  const busy = !['idle', 'completed', 'failed'].includes(session.phase) || session.hasRecoverableRecording
+  const isCapturing = capturePhases.includes(session.phase)
+  const busy = isMeetingBusy(session)
   const workspace = getWorkspaceLabel(currentWorkspace, teams, zh ? '个人空间' : 'Personal workspace')
+  const workspacePending = pending.filter(item => item.workspace.scope === currentWorkspace.scope && (item.workspace.scope === 'personal' || currentWorkspace.scope === 'team' && item.workspace.teamId === currentWorkspace.teamId))
+  const meetingNotes = notes.filter(note => ['meeting_recording', 'meeting_video'].includes(note.sourceType || ''))
+
   useEffect(() => {
     void loadNotes(currentWorkspace)
     let active = true
     setPending([])
     if (userId) void listPendingMeetings(userId).then(items => { if (active) setPending(items) }).catch(() => { if (active) setError(zh ? '无法读取本地录制。' : 'Cannot load local recordings.') })
     return () => { active = false }
-  }, [currentWorkspace, loadNotes, session.phase, userId])
+  }, [currentWorkspace, loadNotes, session.phase, userId, zh])
   useEffect(() => {
-    if (previewRef.current) previewRef.current.srcObject = session.preview || null
-  }, [session.preview])
-  useEffect(() => {
-    void apiJson<{ diarization: { available: boolean } }>('/api/meeting-capabilities')
-      .then(result => setDiarizationReady(result.diarization.available)).catch(() => setDiarizationReady(false))
-  }, [])
+    let active = true
+    let refreshing = false
+    const refresh = () => { if (userId && !refreshing && active) { refreshing = true; void listPendingMeetings(userId).then(async items => {
+      if (active) setPending(items)
+      for (const item of items) {
+        if (!active) return
+        if (isMeetingProcessing(item.id) || ['idle', 'completed', 'failed'].includes(item.processingStatus) || session.recordingId === item.id && isMeetingBusy(session)) continue
+        if (!item.taskId) {
+          await updatePendingMeeting(item.id, { processingStatus: 'failed', processingError: '处理被中断，原始媒体已保存，请重试。' })
+          continue
+        }
+        try {
+          const status = await fetchTaskStatus(item.taskId)
+          if (!active) return
+          if (status.status === 'success') {
+            window.dispatchEvent(new CustomEvent('vinote-restore-meeting', { detail: item }))
+          } else if (['failed', 'not_found'].includes(status.status)) {
+            await updatePendingMeeting(item.id, {
+              processingStatus: 'failed', failedStage: status.failed_stage || item.processingStatus,
+              processingError: status.message,
+            })
+          } else {
+            const stages: Record<string, PendingMeeting['processingStatus']> = {
+              preparing: 'preparing_media', preparing_media: 'preparing_media', uploaded: 'preparing_media', transcribing: 'transcribing',
+              diarizing: 'diarizing', aligning: 'aligning', analyzing_video: 'analyzing_video',
+              summarizing: 'generating', screenshots: 'generating', saving: 'saving_result', saving_result: 'saving_result',
+            }
+            await updatePendingMeeting(item.id, {
+              processingStatus: stages[status.stage || status.status] || item.processingStatus,
+              progress: status.progress ?? undefined, processedSeconds: status.processed_seconds ?? undefined,
+              totalSeconds: status.total_seconds ?? undefined, etaSeconds: status.eta_seconds ?? undefined,
+            })
+          }
+        } catch {
+          await updatePendingMeeting(item.id, { processingStatus: 'failed', processingError: '暂时无法连接处理服务。原始媒体已保留，重试将检查并继续现有任务。' })
+        }
+      }
+    }).catch(() => undefined).finally(() => { refreshing = false }) } }
+    refresh()
+    const timer = window.setInterval(refresh, 2000)
+    return () => { active = false; window.clearInterval(timer) }
+  }, [userId, session.recordingId, session.phase])
+  useEffect(() => { void apiJson<{ diarization: { available: boolean } }>('/api/meeting-capabilities').then(result => setDiarizationReady(result.diarization.available)).catch(() => setDiarizationReady(false)) }, [])
   useEffect(() => {
     const refresh = () => { void navigator.mediaDevices?.enumerateDevices().then(items => setDevices(items.filter(item => item.kind === 'audioinput'))).catch(() => undefined) }
     refresh()
     navigator.mediaDevices?.addEventListener('devicechange', refresh)
     return () => navigator.mediaDevices?.removeEventListener('devicechange', refresh)
   }, [])
+
   const refreshDevices = async () => {
     setError('')
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+      const stream = await acquireMeetingMicrophone(options.microphoneId)
       stream.getTracks().forEach(track => track.stop())
-      setDevices((await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'audioinput'))
-    } catch { setError(zh ? '无法访问麦克风，请检查设备和麦克风权限。' : 'Cannot access microphone. Check your device and permissions.') }
+      const nextDevices = (await navigator.mediaDevices.enumerateDevices()).filter(device => device.kind === 'audioinput')
+      setDevices(nextDevices)
+      if (options.microphoneId && !nextDevices.some(device => device.deviceId === options.microphoneId)) {
+        setOptions(current => ({ ...current, microphoneId: '' }))
+      }
+    } catch (deviceError) {
+      const reason = mapMicrophoneError(deviceError)
+      setError(reason === 'denied'
+        ? (zh ? '麦克风权限未开启，请在 Windows 隐私设置中允许 VINote 使用麦克风。' : 'Microphone permission is disabled. Allow VINote to use it in Windows privacy settings.')
+        : reason === 'no-device'
+          ? (zh ? '没有检测到可用的麦克风，请重新连接耳机后检测。' : 'No microphone was detected. Reconnect the headset and check again.')
+          : (zh ? '暂时无法启动这个麦克风。请重新检测，或改用“系统默认麦克风”。' : 'This microphone could not start. Check again or use the system default microphone.'))
+    }
   }
-  const inputClass = 'w-full rounded-xl border border-gray-200 bg-transparent px-3 py-2.5 dark:border-gray-700'
-  return <div className="mx-auto max-w-6xl space-y-6 px-6 py-8 pb-32 lg:px-10">
-    <header className="flex flex-wrap items-start justify-between gap-4">
-      <div><h1 className="text-2xl font-semibold">{zh ? '会议记录' : 'Meetings'}</h1>
-        <p className="mt-2 text-sm text-gray-500">{zh ? '专心开会，结束后自动整理重点、决策与待办。' : 'Capture conversations, shared screens and decisions.'}</p></div>
-      <button className="flex items-center gap-2 rounded-xl border px-4 py-2 text-sm dark:border-gray-700" onClick={() => navigate('/generate?meeting=1')}><Upload size={16} />{zh ? '导入会议文件' : 'Import meeting'}</button>
+  const startRecording = () => {
+    if (busy) return
+    setError('')
+    const nextOptions = {
+      ...options,
+      sessionId: crypto.randomUUID(),
+      mode,
+      meetingType,
+      screen: meetingType === 'video',
+      // The microphone is the required meeting audio source. Screen capture must
+      // never be blocked by optional WebView/Windows system-audio capture.
+      systemAudio: false,
+      diarize: true,
+      speakerCount: undefined,
+    }
+    setOptions(nextOptions)
+    window.dispatchEvent(new CustomEvent(START_MEETING_EVENT, { detail: nextOptions }))
+  }
+
+  return <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-8 px-6 py-8 pb-24 xl:px-8">
+    <header className="motion-rise flex flex-wrap items-start justify-between gap-6">
+      <div className="max-w-2xl"><div className="mb-2 text-sm text-muted-foreground">{workspace}</div><h1 className="text-3xl font-semibold tracking-[-0.03em]">{isCapturing ? (session.phase === 'requesting' ? (zh ? '正在准备录制' : 'Preparing recording') : session.phase === 'stopping' ? (zh ? '正在保存录制' : 'Saving recording') : (zh ? '会议正在进行' : 'Meeting in progress')) : (zh ? '开始一次会议' : 'Start a meeting')}</h1><p className="mt-3 text-[15px] leading-6 text-muted-foreground">{isCapturing ? (zh ? '专注讨论即可。录制结束后先保存到本机；选择生成会议纪要时会自动开始会后处理。' : 'Capture first. Minutes mode processes the saved recording automatically.') : (zh ? '检查声音和录制范围，然后开始。结束后可回放、下载或生成带说话人的会议纪要。' : 'Check sound and capture scope, then start.')}</p></div>
+      {!isCapturing ? <div className="flex items-center gap-3"><Sheet><SheetTrigger asChild><Button variant="outline" size="lg"><Settings2 data-icon="inline-start" />{zh ? '处理设置' : 'Processing settings'}</Button></SheetTrigger><SheetContent className="w-full overflow-y-auto sm:max-w-md"><SheetHeader><SheetTitle>{zh ? '转写与总结设置' : 'Transcription and summary settings'}</SheetTitle><SheetDescription>{zh ? '选择主动生成会议纪要时使用的转写与总结服务。' : 'Choose the transcription and summary services used to generate meeting notes.'}</SheetDescription></SheetHeader><div className="mt-7"><ModelSourcePanel compact /></div></SheetContent></Sheet><Button variant="outline" size="lg" onClick={() => navigate('/generate?meeting=1')}><Upload data-icon="inline-start" />{zh ? '导入已有录制' : 'Import recording'}</Button></div> : null}
     </header>
-    <section className="grid gap-6 rounded-2xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-[#202020] lg:grid-cols-[1.3fr_1fr]">
-      <div className="space-y-4">
-        <h2 className="flex items-center gap-2 font-semibold"><Mic size={20} />{zh ? '开始会议' : 'Start a meeting'}</h2>
-        <label className="block space-y-2 text-sm"><span>{zh ? '会议名称（可选）' : 'Meeting name (optional)'}</span><input className={inputClass} maxLength={160} disabled={busy} value={options.title} onChange={event => setOptions({ ...options, title: event.target.value })} placeholder={zh ? '例如：产品方案评审' : 'e.g. Product review'} /></label>
-        <label className="block space-y-2 text-sm"><span>{zh ? '麦克风 · 录制现场声音' : 'Microphone · local voices'}</span><select className={inputClass} disabled={busy} value={options.microphoneId} onChange={event => setOptions({ ...options, microphoneId: event.target.value })}><option value="">{zh ? '系统默认麦克风' : 'Default microphone'}</option>{devices.filter(device => device.deviceId && device.deviceId !== 'default').map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Microphone ${index + 1}`}</option>)}</select></label>
-        <button disabled={busy} onClick={() => void refreshDevices()} className="text-sm text-primary-light">{zh ? '检测 / 刷新麦克风' : 'Detect / refresh microphones'}</button>
-        <label className="flex items-start gap-3 rounded-xl border border-gray-100 bg-gray-50 p-3 text-sm dark:border-gray-700 dark:bg-gray-800/40"><input type="checkbox" disabled={busy} checked={options.screen} onChange={event => setOptions({ ...options, screen: event.target.checked })} /><span>{zh ? '同时录制屏幕' : 'Record screen too'}<small className="mt-1 block text-gray-500">{zh ? '选择屏幕或窗口，生成带截图的纪要。录屏占用更多空间。' : 'Choose a screen or window for illustrated notes. Uses more disk space.'}</small></span></label>
-        {diarizationReady === false && <p className="text-sm text-amber-600">{zh ? '自动转写组件暂不可用。录音仍可保存，请修复组件后再生成纪要。' : 'Automatic transcription is unavailable. Save your recording and repair the component before generating notes.'}</p>}
-        {(error || session.error) && <p role="alert" className="text-sm text-red-500">{error || session.error}</p>}
-        {session.error?.includes(SYSTEM_AUDIO_UNAVAILABLE) && <button className="rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900" onClick={() => window.dispatchEvent(new CustomEvent(START_MEETING_EVENT, { detail: { ...options, systemAudio: false, diarize: true, speakerCount: undefined } }))}>{zh ? '仅录麦克风继续' : 'Continue with microphone only'}</button>}
-        <p className="text-xs text-gray-500">{zh ? `保存到：${workspace}` : `Save to: ${workspace}`}</p>
-        <button disabled={busy} className="w-full rounded-xl bg-primary-light px-6 py-3 text-sm font-medium text-white disabled:opacity-40" onClick={() => window.dispatchEvent(new CustomEvent(START_MEETING_EVENT, { detail: { ...options, systemAudio: true, diarize: true, speakerCount: undefined } }))}>{zh ? '开始录制' : 'Start recording'}</button>
-      </div>
-      <div className="flex flex-col justify-center rounded-xl bg-blue-50/60 p-6 dark:bg-blue-950/20">
-        {session.preview ? <video ref={previewRef} autoPlay muted playsInline className="w-full rounded-lg" /> : <div className="text-center"><div className="mx-auto mb-5 flex h-14 w-14 items-center justify-center rounded-2xl bg-white text-primary-light shadow-sm dark:bg-gray-800">{options.screen ? <Monitor size={26} /> : <FileText size={26} />}</div><p className="text-sm text-gray-500">{options.screen ? (zh ? '录下讨论，也留住共享画面' : 'Keep conversations and shared screens') : (zh ? '从讨论到一份清晰的纪要' : 'Turn conversations into clear notes')}</p><p className="mt-3 text-xs text-gray-500">{zh ? '自动整理议题、结论和待办，随时查看原文、回放录音。' : 'Generate notes, read the transcript and replay the recording.'}</p></div>}
-        {busy && <button className="mt-5 rounded-lg bg-white p-3 text-sm dark:bg-[#191919]" onClick={() => { session.restorePanel(); void openMeetingController().catch(() => undefined) }}>{copy.meetingRecorder.phases[session.phase]} · {Math.floor(session.elapsedSeconds / 60)}:{String(session.elapsedSeconds % 60).padStart(2, '0')} · {((session.sizeBytes || 0) / 1024 / 1024).toFixed(1)} MB — {zh ? '显示控制面板' : 'Show controls'}</button>}
-        <p className="mt-5 text-xs leading-6 text-gray-500">{zh ? '自动区分发言人，转写完成后可修改姓名。' : 'Speakers are identified automatically. You can edit their names in the transcript.'}</p>
-      </div>
-    </section>
-    <ModelSourcePanel compact />
-    <section className="space-y-3"><h2 className="font-semibold">{zh ? '已保存的录制' : 'Saved recordings'}</h2>
-      {pending.filter(item => item.workspace.scope === currentWorkspace.scope && (item.workspace.scope === 'personal' || currentWorkspace.scope === 'team' && item.workspace.teamId === currentWorkspace.teamId)).map(item => <LocalRecordingCard key={item.id} recording={item} busy={busy} onDeleted={() => setPending(items => items.filter(entry => entry.id !== item.id))} />)}
-      {pending.length === 0 && <p className="text-sm text-gray-500">{zh ? '结束录制后会自动保存在这里，无需先生成纪要。' : 'Recordings are saved here when you finish, even without a summary.'}</p>}
-    </section>
-    <section className="space-y-4"><h2 className="font-semibold">{zh ? '会议纪要' : 'Meeting notes'}</h2><NoteGrid notes={notes.filter(note => ['meeting_recording', 'meeting_video'].includes(note.sourceType || ''))} loading={loading} emptyTitle={zh ? '还没有会议记录' : 'No meetings yet'} emptyBody={zh ? '开始录制或导入已有会议，纪要会保存在当前空间。' : 'Record or import a meeting to save it in this workspace.'} onOpen={note => navigate(`/note/${note.id}`)} /></section>
+
+    {isCapturing ? <MeetingCaptureWorkspace title={options.title} /> : <section className="motion-rise mx-auto w-full max-w-[1180px]" style={{ animationDelay: '70ms' }}>
+      <article className="overflow-hidden rounded-[1.75rem] border bg-card shadow-[0_18px_60px_-42px_rgba(0,0,0,0.35)]">
+        <div className="border-b px-6 py-6 sm:px-8 lg:px-10">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div><h2 className="text-xl font-semibold tracking-tight">{zh ? '设置这次会议' : 'Set up this meeting'}</h2><p className="mt-1.5 text-sm leading-6 text-muted-foreground">{zh ? '按顺序选择用途、录制范围和声音设备。' : 'Choose the purpose, capture range and audio device.'}</p></div>
+            <Badge variant="secondary" className="max-w-full truncate px-3 py-1">{workspace}</Badge>
+          </div>
+        </div>
+
+        <div className="grid min-w-0 gap-0 min-[1080px]:grid-cols-[minmax(0,1.18fr)_minmax(360px,0.82fr)]">
+          <div className="flex min-w-0 flex-col gap-10 px-6 py-8 sm:px-8 lg:px-10 min-[1080px]:border-r">
+            <section className="min-w-0">
+              <div className="mb-5 flex items-start gap-4"><span className="grid size-8 shrink-0 place-items-center rounded-full bg-foreground text-sm font-semibold text-background">1</span><div className="min-w-0"><h3 className="font-semibold">{zh ? '选择工作方式' : 'Choose a workflow'}</h3><p className="mt-1 text-sm leading-6 text-muted-foreground">{zh ? '只保留原始记录，或保存后自动完成会后转写和纪要。' : 'Keep the recording only, or process it automatically after saving.'}</p></div></div>
+              <ToggleGroup type="single" value={mode} onValueChange={value => value && setMode(value as 'recording' | 'minutes')} className="grid min-w-0 gap-3 sm:grid-cols-2">
+                <ToggleGroupItem value="recording" className="h-auto min-h-32 min-w-0 items-start justify-start whitespace-normal rounded-2xl border p-5 text-left data-[state=on]:border-foreground data-[state=on]:bg-foreground data-[state=on]:text-background"><span className="flex min-w-0 items-start gap-4"><span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted text-foreground"><Volume2 className="size-5" /></span><span className="min-w-0"><strong className="block text-base leading-6">{zh ? '会议记录' : 'Meeting recording'}</strong><span className="mt-1.5 block text-sm leading-6 opacity-70">{zh ? '保存音频或屏幕录像，之后再决定如何使用。' : 'Save audio or screen video for later use.'}</span></span></span></ToggleGroupItem>
+                <ToggleGroupItem value="minutes" className="h-auto min-h-32 min-w-0 items-start justify-start whitespace-normal rounded-2xl border p-5 text-left data-[state=on]:border-foreground data-[state=on]:bg-foreground data-[state=on]:text-background"><span className="flex min-w-0 items-start gap-4"><span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted text-foreground"><Sparkles className="size-5" /></span><span className="min-w-0"><strong className="block text-base leading-6">{zh ? '生成会议纪要' : 'Generate meeting notes'}</strong><span className="mt-1.5 block text-sm leading-6 opacity-70">{zh ? '录制期间只保存媒体，结束后自动转写、区分说话人并生成纪要。' : 'Record first, then transcribe and generate notes automatically.'}</span></span></span></ToggleGroupItem>
+              </ToggleGroup>
+            </section>
+
+            <section className="min-w-0">
+              <div className="mb-5 flex items-start gap-4"><span className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-sm font-semibold">2</span><div className="min-w-0"><h3 className="font-semibold">{zh ? '选择录制范围' : 'Choose the capture range'}</h3><p className="mt-1 text-sm leading-6 text-muted-foreground">{zh ? '录音只采集麦克风；录屏会让你选择屏幕或窗口。' : 'Audio captures the microphone; screen recording opens the picker.'}</p></div></div>
+              <ToggleGroup type="single" value={meetingType} onValueChange={value => value && setMeetingType(value as 'audio' | 'video')} className="grid min-w-0 gap-3 sm:grid-cols-2">
+                <ToggleGroupItem value="audio" className="h-auto min-h-24 min-w-0 items-start justify-start whitespace-normal rounded-2xl border p-4 text-left data-[state=on]:border-foreground data-[state=on]:bg-muted"><span className="flex min-w-0 items-start gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-background shadow-sm"><Mic2 className="size-4" /></span><span className="min-w-0"><strong className="block leading-6">{mode === 'minutes' ? (zh ? '语音会议' : 'Audio meeting') : (zh ? '仅录音' : 'Audio only')}</strong><span className="mt-1 block text-xs leading-5 text-muted-foreground">{zh ? '使用麦克风记录现场声音' : 'Capture sound from the microphone'}</span></span></span></ToggleGroupItem>
+                <ToggleGroupItem value="video" className="h-auto min-h-24 min-w-0 items-start justify-start whitespace-normal rounded-2xl border p-4 text-left data-[state=on]:border-foreground data-[state=on]:bg-muted"><span className="flex min-w-0 items-start gap-3"><span className="grid size-9 shrink-0 place-items-center rounded-xl bg-background shadow-sm"><Monitor className="size-4" /></span><span className="min-w-0"><strong className="block leading-6">{mode === 'minutes' ? (zh ? '视频会议' : 'Video meeting') : (zh ? '录音和屏幕' : 'Audio and screen')}</strong><span className="mt-1 block text-xs leading-5 text-muted-foreground">{zh ? '记录屏幕画面，并通过麦克风收录现场可听声音' : 'Capture the screen and audible meeting sound through the microphone'}</span></span></span></ToggleGroupItem>
+              </ToggleGroup>
+            </section>
+          </div>
+
+          <div className="flex min-w-0 flex-col gap-8 bg-muted/[0.16] px-6 py-8 sm:px-8 lg:px-10">
+            <section className="min-w-0">
+              <div className="mb-5 flex items-start gap-4"><span className="grid size-8 shrink-0 place-items-center rounded-full bg-muted text-sm font-semibold">3</span><div className="min-w-0"><h3 className="font-semibold">{zh ? '确认会议信息' : 'Confirm meeting details'}</h3><p className="mt-1 text-sm leading-6 text-muted-foreground">{zh ? '名称可以留空，保存后仍可修改。' : 'The name is optional and can be changed later.'}</p></div></div>
+              <Field><FieldLabel>{zh ? '会议名称（可选）' : 'Meeting name (optional)'}</FieldLabel><Input className="h-12 min-w-0" maxLength={160} disabled={busy} value={options.title} onChange={event => setOptions({ ...options, title: event.target.value })} placeholder={zh ? '例如：产品方案评审' : 'e.g. Product review'} /></Field>
+            </section>
+            <section className="min-w-0 border-t pt-7">
+              <Field><div className="flex flex-wrap items-center justify-between gap-2"><FieldLabel>{zh ? '麦克风' : 'Microphone'}</FieldLabel><Button variant="ghost" size="sm" className="shrink-0" disabled={busy} onClick={() => void refreshDevices()}>{zh ? '检测设备' : 'Check device'}</Button></div><Select disabled={busy} value={options.microphoneId || 'default'} onValueChange={value => setOptions({ ...options, microphoneId: value === 'default' ? '' : value })}><SelectTrigger className="h-12 min-w-0"><SelectValue className="truncate" /></SelectTrigger><SelectContent><SelectItem value="default">{zh ? '系统默认麦克风' : 'Default microphone'}</SelectItem>{devices.filter(device => device.deviceId && device.deviceId !== 'default').map((device, index) => <SelectItem key={device.deviceId} value={device.deviceId}>{device.label || 'Microphone ' + String(index + 1)}</SelectItem>)}</SelectContent></Select></Field>
+              <p className="mt-4 text-sm leading-6 text-muted-foreground">{meetingType === 'video' ? (zh ? '麦克风会记录你和现场可听到的会议声音；屏幕选择只决定录制哪部分画面。' : 'The microphone captures audible meeting sound; screen selection only chooses the picture.') : mode === 'minutes' ? (zh ? '录制期间不连接转写服务；静音和停顿不会中断录制。' : 'No transcription service runs while recording; silence does not stop capture.') : (zh ? '结束后可回放、下载文件，或稍后主动生成纪要。' : 'Replay, save as, or generate notes later.')}</p>
+            </section>
+          </div>
+        </div>
+
+        <div className="border-t px-6 py-5 sm:px-8 lg:px-10">{diarizationReady === false ? <Alert className="mb-4"><AlertDescription>{zh ? '说话人识别服务当前不可用，但仍可正常录制并稍后重试生成。' : 'Speaker identification is unavailable, but recording still works.'}</AlertDescription></Alert> : null}{error || session.error ? <Alert variant="destructive" className="mb-4"><AlertDescription>{error || session.error}</AlertDescription></Alert> : null}<div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between"><div className="min-w-0"><p className="font-medium">{mode === 'minutes' ? (zh ? '保存后自动生成会议纪要' : 'Generate meeting notes after saving') : (zh ? '保存会议记录' : 'Save meeting recording')}</p><p className="mt-1 text-sm leading-6 text-muted-foreground">{meetingType === 'video' ? (zh ? '下一步只需选择要录制的屏幕或窗口；声音由当前麦克风记录。' : 'Next, choose a screen or window. Sound is recorded by the microphone.') : zh ? '保存到 ' + workspace + '，录制结束前不会上传媒体。' : 'Save to ' + workspace + '. Media is not uploaded before recording ends.'}</p></div><Button size="lg" disabled={busy} className="motion-sheen h-12 w-full shrink-0 rounded-full px-7 sm:w-auto sm:min-w-52" onClick={startRecording}><Mic2 data-icon="inline-start" />{mode === 'minutes' ? meetingType === 'video' ? (zh ? '选择屏幕并开始' : 'Choose screen and start') : (zh ? '开始语音会议' : 'Start audio meeting') : meetingType === 'video' ? (zh ? '选择屏幕并开始' : 'Choose screen and start') : (zh ? '开始录音' : 'Start audio recording')}</Button></div></div>
+      </article>
+    </section>}
+
+    {!isCapturing ? <section className="motion-rise space-y-6" style={{ animationDelay: '140ms' }}><div><h2 className="text-2xl font-semibold tracking-tight">{zh ? '最近的会议内容' : 'Recent meeting content'}</h2><p className="mt-2 text-sm text-muted-foreground">{zh ? '录制先保存在本机；需要时再生成会议纪要。' : 'Recordings stay local until you generate notes.'}</p></div><Tabs defaultValue="recordings" className="grid gap-6"><TabsList className="w-fit"><TabsTrigger value="recordings">{zh ? '本地录制' : 'Local recordings'}<Badge variant="secondary" className="ml-2">{workspacePending.length}</Badge></TabsTrigger><TabsTrigger value="notes">{zh ? '会议纪要' : 'Meeting notes'}<Badge variant="secondary" className="ml-2">{meetingNotes.length}</Badge></TabsTrigger></TabsList><TabsContent value="recordings" className="m-0 grid gap-4 sm:grid-cols-2">{workspacePending.map(item => <LocalRecordingCard key={item.id} recording={item} onOpenNote={noteId => navigate('/note/' + noteId)} onDeleted={() => setPending(items => items.filter(entry => entry.id !== item.id))} />)}{workspacePending.length === 0 ? <div className="rounded-[1.75rem] border border-dashed bg-muted/10 sm:col-span-2"><Empty><EmptyHeader><EmptyMedia variant="icon"><FileText /></EmptyMedia><EmptyTitle>{zh ? '还没有本地录制' : 'No local recordings'}</EmptyTitle><EmptyDescription>{zh ? '结束录制后会保存在这里，可回放、下载或生成会议纪要。' : 'Finished recordings appear here.'}</EmptyDescription></EmptyHeader></Empty></div> : null}</TabsContent><TabsContent value="notes" className="m-0"><NoteGrid notes={meetingNotes} loading={loading} emptyTitle={zh ? '还没有会议纪要' : 'No meeting notes yet'} emptyBody={zh ? '从本地录制生成，或导入已有会议文件。' : 'Generate from a local recording or import a meeting.'} onOpen={note => navigate('/note/' + note.id)} /></TabsContent></Tabs></section> : null}
   </div>
 }

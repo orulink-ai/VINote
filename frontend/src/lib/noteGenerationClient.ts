@@ -13,6 +13,15 @@ export interface TaskStatusResponse {
   task_id?: string
   status: string
   message: string
+  stage?: string
+  progress?: number
+  processed_seconds?: number
+  total_seconds?: number
+  eta_seconds?: number
+  updated_at?: string
+  retryable?: boolean
+  failed_stage?: string
+  attempt?: number
   result?: {
     task_id: string
     title: string
@@ -34,6 +43,9 @@ export interface UploadGenerationInput {
   speakerCount?: number
   workflow?: 'meeting' | 'note_organization'
   traceSource?: 'desktop_recording' | 'local_file'
+  meetingSessionId?: string
+  meetingMode?: 'recording' | 'minutes'
+  meetingType?: 'audio' | 'video'
 }
 
 export async function submitUploadedSource(input: UploadGenerationInput) {
@@ -46,8 +58,11 @@ export async function submitUploadedSource(input: UploadGenerationInput) {
   formData.append('summary_mode', input.summaryMode)
   formData.append('workflow', input.workflow || 'note_organization')
   formData.append('trace_source', input.traceSource || 'local_file')
-  if (input.sourceType !== 'transcript') formData.append('diarize', 'true')
+  if (input.diarize !== undefined) formData.append('diarize', String(input.diarize))
   if (input.speakerCount) formData.append('speaker_count', String(input.speakerCount))
+  if (input.meetingSessionId) formData.append('meeting_session_id', input.meetingSessionId)
+  if (input.meetingMode) formData.append('meeting_mode', input.meetingMode)
+  if (input.meetingType) formData.append('meeting_type', input.meetingType)
 
   if (input.outputLanguage) {
     formData.append('output_language', input.outputLanguage)

@@ -156,7 +156,7 @@ describe('ModelProfileManager', () => {
   it('opens the tested saved profile in the edit panel before showing connection feedback', async () => {
     renderWithI18n(<ModelProfileManager />)
 
-    const card = screen.getByText('Silicon Flow').closest('div.rounded-3xl') as HTMLElement
+    const card = screen.getByText('Silicon Flow').closest('div.border-b') as HTMLElement
     await userEvent.click(within(card).getByRole('button', { name: '测试连接' }))
 
     expect(modelStoreMock.state.testProfile).toHaveBeenCalledWith('silicon-flow')
@@ -184,8 +184,8 @@ describe('ModelProfileManager', () => {
     }
     renderWithI18n(<ModelProfileManager />)
 
-    const siliconCard = screen.getByText('Silicon Flow').closest('div.rounded-3xl') as HTMLElement
-    const openaiCard = screen.getByText('OpenAI Main').closest('div.rounded-3xl') as HTMLElement
+    const siliconCard = screen.getByText('Silicon Flow').closest('div.border-b') as HTMLElement
+    const openaiCard = screen.getByText('OpenAI Main').closest('div.border-b') as HTMLElement
 
     expect(within(siliconCard).getByText('连接成功，耗时 4013 ms')).toBeInTheDocument()
     expect(within(openaiCard).getByText('连接失败：invalid_api_key')).toBeInTheDocument()
@@ -194,7 +194,7 @@ describe('ModelProfileManager', () => {
   it('keeps the default model checkbox checked and locked while editing the current default profile', async () => {
     renderWithI18n(<ModelProfileManager />)
 
-    const card = screen.getByText('OpenAI Main').closest('div.rounded-3xl') as HTMLElement
+    const card = screen.getByText('OpenAI Main').closest('div.border-b') as HTMLElement
     await userEvent.click(within(card).getByRole('button', { name: '编辑' }))
 
     const defaultCheckbox = screen.getByRole('checkbox', {
@@ -207,7 +207,7 @@ describe('ModelProfileManager', () => {
   it('syncs the edit form when the profile being edited becomes the default', async () => {
     renderWithI18n(<ModelProfileManager />)
 
-    const card = screen.getByText('Silicon Flow').closest('div.rounded-3xl') as HTMLElement
+    const card = screen.getByText('Silicon Flow').closest('div.border-b') as HTMLElement
     await userEvent.click(within(card).getByRole('button', { name: '编辑' }))
     await userEvent.click(within(card).getByRole('button', { name: '设为默认' }))
 
@@ -220,7 +220,7 @@ describe('STTProfileManager', () => {
   it('keeps the default STT checkbox checked and locked while editing the current default profile', async () => {
     renderWithI18n(<STTProfileManager />)
 
-    const card = screen.getByText('New STT').closest('div.rounded-3xl') as HTMLElement
+    const card = screen.getByText('New STT').closest('div.border-b') as HTMLElement
     await userEvent.click(within(card).getByRole('button', { name: '编辑' }))
 
     const defaultCheckbox = screen.getByRole('checkbox', {
@@ -241,7 +241,7 @@ describe('STTProfileManager', () => {
     sttStoreMock.state.setDefaultProfile.mockResolvedValue(secondaryProfile)
     renderWithI18n(<STTProfileManager />)
 
-    const card = screen.getByText('Secondary STT').closest('div.rounded-3xl') as HTMLElement
+    const card = screen.getByText('Secondary STT').closest('div.border-b') as HTMLElement
     await userEvent.click(within(card).getByRole('button', { name: '编辑' }))
     await userEvent.click(within(card).getByRole('button', { name: '设为默认' }))
 

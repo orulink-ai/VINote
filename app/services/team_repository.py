@@ -1,7 +1,7 @@
-from sqlalchemy import select
+from sqlalchemy import delete, select, update
 
 from app.db import session_scope
-from app.db_models import TeamDB, TeamMemberDB, UserDB
+from app.db_models import NoteDB, TeamDB, TeamMemberDB, UserDB
 from app.models.team import TeamCreateRequest, TeamMemberCreateRequest, TeamMemberResponse, TeamSummaryResponse
 
 
@@ -123,6 +123,27 @@ class TeamRepository:
             db.delete(membership)
             db.flush()
             return self._build_team_response(db, team, current_user_id=requester_id)
+
+    def delete_team(self, requester_id: str, team_id: str) -> bool:
+        with session_scope() as db:
+            team = db.get(TeamDB, team_id)
+            if not team:
+                return False
+            if team.owner_id != requester_id:
+                raise PermissionError("Only the team owner can delete the team")
+
+            # Keep every member's work accessible after the shared space is removed.
+            # Each note remains owned by its original creator and returns to that
+            # creator's personal workspace.
+            db.execute(
+                update(NoteDB)
+                .where(NoteDB.team_id == team_id)
+                .values(scope="personal", team_id=None)
+            )
+            db.execute(delete(TeamMemberDB).where(TeamMemberDB.team_id == team_id))
+            db.delete(team)
+            db.flush()
+            return True
 
     def get_accessible_team_ids(self, user_id: str) -> list[str]:
         with session_scope() as db:
