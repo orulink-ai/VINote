@@ -394,6 +394,9 @@ class TranscriptionService:
         metadata = {**metadata, "stt_request_count": len(chunk_results),
                     "unrecognized_segments": [item for _, result in chunk_results
                                               for item in result.metadata.get("unrecognized_segments", [])]}
+        if any(result.full_text.strip() and result.metadata.get("timestamp_granularity") != "segment"
+               for _, result in chunk_results):
+            metadata["timestamp_granularity"] = "chunk"
         return TranscriptResult(
             language=language,
             full_text=full_text,

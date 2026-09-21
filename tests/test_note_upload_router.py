@@ -22,6 +22,7 @@ class GenerateFromUploadRouterTest(unittest.TestCase):
         self.client = TestClient(self.app)
 
     def tearDown(self):
+        note._ACTIVE_FILE_TASKS.clear()
         self.temp_dir.cleanup()
 
     def test_recording_artifacts_require_owner_or_accessible_note(self):
@@ -72,7 +73,9 @@ class GenerateFromUploadRouterTest(unittest.TestCase):
             self.assertEqual(first.status_code, 200, first.text)
             self.assertEqual(repeated.status_code, 200, repeated.text)
             self.assertEqual(first.json()["task_id"], repeated.json()["task_id"])
-            self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_count, 1)
+        # Reservation must exist before the scheduled worker starts.
+        self.assertIn(first.json()["task_id"], note._ACTIVE_FILE_TASKS)
 
     def test_generate_from_upload_preserves_audio_before_background_processing(self):
         fake_note_service = SimpleNamespace(artifact_service=self.artifact_service)

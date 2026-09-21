@@ -65,6 +65,18 @@ def align_transcript_to_speaker_turns(
         and bool(transcript.segments)
     )
     aligned: list[TranscriptSegment] = []
+    if transcript.metadata.get("timestamp_granularity") == "chunk":
+        # Whole-file-only ASR results still have trustworthy chunk boundaries.
+        # Estimate inside each boundary, never redistribute text across the meeting.
+        for segment in transcript.segments:
+            local_turns = [SpeakerTurn(max(segment.start, turn.start), min(segment.end, turn.end), turn.speaker_id)
+                           for turn in turns if min(segment.end, turn.end) > max(segment.start, turn.start)]
+            if not local_turns:
+                local_turns = [SpeakerTurn(segment.start, segment.end, "speaker_unknown")]
+            local, _ = align_transcript_to_speaker_turns(
+                TranscriptResult(transcript.language, segment.text, [], {"timestamp_granularity": "file"}), local_turns)
+            aligned.extend(local)
+        return aligned, "estimated_by_speaking_duration"
     if has_provider_timestamps:
         for segment in transcript.segments:
             if not segment.text.strip():
@@ -73,8 +85,8 @@ def align_transcript_to_speaker_turns(
                 (max(0.0, min(segment.end, turn.end) - max(segment.start, turn.start)), turn)
                 for turn in turns
             ]
-            overlap, selected = max(overlaps, key=lambda item: item[0])
-            speaker_id = selected.speaker_id if overlap > 0 else "speaker_unknown"
+            overlap, selected = max(overlaps, key=lambda item: item[0], default=(0, None))
+            speaker_id = selected.speaker_id if overlap > 0 and selected else "speaker_unknown"
             aligned.append(TranscriptSegment(
                 start=segment.start,
                 end=segment.end,

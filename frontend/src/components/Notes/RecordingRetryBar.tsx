@@ -3,7 +3,7 @@ import { AlertCircle, Loader2, RotateCcw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useI18n } from '../../lib/i18n'
-import { listPendingMeetings } from '../../lib/audioStorage'
+import { getPendingMeeting, listPendingMeetings } from '../../lib/audioStorage'
 import { processSavedMeeting } from '../../lib/meetingProcessing'
 import { useAuthStore } from '../../stores/authStore'
 import {
@@ -47,8 +47,10 @@ export function RecordingRetryBar({ note, onUpdated }: RecordingRetryBarProps) {
       const local = ownerId ? (await listPendingMeetings(ownerId)).find(item => item.taskId === note.taskId || item.draftNoteId === note.id) : undefined
       if (local) {
         await processSavedMeeting(local, language)
+        const result = await getPendingMeeting(local.id)
         const refreshed = await loadNoteById(note.id)
         if (refreshed) onUpdated(refreshed)
+        if (result?.processingStatus === 'failed') throw new Error(result.processingError || copy.meetingRecorder.unknownError)
         setStatus('idle')
         return
       }

@@ -755,6 +755,8 @@ async def generate_from_upload(
                 meeting_type=meeting_type,
             )
             _persist_file_request(task_dir, req, user.user_id if user else None, trace_context)
+            with _FILE_TASK_LOCK:
+                _ACTIVE_FILE_TASKS.add(task_id)
             background_tasks.add_task(
                 _run_task_from_file,
                 task_id=task_id,
