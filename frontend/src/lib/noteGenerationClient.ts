@@ -1,5 +1,4 @@
 import { apiJson } from './api'
-import type { LiveTranscriptDiagnostics } from '../types/liveTranscript'
 
 export type SummaryMode = 'default' | 'accurate' | 'oneshot'
 export type UploadSourceType = 'audio' | 'video' | 'transcript'
@@ -14,6 +13,15 @@ export interface TaskStatusResponse {
   task_id?: string
   status: string
   message: string
+  stage?: string
+  progress?: number
+  processed_seconds?: number
+  total_seconds?: number
+  eta_seconds?: number
+  updated_at?: string
+  retryable?: boolean
+  failed_stage?: string
+  attempt?: number
   result?: {
     task_id: string
     title: string
@@ -23,7 +31,6 @@ export interface TaskStatusResponse {
 
 export interface UploadGenerationInput {
   file: File
-  recordingFile?: File
   sourceType: UploadSourceType
   title: string
   style?: string
@@ -35,17 +42,15 @@ export interface UploadGenerationInput {
   diarize?: boolean
   speakerCount?: number
   workflow?: 'meeting' | 'note_organization'
-  traceSource?: 'desktop_recording' | 'desktop_live_transcript' | 'local_file'
+  traceSource?: 'desktop_recording' | 'local_file'
   meetingSessionId?: string
   meetingMode?: 'recording' | 'minutes'
   meetingType?: 'audio' | 'video'
-  realtimeDiagnostics?: LiveTranscriptDiagnostics
 }
 
 export async function submitUploadedSource(input: UploadGenerationInput) {
   const formData = new FormData()
   formData.append('file', input.file)
-  if (input.recordingFile) formData.append('recording', input.recordingFile)
   formData.append('source_type', input.sourceType)
   formData.append('title', input.title)
   formData.append('style', input.style || 'meeting')
@@ -58,7 +63,6 @@ export async function submitUploadedSource(input: UploadGenerationInput) {
   if (input.meetingSessionId) formData.append('meeting_session_id', input.meetingSessionId)
   if (input.meetingMode) formData.append('meeting_mode', input.meetingMode)
   if (input.meetingType) formData.append('meeting_type', input.meetingType)
-  if (input.realtimeDiagnostics) formData.append('realtime_diagnostics', JSON.stringify(input.realtimeDiagnostics))
 
   if (input.outputLanguage) {
     formData.append('output_language', input.outputLanguage)

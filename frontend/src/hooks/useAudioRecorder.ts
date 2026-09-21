@@ -4,8 +4,6 @@ import { captureDiagnostic, captureFailure } from '../lib/captureDiagnostics'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { requestDesktopMicrophoneAccess } from '../lib/desktopMicrophonePermission'
 import { checkMicrophoneReadiness, mapMicrophoneError } from '../lib/microphonePermission'
-import { VILabRealtimeClient } from '../lib/vilabRealtimeClient'
-import type { LiveTranscriptDiagnostics, LiveTranscriptSegment, LiveTranscriptStatus } from '../types/liveTranscript'
 
 type AudioRecorderStatus = 'idle' | 'requesting' | 'recording' | 'paused' | 'stopped' | 'failed'
 
@@ -35,10 +33,7 @@ export function useAudioRecorder() {
   const [preview, setPreview] = useState<MediaStream | null>(null)
   const [sizeBytes, setSizeBytes] = useState(0)
   const [sourceEnded, setSourceEnded] = useState(false)
-  const [liveStatus, setLiveStatus] = useState<LiveTranscriptStatus>('idle')
-  const [liveError, setLiveError] = useState('')
-  const [liveSegments, setLiveSegments] = useState<LiveTranscriptSegment[]>([])
-  const [liveDiagnostics, setLiveDiagnostics] = useState<LiveTranscriptDiagnostics>({ frameCount: 0, sentBytes: 0, partialCount: 0, finalCount: 0, audioDurationMs: 0 })
+  const [audioLevel, setAudioLevel] = useState(0)
   const recorderRef = useRef<MediaRecorder | null>(null)
   const streamRef = useRef<MediaStream | null>(null)
   const chunksRef = useRef<Blob[]>([])
@@ -49,30 +44,8 @@ export function useAudioRecorder() {
   const accumulatedMsRef = useRef(0)
   const mimeTypeRef = useRef('')
   const optionsRef = useRef<MeetingCaptureOptions | null>(null)
-  const realtimeRef = useRef<VILabRealtimeClient | null>(null)
-  const liveSegmentsRef = useRef<LiveTranscriptSegment[]>([])
-  const realtimeVersionRef = useRef(0)
-  const liveStateRef = useRef<{ status: LiveTranscriptStatus; error: string }>({ status: 'idle', error: '' })
-
-  const createRealtimeClient = useCallback(() => {
-    const version = ++realtimeVersionRef.current
-    return new VILabRealtimeClient({
-      onStatus: (next, nextError) => {
-        if (version !== realtimeVersionRef.current) return
-        liveStateRef.current = { status: next, error: nextError || '' }
-        setLiveStatus(next)
-        setLiveError(nextError || '')
-      },
-      onSegments: segments => {
-        if (version !== realtimeVersionRef.current) return
-        liveSegmentsRef.current = segments
-        setLiveSegments(segments)
-      },
-      onDiagnostics: diagnostics => {
-        if (version === realtimeVersionRef.current) setLiveDiagnostics(diagnostics)
-      },
-    }, liveSegmentsRef.current)
-  }, [])
+  const audioContextRef = useRef<AudioContext | null>(null)
+  const levelFrameRef = useRef<number | null>(null)
 
   const isSupported =
     typeof navigator !== 'undefined' &&
@@ -104,6 +77,11 @@ export function useAudioRecorder() {
   }, [clearTimer])
 
   const cleanupStream = useCallback(() => {
+    if (levelFrameRef.current !== null) cancelAnimationFrame(levelFrameRef.current)
+    levelFrameRef.current = null
+    void audioContextRef.current?.close().catch(() => undefined)
+    audioContextRef.current = null
+    setAudioLevel(0)
     captureCleanupRef.current?.()
     captureCleanupRef.current = null
     setPreview(null)
@@ -138,21 +116,13 @@ export function useAudioRecorder() {
     accumulatedMsRef.current = 0
     mimeTypeRef.current = ''
     optionsRef.current = null
-    realtimeVersionRef.current += 1
-    void realtimeRef.current?.cancel()
-    realtimeRef.current = null
     setElapsedSeconds(0)
     setSizeBytes(0)
     setSourceEnded(false)
     void diskRef.current?.remove()
     diskRef.current = null
     setError('')
-    liveStateRef.current = { status: 'idle', error: '' }
-    setLiveStatus('idle')
-    setLiveError('')
-    setLiveSegments([])
-    liveSegmentsRef.current = []
-    setLiveDiagnostics({ frameCount: 0, sentBytes: 0, partialCount: 0, finalCount: 0, audioDurationMs: 0 })
+    setAudioLevel(0)
     setStatus('idle')
   }, [cleanupStream, clearTimer, stopActiveRecorder])
 
@@ -205,6 +175,30 @@ export function useAudioRecorder() {
       if (stream.getAudioTracks().length === 0) {
         throw new Error('microphone_no-device')
       }
+      try {
+      const AudioContextCtor = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext
+      if (AudioContextCtor) {
+        const context = new AudioContextCtor()
+        audioContextRef.current = context
+        const analyser = context.createAnalyser()
+        analyser.fftSize = 256
+        context.createMediaStreamSource(stream).connect(analyser)
+        const samples = new Uint8Array(analyser.fftSize)
+        const readLevel = () => {
+          try { analyser.getByteTimeDomainData(samples) } catch { setAudioLevel(0); return }
+          let sum = 0
+          for (const sample of samples) { const normalized = (sample - 128) / 128; sum += normalized * normalized }
+          setAudioLevel(Math.min(1, Math.sqrt(sum / samples.length) * 4))
+          levelFrameRef.current = requestAnimationFrame(readLevel)
+        }
+        audioContextRef.current = context
+        readLevel()
+      }
+      } catch {
+        setAudioLevel(0)
+        void audioContextRef.current?.close().catch(() => undefined)
+        audioContextRef.current = null
+      }
       if (options?.screen) {
         captureDiagnostic('storage.opening')
         const disk = await createRecordingFile()
@@ -245,13 +239,6 @@ export function useAudioRecorder() {
       setStatus('recording')
       startTimer()
       optionsRef.current = options || null
-      if (options?.mode === 'minutes') {
-        const realtime = createRealtimeClient()
-        realtimeRef.current = realtime
-        void realtime.start(stream, options.sessionId).catch(() => {
-          // Realtime ASR is fail-open. The local MediaRecorder remains active.
-        })
-      }
       return true
     } catch (recordingError) {
       captureFailure('recorder.failed', recordingError, diagnosticStartedAt)
@@ -264,7 +251,7 @@ export function useAudioRecorder() {
       setStatus('failed')
       throw new Error(message)
     }
-  }, [captureElapsed, clearTimer, cleanupStream, createRealtimeClient, isSupported, reset, startTimer, stopActiveRecorder])
+  }, [captureElapsed, clearTimer, cleanupStream, isSupported, reset, startTimer, stopActiveRecorder])
 
   const pause = useCallback(() => {
     const recorder = recorderRef.current
@@ -273,12 +260,6 @@ export function useAudioRecorder() {
     }
 
     recorder.pause()
-    if (optionsRef.current?.mode === 'minutes') {
-      const version = realtimeVersionRef.current
-      void realtimeRef.current?.finish().finally(() => {
-        if (version === realtimeVersionRef.current) setLiveStatus('paused')
-      })
-    }
     captureElapsed()
     clearTimer()
     setStatus('paused')
@@ -291,16 +272,9 @@ export function useAudioRecorder() {
     }
 
     recorder.resume()
-    const stream = streamRef.current
-    const options = optionsRef.current
-    if (options?.mode === 'minutes' && stream) {
-      const realtime = createRealtimeClient()
-      realtimeRef.current = realtime
-      void realtime.start(stream, options.sessionId).catch(() => undefined)
-    }
     setStatus('recording')
     startTimer()
-  }, [createRealtimeClient, startTimer])
+  }, [startTimer])
 
   const stop = useCallback(async () => {
     const recorder = recorderRef.current
@@ -310,8 +284,6 @@ export function useAudioRecorder() {
 
     captureElapsed()
     clearTimer()
-    if (optionsRef.current?.mode === 'minutes') await realtimeRef.current?.finish().catch(() => undefined)
-
     return new Promise<Blob>((resolve, reject) => {
       let settled = false
       let fallbackTimer: ReturnType<typeof window.setTimeout> | null = null
@@ -396,25 +368,17 @@ export function useAudioRecorder() {
     clearTimer()
     stopActiveRecorder()
     cleanupStream()
-    realtimeVersionRef.current += 1
-    void realtimeRef.current?.cancel()
-    realtimeRef.current = null
     void diskRef.current?.remove()
   }, [cleanupStream, clearTimer, stopActiveRecorder])
 
   return {
-    getLiveSnapshot: () => ({ ...liveStateRef.current, diagnostics: realtimeRef.current?.getDiagnostics() }),
-    getLiveSegments: () => [...liveSegmentsRef.current],
     getRecordingFileName: () => diskRef.current?.name,
     retainRecordingFile: () => { diskRef.current = null },
     status,
     preview,
     sizeBytes,
     sourceEnded,
-    liveStatus,
-    liveError,
-    liveSegments,
-    liveDiagnostics,
+    audioLevel,
     elapsedSeconds,
     error,
     isSupported,

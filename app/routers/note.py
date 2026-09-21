@@ -6,6 +6,8 @@ import logging
 import math
 import re
 import uuid
+import threading
+from dataclasses import asdict, replace
 from pathlib import Path
 
 from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
@@ -25,6 +27,9 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["notes"])
 _note_service = NoteService()
+_FILE_TASK_LOCK = threading.RLock()
+_ACTIVE_FILE_TASKS: set[str] = set()
+_UPLOADING_MEETINGS: set[str] = set()
 
 _ALLOWED_OUTPUT_LANGUAGES = {"en", "zh-CN"}
 _ALLOWED_SUMMARY_MODES = {"default", "accurate", "oneshot"}
@@ -51,46 +56,6 @@ _ALLOWED_MEDIA_EXTENSIONS = {
     ".wmv",
 }
 _ALLOWED_TRANSCRIPT_EXTENSIONS = {".txt", ".vtt", ".srt", ".json", ".md"}
-_REALTIME_DIAGNOSTIC_FIELDS = {
-    "connectionLatencyMs",
-    "sessionStartLatencyMs",
-    "firstPartialLatencyMs",
-    "completionLatencyMs",
-    "frameCount",
-    "sentBytes",
-    "partialCount",
-    "finalCount",
-    "audioDurationMs",
-    "closeCode",
-    "errorCode",
-}
-
-
-def _parse_realtime_diagnostics(value: str | None) -> dict | None:
-    if not value:
-        return None
-    try:
-        raw = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise ValueError("realtime_diagnostics must be a JSON object.") from exc
-    if not isinstance(raw, dict):
-        raise ValueError("realtime_diagnostics must be a JSON object.")
-    result = {}
-    for key in _REALTIME_DIAGNOSTIC_FIELDS:
-        item = raw.get(key)
-        if item is None:
-            continue
-        if key == "errorCode":
-            if isinstance(item, str):
-                result[key] = item.strip()[:100]
-            continue
-        if isinstance(item, bool) or not isinstance(item, (int, float)):
-            continue
-        if math.isfinite(float(item)) and item >= 0:
-            result[key] = item
-    return result or None
-
-
 def _is_desktop_request(request: Request) -> bool:
     return request.headers.get("X-VINote-Client", "").strip().lower() == "desktop"
 
@@ -110,7 +75,6 @@ def _desktop_trace_context(
     meeting_session_id: str | None = None,
     meeting_mode: str | None = None,
     meeting_type: str | None = None,
-    realtime_diagnostics: dict | None = None,
 ) -> DesktopTraceContext | None:
     if not _is_desktop_request(request):
         return None
@@ -137,8 +101,8 @@ def _desktop_trace_context(
         payload["meeting_mode"] = meeting_mode
     if meeting_type in {"audio", "video"}:
         payload["meeting_type"] = meeting_type
-    if realtime_diagnostics:
-        payload["realtime_transcription"] = realtime_diagnostics
+    if normalized_workflow == "meeting" and meeting_session_id:
+        payload["recording_id"] = meeting_session_id.strip()[:128]
     return DesktopTraceContext(
         workflow=normalized_workflow,
         source=source,
@@ -484,8 +448,23 @@ def generate_note_sync(
     )
 
 
+def _require_recording_access(task_id: str, user: AuthenticatedUser | None):
+    folder = _note_service.artifact_service.find_task_dir(task_id)
+    owner_path = folder / "recording_owner" if folder else None
+    if not owner_path or not owner_path.exists():
+        return
+    if user and not owner_path.is_symlink() and owner_path.read_text(encoding="utf-8") == user.user_id:
+        return
+    if user:
+        from app.services.note_repository import NoteRepository
+        if NoteRepository().can_access_task(user.user_id, task_id):
+            return
+    raise HTTPException(404, "Task not found")
+
+
 @router.get("/task/{task_id}", response_model=TaskStatusResponse)
-def get_task_status(task_id: str):
+def get_task_status(task_id: str, user: AuthenticatedUser | None = Depends(get_optional_current_user)):
+    _require_recording_access(task_id, user)
     status_data = _note_service.get_status(task_id)
     status = status_data.get("status", "not_found")
     message = status_data.get("message", "")
@@ -502,12 +481,46 @@ def get_task_status(task_id: str):
                 video_id=result_data.get("video_id", ""),
                 summary_mode=result_data.get("summary_mode", "default"),
             )
-    return TaskStatusResponse(task_id=task_id, status=status, message=message, result=result,
-                              langfuse_trace_id=status_data.get("langfuse_trace_id"))
+    return TaskStatusResponse(
+        task_id=task_id, status=status, message=message, result=result,
+        langfuse_trace_id=status_data.get("langfuse_trace_id"),
+        stage=status_data.get("stage"), progress=status_data.get("progress"),
+        processed_seconds=status_data.get("processed_seconds"),
+        total_seconds=status_data.get("total_seconds"),
+        eta_seconds=status_data.get("eta_seconds"),
+        updated_at=status_data.get("updated_at"), retryable=status_data.get("retryable"),
+        failed_stage=status_data.get("failed_stage"), attempt=status_data.get("attempt"),
+    )
+
+
+@router.post("/task/{task_id}/retry")
+def retry_media_task(task_id: str, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
+    artifacts = _note_service.artifact_service
+    with _FILE_TASK_LOCK:
+        folder = artifacts.find_task_dir(task_id)
+        if not folder or not (folder / "recording_owner").exists() or (folder / "recording_owner").read_text(encoding="utf-8") != user.user_id:
+            raise HTTPException(404, "Task not found")
+        status = artifacts.get_status(task_id)
+        if task_id in _ACTIVE_FILE_TASKS or status.get("status") == "success":
+            return {"task_id": task_id, "status": status["status"]}
+        source = artifacts.resolve_source_media(folder)
+        if not source or not (folder / "request.json").exists():
+            raise HTTPException(409, "原任务缺少可恢复信息，请保留本地录制。")
+        saved = json.loads((folder / "request.json").read_text(encoding="utf-8"))
+        req = LocalFileRequest(**{**saved["request"], "file_path": str(source)})
+        trace = DesktopTraceContext(**saved["trace"]) if saved.get("trace") else None
+        if trace:
+            trace = replace(trace, input={**(trace.input or {}),
+                            "retry_attempt": (status.get("attempt") or 1) + 1})
+        artifacts.update_status(folder, "uploaded", "正在恢复会后处理", attempt=(status.get("attempt") or 1) + 1)
+        _ACTIVE_FILE_TASKS.add(task_id)
+        background_tasks.add_task(_run_task_from_file, task_id, req, user.user_id, trace)
+        return {"task_id": task_id, "status": "uploaded"}
 
 
 @router.get("/task/{task_id}/artifacts/{asset_path:path}", include_in_schema=False)
-def get_task_artifact(task_id: str, asset_path: str):
+def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | None = Depends(get_optional_current_user)):
+    _require_recording_access(task_id, user)
     task_dir = _note_service.artifact_service.find_task_dir(task_id)
     if not task_dir:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -614,7 +627,6 @@ async def generate_from_upload(
     background_tasks: BackgroundTasks,
     request: Request,
     file: UploadFile = File(...),
-    recording: UploadFile | None = File(None),
     source_type: str = Form("media"),
     diarize: bool = Form(False),
     speaker_count: int | None = Form(None, ge=1, le=20),
@@ -633,14 +645,12 @@ async def generate_from_upload(
     meeting_session_id: str | None = Form(None),
     meeting_mode: str | None = Form(None),
     meeting_type: str | None = Form(None),
-    realtime_diagnostics: str | None = Form(None),
     user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
     try:
         normalized_source_type = _normalize_source_type(source_type)
         normalized_summary_mode = _normalize_summary_mode(summary_mode)
         normalized_output_language = _normalize_output_language(output_language)
-        parsed_realtime_diagnostics = _parse_realtime_diagnostics(realtime_diagnostics)
         desktop_request = _is_desktop_request(request)
         diarize = diarize or (desktop_request and normalized_source_type != "transcript")
         if desktop_request:
@@ -656,28 +666,12 @@ async def generate_from_upload(
             if not file_bytes:
                 raise ValueError("Uploaded file is empty.")
             transcript = _build_transcript_from_upload(file.filename, file_bytes)
-            if recording is not None:
-                if not user:
-                    raise HTTPException(401, "保存会议录制需要登录")
-                _ensure_media_extension("audio", recording.filename)
-                task_dir = _note_service.artifact_service.create_task_dir(task_id)
-                media_dir = task_dir / "media"
-                media_dir.mkdir(parents=True, exist_ok=True)
-                suffix = Path(_sanitize_filename(recording.filename)).suffix.lower()
-                recording_path = media_dir / f"source_audio{suffix}"
-                with recording_path.open("wb") as destination:
-                    while chunk := await recording.read(1024 * 1024):
-                        destination.write(chunk)
-                if not recording_path.stat().st_size:
-                    raise ValueError("会议录音为空，无法保存")
-                _note_service.artifact_service.record_source_media(task_dir, recording_path, media_kind="audio")
-                (task_dir / "recording_owner").write_text(user.user_id, encoding="utf-8")
             trace_context = _desktop_trace_context(
                 request, workflow=workflow, source=trace_source, media_type="transcript",
                 title=title, filename=file.filename, size_bytes=len(file_bytes),
                 summary_mode=normalized_summary_mode, output_language=normalized_output_language,
                 meeting_session_id=meeting_session_id, meeting_mode=meeting_mode,
-                meeting_type=meeting_type, realtime_diagnostics=parsed_realtime_diagnostics,
+                meeting_type=meeting_type,
             )
             background_tasks.add_task(
                 _run_task_from_transcript,
@@ -698,6 +692,20 @@ async def generate_from_upload(
             )
         else:
             _ensure_media_extension(normalized_source_type, file.filename)
+            if workflow == "meeting" and meeting_session_id and user:
+                task_id = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(
+                    ["vinote-recording-task", user.user_id, meeting_session_id],
+                )))
+                artifacts = _note_service.artifact_service
+                with _FILE_TASK_LOCK:
+                    existing = artifacts.find_task_dir(task_id)
+                    if existing and (existing / "request.json").exists():
+                        return {"task_id": task_id, "status": artifacts.get_status(task_id)["status"]}
+                    # Only one upload may write this recording's source at a time.
+                    if task_id in _UPLOADING_MEETINGS:
+                        raise HTTPException(409, "这条录制正在上传，请稍后重试。") from None
+                    _UPLOADING_MEETINGS.add(task_id)
+                    reserved_upload = task_id
             task_dir = _note_service.artifact_service.create_task_dir(task_id)
             media_dir = task_dir / "media"
             media_dir.mkdir(parents=True, exist_ok=True)
@@ -744,8 +752,9 @@ async def generate_from_upload(
                 size_bytes=uploaded_size_bytes,
                 summary_mode=normalized_summary_mode, output_language=normalized_output_language,
                 meeting_session_id=meeting_session_id, meeting_mode=meeting_mode,
-                meeting_type=meeting_type, realtime_diagnostics=parsed_realtime_diagnostics,
+                meeting_type=meeting_type,
             )
+            _persist_file_request(task_dir, req, user.user_id if user else None, trace_context)
             background_tasks.add_task(
                 _run_task_from_file,
                 task_id=task_id,
@@ -761,6 +770,10 @@ async def generate_from_upload(
     except Exception as exc:
         logger.error("[API] generate_from_upload failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+    finally:
+        if "reserved_upload" in locals():
+            with _FILE_TASK_LOCK:
+                _UPLOADING_MEETINGS.discard(reserved_upload)
 
 
 @router.post("/generate_from_upload_sync", response_model=NoteResponse)
@@ -785,7 +798,6 @@ async def generate_from_upload_sync(
     meeting_session_id: str | None = Form(None),
     meeting_mode: str | None = Form(None),
     meeting_type: str | None = Form(None),
-    realtime_diagnostics: str | None = Form(None),
     user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
     task_id = str(uuid.uuid4())
@@ -793,7 +805,6 @@ async def generate_from_upload_sync(
         normalized_source_type = _normalize_source_type(source_type)
         normalized_summary_mode = _normalize_summary_mode(summary_mode)
         normalized_output_language = _normalize_output_language(output_language)
-        parsed_realtime_diagnostics = _parse_realtime_diagnostics(realtime_diagnostics)
         desktop_request = _is_desktop_request(request)
         diarize = diarize or (desktop_request and normalized_source_type != "transcript")
         if desktop_request:
@@ -811,7 +822,7 @@ async def generate_from_upload_sync(
                 title=title, filename=file.filename, size_bytes=len(file_bytes),
                 summary_mode=normalized_summary_mode, output_language=normalized_output_language,
                 meeting_session_id=meeting_session_id, meeting_mode=meeting_mode,
-                meeting_type=meeting_type, realtime_diagnostics=parsed_realtime_diagnostics,
+                meeting_type=meeting_type,
             )
             with desktop_trace(trace_context):
                 result = _note_service.generate_from_transcript(
@@ -871,7 +882,7 @@ async def generate_from_upload_sync(
                 size_bytes=uploaded_size_bytes,
                 summary_mode=normalized_summary_mode, output_language=normalized_output_language,
                 meeting_session_id=meeting_session_id, meeting_mode=meeting_mode,
-                meeting_type=meeting_type, realtime_diagnostics=parsed_realtime_diagnostics,
+                meeting_type=meeting_type,
             )
             with desktop_trace(trace_context):
                 result = _note_service.generate_from_file(
@@ -926,9 +937,23 @@ def _run_task(task_id: str, req: NoteRequest, user_id: str | None,
         logger.error("[Background] task failed task_id=%s error=%s", task_id, exc, exc_info=True)
 
 
+def _persist_file_request(task_dir: Path, req: LocalFileRequest, user_id: str | None,
+                          trace_context: DesktopTraceContext | None) -> None:
+    if user_id:
+        (task_dir / "recording_owner").write_text(user_id, encoding="utf-8")
+    _note_service.artifact_service.write_json(task_dir / "request.json", {
+        "request": req.model_dump(exclude={"api_key", "base_url", "model_name"}),
+        "trace": asdict(trace_context) if trace_context else None,
+    })
+
+
 def _run_task_from_file(task_id: str, req: LocalFileRequest, user_id: str | None,
                         trace_context: DesktopTraceContext | None = None):
+    with _FILE_TASK_LOCK:
+        _ACTIVE_FILE_TASKS.add(task_id)
     try:
+        task_dir = _note_service.artifact_service.create_task_dir(task_id)
+        _persist_file_request(task_dir, req, user_id, trace_context)
         with desktop_trace(trace_context):
             _note_service.generate_from_file(
                 file_path=req.file_path,
@@ -949,6 +974,16 @@ def _run_task_from_file(task_id: str, req: LocalFileRequest, user_id: str | None
             )
     except Exception as exc:
         logger.error("[Background] local task failed task_id=%s error=%s", task_id, exc, exc_info=True)
+        try:
+            artifacts = _note_service.artifact_service
+            folder = artifacts.find_task_dir(task_id)
+            if folder and artifacts.get_status(task_id).get("status") != "failed":
+                artifacts.update_status(folder, "failed", "会后处理异常中断，请重试。", retryable=True)
+        except Exception:
+            logger.exception("[Background] cannot persist failure task_id=%s", task_id)
+    finally:
+        with _FILE_TASK_LOCK:
+            _ACTIVE_FILE_TASKS.discard(task_id)
 
 
 def _run_task_from_transcript(

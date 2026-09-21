@@ -1,7 +1,7 @@
 import { Input } from '../components/ui/input'
 import { Textarea } from '../components/ui/textarea'
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Download, Edit3, Eye, FileText, MessageSquare, Trash2, Save, Share2 } from 'lucide-react'
+import { ArrowLeft, Copy, Download, Edit3, Eye, FileText, MessageSquare, Trash2, Save, Share2 } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { MarkdownContent } from '../components/Markdown/MarkdownContent'
 import { KeyMomentsRail } from '../components/Notes/KeyMomentsRail'
@@ -401,6 +401,17 @@ export function NoteEditor() {
     await handleShare()
   }
 
+  const selectedText = () => noteView === 'transcript' && transcriptEvidence
+    ? renderTranscriptMarkdown(transcriptEvidence, transcriptTextMode) : content
+
+  const handleCopyBody = async () => {
+    try {
+      await navigator.clipboard.writeText(selectedText())
+    } catch {
+      setError(zh ? '无法复制正文，请检查剪贴板权限或下载正文。' : 'Could not copy text. Check clipboard permission or download it.')
+    }
+  }
+
   const handleExport = () => {
     const baseTitle = localTitle.trim() || 'note'
     const exportingTranscript = noteView === 'transcript' && Boolean(transcriptEvidence?.segments.length)
@@ -546,6 +557,10 @@ export function NoteEditor() {
             <ToggleGroupItem value="summary"><FileText />{zh ? '纪要' : 'Summary'}</ToggleGroupItem>
             <ToggleGroupItem value="transcript"><MessageSquare />{zh ? '逐字稿' : 'Transcript'}</ToggleGroupItem>
           </ToggleGroup>
+          <Button
+            onClick={() => void handleCopyBody()} variant="outline" size="icon"
+            title={zh ? '复制正文' : 'Copy text'} aria-label={zh ? '复制正文' : 'Copy text'}
+          ><Copy className="size-5" /></Button>
           <Button
             onClick={() => void handleSave()}
             variant="outline" size="icon"

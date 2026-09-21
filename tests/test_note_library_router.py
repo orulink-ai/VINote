@@ -67,6 +67,28 @@ class NoteLibraryRouterTest(unittest.TestCase):
         finally:
             db.close()
 
+    def test_meeting_save_retry_reuses_note_without_overwriting_content(self):
+        with patch("app.services.note_repository.session_scope", self._session_scope):
+            payload = NoteCreateRequest(title="会议", content="已编辑内容",
+                                        task_id="meeting-task", source_type="meeting_recording")
+            first = self.repository.create_note("user-1", payload)
+            repeated = self.repository.create_note("user-1", payload.model_copy(update={"content": "旧草稿"}))
+            other = self.repository.create_note("user-2", payload)
+            self.assertEqual(first.id, repeated.id)
+            self.assertEqual(repeated.content, "已编辑内容")
+            self.assertNotEqual(first.id, other.id)
+            self.assertEqual(len(self.repository.list_notes("user-1")), 1)
+
+    def test_failed_processing_status_preserves_edited_draft(self):
+        with patch("app.services.note_repository.session_scope", self._session_scope):
+            note = self.repository.create_note("user-1", NoteCreateRequest(
+                title="用户修改的标题", content="需要保留的正文", status="pending"))
+            response = self.client.patch(f"/api/notes/{note.id}", json={"status": "failed"})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(response.json()["status"], "failed")
+            self.assertEqual(response.json()["title"], "用户修改的标题")
+            self.assertEqual(response.json()["content"], "需要保留的正文")
+
     def test_get_note_media_streams_task_audio(self):
         media_file = self.media_dir / "episode.mp3"
         media_file.write_bytes(b"fake-audio")

@@ -56,6 +56,8 @@ def main():
     started = time.monotonic()
     meeting = args.workflow == "meeting"
     diarize = not args.no_diarize
+    is_video = args.file.suffix.lower() in {'.mp4', '.webm', '.mov', '.mkv'} and (
+        mimetypes.guess_type(args.file.name)[0] or '').startswith('video/')
     with TestClient(app) as client:
         client.cookies.set(settings.auth_cookie_name, create_access_token(user))
         capability = client.get("/api/meeting-capabilities")
@@ -66,7 +68,7 @@ def main():
             response = client.post("/api/generate_from_upload", headers={
                 "X-VINote-Client": "desktop", "X-VINote-Client-Version": "source-live-check",
             }, data={
-                "source_type": "audio", "diarize": "true" if diarize else "false",
+                "source_type": "video" if is_video else "audio", "diarize": "true" if diarize else "false",
                 **({"speaker_count": str(args.speakers)} if args.speakers else {}),
                 "style": "meeting" if meeting else "detailed",
                 "workflow": args.workflow, "trace_source": "local_file",
@@ -111,10 +113,10 @@ def main():
         if diarize:
             names = {item.get("name") for item in observations}
             assert {"说话人检测", "说话人聚类"} <= names, names
-            assert len(stt_calls) == 1, stt_calls
-            stt_input = stt_calls[0].get("input") or {}
-            assert stt_input.get("transcription_scope") == "complete_recording", stt_input
-            assert stt_input.get("diarization_turn_count", 0) > 0, stt_input
+            for call in stt_calls:
+                stt_input = call.get("input") or {}
+                assert stt_input.get("transcription_scope") == "complete_recording", stt_input
+                assert stt_input.get("diarization_turn_count", 0) > 0, stt_input
         llm_calls = [item for item in observations if item.get("type") == "GENERATION"
                      and item.get("name", "").startswith("LLM｜")]
         assert llm_calls and all(item.get("model") and item.get("input") is not None
@@ -122,7 +124,7 @@ def main():
         generated = result["result"]
         saved = client.post("/api/notes", json={
             "title": generated["title"], "content": generated["markdown"],
-            "task_id": task_id, "source_type": "meeting_recording" if meeting else "audio",
+            "task_id": task_id, "source_type": ("meeting_video" if is_video else "meeting_recording") if meeting else "audio",
             "status": "done", "scope": "personal",
         })
         saved.raise_for_status()

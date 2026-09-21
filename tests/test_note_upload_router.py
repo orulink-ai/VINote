@@ -24,6 +24,56 @@ class GenerateFromUploadRouterTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
+    def test_recording_artifacts_require_owner_or_accessible_note(self):
+        task = self.artifact_service.create_task_dir("private-recording")
+        self.artifact_service.update_status(task, "uploaded", "Saved")
+        (task / "recording_owner").write_text("owner", encoding="utf-8")
+        (task / "media").mkdir()
+        (task / "media" / "source_audio.wav").write_bytes(b"private-audio")
+        url = "/api/task/private-recording/artifacts/media/source_audio.wav"
+        with patch.object(note, "_note_service", SimpleNamespace(artifact_service=self.artifact_service)):
+            self.app.dependency_overrides[note.get_optional_current_user] = lambda: None
+            self.assertEqual(self.client.get(url).status_code, 404)
+            self.app.dependency_overrides[note.get_optional_current_user] = lambda: SimpleNamespace(user_id="owner")
+            self.assertEqual(self.client.get(url).content, b"private-audio")
+            self.app.dependency_overrides[note.get_optional_current_user] = lambda: SimpleNamespace(user_id="member")
+            with patch("app.services.note_repository.NoteRepository.can_access_task", return_value=False):
+                self.assertEqual(self.client.get(url).status_code, 404)
+            with patch("app.services.note_repository.NoteRepository.can_access_task", return_value=True):
+                self.assertEqual(self.client.get(url).content, b"private-audio")
+
+    def test_retry_checks_owner_and_reuses_active_task(self):
+        self.app.dependency_overrides[note.get_current_user] = lambda: SimpleNamespace(user_id="owner")
+        task = self.artifact_service.create_task_dir("retry-task")
+        self.artifact_service.update_status(task, "failed", "cloud unavailable")
+        (task / "recording_owner").write_text("other", encoding="utf-8")
+        fake = SimpleNamespace(artifact_service=self.artifact_service)
+        with patch.object(note, "_note_service", fake):
+            self.assertEqual(self.client.post("/api/task/retry-task/retry").status_code, 404)
+            (task / "recording_owner").write_text("owner", encoding="utf-8")
+            self.assertEqual(self.client.post("/api/task/retry-task/retry").status_code, 409)
+            note._ACTIVE_FILE_TASKS.add("retry-task")
+            try:
+                with patch.object(note, "_run_task_from_file") as run:
+                    response = self.client.post("/api/task/retry-task/retry")
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.json()["task_id"], "retry-task")
+                    run.assert_not_called()
+            finally:
+                note._ACTIVE_FILE_TASKS.discard("retry-task")
+
+    def test_repeated_meeting_upload_reuses_task_after_lost_response(self):
+        self.app.dependency_overrides[note.get_optional_current_user] = lambda: SimpleNamespace(user_id="owner")
+        with patch.object(note, "_note_service", SimpleNamespace(artifact_service=self.artifact_service)), patch.object(note, "_run_task_from_file") as run:
+            arguments = dict(data={"source_type": "audio", "workflow": "meeting", "meeting_session_id": "recording-123"},
+                             files={"file": ("recording.wav", b"audio", "audio/wav")})
+            first = self.client.post("/api/generate_from_upload", **arguments)
+            repeated = self.client.post("/api/generate_from_upload", **arguments)
+            self.assertEqual(first.status_code, 200, first.text)
+            self.assertEqual(repeated.status_code, 200, repeated.text)
+            self.assertEqual(first.json()["task_id"], repeated.json()["task_id"])
+            self.assertEqual(run.call_count, 1)
+
     def test_generate_from_upload_preserves_audio_before_background_processing(self):
         fake_note_service = SimpleNamespace(artifact_service=self.artifact_service)
 
@@ -43,6 +93,9 @@ class GenerateFromUploadRouterTest(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         payload = response.json()
         self.assertEqual(payload["status"], "uploaded")
+        saved_request = json.loads((self.output_dir / payload["task_id"] / "request.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved_request["request"]["title"], "Meeting recording")
+        self.assertNotIn("api_key", saved_request["request"])
         task_id = payload["task_id"]
         audio_path = self.output_dir / task_id / "media" / "source_audio.webm"
         self.assertEqual(audio_path.read_bytes(), b"audio-bytes")
@@ -60,7 +113,7 @@ class GenerateFromUploadRouterTest(unittest.TestCase):
         self.assertEqual(kwargs["req"].title, "Meeting recording")
         self.assertFalse(kwargs["req"].diarize)
 
-    def test_transcript_upload_preserves_associated_recording(self):
+    def test_transcript_upload_ignores_legacy_live_attachment(self):
         self.app.dependency_overrides[note.get_optional_current_user] = lambda: SimpleNamespace(user_id="user-test")
         fake_service = SimpleNamespace(artifact_service=self.artifact_service)
         with patch.object(note, "_note_service", fake_service), patch.object(note, "_run_task_from_transcript") as run:
@@ -69,8 +122,7 @@ class GenerateFromUploadRouterTest(unittest.TestCase):
                        "recording": ("meeting.webm", b"original-audio", "audio/webm")})
         self.assertEqual(response.status_code, 200, response.text)
         task_dir = self.output_dir / response.json()["task_id"]
-        self.assertEqual((task_dir / "media/source_audio.webm").read_bytes(), b"original-audio")
-        self.assertEqual((task_dir / "recording_owner").read_text(), "user-test")
+        self.assertFalse((task_dir / "media/source_audio.webm").exists())
         run.assert_called_once()
 
     def test_desktop_media_upload_always_uses_automatic_diarization(self):

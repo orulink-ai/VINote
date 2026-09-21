@@ -39,8 +39,8 @@ class NoteCreateRequest(BaseModel):
 
 
 class NoteUpdateRequest(BaseModel):
-    title: str = Field(min_length=1, max_length=255)
-    content: str = ""
+    title: str | None = Field(default=None, min_length=1, max_length=255)
+    content: str | None = None
     status: str | None = None
 
 

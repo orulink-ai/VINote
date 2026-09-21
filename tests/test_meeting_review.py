@@ -39,6 +39,18 @@ def test_empty_review_does_not_silently_accept_unreviewed_draft():
         llm.summarize("Meeting", [TranscriptSegment(0, 1, "hello")], style="meeting")
 
 
+def test_speaker_attribution_reaches_draft_and_fact_review():
+    llm = ReviewLLM(["说话人1建议延期；说话人2不同意。", "说话人1建议延期；说话人2不同意。"])
+    llm.summarize("会议", [
+        TranscriptSegment(0, 3, "建议延期", speaker_id="speaker_1", speaker_label="说话人1"),
+        TranscriptSegment(4, 7, "不同意延期", speaker_id="speaker_2", speaker_label="说话人2"),
+    ], style="meeting")
+    for call in llm.calls:
+        assert "[说话人1] 建议延期" in call["user_prompt"]
+        assert "[说话人2] 不同意延期" in call["user_prompt"]
+    assert "preserve those exact labels" in llm.calls[1]["system_prompt"]
+
+
 def test_hierarchical_meeting_reviews_chunks_before_merge_and_final_result():
     llm = ReviewLLM(["draft one", "verified one", "draft two", "verified two",
                      "merged draft", "verified final"])

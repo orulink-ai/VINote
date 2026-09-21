@@ -1,12 +1,10 @@
 from typing import Literal
-from urllib.parse import urlencode, urlsplit, urlunsplit
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel, Field
 from app.services.cloud_account_service import CloudAccountService
 from app.services.auth_service import get_current_user
 from app.services.vilab_cloud_service import VILabCloudService
-from app.config import settings
 
 router = APIRouter(prefix="/vilab", tags=["vilab"])
 service = VILabCloudService()
@@ -69,31 +67,3 @@ def select_models(payload: Selection, user=Depends(get_current_user)):
 @router.put("/mode")
 def set_mode(payload: ModeSelection, user=Depends(get_current_user)):
     return service.set_mode(user.user_id, payload.mode)
-
-
-@router.get("/realtime-connection")
-def realtime_connection(response: Response, user=Depends(get_current_user)):
-    """Return a short-lived, user-scoped realtime ASR connection.
-
-    The deployment API key must never be exposed to the renderer. Realtime
-    capture therefore requires the signed-in VINote user to have linked their
-    personal cloud account.
-    """
-    origin = settings.vilab_server_url.strip().rstrip("/")
-    if not origin:
-        raise HTTPException(503, "云端实时转写服务尚未配置")
-    parsed = urlsplit(origin)
-    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise HTTPException(503, "云端实时转写服务地址无效")
-
-    model = service.defaults(user.user_id).get("asr_model")
-    if not model:
-        raise HTTPException(400, "请选择可用的云端语音转写模型")
-    service._validate_selection(service.models(user.user_id), model, "asr")
-    token = accounts.access_token(user.user_id)
-    websocket_scheme = "wss" if parsed.scheme == "https" else "ws"
-    base_path = parsed.path.rstrip("/")
-    path = f"{base_path}/v1/asr/transcriptions"
-    url = urlunsplit((websocket_scheme, parsed.netloc, path, urlencode({"token": token}), ""))
-    response.headers["Cache-Control"] = "no-store"
-    return {"url": url, "language": "zh-CN", "model": model}

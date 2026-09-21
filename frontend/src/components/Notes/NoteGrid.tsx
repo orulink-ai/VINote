@@ -6,7 +6,7 @@ import { useI18n } from '../../lib/i18n'
 import type { NoteRecord } from '../../stores/noteLibraryStore'
 
 interface NoteGridProps { notes: NoteRecord[]; loading?: boolean; emptyTitle: string; emptyBody: string; onOpen: (note: NoteRecord) => void }
-const failedRecording = (note: NoteRecord) => note.sourceType === 'meeting_recording' && ['transcribing_failed', 'generation_failed'].includes(note.status || '')
+const failedRecording = (note: NoteRecord) => ['meeting_recording', 'meeting_video'].includes(note.sourceType || '') && ['failed', 'transcribing_failed', 'generation_failed'].includes(note.status || '')
 
 export function NoteGrid({ notes, loading = false, emptyTitle, emptyBody, onOpen }: NoteGridProps) {
   const { copy, formatDate, locale } = useI18n()

@@ -1,4 +1,4 @@
-import { deleteLocalRecording, getRecordedAudio, savePendingMeeting } from '../../lib/audioStorage'
+import { deleteLocalRecording, getRecordedAudio, savePendingMeeting, saveRecordedAudio } from '../../lib/audioStorage'
 import { START_MEETING_EVENT, DEFAULT_CAPTURE_OPTIONS } from '../../lib/meetingCapture'
 import { render, screen, waitFor, act, fireEvent } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
@@ -9,36 +9,19 @@ import { I18nProvider } from '../../lib/i18n'
 import { useMeetingRecorderStore } from '../../stores/meetingRecorderStore'
 
 const navigate = vi.fn()
+const pendingRows = vi.hoisted(() => new Map<string, import('../../lib/audioStorage').PendingMeeting>())
 const audioRecorderMock = vi.hoisted(() => ({
   start: vi.fn(),
   pause: vi.fn(),
   resume: vi.fn(),
   stop: vi.fn(),
   reset: vi.fn(),
-  liveStatus: 'idle' as const,
-  liveError: '',
-  liveSegments: [] as Array<{
-    id: string
-    text: string
-    speaker?: string
-    startMs?: number
-    endMs?: number
-    final: boolean
-    kind?: 'speech' | 'background'
-  }>,
-  liveDiagnostics: {
-    frameCount: 0,
-    sentBytes: 0,
-    partialCount: 0,
-    finalCount: 0,
-    audioDurationMs: 0,
-  },
   getRecordingFileName: vi.fn(() => undefined),
   retainRecordingFile: vi.fn(),
 }))
 const meetingGenerationMock = vi.hoisted(() => ({
   submitMeetingRecording: vi.fn(),
-  submitMeetingTranscript: vi.fn(),
+  resumeMeetingTask: vi.fn(),
   completeMeetingRecordingGeneration: vi.fn(),
   fetchMeetingAudioBlob: vi.fn(),
 }))
@@ -84,10 +67,7 @@ vi.mock('../../hooks/useAudioRecorder', () => ({
     isSupported: true,
     elapsedSeconds: 0,
     error: '',
-    liveStatus: audioRecorderMock.liveStatus,
-    liveError: audioRecorderMock.liveError,
-    liveSegments: audioRecorderMock.liveSegments,
-    liveDiagnostics: audioRecorderMock.liveDiagnostics,
+    audioLevel: 0,
     start: audioRecorderMock.start,
     pause: audioRecorderMock.pause,
     resume: audioRecorderMock.resume,
@@ -99,7 +79,7 @@ vi.mock('../../hooks/useAudioRecorder', () => ({
 }))
 
 vi.mock('../../stores/authStore', () => ({
-  useAuthStore: () => ({ initialized: true, user: { id: 'user-1' } }),
+  useAuthStore: Object.assign(() => ({ initialized: true, user: { id: 'user-1' } }), { getState: () => ({ user: { id: 'user-1' } }) }),
 }))
 
 vi.mock('../../stores/languageStore', () => ({
@@ -111,7 +91,7 @@ vi.mock('../../stores/languageStore', () => ({
 }))
 
 vi.mock('../../stores/modelProfileStore', () => ({
-  useModelProfileStore: () => ({ selectedProfileId: '', loadProfiles: vi.fn() }),
+  useModelProfileStore: Object.assign(() => ({ selectedProfileId: '', loadProfiles: vi.fn() }), { getState: () => ({ selectedProfileId: '' }) }),
 }))
 
 vi.mock('../../stores/sttProfileStore', () => ({
@@ -131,7 +111,7 @@ vi.mock('../../stores/teamStore', () => ({
 }))
 
 vi.mock('../../stores/noteLibraryStore', () => ({
-  useNoteLibraryStore: () => ({ saveNote: saveNoteMock, updateNote: updateNoteMock }),
+  useNoteLibraryStore: Object.assign(() => ({ saveNote: saveNoteMock, updateNote: updateNoteMock }), { getState: () => ({ saveNote: saveNoteMock, updateNote: updateNoteMock }) }),
 }))
 
 vi.mock('../../lib/meetingGeneration', async (importOriginal) => {
@@ -139,7 +119,7 @@ vi.mock('../../lib/meetingGeneration', async (importOriginal) => {
   return {
     ...actual,
     submitMeetingRecording: meetingGenerationMock.submitMeetingRecording,
-    submitMeetingTranscript: meetingGenerationMock.submitMeetingTranscript,
+    resumeMeetingTask: meetingGenerationMock.resumeMeetingTask,
     completeMeetingRecordingGeneration: meetingGenerationMock.completeMeetingRecordingGeneration,
     fetchMeetingAudioBlob: meetingGenerationMock.fetchMeetingAudioBlob,
   }
@@ -166,7 +146,19 @@ function renderDock(props?: { autoStart?: boolean }) {
   )
 }
 
-vi.mock('../../lib/audioStorage', async (importOriginal) => ({ ...(await importOriginal<object>()), savePendingMeeting: vi.fn(), deletePendingMeeting: vi.fn(), deleteLocalRecording: vi.fn().mockResolvedValue(undefined), getRecordedAudio: vi.fn().mockResolvedValue(null) }))
+vi.mock('../../lib/audioStorage', async (importOriginal) => ({
+  ...(await importOriginal<object>()),
+  saveRecordedAudio: vi.fn().mockResolvedValue(undefined),
+  savePendingMeeting: vi.fn(async (row) => { pendingRows.set(row.id, row) }),
+  getPendingMeeting: vi.fn(async (id) => pendingRows.get(id) ?? null),
+  updatePendingMeeting: vi.fn(async (id, patch) => {
+    const next = { ...pendingRows.get(id), ...patch }
+    pendingRows.set(id, next)
+    return next
+  }),
+  deleteLocalRecording: vi.fn().mockResolvedValue(undefined),
+  getRecordedAudio: vi.fn().mockResolvedValue(null),
+}))
 
 async function startMeeting(options = DEFAULT_CAPTURE_OPTIONS) {
   act(() => { window.dispatchEvent(new CustomEvent(START_MEETING_EVENT, { detail: options })) })
@@ -184,19 +176,12 @@ async function restoreSavedRecording() {
 describe('MeetingRecorderDock', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    audioRecorderMock.liveSegments.splice(0, audioRecorderMock.liveSegments.length)
-    Object.assign(audioRecorderMock.liveDiagnostics, {
-      frameCount: 0,
-      sentBytes: 0,
-      partialCount: 0,
-      finalCount: 0,
-      audioDurationMs: 0,
-    })
+    pendingRows.clear()
     useMeetingRecorderStore.getState().resetSession()
     audioRecorderMock.start.mockResolvedValue(undefined)
     audioRecorderMock.stop.mockResolvedValue(new Blob(['audio'], { type: 'audio/webm' }))
     meetingGenerationMock.submitMeetingRecording.mockResolvedValue({ task_id: 'task-1' })
-    meetingGenerationMock.submitMeetingTranscript.mockResolvedValue({ task_id: 'task-live-1' })
+    meetingGenerationMock.resumeMeetingTask.mockResolvedValue({ task_id: 'task-1' })
     meetingGenerationMock.completeMeetingRecordingGeneration.mockImplementation(async ({ saveNote }) => saveNote('会议录音 2026/07/01', '# Summary'))
     saveNoteMock.mockResolvedValue({ id: 'draft-1', title: '会议录音', content: '# Draft', taskId: 'task-1', status: 'pending' })
     updateNoteMock.mockResolvedValue({ id: 'draft-1', title: '会议录音', content: '# Summary', taskId: 'task-1', status: 'done' })
@@ -240,21 +225,27 @@ describe('MeetingRecorderDock', () => {
     await waitFor(() => expect(savePendingMeeting).toHaveBeenCalled())
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/meetings'))
     expect(useMeetingRecorderStore.getState().recordedAudio).toBeUndefined()
-    expect(meetingGenerationMock.submitMeetingRecording).not.toHaveBeenCalled()
-    expect(meetingGenerationMock.submitMeetingTranscript).not.toHaveBeenCalled()
   })
 
-  it('uses confirmed live transcript to generate minutes after saving the recording', async () => {
-    audioRecorderMock.liveSegments.push({
-      id: 'segment-1',
-      text: '这是已经确认的实时转写。',
-      speaker: 'speaker-1',
-      startMs: 0,
-      endMs: 1800,
-      final: true,
-      kind: 'speech',
-    })
-    audioRecorderMock.liveDiagnostics.finalCount = 1
+  it('retries durable saving before any minutes upload when local storage fails', async () => {
+    vi.mocked(saveRecordedAudio).mockRejectedValueOnce(new Error('disk full'))
+    renderDock()
+    await startMeeting({ ...DEFAULT_CAPTURE_OPTIONS, mode: 'minutes' })
+    await userEvent.click(screen.getByRole('button', { name: '停止' }))
+    await waitFor(() => expect(useMeetingRecorderStore.getState().phase).toBe('failed'))
+    expect(useMeetingRecorderStore.getState().localRecordingSaved).toBe(false)
+    expect(useMeetingRecorderStore.getState().recordedAudio).toBeInstanceOf(Blob)
+    expect(meetingGenerationMock.submitMeetingRecording).not.toHaveBeenCalled()
+    expect(audioRecorderMock.retainRecordingFile).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('button', { name: '重试' }))
+    await waitFor(() => expect(meetingGenerationMock.submitMeetingRecording).toHaveBeenCalledOnce())
+    expect(saveRecordedAudio).toHaveBeenCalledTimes(2)
+    expect(savePendingMeeting).toHaveBeenCalledOnce()
+    expect(audioRecorderMock.stop).toHaveBeenCalledOnce()
+    expect(useMeetingRecorderStore.getState().phase).toBe('idle')
+  })
+
+  it('automatically processes complete audio only after durable saving', async () => {
     renderDock()
 
     await startMeeting({
@@ -266,26 +257,19 @@ describe('MeetingRecorderDock', () => {
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
 
     await waitFor(() => expect(savePendingMeeting).toHaveBeenCalled())
-    expect(meetingGenerationMock.submitMeetingTranscript).toHaveBeenCalledWith(
+    expect(meetingGenerationMock.submitMeetingRecording).toHaveBeenCalledWith(
       expect.objectContaining({
-        meetingSessionId: 'meeting-session-1',
+        meetingSessionId: vi.mocked(savePendingMeeting).mock.calls[0][0].id,
         meetingMode: 'minutes',
         meetingType: 'audio',
-        segments: [expect.objectContaining({ text: '这是已经确认的实时转写。', final: true })],
+        audioBlob: expect.any(Blob),
       }),
       expect.any(Object),
     )
-    expect(meetingGenerationMock.submitMeetingRecording).not.toHaveBeenCalled()
-    await waitFor(() => expect(deleteLocalRecording).toHaveBeenCalled())
+    expect(deleteLocalRecording).not.toHaveBeenCalled()
   })
 
-  it('automatically uploads minutes recording when live transcript has no confirmed segment', async () => {
-    audioRecorderMock.liveSegments.push({
-      id: 'partial-1',
-      text: '仍在识别中的内容',
-      final: false,
-      kind: 'speech',
-    })
+  it('automatically processes saved minutes without another click', async () => {
     renderDock()
 
     await startMeeting({
@@ -299,24 +283,21 @@ describe('MeetingRecorderDock', () => {
 
     await waitFor(() => expect(savePendingMeeting).toHaveBeenCalled())
     expect(vi.mocked(savePendingMeeting).mock.calls.at(-1)?.[0]).toEqual(
-      expect.objectContaining({ transcript: [] }),
+      expect.objectContaining({ recordingStatus: 'saved', processingStatus: 'queued' }),
     )
-    expect(meetingGenerationMock.submitMeetingTranscript).not.toHaveBeenCalled()
     await waitFor(() => expect(meetingGenerationMock.submitMeetingRecording).toHaveBeenCalled())
-    await waitFor(() => expect(deleteLocalRecording).toHaveBeenCalled())
+    expect(deleteLocalRecording).not.toHaveBeenCalled()
     await waitFor(() => expect(navigate).toHaveBeenCalledWith('/meetings'))
   })
 
-  it('uploads full video even when confirmed live speech is available', async () => {
-    audioRecorderMock.liveSegments.push({ id: 'final', text: '看屏幕上的图表', final: true })
+  it('uploads full video for post-recording analysis', async () => {
     audioRecorderMock.stop.mockResolvedValueOnce(new Blob(['video'], { type: 'video/webm' }))
     renderDock()
     await startMeeting({ ...DEFAULT_CAPTURE_OPTIONS, mode: 'minutes', meetingType: 'video', screen: true })
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
     await waitFor(() => expect(meetingGenerationMock.submitMeetingRecording).toHaveBeenCalledWith(
       expect.objectContaining({ audioBlob: expect.any(Blob), meetingType: 'video' }), expect.any(Object)))
-    expect(meetingGenerationMock.submitMeetingTranscript).not.toHaveBeenCalled()
-    await waitFor(() => expect(deleteLocalRecording).toHaveBeenCalled())
+    expect(deleteLocalRecording).not.toHaveBeenCalled()
   })
 
   it('closes native controls on terminal state and never adds a second launcher', async () => {
@@ -341,22 +322,18 @@ describe('MeetingRecorderDock', () => {
     desktopRecorderWindowMock.closeRecorderWindow.mockClear()
     act(() => window.dispatchEvent(new CustomEvent('vinote-meeting-controller-action', { detail: 'stop' })))
     await waitFor(() => expect(meetingGenerationMock.completeMeetingRecordingGeneration).toHaveBeenCalled())
-    expect(useMeetingRecorderStore.getState().localRecordingSaved).toBe(true)
+    expect(useMeetingRecorderStore.getState().phase).toBe('idle')
     expect(desktopRecorderWindowMock.closeRecorderWindow).toHaveBeenCalled()
     expect(screen.queryByRole('button', { name: '暂停' })).not.toBeInTheDocument()
+    await startMeeting({ ...DEFAULT_CAPTURE_OPTIONS, mode: 'recording' })
     await act(async () => rejectSummary(new Error('video analysis failed')))
-    await waitFor(() => expect(useMeetingRecorderStore.getState().phase).toBe('failed'))
+    await waitFor(() => expect([...pendingRows.values()][0].processingStatus).toBe('failed'))
+    expect(useMeetingRecorderStore.getState().phase).toBe('recording')
     expect(screen.queryByRole('region', { name: '会议录音' })).not.toBeInTheDocument()
     expect(deleteLocalRecording).not.toHaveBeenCalled()
   })
 
-  it('preserves the saved minutes recording when live-transcript summarization fails', async () => {
-    audioRecorderMock.liveSegments.push({
-      id: 'segment-failed',
-      text: '纪要生成失败时仍然保留录制。',
-      final: true,
-      kind: 'speech',
-    })
+  it('preserves the saved minutes recording when post-recording summarization fails', async () => {
     meetingGenerationMock.completeMeetingRecordingGeneration.mockRejectedValueOnce(new Error('summary failed'))
     renderDock()
 
@@ -369,8 +346,9 @@ describe('MeetingRecorderDock', () => {
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
 
     await waitFor(() => expect(savePendingMeeting).toHaveBeenCalled())
-    await waitFor(() => expect(meetingGenerationMock.submitMeetingTranscript).toHaveBeenCalled())
-    await waitFor(() => expect(useMeetingRecorderStore.getState().phase).toBe('failed'))
+    await waitFor(() => expect(meetingGenerationMock.submitMeetingRecording).toHaveBeenCalled())
+    await waitFor(() => expect([...pendingRows.values()][0].processingStatus).toBe('failed'))
+    expect(useMeetingRecorderStore.getState().phase).toBe('idle')
     expect(deleteLocalRecording).not.toHaveBeenCalled()
   })
 
@@ -447,7 +425,7 @@ describe('MeetingRecorderDock', () => {
     await waitFor(() => {
       expect(saveNoteMock).toHaveBeenCalledWith(
         expect.stringContaining('会议录音'),
-        expect.stringContaining('/api/task/task-1/artifacts/media/source_audio.webm'),
+        expect.stringContaining('原始媒体已保存'),
         undefined,
         'task-1',
         { scope: 'personal' },
@@ -456,7 +434,7 @@ describe('MeetingRecorderDock', () => {
       )
       expect(updateNoteMock).toHaveBeenCalledWith('draft-1', '会议录音 2026/07/01', '# Summary', 'done')
     })
-    expect(useMeetingRecorderStore.getState().phase).toBe('completed')
+    expect(useMeetingRecorderStore.getState().phase).toBe('idle')
     expect(screen.queryByRole('region', { name: '会议录音' })).not.toBeInTheDocument()
   })
 
@@ -468,17 +446,16 @@ describe('MeetingRecorderDock', () => {
     await userEvent.click(screen.getByRole('button', { name: '暂停' }))
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
     await restoreSavedRecording()
-    await waitFor(() => expect(useMeetingRecorderStore.getState().phase).toBe('failed'))
-    expect(useMeetingRecorderStore.getState().error).toContain('请先配置可用的 LLM 和 STT API Key')
-    expect(useMeetingRecorderStore.getState().recordedAudio).toBeInstanceOf(Blob)
-    expect(useMeetingRecorderStore.getState().localRecordingSaved).toBe(true)
+    await waitFor(() => expect([...pendingRows.values()][0].processingStatus).toBe('failed'))
+    expect([...pendingRows.values()][0].processingError).toContain('401')
+    expect(useMeetingRecorderStore.getState().phase).toBe('idle')
     expect(screen.queryByRole('region', { name: '会议录音' })).not.toBeInTheDocument()
     // A saved failure must not block restoring that recording again.
     vi.mocked(getRecordedAudio).mockResolvedValueOnce(new Blob(['audio'], { type: 'audio/webm' }))
     act(() => window.dispatchEvent(new CustomEvent('vinote-restore-meeting', {
       detail: vi.mocked(savePendingMeeting).mock.calls.at(-1)![0],
     })))
-    await waitFor(() => expect(meetingGenerationMock.submitMeetingRecording).toHaveBeenCalledTimes(2))
+    await waitFor(() => expect(meetingGenerationMock.resumeMeetingTask).toHaveBeenCalledWith('task-1'))
   })
 
   it('does not offer retry when the microphone produced no audio', async () => {
@@ -619,8 +596,9 @@ describe('MeetingRecorderDock', () => {
       expect(meetingGenerationMock.fetchMeetingAudioBlob).toHaveBeenCalledWith('task-recovered'),
     )
     await waitFor(() =>
-      expect(meetingGenerationMock.submitMeetingRecording).toHaveBeenCalled(),
+      expect(savePendingMeeting).toHaveBeenCalled(),
     )
+    expect(meetingGenerationMock.submitMeetingRecording).not.toHaveBeenCalled()
   })
 
   it('keeps the native recorder window at 132 px across all states, including discard confirmation', async () => {

@@ -440,13 +440,15 @@ class NoteService:
             audio_path=context.audio_meta.file_path,
             load_cached=lambda: self.artifact_service.load_transcript(context.task_dir),
             save_transcript=lambda result: self.artifact_service.save_transcript(context.task_dir, result),
-            update_status=lambda status, message: self.artifact_service.update_status(
+            update_status=lambda status, message, **details: self.artifact_service.update_status(
                 context.task_dir,
                 status,
                 message,
+                **details,
             ),
             user_id=context.user_id,
             stt_profile_id=context.stt_profile_id,
+            **({"chunk_cache_dir": context.task_dir / "transcription_chunks"} if context.diarize else {}),
             **({"diarize": True, "speaker_count": context.speaker_count} if context.diarize else {}),
         )
         context.step_timings["transcribe"] = time.time() - step_start
@@ -483,7 +485,7 @@ class NoteService:
                 video_path = self.artifact_service.resolve_source_media(context.task_dir)
                 if not video_path:
                     raise ValueError("找不到会议视频，无法分析画面")
-                self.artifact_service.update_status(context.task_dir, "summarizing", "正在分析会议视频画面…")
+                self.artifact_service.update_status(context.task_dir, "summarizing", "正在分析会议视频画面…", stage="analyzing_video")
                 visual_evidence = MeetingVideoAnalysisService().analyze(
                     video_path=video_path, duration=context.audio_meta.duration,
                     user_id=context.user_id, task_dir=context.task_dir,

@@ -1,5 +1,4 @@
 import { create } from 'zustand'
-import type { LiveTranscriptDiagnostics, LiveTranscriptSegment, LiveTranscriptStatus } from '../types/liveTranscript'
 import type { MeetingCaptureOptions } from '../lib/meetingCapture'
 
 export type MeetingRecorderPhase =
@@ -18,7 +17,11 @@ export type MeetingRecorderPhase =
 
 export type MeetingRecorderStage =
   | 'uploading'
+  | 'preparing_media'
   | 'transcribing'
+  | 'diarizing'
+  | 'aligning'
+  | 'analyzing_video'
   | 'summarizing'
   | 'saving'
 
@@ -49,10 +52,7 @@ interface MeetingRecorderState {
   localRecordingSaved: boolean
   notification: MeetingRecorderNotification | null
   captureOptions?: MeetingCaptureOptions
-  liveTranscriptStatus: LiveTranscriptStatus
-  liveTranscriptError: string
-  liveTranscriptSegments: LiveTranscriptSegment[]
-  liveTranscriptDiagnostics?: LiveTranscriptDiagnostics
+  audioLevel: number
   openPanel: () => void
   closePanel: () => void
   requestClose: () => void
@@ -111,15 +111,16 @@ const initialState = {
   localRecordingSaved: false,
   notification: null as MeetingRecorderNotification | null,
   captureOptions: undefined as MeetingCaptureOptions | undefined,
-  liveTranscriptStatus: 'idle' as LiveTranscriptStatus,
-  liveTranscriptError: '',
-  liveTranscriptSegments: [] as LiveTranscriptSegment[],
-  liveTranscriptDiagnostics: undefined as LiveTranscriptDiagnostics | undefined,
+  audioLevel: 0,
 }
 
 const retryDescriptions: Record<MeetingRecorderStage, string> = {
   uploading: '录制已经保存在本机，可重新上传并生成纪要。',
+  preparing_media: '原始录制已保留，可重试媒体准备。',
   transcribing: '录制已经保存在本机，可稍后重新转写。',
+  diarizing: '原始录制已保留，可重试本地说话人区分。',
+  aligning: '原始录制及有效产物已保留，可重试逐字稿对齐。',
+  analyzing_video: '原始录制及有效逐字稿已保留，可重试画面分析。',
   summarizing: '录制和可用逐字稿已经保存在本机，可稍后重新生成纪要。',
   saving: '生成结果尚未保存，可重新保存。',
 }
@@ -172,7 +173,7 @@ export const useMeetingRecorderStore = create<MeetingRecorderState>((set, get) =
     failedStage,
     error,
     retryDescription: retryDescriptions[failedStage],
-    isPanelOpen: true,
+    isPanelOpen: !state.localRecordingSaved,
     isMinimized: false,
     hasRecoverableRecording: hasRecoveryRisk({ ...state, phase: 'failed' }),
     notification: {

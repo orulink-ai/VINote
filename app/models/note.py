@@ -62,6 +62,15 @@ class TaskStatusResponse(BaseModel):
     message: str = ""
     result: Optional[NoteResponse] = None
     langfuse_trace_id: Optional[str] = None
+    stage: Optional[str] = None
+    progress: Optional[float] = None
+    processed_seconds: Optional[float] = None
+    total_seconds: Optional[float] = None
+    eta_seconds: Optional[float] = None
+    updated_at: Optional[str] = None
+    retryable: Optional[bool] = None
+    failed_stage: Optional[str] = None
+    attempt: Optional[int] = None
 
 
 @dataclass

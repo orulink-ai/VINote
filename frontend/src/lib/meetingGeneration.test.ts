@@ -5,9 +5,27 @@ import {
   completeMeetingRecordingGeneration,
   createMeetingRecordingTitle,
   submitMeetingRecording,
+  waitForMeetingTaskCompletion,
 } from './meetingGeneration'
 
 describe('meetingGeneration', () => {
+  it('keeps MP4 screen recordings named as video files', () => {
+    expect(buildMeetingRecordingFile(new Blob(['video'], { type: 'video/mp4' })).name).toMatch(/\.mp4$/)
+  })
+
+  it('forwards measured progress and preserves a terminal failure stage without polling forever', async () => {
+    const progress = { status: 'transcribing', processed_seconds: 30, total_seconds: 60, progress: 0.5, eta_seconds: 10 }
+    const fetchStatus = vi.fn().mockResolvedValueOnce(progress).mockResolvedValueOnce({
+      status: 'failed', stage: 'transcribing', failed_stage: 'aligning', message: 'alignment failed',
+    })
+    const onProgress = vi.fn()
+    const delay = vi.fn().mockResolvedValue(undefined)
+    await expect(waitForMeetingTaskCompletion({ taskId: 'task', fetchStatus, onProgress, delay })).rejects.toMatchObject({ stage: 'aligning' })
+    expect(onProgress).toHaveBeenCalledWith(progress)
+    expect(delay).toHaveBeenCalledTimes(1)
+    expect(fetchStatus).toHaveBeenCalledTimes(2)
+  })
+
   it('creates a stable meeting recording file from a browser audio blob', () => {
     const file = buildMeetingRecordingFile(
       new Blob(['audio'], { type: 'audio/webm;codecs=opus' }),

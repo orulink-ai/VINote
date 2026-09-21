@@ -20,6 +20,7 @@ from app.models.note import NoteResult
 from app.models.transcript import TranscriptResult, TranscriptSegment
 
 
+_WORKER_ID = uuid.uuid4().hex
 _STATUS_FILE_LOCK = threading.RLock()
 _WINDOWS_FILE_RETRY_DELAYS_SECONDS = (0.01, 0.02, 0.04, 0.08, 0.16, 0.25, 0.25, 0.25)
 
@@ -29,11 +30,14 @@ class TaskArtifactService:
         self.output_dir = output_dir or settings.output_dir
 
     def create_task_dir(self, task_id: str) -> Path:
-        task_dir = self.output_dir / task_id
+        task_dir = self.find_task_dir(task_id) if self.output_dir.exists() else None
+        task_dir = task_dir or self.output_dir / task_id
         task_dir.mkdir(parents=True, exist_ok=True)
         return task_dir
 
     def finalize_task_dir(self, task_dir: Path, title: str, task_id: str) -> Path:
+        if (task_dir / ".task_id").exists():
+            return task_dir
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         safe_title = self.sanitize_filename(title)
         new_dir_name = f"{timestamp}_{safe_title}"
@@ -169,15 +173,54 @@ class TaskArtifactService:
                 digest.update(chunk)
         return digest.hexdigest()
 
-    def update_status(self, task_dir: Path, status: str, message: str = "") -> None:
+    def update_status(
+        self,
+        task_dir: Path,
+        status: str,
+        message: str = "",
+        *,
+        stage: str | None = None,
+        progress: float | None = None,
+        processed_seconds: float | None = None,
+        total_seconds: float | None = None,
+        eta_seconds: float | None = None,
+        retryable: bool | None = None,
+        failed_stage: str | None = None,
+        attempt: int | None = None,
+    ) -> None:
         status_file = task_dir / "status.json"
-        payload = {"status": status, "message": message}
+        payload = {
+            "worker_id": _WORKER_ID,
+            "status": status,
+            "stage": stage or status,
+            "message": message,
+            "updated_at": datetime.now().astimezone().isoformat(),
+        }
+        if progress is not None:
+            payload["progress"] = max(0.0, min(1.0, float(progress)))
+        if processed_seconds is not None:
+            payload["processed_seconds"] = max(0.0, float(processed_seconds))
+        if total_seconds is not None:
+            payload["total_seconds"] = max(0.0, float(total_seconds))
+        if eta_seconds is not None:
+            payload["eta_seconds"] = max(0.0, float(eta_seconds))
+        if retryable is not None:
+            payload["retryable"] = retryable
+        if failed_stage:
+            payload["failed_stage"] = failed_stage
+        if attempt is not None:
+            payload["attempt"] = max(1, int(attempt))
         trace_id = current_trace_id()
         if trace_id:
             payload["langfuse_trace_id"] = trace_id
         temp_file = task_dir / f".{status_file.name}.{uuid.uuid4().hex}.tmp"
         with _STATUS_FILE_LOCK:
             try:
+                previous = json.loads(status_file.read_text(encoding="utf-8")) if status_file.exists() else {}
+                payload.setdefault("attempt", previous.get("attempt", 1))
+                if status == "failed":
+                    payload.setdefault("failed_stage", previous.get("failed_stage") or previous.get("stage"))
+                    payload.setdefault("retryable", True)
                 self.write_json(temp_file, payload)
                 self._replace_status_file(temp_file, status_file)
             finally:
@@ -215,6 +258,8 @@ class TaskArtifactService:
 
     def find_task_dir(self, task_id: str) -> Optional[Path]:
         with _STATUS_FILE_LOCK:
+            if not self.output_dir.exists():
+                return None
             direct_dir = self.output_dir / task_id
             if direct_dir.exists() and (direct_dir / "status.json").exists():
                 return direct_dir
@@ -235,7 +280,11 @@ class TaskArtifactService:
             status_file = task_dir / "status.json"
             if not status_file.exists():
                 return {"status": "not_found", "message": "Task not found"}
-            return json.loads(status_file.read_text(encoding="utf-8"))
+            payload = json.loads(status_file.read_text(encoding="utf-8"))
+            if payload.get("status") not in {"success", "failed", "not_found"} and payload.get("worker_id") != _WORKER_ID:
+                payload.update(status="failed", failed_stage=payload.get("stage"), retryable=True,
+                               message="处理服务已中断，原始媒体和已有产物已保留，请重试。")
+            return payload
 
     def get_result(self, task_id: str) -> Optional[dict]:
         task_dir = self.find_task_dir(task_id) or (self.output_dir / task_id)

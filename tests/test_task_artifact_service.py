@@ -13,6 +13,41 @@ from app.services.task_artifact_service import TaskArtifactService
 
 
 class TaskArtifactServiceTest(unittest.TestCase):
+    def test_failure_preserves_stage_and_retry_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = TaskArtifactService(Path(directory))
+            task = service.create_task_dir("retry")
+            service.update_status(task, "uploaded", attempt=2)
+            service.update_status(task, "transcribing", stage="diarizing")
+            service.update_status(task, "failed", "local model failed")
+            status = service.get_status("retry")
+            self.assertEqual(status["failed_stage"], "diarizing")
+            self.assertEqual(status["attempt"], 2)
+            self.assertTrue(status["retryable"])
+
+    def test_progress_is_cleared_when_stage_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = TaskArtifactService(Path(directory))
+            task = service.create_task_dir("progress")
+            service.update_status(task, "transcribing", progress=.5,
+                                  processed_seconds=30, total_seconds=60, eta_seconds=10)
+            status = service.get_status("progress")
+            self.assertEqual(status["progress"], .5)
+            self.assertEqual(status["eta_seconds"], 10)
+            service.update_status(task, "summarizing")
+            self.assertNotIn("eta_seconds", service.get_status("progress"))
+
+    def test_interrupted_worker_becomes_retryable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = TaskArtifactService(Path(directory))
+            task = service.create_task_dir("interrupted")
+            service.write_json(task / "status.json", {
+                "status": "transcribing", "stage": "transcribing", "worker_id": "old"})
+            status = service.get_status("interrupted")
+            self.assertEqual(status["status"], "failed")
+            self.assertEqual(status["failed_stage"], "transcribing")
+            self.assertTrue(status["retryable"])
+
     def test_status_replace_retries_transient_windows_permission_error(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             service = TaskArtifactService(Path(temp_dir))
