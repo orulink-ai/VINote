@@ -1,0 +1,3 @@
+[submodule "VINote-Mobile"]
+	path = VINote-Mobile
+	url = https://github.com/orulink-ai/VINote-Mobile.git
