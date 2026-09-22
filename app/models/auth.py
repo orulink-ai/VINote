@@ -19,6 +19,13 @@ class UserResponse(BaseModel):
     email: str
 
 
+class AuthResponse(UserResponse):
+    """登录结果；Cookie 供桌面端使用，Bearer Token 供移动端使用。"""
+
+    access_token: str
+    token_type: str = "bearer"
+
+
 class SessionResponse(BaseModel):
     authenticated: bool
     user: UserResponse | None = None
