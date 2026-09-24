@@ -2,6 +2,7 @@
 import base64
 import hashlib
 import json
+import logging
 import threading
 import time
 
@@ -40,7 +41,9 @@ def _request(path, payload=None, token=None, method=None):
                                  settings.cloud_auth_url + "/auth/v1/" + path,
                                  headers=headers, json=payload, timeout=20,
                                  follow_redirects=False)
-    except httpx.RequestError:
+    except httpx.RequestError as exc:
+        # 仅记录异常类型，避免输出请求头、密码或令牌。
+        logging.getLogger(__name__).warning("VINote account transport failed: %s", type(exc).__name__)
         raise HTTPException(502, "无法连接 VINote 账号服务") from None
     if not response.is_success:
         if response.status_code == 429:

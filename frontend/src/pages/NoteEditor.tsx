@@ -1,3 +1,4 @@
+import { noteOrigin } from '@/lib/noteOrigin'
 import { Input } from '../components/ui/input'
 import { Textarea } from '../components/ui/textarea'
 import { useEffect, useRef, useState } from 'react'
@@ -179,6 +180,7 @@ export function NoteEditor() {
   const [videoUrl, setVideoUrl] = useState('')
   const [taskId, setTaskId] = useState('')
   const [sourceType, setSourceType] = useState('')
+  const [generationClient, setGenerationClient] = useState<string | undefined>()
   const [noteScope, setNoteScope] = useState<'personal' | 'team'>('personal')
   const [noteWorkspaceName, setNoteWorkspaceName] = useState('')
   const [loading, setLoading] = useState(true)
@@ -254,6 +256,7 @@ export function NoteEditor() {
       setVideoUrl(note.videoUrl || '')
       setTaskId(note.taskId || '')
       setSourceType(note.sourceType || '')
+      setGenerationClient(note.generationClient)
       setNoteScope(note.scope)
       setNoteWorkspaceName(note.teamName || '')
       setCurrentNote(note)
@@ -541,6 +544,7 @@ export function NoteEditor() {
             </div>
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
               <Badge variant="secondary">{workspaceBadge}</Badge>
+              <Badge variant="outline">{noteOrigin(generationClient, locale.startsWith("zh"))}</Badge>
               {keyMoments.length} {zh ? '个可跳转关键时刻' : 'key moments'}
             </div>
           </div>

@@ -1,3 +1,4 @@
+import { noteOrigin } from '@/lib/noteOrigin'
 import { useEffect, useMemo, useState } from 'react'
 import { Grid2X2, List, Plus, Search } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
@@ -38,6 +39,6 @@ export function Notes() {
       <div className="flex gap-1"><Button variant={view==='grid'?'secondary':'ghost'} size="icon" onClick={() => setView('grid')}><Grid2X2/></Button><Button variant={view==='list'?'secondary':'ghost'} size="icon" onClick={() => setView('list')}><List/></Button></div>
     </div>
     <div className="flex items-center justify-between text-sm text-muted-foreground"><span>{zh ? `${filtered.length} 条笔记` : `${filtered.length} notes`}</span>{filter!=='all'?<Badge variant="secondary">{filters.find(item=>item[0]===filter)?.[1]}</Badge>:null}</div>
-    {view === 'grid' ? <NoteGrid notes={filtered} loading={loading} emptyTitle={copy.notes.emptyTitle} emptyBody={copy.notes.emptyBody} onOpen={note => navigate(`/note/${note.id}`)} /> : <section className="divide-y border-y">{filtered.map(note => <Button key={note.id} variant="ghost" onClick={() => navigate(`/note/${note.id}`)} className="h-auto w-full justify-between rounded-none px-1 py-4 text-left"><span className="min-w-0"><span className="block truncate font-medium">{note.title}</span><span className="mt-1 block truncate text-sm font-normal text-muted-foreground">{note.content || copy.notes.noContent}</span></span><span className="shrink-0 text-xs font-normal text-muted-foreground">{formatDate(note.updatedAt || note.createdAt)}</span></Button>)}</section>}
+    {view === 'grid' ? <NoteGrid notes={filtered} loading={loading} emptyTitle={copy.notes.emptyTitle} emptyBody={copy.notes.emptyBody} onOpen={note => navigate(`/note/${note.id}`)} /> : <section className="divide-y border-y">{filtered.map(note => <Button key={note.id} variant="ghost" onClick={() => navigate(`/note/${note.id}`)} className="h-auto w-full justify-between rounded-none px-1 py-4 text-left"><span className="min-w-0"><span className="block truncate font-medium">{note.title}</span><span className="mt-1 block truncate text-sm font-normal text-muted-foreground">{note.content || copy.notes.noContent}</span></span><span className="shrink-0 text-xs font-normal text-muted-foreground">{noteOrigin(note.generationClient, zh)} · {formatDate(note.updatedAt || note.createdAt)}</span></Button>)}</section>}
   </div>
 }

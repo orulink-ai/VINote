@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 
 from app.models.auth import AuthCredentials, AuthResponse, SessionResponse, UserResponse
 from app.services.auth_service import (
@@ -12,6 +12,7 @@ from app.services.auth_service import (
     set_auth_cookie,
 )
 
+from app.services.auth_audit_service import record_login
 router = APIRouter(tags=["auth"])
 
 
@@ -54,8 +55,9 @@ def login_code(payload: LoginEmail):
 
 
 @router.post("/auth/verify", response_model=AuthResponse)
-def login_verify(payload: LoginCode, response: Response):
+def login_verify(payload: LoginCode, response: Response, request: Request):
     user = CloudAccountService().login(payload.email, payload.code)
+    record_login(user.id, request)
     token = create_access_token(user)
     set_auth_cookie(response, token)
     response.headers["Cache-Control"] = "no-store"
@@ -63,18 +65,20 @@ def login_verify(payload: LoginCode, response: Response):
 
 
 @router.post("/auth/sign-up", response_model=AuthResponse, status_code=status.HTTP_201_CREATED)
-def sign_up(payload: AuthCredentials, response: Response):
+def sign_up(payload: AuthCredentials, response: Response, request: Request):
     if settings.cloud_auth_url:
         raise HTTPException(400, "请通过邮箱验证注册 VINote 账号")
     user = create_user(payload)
+    record_login(user.id, request)
     token = create_access_token(user)
     set_auth_cookie(response, token)
     return AuthResponse(**user.model_dump(), access_token=token)
 
 
 @router.post("/auth/sign-in", response_model=AuthResponse)
-def sign_in(payload: AuthCredentials, response: Response):
+def sign_in(payload: AuthCredentials, response: Response, request: Request):
     user = CloudAccountService().password_login(payload.email, payload.password) if settings.cloud_auth_url else authenticate_user(payload)
+    record_login(user.id, request)
     token = create_access_token(user)
     set_auth_cookie(response, token)
     return AuthResponse(**user.model_dump(), access_token=token)
@@ -82,9 +86,7 @@ def sign_in(payload: AuthCredentials, response: Response):
 
 @router.post("/auth/sign-out", status_code=status.HTTP_204_NO_CONTENT)
 def sign_out(response: Response, user=Depends(get_optional_current_user)):
-    if user:
-        from app.services.cloud_account_service import CloudAccountService
-        CloudAccountService().disconnect(user.user_id)
+    # 普通退出仅清除当前终端凭证，不能删除其他终端仍在使用的共享云端会话。
     clear_auth_cookie(response)
     response.status_code = status.HTTP_204_NO_CONTENT
 
@@ -115,8 +117,9 @@ def register_code(payload: AuthCredentials):
 
 
 @router.post("/auth/register/verify", response_model=AuthResponse)
-def register_verify(payload: LoginCode, response: Response):
+def register_verify(payload: LoginCode, response: Response, request: Request):
     user = CloudAccountService().confirm_registration(payload.email, payload.code)
+    record_login(user.id, request)
     token = create_access_token(user)
     set_auth_cookie(response, token)
     response.headers["Cache-Control"] = "no-store"

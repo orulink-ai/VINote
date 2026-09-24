@@ -1,7 +1,7 @@
 import mimetypes
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from fastapi.responses import FileResponse
 
 from app.models.auth import AuthenticatedUser
@@ -18,6 +18,7 @@ from app.services.auth_service import get_current_user
 from app.services.task_artifact_service import TaskArtifactService
 from app.services.note_repository import NoteRepository
 from app.services.meeting_media_service import MeetingMediaService
+from app.services.note_origin_service import read_origin
 
 router = APIRouter(tags=["notes-library"])
 _repository = NoteRepository()
@@ -144,9 +145,12 @@ def update_note_speakers(
 
 
 @router.post("/notes", response_model=NoteRecordResponse, status_code=status.HTTP_201_CREATED)
-def create_note(payload: NoteCreateRequest, user: AuthenticatedUser = Depends(get_current_user)):
+def create_note(payload: NoteCreateRequest, request: Request, user: AuthenticatedUser = Depends(get_current_user)):
     try:
-        return _repository.create_note(user.user_id, payload)
+        # 以生成任务为准，不能用当前保存请求冒充原始生成来源。
+        folder = _artifact_service.find_task_dir(payload.task_id) if payload.task_id else None
+        client = read_origin(folder)
+        return _repository.create_note(user.user_id, payload, generation_client=client)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

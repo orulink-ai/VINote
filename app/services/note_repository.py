@@ -29,6 +29,7 @@ class NoteRepository:
             content=record.content,
             video_url=record.video_url,
             source_type=record.source_type,
+            generation_client=record.generation_client,
             task_id=record.task_id,
             status=record.status,
             scope=record.scope,
@@ -97,7 +98,7 @@ class NoteRepository:
             row = self._get_accessible_record(db, user_id=user_id, note_id=note_id)
             return self._to_response(row, team_name=self._get_team_name(db, row.team_id)) if row else None
 
-    def create_note(self, user_id: str, payload: NoteCreateRequest) -> NoteRecordResponse:
+    def create_note(self, user_id: str, payload: NoteCreateRequest, *, generation_client: str | None = None) -> NoteRecordResponse:
         with session_scope() as db:
             scope = payload.scope or "personal"
             team_id = None
@@ -126,6 +127,7 @@ class NoteRepository:
                 content=payload.content,
                 video_url=payload.video_url,
                 source_type=payload.source_type,
+                generation_client=generation_client if generation_client in {"mobile", "desktop", "web"} else None,
                 task_id=payload.task_id,
                 status=payload.status,
                 scope=scope,
