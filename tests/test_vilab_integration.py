@@ -13,6 +13,44 @@ from app.transcribers.vilab_transcriber import VILabTranscriber
 from app.llm.vilab_llm import VILabLLM
 
 
+def test_explicit_available_models_skip_broken_legacy_defaults(monkeypatch):
+    service = VILabCloudService()
+    choices = {"asr_model": "chosen-asr", "llm_model": "chosen-llm"}
+    monkeypatch.setattr(service, "status", lambda uid: choices)
+    monkeypatch.setattr(service, "models", lambda uid: [
+        {"id": "chosen-asr", "modelType": "asr", "runtimeStatus": "available"},
+        {"id": "chosen-llm", "modelType": "llm", "runtimeStatus": "available"},
+    ])
+    def legacy(*args, **kwargs):
+        raise HTTPException(503, "default unavailable")
+    monkeypatch.setattr(service, "request", legacy)
+    assert service.defaults("user") == choices
+
+
+def test_cloud_identity_outage_has_specific_safe_message(monkeypatch):
+    monkeypatch.setattr(settings, "cloud_auth_url", "")
+    monkeypatch.setattr(settings, "vilab_server_url", "http://vilab.test")
+    monkeypatch.setattr(httpx, "request", lambda *a, **k: httpx.Response(503, json={
+        "error": "Account authentication is temporarily unavailable",
+    }))
+    with pytest.raises(HTTPException) as error:
+        VILabCloudService().models("user")
+    assert error.value.status_code == 503
+    assert "账号认证服务暂时不可用" in error.value.detail
+
+
+def test_unavailable_explicit_models_cannot_bypass_validation(monkeypatch):
+    service = VILabCloudService()
+    monkeypatch.setattr(service, "status", lambda uid: {"asr_model": "asr", "llm_model": "llm"})
+    monkeypatch.setattr(service, "models", lambda uid: [
+        {"id": "asr", "modelType": "asr", "runtimeStatus": "unavailable"},
+        {"id": "llm", "modelType": "llm", "runtimeStatus": "available"},
+    ])
+    monkeypatch.setattr(service, "request", lambda *a, **k: {"asr_model": "asr", "llm_model": "llm"})
+    with pytest.raises(HTTPException):
+        service.defaults("user")
+
+
 def test_generation_requires_resolved_models(monkeypatch):
     service = VILabCloudService()
     monkeypatch.setattr(service, "status", lambda uid: {

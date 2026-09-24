@@ -18,6 +18,7 @@ class NoteRecordResponse(BaseModel):
     content: str
     video_url: str | None = None
     source_type: str | None = None
+    generation_client: Literal["mobile", "desktop", "web"] | None = None
     task_id: str | None = None
     status: str
     scope: NoteScope = "personal"

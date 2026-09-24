@@ -9,6 +9,7 @@ type NoteRow = {
   content: string
   video_url: string | null
   source_type: string | null
+  generation_client?: string | null
   task_id: string | null
   status: string
   scope: 'personal' | 'team'
@@ -24,6 +25,7 @@ export interface NoteRecord {
   content: string
   videoUrl?: string
   sourceType?: string
+  generationClient?: string
   taskId?: string
   status: string
   scope: 'personal' | 'team'
@@ -77,6 +79,7 @@ const mapRow = (row: NoteRow): NoteRecord => ({
   content: row.content ?? '',
   videoUrl: row.video_url ?? undefined,
   sourceType: row.source_type ?? undefined,
+  generationClient: row.generation_client ?? undefined,
   taskId: row.task_id ?? undefined,
   status: row.status,
   scope: row.scope,

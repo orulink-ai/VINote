@@ -1,6 +1,7 @@
 """
 Note generation API routes.
 """
+from app.services.note_origin_service import record_origin
 import json
 import logging
 import math
@@ -707,6 +708,7 @@ async def generate_from_upload(
                     _UPLOADING_MEETINGS.add(task_id)
                     reserved_upload = task_id
             task_dir = _note_service.artifact_service.create_task_dir(task_id)
+            record_origin(task_dir, request.headers.get("X-VINote-Client", ""))
             media_dir = task_dir / "media"
             media_dir.mkdir(parents=True, exist_ok=True)
             suffix = Path(_sanitize_filename(file.filename)).suffix.lower() or ".webm"
@@ -844,6 +846,7 @@ async def generate_from_upload_sync(
                 )
         else:
             task_dir = _note_service.artifact_service.create_task_dir(task_id)
+            record_origin(task_dir, request.headers.get("X-VINote-Client", ""))
             media_dir = task_dir / "media"
             media_dir.mkdir(parents=True, exist_ok=True)
             suffix = Path(_sanitize_filename(file.filename)).suffix.lower() or ".webm"

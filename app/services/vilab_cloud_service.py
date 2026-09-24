@@ -28,9 +28,19 @@ class VILabCloudService:
         snapshot = _task_source.get()
         if snapshot and snapshot[0] == user_id:
             return dict(snapshot[1])
-        defaults = self.request(user_id, "GET", "/v1/default-models")
         preferences = self.status(user_id)
         selections = {key: preferences.get(key) for key in ("asr_model", "llm_model")}
+        # 完整且可用的显式选择不依赖旧版服务的默认模型配置。
+        if all(selections.values()):
+            models = self.models(user_id)
+            try:
+                self._validate_selection(models, selections["asr_model"], "asr")
+                self._validate_selection(models, selections["llm_model"], "llm")
+            except HTTPException:
+                pass  # 保留已下线模型回退到经过验证的服务默认值的行为。
+            else:
+                return selections
+        defaults = self.request(user_id, "GET", "/v1/default-models")
         if any(selections.values()):
             models = self.models(user_id)
             for key, kind in (("asr_model", "asr"), ("llm_model", "llm")):
@@ -73,6 +83,14 @@ class VILabCloudService:
         if response.status_code in {401, 403}:
             raise HTTPException(502, "云端服务未接受当前身份，请检查账号登录及服务端可信身份来源配置")
         if not response.is_success:
+            if response.status_code == 503:
+                try:
+                    cloud_error = response.json().get("error")
+                    message = cloud_error.get("message") if isinstance(cloud_error, dict) else cloud_error
+                except (ValueError, AttributeError):
+                    message = None
+                if message == "Account authentication is temporarily unavailable":
+                    raise HTTPException(503, "云端账号认证服务暂时不可用（HTTP 503），请稍后重试；若持续出现，请联系服务管理员检查认证服务。")
             if path == "/v1/asr/transcriptions" and response.status_code == 502:
                 try:
                     message = response.json().get("error", {}).get("message")

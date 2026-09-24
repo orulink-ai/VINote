@@ -34,6 +34,14 @@ def init_db():
     _ensure_note_share_columns()
     _ensure_note_workspace_columns()
     _ensure_note_evidence_columns()
+    _ensure_note_origin_column()
+
+
+def _ensure_note_origin_column():
+    columns = {column["name"] for column in inspect(engine).get_columns("notes")}
+    if "generation_client" not in columns:
+        with engine.begin() as connection:
+            connection.exec_driver_sql("ALTER TABLE notes ADD COLUMN generation_client VARCHAR(16)")
 
 
 def _ensure_note_share_columns():

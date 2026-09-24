@@ -89,6 +89,27 @@ class NoteLibraryRouterTest(unittest.TestCase):
             self.assertEqual(response.json()["title"], "用户修改的标题")
             self.assertEqual(response.json()["content"], "需要保留的正文")
 
+    def test_generation_origin_survives_cross_client_save_and_edit(self):
+        from app.services.note_origin_service import record_origin
+        folder = self.artifact_service.create_task_dir("origin-task")
+        self.artifact_service.update_status(folder, "success", "ready")
+        record_origin(folder, "mobile")
+        record_origin(folder, "desktop")
+        with patch("app.services.note_repository.session_scope", self._session_scope), patch.object(
+            note_library, "_artifact_service", self.artifact_service
+        ):
+            payload = {"title": "会议", "task_id": "origin-task", "source_type": "meeting_recording"}
+            response = self.client.post("/api/notes", json=payload, headers={"X-VINote-Client": "desktop"})
+            self.assertEqual(response.status_code, 201)
+            note = response.json()
+            self.assertEqual(note["generation_client"], "mobile")
+            edited = self.client.patch(f"/api/notes/{note['id']}", json={"title": "新标题"})
+            self.assertEqual(edited.json()["generation_client"], "mobile")
+            legacy = self.client.post("/api/notes", json={"title": "旧纪要", "task_id": "missing"}, headers={"X-VINote-Client": "mobile"})
+            self.assertIsNone(legacy.json()["generation_client"])
+            self.assertEqual(self.client.delete(f"/api/notes/{note['id']}").status_code, 204)
+            self.assertEqual(self.client.get(f"/api/notes/{note['id']}").status_code, 404)
+
     def test_get_note_media_streams_task_audio(self):
         media_file = self.media_dir / "episode.mp3"
         media_file.write_bytes(b"fake-audio")

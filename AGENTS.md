@@ -181,6 +181,10 @@ Update `README.md`, this `AGENTS.md`, or both whenever you change:
 - If documentation and code disagree, trust the code, then fix the documentation in the same change.
 
 ## Cloud account integration development
+
+- App 登录页提供邮箱验证码重置密码，复用 `/api/auth/password/code` 与 `/api/auth/password/reset`，成功后返回密码登录。登录来源仅后台记录，不在产品界面展示。普通 `/api/auth/sign-out` 只清除当前客户端 Cookie（手机同时清除 Keychain Token），不调用共享云端账号 `disconnect`，以支持手机与桌面同时在线及独立退出。JWT 仍沿用原有到期机制，普通退出不是全设备令牌撤销。
+
+- 手机和桌面端复用同一套云端账号与本地用户映射。App 通过 `/api/auth/config` 选择邮箱验证注册流程；云端配置启用时不可回退本地注册。成功登录及注册验证写入 `auth_login_events`，保存用户 ID、UTC 时间、客户端来源和平台。来源来自白名单化的 `X-VINote-Client` / `X-VINote-Platform`，属于客户端自报备注，不参与鉴权。桌面端现有请求标记为 `desktop`；App 标记为 `mobile` 并区分 `android` / `ios`。新表由启动时 `init_db()` 创建。
 - Cloud session linking must match the current local user's normalized email and must never replace an existing issuer/subject. Registration keeps email/password fixed after sending the code; switching back to login resets the form.
 - `cloud_account_service.py` owns VINote Supabase email OTP linking, encrypted sessions and token rotation. `VINOTE_SUPABASE_URL` / `VINOTE_SUPABASE_PUBLISHABLE_KEY` enable personal authentication; configured personal auth never falls back to the deployment key.
 - Cloud account endpoints under `/api/vilab/account` require local VINote authentication. `cloud_accounts` maps local users to unique `(issuer, subject)` identities.
@@ -252,3 +256,10 @@ Development channels use separate Tauri identities (`app.vinote.desktop.dev` and
 MeetingCaptureWorkspace renders capture preview and controls. User end actions send request-stop; MeetingRecorderDock confirms in the main window, never in the native controller. The internal stop action remains available for source-ended/save flows. Recording uses no realtime ASR. Audio-meter failures are fail-open and must never stop media capture.
 
 Meeting postprocessing workers live in frontend/src/lib/meetingProcessing.ts and never own capture state. Both history and note retry reuse the task. PATCH /api/notes/{note_id} accepts status-only changes, preserving title/content. Verification scope and remaining media-management gaps are documented in docs/plans/2026-09-21-meeting-postprocessing.md.
+
+
+## App 录音库与纪要来源（2026-09-23）
+
+VINote-app 的 recordingLibrary 按账号持久化原音频和录音草稿；generateRecording 直连 VILab 分段转写和总结，保存检查点供失败重试。录音库支持播放、导出、导入、后续生成和确认删除。仅录音模式不调用模型。Android 已加入麦克风前台服务；iOS 后台音频与转换源码待 Mac/iPhone 验证。生成纪要仍需前台，公网入口尚未配置。App 当前直连 Supabase 认证，不经过下述后端登录审计端点；纪要本机保存，未实现跨端同步。详见子仓库 README 和真机验证文档。
+
+上传生成入口在任务目录写入不可覆盖的 generation_client 标记，保存笔记时从任务读取到 notes.generation_client（启动时兼容迁移旧表）。App 与桌面列表/详情显示 App 生成或桌面端生成；历史缺失显示来源未知，不能用当前保存/编辑客户端猜测。登录来源审计仍不向用户显示。
