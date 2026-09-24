@@ -263,3 +263,5 @@ Meeting postprocessing workers live in frontend/src/lib/meetingProcessing.ts and
 VINote-app 的 recordingLibrary 按账号持久化原音频和录音草稿；generateRecording 直连 VILab 分段转写和总结，保存检查点供失败重试。录音库支持播放、导出、导入、后续生成和确认删除。仅录音模式不调用模型。Android 已加入麦克风前台服务；iOS 后台音频与转换源码待 Mac/iPhone 验证。生成纪要仍需前台，公网入口尚未配置。App 当前直连 Supabase 认证，不经过下述后端登录审计端点；纪要本机保存，未实现跨端同步。详见子仓库 README 和真机验证文档。
 
 上传生成入口在任务目录写入不可覆盖的 generation_client 标记，保存笔记时从任务读取到 notes.generation_client（启动时兼容迁移旧表）。App 与桌面列表/详情显示 App 生成或桌面端生成；历史缺失显示来源未知，不能用当前保存/编辑客户端猜测。登录来源审计仍不向用户显示。
+
+App 文档与脚本：子仓库 README.md / README.en.md 与 docs/build-and-deployment{,.en}.md 为当前直接 Supabase/VILab 架构说明；父仓库 docs/app-integration.md / docs/en/app-integration.md 记录边界。App npm android:standalone 是调试签名验收包；android:release / android:bundle 必须使用 VINOTE_ANDROID_* 签名环境变量，禁止回退调试证书。父仓库桌面运行和打包命令不隐式构建 App。

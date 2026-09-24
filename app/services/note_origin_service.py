@@ -19,6 +19,7 @@ def read_origin(folder: Path | None) -> str | None:
         return None
     try:
         client = (folder / "generation_client").read_text(encoding="utf-8").strip()
-    except FileNotFoundError:
+    except (OSError, UnicodeError):
+        # 来源仅为显示备注；历史标记损坏不应阻断纪要保存。
         return None
     return client if client in CLIENTS else None

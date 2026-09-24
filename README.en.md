@@ -317,3 +317,5 @@ npm run build
 - Browser auth uses backend-issued HttpOnly cookies
 - The sidebar `Document` link can point to a standalone docs site through `VITE_DOCS_BASE_URL`
 - If documentation and code disagree, trust the code and update the docs in the same change
+
+See [App integration](docs/en/app-integration.md) for repository boundaries, shared accounts versus local data, build commands and validation limits.
