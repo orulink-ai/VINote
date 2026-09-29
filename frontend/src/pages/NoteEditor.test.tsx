@@ -84,10 +84,25 @@ describe('NoteEditor transcript evidence', () => {
     noteStoreMock.getShareLink.mockResolvedValue(null)
   })
 
+  it('opens the rendered summary and only shows Markdown when editing is requested', async () => {
+    renderEditor()
+    await screen.findByText('Minutes only.')
+    expect(screen.queryByDisplayValue(/Minutes only/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: 'Edit' }))
+    const editor = await screen.findByDisplayValue(/Minutes only/)
+    fireEvent.change(editor, { target: { value: '# Revised summary\n\nUpdated decision.' } })
+    fireEvent.click(screen.getByRole('radio', { name: 'Preview' }))
+    expect(await screen.findByText('Updated decision.')).toBeInTheDocument()
+    expect(screen.queryByDisplayValue(/Updated decision/)).not.toBeInTheDocument()
+    fireEvent.click(screen.getByRole('radio', { name: 'Split' }))
+    expect(await screen.findByDisplayValue(/Updated decision/)).toBeInTheDocument()
+    expect(screen.getByText('Updated decision.')).toBeInTheDocument()
+  })
+
   it('requires confirmation and returns to the library only after deletion succeeds', async () => {
     noteStoreMock.deleteNote.mockResolvedValue(undefined)
     renderEditor()
-    await screen.findByDisplayValue(/Minutes only/)
+    await screen.findByText(/Minutes only/)
     fireEvent.click(screen.getByRole('button', { name: 'Delete note' }))
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }))
     expect(noteStoreMock.deleteNote).not.toHaveBeenCalled()
@@ -100,7 +115,7 @@ describe('NoteEditor transcript evidence', () => {
   it('keeps the note open when deletion fails', async () => {
     noteStoreMock.deleteNote.mockRejectedValue(new Error('Access denied'))
     renderEditor()
-    await screen.findByDisplayValue(/Minutes only/)
+    await screen.findByText(/Minutes only/)
     fireEvent.click(screen.getByRole('button', { name: 'Delete note' }))
     fireEvent.click(screen.getByRole('button', { name: 'Confirm deletion' }))
     expect(await screen.findByRole('alert')).toHaveTextContent('Access denied')
@@ -110,7 +125,7 @@ describe('NoteEditor transcript evidence', () => {
   it('keeps summary and transcript separate while sharing one audio player', async () => {
     renderEditor()
 
-    expect(await screen.findByDisplayValue(/Minutes only/)).toBeInTheDocument()
+    await waitFor(() => expect(screen.getByText('Minutes only.')).toBeInTheDocument())
     expect(screen.getAllByTestId('source-audio')).toHaveLength(1)
     expect(screen.queryByText('We agreed to activate Sortformer.')).not.toBeInTheDocument()
 
@@ -189,5 +204,13 @@ describe('NoteEditor transcript evidence', () => {
     expect(screen.getAllByTestId('source-video')).toHaveLength(1)
     expect(video.currentTime).toBe(62)
     expect(window.HTMLMediaElement.prototype.play).toHaveBeenCalled()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Expand video' }))
+    expect(screen.getByTestId('source-video')).toBe(video)
+    expect(screen.getByRole('button', { name: 'Back to notes' })).toHaveAttribute('aria-expanded', 'true')
+    expect(video.currentTime).toBe(62)
+    fireEvent.click(screen.getByRole('button', { name: 'Back to notes' }))
+    expect(screen.getByTestId('source-video')).toBe(video)
+    expect(video.currentTime).toBe(62)
   })
 })

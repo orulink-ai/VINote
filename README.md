@@ -64,7 +64,7 @@ API 参考：
 
 ### 云端模型部署配置
 
-由部署管理员在根目录 `.env` 中设置可选的 `VILAB_SERVER_URL`、`VINOTE_SUPABASE_URL` 和 `VINOTE_SUPABASE_PUBLISHABLE_KEY`。测试开发、测试包和正式包默认连接内网 `http://192.168.1.143:9876`；普通开发默认连接本机 `http://127.0.0.1:9878`。桌面端分别使用 `VINOTE_TEST_VILAB_SERVER_URL`、`VINOTE_DEV_VILAB_SERVER_URL`、`VINOTE_RELEASE_VILAB_SERVER_URL` 覆盖对应渠道地址，独立后端仍读取 `VILAB_SERVER_URL`。详见[运行脚本规范](docs/running-scripts.md)。在模型设置中注册/登录 VINote 云端账号，后端加密保存并刷新个人令牌；模型供应商密钥只配置在 VILab Server。未配置 Supabase 时保留 `VILAB_API_KEY` 部署凭证兼容路径。
+账号等配置仍由部署管理员在根目录 `.env` 设置。源码入口明确选择内网或公网；正式包固定连接 `https://api.orulink.ai`，测试包固定连接 `http://192.168.1.143:9876`，这些入口不接受 VILab 地址环境变量覆盖。独立后端仍读取 `VILAB_SERVER_URL`。详见[运行脚本规范](docs/running-scripts.md)。Supabase 配置与模型供应商密钥管理保持原有方式。
 
 「设置 → 模型服务」提供云端与本地/自定义运行模式切换，并按 VINote 用户保存。视频链接、文件上传、文字稿和会议录音统一遵循该模式；进行中的任务保持开始处理时的配置，切换只影响后续任务。
 
@@ -112,15 +112,19 @@ npm run web:dev
 
 ```bash
 yarn setup        # 首次初始化依赖、配置和说话人模型，不启动应用
-yarn client:test:dev # 测试开发版桌面端，连接内网，支持热更新
-yarn client:dev      # 普通开发版桌面端，连接本地开发服务
+yarn dev:desktop:lan    # 桌面源码，内网
+yarn dev:desktop:public # 桌面源码，公网
+yarn dev:web:lan        # 网页源码，内网（同时启动后端）
+yarn dev:web:public     # 网页源码，公网（同时启动后端）
+yarn package:release    # 正式安装包，公网
+yarn package:test       # 测试安装包，内网
 yarn dev:api      # 仅后端
-yarn dev:web      # 仅浏览器 Web 客户端
+yarn dev:web      # 兼容入口：内网网页，自动启动后端
 yarn verify        # 后端、前端、脚本和文档的合并前检查
 yarn check         # 前端生产构建 + 桌面脚本检查
 ```
 
-如果 `3100` 端口上已经有 VINote 的 Vite 开发服务器，桌面开发模式会直接复用它。
+四个源码入口统一管理后端与前端，8900 或 3100 已占用时会报错，不复用已有服务；切换模式前先退出原实例。
 `yarn dev` 使用跨平台 Node.js 脚本，可在 Windows PowerShell 和 macOS 终端中运行，不依赖 Bash；会自动启动并等待 VINote 后端就绪。桌面开发需要 Rust 工具链，以及 Windows C++ 构建工具或 macOS Xcode Command Line Tools。
 `yarn dev` 会自动选择已安装后端依赖的 Python；如需手动指定，可设置 `VINOTE_PYTHON=/path/to/python`。
 后端使用 `.env` 的数据库配置；未配置时使用本地 SQLite。已配置数据库无法连接时会明确报错，不会悄悄切换到另一份数据库。
@@ -353,7 +357,7 @@ npm run build
 
 会议草稿会额外调用 LLM 对照转写复核主体、决策和行动后再返回，增加一次模型调用；长会议先逐块复核，再合并并核对一致性。云端复核优先使用 `MEETING_REVIEW_MODEL`（默认 `gpt-6-astra`），仅在服务列为可用时选择；未提供该模型或设为空值则沿用原模型，本地/自定义模式始终使用当前模型。全局模型选择不变。复核失败不静默返回未复核稿；这项复核不能恢复录音缺失信息或保证所有识别错误都已消除。
 
-正式版使用 `yarn client:production`，测试版使用 `yarn client:test`。测试开发和两种安装包默认连接 `http://192.168.1.143:9876`；普通开发默认连接本机 `9878`，可用 `VINOTE_DEV_VILAB_SERVER_URL` 覆盖。测试开发/测试包和正式包可分别用 `VINOTE_TEST_VILAB_SERVER_URL`、`VINOTE_RELEASE_VILAB_SERVER_URL` 覆盖。测试版使用独立安装身份和数据目录。产物与校验清单位于 `.desktop-build/artifacts/`，详见[打包说明](docs/desktop-packaging.md)。
+正式版使用 `yarn package:release`，固定连接 `https://api.orulink.ai`；测试版使用 `yarn package:test`，固定连接 `http://192.168.1.143:9876`。测试版保留独立安装身份和数据目录。产物与校验清单位于 `.desktop-build/artifacts/`，详见[打包说明](docs/desktop-packaging.md)。
 
 真实会议生成验证可运行 `python scripts/check_meeting_generation.py data/diarization-four-speakers.wav --live --speakers 4 --output data/meeting-live-report.json`。它调用桌面端共用的上传、任务、保存、逐字稿和媒体接口，真实消耗云端 STT/LLM，并在当前唯一关联账号的个人空间保存一条标注「测试」的笔记；多账号需传 `--user-id`。该后台检查不验证原生麦克风、录屏权限或桌面窗口交互。
 
@@ -361,11 +365,11 @@ npm run build
 
 需要 Node.js 22+、Rust，以及 Windows C++ Build Tools/WebView2 或 macOS Xcode Command Line Tools。两个项目分别运行，VINote 不启动或打包 VILab Server。
 
-1. 仅调试本地服务时，在 VILab Server 仓库运行 `yarn dev`，模型 API 为 `http://127.0.0.1:9878`，管理界面为 `http://127.0.0.1:5174/admin/`。
-2. VINote 仓库：内网调试运行 `yarn client:test:dev`，本地联调运行 `yarn client:dev`：首次自动安装前端依赖、创建 `.venv`、安装后端依赖并生成忽略提交的 `.env`（不覆盖已有配置）。自动启动 VINote API、Vite 和一个桌面开发实例。先登录/注册邮箱账号，再在应用中选择云端或本地。
-3. 两个开发渠道的地址、应用身份和追踪环境独立选择，配置规则见[运行脚本规范](docs/running-scripts.md)。先设置 `VINOTE_SUPABASE_URL` 和 `VINOTE_SUPABASE_PUBLISHABLE_KEY`。
+1. 源码选择桌面或网页、内网或公网入口；不需要在本机启动 VILab Server。
+2. 运行 `yarn dev:desktop:lan` / `yarn dev:desktop:public`，或 `yarn dev:web:lan` / `yarn dev:web:public`。首次自动准备依赖、`.venv` 和 `.env`（不覆盖已有文件），启动本机后端与前端。桌面打开 Tauri，网页打开浏览器。
+3. 源码桌面统一使用 development 追踪环境，网页不启用桌面追踪；账号配置仍使用 `VINOTE_SUPABASE_URL` 和 `VINOTE_SUPABASE_PUBLISHABLE_KEY`。
 4. 安装 FFmpeg/FFprobe 并加入 PATH，然后运行根目录 `yarn client:production` 或 `yarn client:test`，脚本会自动初始化依赖和安装 PyInstaller。Windows 生成 NSIS `.exe`，macOS 生成 `.app` 和 `.dmg`，归档到 `.desktop-build/artifacts/`。必须在对应系统上构建；签名/公证需要各平台的发布证书。
-5. 安装包的云端默认地址为 `http://192.168.1.143:9876`。可在构建时分别设置 `VINOTE_TEST_VILAB_SERVER_URL` 或 `VINOTE_RELEASE_VILAB_SERVER_URL`。打包只读取 Supabase URL 和 publishable key，不打包 `.env`、模型密钥或个人数据。
+5. 固定地址集中在 `scripts/service-environments.mjs`，不接受旧渠道地址变量覆盖。打包保留公开账号配置和构建管理的 Langfuse 配置，不打包 `.env`、模型密钥或个人数据。
 
 `VINOTE_PYTHON` 可指定 Python；`VINOTE_FFMPEG_PATH`、`VINOTE_FFPROBE_PATH` 可指定打包用的二进制文件。macOS 请使用可分发的同架构 FFmpeg（其动态依赖也须可分发）。
 首次运行检查可用：yarn setup（只初始化依赖/配置，不打开额外桌面窗口）。邮箱公共配置来自 config/desktop-public.json，用户不需要填写云端模型 API Key；自托管版本可通过 .env 覆盖公开账号配置。源码处理音视频需要 PATH 中的 FFmpeg 和 FFprobe。
@@ -390,10 +394,12 @@ VINote 桌面端使用独立 Langfuse 项目追踪生成链路，业务根名称
 
 ## 会后统一处理（2026-09-21）
 
-两种模式在录制期间均不调用 ASR 或总结模型。结束后先保存完整原始媒体、释放设备并关闭控制；纪要模式自动执行会后处理。说话人区分继续使用本地模型，VILab 负责完整音频转写和总结，结果按时间戳对齐。视频使用实际代表帧证据，不代表逐帧理解。
+会议页只确认麦克风；点击“开始会议”后再选择是否共享屏幕，选择共享才打开系统选择器，不预选是否生成纪要。录制期间不调用 ASR 或总结模型；结束后先保存完整原始媒体、释放设备并关闭控制，再由用户选择“生成会议纪要”或“暂不生成”。暂不生成时保留本地历史，之后仍可手动生成。说话人区分继续使用本地模型，VILab 负责完整音频转写和总结，结果按时间戳对齐。视频使用实际代表帧证据，不代表逐帧理解。
 
 分段转写显示已完成音频时长、比例及基于实际分段耗时估算的剩余转写时间；整段请求没有中间结果时不虚构进度。所有进度采集仅在录制结束后运行。
 
 本地历史持久化任务 ID、草稿 ID、失败阶段和进度。POST /api/task/{task_id}/retry 校验录制所有者与媒体后复用任务和有效产物。旧进程中断任务显示可重试。保存笔记后保留本地原始媒体直到用户明确删除。
 
 App 独立仓库、账号与本机数据边界、运行/打包入口及验证限制见 [App 集成说明](docs/app-integration.md)。
+
+会议标题默认采用 `YYYY-MM-DD HH:mm｜内容`：以已记录的录制开始时间创建“待生成纪要”占位，完成后从最终纪要主题生成标题；不使用生成时间冒充会议时间。本地录制支持改名，纪要详情支持编辑标题；生成时保留手动改过的录制或草稿标题。

@@ -10,7 +10,6 @@ import { useNavigate } from 'react-router-dom'
 import { useAudioRecorder } from '../../hooks/useAudioRecorder'
 import {
   closeCurrentRecorderWindow,
-  hideCurrentRecorderWindow,
   closeRecorderWindow,
   emitRecorderWindowReady,
   emitRecorderWindowState,
@@ -505,12 +504,12 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     setPhase('recording')
   }
 
-  const closeSavedRecordingSurface = async () => {
+  const closeSavedRecordingSurface = async (route = '/meetings') => {
     closePanel()
     try {
       await setRecorderActive(false)
       if (isRecorderWindow) {
-        await showMainWindow('/meetings')
+        await showMainWindow(route)
         await closeCurrentRecorderWindow()
       } else {
         await closeRecorderWindow()
@@ -519,7 +518,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       // A window cleanup error must not turn a saved note into a failed task.
       console.error('[meeting-recorder] window cleanup failed', error)
     }
-    if (!isRecorderWindow) navigate('/meetings')
+    if (!isRecorderWindow) navigate(route)
   }
 
   useEffect(() => {
@@ -536,12 +535,13 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     setRecordingId(persistedId)
     await saveRecordedAudio(persistedId, audioBlob)
     await savePendingMeeting({ id: persistedId, ownerId: user?.id || '', workspace: captureWorkspaceRef.current,
-      options, startedAt: startedAt.toISOString(),
+      options: { ...options, title: options.title.trim() || createMeetingRecordingTitle(startedAt, language) },
+      titleEdited: !!options.title.trim(), startedAt: startedAt.toISOString(),
       endedAt: (endedAtRef.current || new Date()).toISOString(),
       fileName: recorder.getRecordingFileName?.(),
       elapsedSeconds: useMeetingRecorderStore.getState().elapsedSeconds,
       recordingStatus: 'saved',
-      processingStatus: options.mode === 'minutes' ? 'queued' : 'idle',
+      processingStatus: 'idle',
       processingUpdatedAt: new Date().toISOString(),
     })
     recorder.retainRecordingFile?.()
@@ -554,46 +554,16 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     finishInFlightRef.current = true
     try {
       endedAtRef.current = new Date()
-      const options = captureOptionsRef.current
       setPhase('stopping')
       const audioBlob = await recorder.stop()
       if (audioBlob.size === 0) throw new Error('microphone_no_audio')
       setRecordedAudio(audioBlob)
       await persistRecording(audioBlob)
-      // Native controls only belong to capture. Generation continues in the
-      // main window after the local save, even when it later fails.
-      if (!isRecorderWindow) await closeSavedRecordingSurface()
-      else {
-        // Compatibility window may still own generation: hide it now and
-        // destroy it after work finishes, rather than terminating its worker.
-        await setRecorderActive(false)
-        await showMainWindow('/meetings')
-        await hideCurrentRecorderWindow()
-      }
-
-      if (options.mode === 'minutes' && !isRecorderWindow) {
-        const pending = await getPendingMeeting(recordingIdRef.current!)
-        if (!pending) throw new Error('无法读取已保存的录制记录。')
-        recorder.reset()
-        resetSession()
-        void processSavedMeeting(pending, language, audioBlob)
-        return
-      }
-      if (options.mode === 'minutes') {
-        await generateFromRecording(audioBlob)
-        recorder.reset()
-        await closeSavedRecordingSurface()
-        return
-      }
-
+      // Saving releases capture ownership before the main window asks about notes.
+      const route = `/meetings?recordingSaved=${encodeURIComponent(recordingIdRef.current!)}`
       recorder.reset()
       resetSession()
-      closePanel()
-      await setRecorderActive(false)
-      if (isRecorderWindow) {
-        await showMainWindow('/meetings')
-        await closeCurrentRecorderWindow()
-      } else navigate('/meetings')
+      await closeSavedRecordingSurface(route)
     } catch (stopError) {
       const failedStage = useMeetingRecorderStore.getState().localRecordingSaved ? stageFromError(stopError) : 'uploading'
       const failureMessage = formatRecorderFailure(stopError, recorderCopy)
@@ -734,12 +704,10 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       }
       if (!state.localRecordingSaved) {
         await persistRecording(audio)
-        await closeSavedRecordingSurface()
-        if (captureOptionsRef.current.mode === 'recording') {
-          recorder.reset()
-          resetSession()
-          return
-        }
+        recorder.reset()
+        resetSession()
+        await closeSavedRecordingSurface(`/meetings?recordingSaved=${encodeURIComponent(recordingIdRef.current!)}`)
+        return
       }
       // Resume the existing task and reuse valid artifacts when available.
       if (!isRecorderWindow && recordingIdRef.current) {
@@ -908,7 +876,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         <AlertDialogContent className="max-h-[calc(100dvh-48px)] w-[calc(100%-32px)] overflow-y-auto">
           <AlertDialogHeader>
             <AlertDialogTitle>{language === 'zh-CN' ? '结束并保存录制？' : 'End and save recording?'}</AlertDialogTitle>
-            <AlertDialogDescription>{language === 'zh-CN' ? (captureOptionsRef.current.mode === 'minutes' ? '结束后保存录制，并自动生成会议纪要。' : '结束后保存到本机，可回放、下载或稍后生成纪要。') : 'Save locally, then replay or generate meeting notes.'}</AlertDialogDescription>
+            <AlertDialogDescription>{language === 'zh-CN' ? '结束后先保存到本机，再选择是否生成会议纪要。' : 'Save locally, then replay or generate meeting notes.'}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="gap-3">
             <AlertDialogCancel className="min-h-11">{language === 'zh-CN' ? '继续录制' : 'Keep recording'}</AlertDialogCancel>

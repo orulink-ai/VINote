@@ -2,7 +2,7 @@ import { noteOrigin } from '@/lib/noteOrigin'
 import { Input } from '../components/ui/input'
 import { Textarea } from '../components/ui/textarea'
 import { useEffect, useRef, useState } from 'react'
-import { ArrowLeft, Copy, Download, Edit3, Eye, FileText, MessageSquare, Trash2, Save, Share2 } from 'lucide-react'
+import { ArrowLeft, Copy, Download, Edit3, Eye, FileText, MessageSquare, Trash2, Save, Share2, Maximize2, Minimize2, ListVideo } from 'lucide-react'
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { MarkdownContent } from '../components/Markdown/MarkdownContent'
 import { KeyMomentsRail } from '../components/Notes/KeyMomentsRail'
@@ -174,7 +174,10 @@ export function NoteEditor() {
   const previewRef = useRef<HTMLDivElement | null>(null)
   const audioRef = useRef<HTMLAudioElement | null>(null)
   const videoRef = useRef<HTMLVideoElement | null>(null)
-  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('split')
+  const [momentsOpen, setMomentsOpen] = useState(false)
+  const [videoExpanded, setVideoExpanded] = useState(false)
+  const [workspaceMode, setWorkspaceMode] = useState<WorkspaceMode>('preview')
+  useEffect(() => setWorkspaceMode('preview'), [id])
   const [localTitle, setLocalTitle] = useState('')
   const [content, setContent] = useState('')
   const [videoUrl, setVideoUrl] = useState('')
@@ -510,9 +513,9 @@ export function NoteEditor() {
   }
 
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden bg-background">
       {id && ['meeting_recording', 'meeting_video'].includes(sourceType) && <SavedRecordingActions key={id} noteId={id} title={localTitle} onDeleted={() => setRecordingDeleted(true)} />}
-      <div className="flex flex-wrap items-center justify-between gap-3 border-b bg-background px-3 py-2">
+      <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b bg-background px-3 py-2">
         <div className="flex min-w-0 items-center gap-3">
           <Button
             onClick={() => navigate('/notes')}
@@ -557,6 +560,7 @@ export function NoteEditor() {
             <ToggleGroupItem value="preview"><Eye />{copy.common.preview}</ToggleGroupItem>
           </ToggleGroup>
 
+          {keyMoments.length > 0 && <Button variant="outline" size="sm" onClick={() => setMomentsOpen(true)}><ListVideo />{zh ? '关键片段' : 'Key moments'}</Button>}
           <ToggleGroup type="single" value={noteView} onValueChange={value => value && setNoteView(value as NoteView)} data-testid="note-view-switcher">
             <ToggleGroupItem value="summary"><FileText />{zh ? '纪要' : 'Summary'}</ToggleGroupItem>
             <ToggleGroupItem value="transcript"><MessageSquare />{zh ? '逐字稿' : 'Transcript'}</ToggleGroupItem>
@@ -648,39 +652,18 @@ export function NoteEditor() {
         </SheetContent>
       </Sheet>
 
-      {noteView === 'summary' && keyMoments.length > 0 ? (
-        <div className="border-b border-border bg-card/70 px-4 py-3 xl:hidden">
-          <div className="stealth-scroll flex gap-3 overflow-x-auto">
-            {keyMoments.map((moment) => (
-              <Button
-                key={`${moment.anchorId}-${moment.seconds}`}
-                type="button"
-                onClick={() => handleSelectMoment(moment)}
-                className={`shrink-0 rounded-xl border px-3 py-2 text-left text-sm ${
-                  activeMoment?.anchorId === moment.anchorId
-                    ? 'border-primary bg-primary/10'
-                    : 'border-border bg-card'
-                }`}
-              >
-                <div className="font-medium">{moment.timestampLabel}</div>
-                <div className="mt-1 max-w-[180px] truncate text-xs text-muted-foreground dark:text-muted-foreground">
-                  {moment.title}
-                </div>
-              </Button>
-            ))}
-          </div>
-        </div>
-      ) : null}
+      <Sheet open={momentsOpen} onOpenChange={setMomentsOpen}>
+        <SheetContent side="right" className="flex w-80 flex-col p-0">
+          <SheetHeader className="p-4"><SheetTitle>{zh ? '关键片段' : 'Key moments'}</SheetTitle><SheetDescription>{zh ? '选择时间点回看会议。' : 'Select a moment to review the meeting.'}</SheetDescription></SheetHeader>
+          <KeyMomentsRail moments={keyMoments} activeAnchorId={activeMoment?.anchorId} onSelectMoment={(moment) => { handleSelectMoment(moment); setMomentsOpen(false) }} />
+        </SheetContent>
+      </Sheet>
 
+      <div className="relative flex min-h-0 flex-1 flex-col-reverse overflow-hidden lg:flex-row">
       {noteView === 'summary' ? (
-      <div className="flex min-h-0 flex-1 overflow-hidden">
-        <KeyMomentsRail
-          moments={keyMoments}
-          activeAnchorId={activeMoment?.anchorId}
-          onSelectMoment={handleSelectMoment}
-        />
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
 
-        <ResizablePanelGroup direction="horizontal" className="min-w-0 flex-1">
+        <ResizablePanelGroup key={workspaceMode} direction="horizontal" className="min-w-0 flex-1">
           {workspaceMode !== 'preview' ? (
             <ResizablePanel defaultSize={workspaceMode === 'split' ? 42 : 100} minSize={30} className="flex min-w-0 flex-col bg-card">
               <div className="border-b px-4 py-2 text-xs font-medium text-muted-foreground">Markdown</div>
@@ -702,7 +685,7 @@ export function NoteEditor() {
                 <div ref={previewRef} className="stealth-scroll min-w-0 flex-1 overflow-auto">
                   <MarkdownContent
                     content={content || copy.noteEditor.previewEmpty}
-                    className="prose w-full max-w-none px-6 py-6 dark:prose-invert lg:px-8"
+                    className="prose mx-auto w-full max-w-4xl break-words px-6 py-6 dark:prose-invert lg:px-8"
                     videoUrl={videoUrl || undefined}
                     mediaUrl={localMediaUrl}
                     onVideoJump={(seconds) => {
@@ -742,8 +725,33 @@ export function NoteEditor() {
         />
       )}
 
+      {isVideoNote && localMediaUrl ? (
+        <section aria-label={zh ? '会议视频' : 'Meeting video'} className={videoExpanded
+          ? 'absolute inset-0 z-10 flex min-h-0 flex-col bg-card'
+          : 'flex max-h-[40%] min-h-0 w-full shrink-0 flex-col border-b bg-card lg:max-h-none lg:w-[42%] lg:border-b-0 lg:border-l'}>
+          <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
+            <span className="text-sm font-medium">{zh ? '会议视频' : 'Meeting video'}</span>
+            <Button variant="ghost" size="sm" onClick={() => setVideoExpanded(value => !value)} aria-expanded={videoExpanded}>
+              {videoExpanded ? <Minimize2 /> : <Maximize2 />}{videoExpanded ? (zh ? '返回纪要' : 'Back to notes') : (zh ? '放大视频' : 'Expand video')}
+            </Button>
+          </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto p-3">
+            <video
+              ref={videoRef}
+              data-testid="source-video"
+              controls
+              preload="metadata"
+              src={resolveContentUrl(localMediaUrl)}
+              className={videoExpanded ? 'min-h-0 w-full flex-1 bg-black object-contain' : 'aspect-video max-h-full w-full shrink-0 bg-black object-contain'}
+              onTimeUpdate={(event) => setCurrentTimestamp(event.currentTarget.currentTime)}
+            />
+            {!videoExpanded && <p className="mt-3 text-xs text-muted-foreground">{zh ? '点击纪要或逐字稿中的时间，可跳转到对应画面。' : 'Select a timestamp in the notes or transcript to seek the video.'}</p>}
+          </div>
+        </section>
+      ) : null}
+      </div>
       {isAudioNote && localMediaUrl ? (
-        <div className="border-t border-border bg-card px-4 py-3 dark:border-border ">
+        <div className="shrink-0 border-t border-border bg-card px-4 py-3 dark:border-border ">
           <div className="mx-auto flex max-w-6xl items-center gap-3">
             <span className="shrink-0 text-sm font-medium">Audio</span>
             <audio
@@ -759,22 +767,7 @@ export function NoteEditor() {
         </div>
       ) : null}
 
-      {isVideoNote && localMediaUrl ? (
-        <div className="border-t border-border bg-card px-4 py-3 dark:border-border ">
-          <div className="mx-auto flex max-w-6xl items-center gap-3">
-            <span className="shrink-0 text-sm font-medium">Video</span>
-            <video
-              ref={videoRef}
-              data-testid="source-video"
-              controls
-              preload="metadata"
-              src={resolveContentUrl(localMediaUrl)}
-              className="h-28 min-w-0 flex-1 bg-black object-contain"
-              onTimeUpdate={(event) => setCurrentTimestamp(event.currentTarget.currentTime)}
-            />
-          </div>
-        </div>
-      ) : null}
+
     </div>
   )
 }

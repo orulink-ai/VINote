@@ -1,6 +1,7 @@
 import { getPendingMeeting, getRecordedAudio, updatePendingMeeting, type PendingMeeting } from './audioStorage'
 import { completeMeetingRecordingGeneration, createMeetingRecordingTitle, MeetingGenerationError, MissingMeetingTaskError, resumeMeetingTask, submitMeetingRecording, type MeetingGenerationStage } from './meetingGeneration'
 import { apiJson } from './api'
+import { formatMeetingTitle, meetingSubject } from './meetingTitle'
 import { useAuthStore } from '../stores/authStore'
 import { useModelProfileStore } from '../stores/modelProfileStore'
 import { useSTTProfileStore } from '../stores/sttProfileStore'
@@ -71,9 +72,18 @@ async function run(recording: PendingMeeting, language: string, audio?: Blob) {
       await persist({ draftNoteId: draftId })
     }
     const note = await completeMeetingRecordingGeneration({ taskId: response.task_id, workspace: pending.workspace, onStage,
-      saveNote: async (title, content) => {
+      saveNote: async (_title, content) => {
         if (useAuthStore.getState().user?.id !== pending.ownerId) throw new MeetingGenerationError('saving', '账号已切换，请使用原账号恢复保存。')
-        return library.updateNote(draftId!, title, content, 'done')
+        const current = await getPendingMeeting(id) || pending
+        const generatedTitle = current.titleEdited ? current.options.title
+          : formatMeetingTitle(pending.startedAt, meetingSubject(content) || (language.startsWith('zh') ? '会议纪要' : 'Meeting notes'), language)
+        // Preserve a title the user changed in the draft while processing.
+        const draft = await library.loadNoteById(draftId!)
+        const originalTitle = pending.options.title.trim() || createMeetingRecordingTitle(new Date(pending.startedAt), language)
+        const finalTitle = draft?.title && draft.title !== originalTitle ? draft.title : generatedTitle
+        const saved = await library.updateNote(draftId!, finalTitle, content, 'done')
+        if (saved) await persist({ options: { ...current.options, title: finalTitle } })
+        return saved
       },
       onProgress: status => { void persist({ processedSeconds: status.processed_seconds ?? undefined,
         totalSeconds: status.total_seconds ?? undefined, etaSeconds: status.eta_seconds ?? undefined,

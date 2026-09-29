@@ -1,12 +1,12 @@
 import { createHash } from 'node:crypto'
+import { serviceOrigin } from './service-environments.mjs'
 
 export function resolveDesktopProfile({ channel = 'release', version, env = {}, publicConfig, buildId }) {
   if (!['release', 'test'].includes(channel)) throw new Error('Channel must be release or test')
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Base version must be major.minor.patch')
   if (!/^[a-zA-Z0-9._-]+$/.test(buildId)) throw new Error('Invalid build ID')
   const test = channel === 'test'
-  const origin = env[test ? 'VINOTE_TEST_VILAB_SERVER_URL' : 'VINOTE_RELEASE_VILAB_SERVER_URL']
-    || 'http://192.168.1.143:9876'
+  const origin = serviceOrigin(test ? 'lan' : 'public')
   const url = new URL(origin)
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password || url.search || url.hash || url.pathname !== '/') {
     throw new Error('VILab URL must be an HTTP(S) origin without credentials, query or path')

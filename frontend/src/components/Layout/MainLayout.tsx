@@ -7,9 +7,11 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { APP_MODE_EVENT, useAppModeStore } from '../../stores/appModeStore'
 import { useAuthStore } from '../../stores/authStore'
+import { SourceTaskProgress } from './SourceTaskProgress'
 
 export function MainLayout() {
   const location = useLocation()
+  const isNoteEditor = location.pathname.startsWith('/note/')
   const userId = useAuthStore(state => state.user?.id)
   useEffect(() => {
     useAppModeStore.getState().reset()
@@ -32,8 +34,9 @@ export function MainLayout() {
         <Sidebar />
         <SidebarInset className="h-full min-w-0 overflow-hidden bg-background">
           <Header />
-          <main className="app-surface stealth-scroll min-h-0 flex-1 overflow-auto">
-            <div key={location.pathname} className="page-transition min-h-full">
+          {import.meta.env.DEV && <SourceTaskProgress key={userId} />}
+          <main className={`app-surface stealth-scroll min-h-0 flex-1 ${isNoteEditor ? 'overflow-hidden' : 'overflow-auto'}`}>
+            <div key={location.pathname} className={isNoteEditor ? 'h-full min-h-0 min-w-0' : 'page-transition min-h-full'}>
               <Outlet />
             </div>
           </main>

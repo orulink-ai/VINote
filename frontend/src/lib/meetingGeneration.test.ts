@@ -37,8 +37,8 @@ describe('meetingGeneration', () => {
   })
 
   it('builds a readable localized meeting title', () => {
-    expect(createMeetingRecordingTitle(new Date('2026-06-15T10:20:30+08:00'), 'zh-CN')).toContain('会议录音')
-    expect(createMeetingRecordingTitle(new Date('2026-06-15T10:20:30Z'), 'en')).toContain('Meeting recording')
+    expect(createMeetingRecordingTitle(new Date('2026-06-15T10:20:30+08:00'), 'zh-CN')).toContain('｜待生成纪要')
+    expect(createMeetingRecordingTitle(new Date('2026-06-15T10:20:30Z'), 'en')).toContain('｜Notes pending')
   })
 
   it('submits meeting recordings through the existing upload generation flow', async () => {

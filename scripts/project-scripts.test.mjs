@@ -8,14 +8,21 @@ const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 
 test('root scripts expose one canonical runtime and package command set', () => {
   const scripts = packageJson.scripts
-  assert.equal(scripts.setup, 'node scripts/dev-desktop.mjs --setup-only')
+  for (const target of ['desktop', 'web']) {
+    for (const environment of ['lan', 'public']) {
+      const key = `dev:${target}:${environment}`
+      assert.equal(scripts[key], `node scripts/dev.mjs --target ${target} --environment ${environment}`)
+      assert.equal(scripts[`${key}:plan`], `${scripts[key]} --plan`)
+    }
+  }
+  assert.equal(scripts.setup, 'node scripts/dev.mjs --setup-only')
   assert.equal(scripts.verify, 'node scripts/verify-project.mjs')
   assert.equal(scripts.check, 'yarn --cwd frontend build && yarn desktop:check')
-  assert.equal(scripts['dev:desktop'], 'node scripts/dev-desktop.mjs')
-  assert.equal(scripts['client:test:dev'], 'node scripts/dev-desktop.mjs --channel test')
-  assert.equal(scripts['client:dev'], 'node scripts/dev-desktop.mjs --channel development')
-  assert.equal(scripts['client:test'], scripts['package:test'])
-  assert.equal(scripts['client:production'], scripts['package:release'])
+  assert.equal(scripts['dev:desktop'], 'node scripts/legacy-command.mjs dev:desktop dev:desktop:lan')
+  assert.equal(scripts['client:test:dev'], 'node scripts/legacy-command.mjs client:test:dev dev:desktop:lan')
+  assert.equal(scripts['client:dev'], 'node scripts/legacy-command.mjs client:dev dev:desktop:public')
+  assert.equal(scripts['client:test'], 'node scripts/legacy-command.mjs client:test package:test')
+  assert.equal(scripts['client:production'], 'node scripts/legacy-command.mjs client:production package:release')
   assert.equal(scripts['dev:api'], 'node scripts/dev-api.mjs')
   assert.equal(scripts['package:test'], 'node scripts/build-desktop.mjs --channel test')
   assert.equal(scripts['package:release'], 'node scripts/build-desktop.mjs --channel release')

@@ -24,7 +24,7 @@ export function MeetingCaptureWorkspace({ title }: { title: string }) {
   return <section className={`mx-auto grid w-full gap-6 p-4 lg:p-8 ${session.captureOptions?.screen ? 'max-w-6xl lg:grid-cols-[minmax(0,1fr)_22rem]' : 'max-w-2xl'}`}>
     <div className="overflow-hidden rounded-3xl border bg-card shadow-sm">
       <div className="flex flex-wrap items-center justify-between gap-3 border-b px-6 py-4">
-        <div className="min-w-0"><p className="truncate font-semibold">{title}</p><p className="mt-1 text-sm text-muted-foreground">{session.captureOptions?.mode === 'minutes' ? (zh ? '保存后自动进行完整会后处理' : 'Full post-meeting processing starts after saving') : (zh ? '仅保存原始媒体，不调用转写或总结模型' : 'Save original media without transcription or summarization')}</p></div>
+        <div className="min-w-0"><p className="truncate font-semibold">{title}</p><p className="mt-1 text-sm text-muted-foreground">{zh ? '先录制并保存，结束后再选择是否生成会议纪要' : 'Record and save first, then choose whether to generate meeting notes'}</p></div>
         <Badge variant={session.phase === 'paused' ? 'secondary' : 'destructive'}>{session.phase === 'paused' ? (zh ? '已暂停' : 'Paused') : (zh ? '录制中' : 'Recording')}</Badge>
       </div>
       {session.captureOptions?.screen && <div className="relative grid min-h-48 place-items-center bg-black">
