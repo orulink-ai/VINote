@@ -13,9 +13,9 @@ from app.transcribers.base import Transcriber
 
 class VILabTranscriber(Transcriber):
     provider = "vilab-server"
-    # 16 kHz mono PCM16 is 32 kB/s: at most ~9.6 MB per cloud request,
-    # regardless of the original compressed audio/video file size.
-    max_request_duration_seconds = 300.0
+    # Shared LAN/public bound, including overlap: ~1.92 MB of PCM16 per request.
+    # Leave processing headroom below the public proxy's read timeout.
+    max_request_duration_seconds = 60.0
     def __init__(self, base_url: str, api_key: str, model: str | None = None, language: str | None = None, cloud_user_id: str | None = None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key

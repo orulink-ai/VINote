@@ -12,6 +12,10 @@ vi.mock('./STTProfileManager', () => ({ STTProfileManager: () => null }))
 
 beforeEach(() => {
   vi.clearAllMocks()
+  HTMLElement.prototype.scrollIntoView = vi.fn()
+  HTMLElement.prototype.hasPointerCapture = vi.fn(() => false)
+  HTMLElement.prototype.setPointerCapture = vi.fn()
+  HTMLElement.prototype.releasePointerCapture = vi.fn()
   mocks.api.mockResolvedValue([
     { id: 'speech', modelType: 'asr', runtimeStatus: 'available' },
     { id: 'first', modelType: 'llm', runtimeStatus: 'available' },
@@ -23,12 +27,14 @@ beforeEach(() => {
 
 it('saves an available summary model while preserving the speech selection', async () => {
   render(<ModelSourcePanel compact />)
-  const summary = screen.getByLabelText('内容总结')
+  const summary = screen.getByRole('combobox', { name: '内容总结 / 画面分析' })
   await waitFor(() => expect(summary).not.toBeDisabled())
-  expect(screen.getByRole('option', { name: 'offline · 不可用' })).toBeDisabled()
-  await userEvent.selectOptions(summary, 'second')
+  await userEvent.click(summary)
+  expect(screen.getByRole('option', { name: 'offline · 不可用' })).toHaveAttribute('aria-disabled', 'true')
+  await userEvent.click(screen.getByRole('option', { name: 'second', exact: true }))
   expect(mocks.save).toHaveBeenCalledWith('speech', 'second')
-  await userEvent.selectOptions(screen.getByLabelText('语音转写'), '')
+  await userEvent.click(screen.getByRole('combobox', { name: '语音转写' }))
+  await userEvent.click(screen.getByRole('option', { name: '跟随服务默认' }))
   expect(mocks.save).toHaveBeenCalledWith('', 'first')
 })
 
@@ -36,7 +42,7 @@ it('shows catalog failures and allows a refresh', async () => {
   mocks.api.mockRejectedValueOnce(new Error('模型服务连接失败'))
   render(<ModelSourcePanel compact />)
   expect(await screen.findByRole('alert')).toHaveTextContent('模型服务连接失败')
-  expect(screen.getByLabelText('内容总结')).toBeDisabled()
-  await userEvent.click(screen.getByRole('button', { name: '刷新模型' }))
-  await waitFor(() => expect(screen.getByLabelText('内容总结')).not.toBeDisabled())
+  expect(screen.getByRole('combobox', { name: '内容总结 / 画面分析' })).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: '刷新' }))
+  await waitFor(() => expect(screen.getByRole('combobox', { name: '内容总结 / 画面分析' })).not.toBeDisabled())
 })

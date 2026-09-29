@@ -98,6 +98,7 @@ export interface PendingMeeting {
   processingUpdatedAt?: string
   retryCount?: number
   draftNoteId?: string
+  titleEdited?: boolean
   progress?: number
   processedSeconds?: number
   totalSeconds?: number

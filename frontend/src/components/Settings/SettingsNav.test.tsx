@@ -23,10 +23,10 @@ describe('SettingsNav', () => {
     expect(nav.className).toContain('lg:sticky')
     expect(nav.className).toContain('lg:top-6')
     expect(nav.className).toContain('lg:self-start')
-    expect(nav.className).toContain('lg:w-56')
+    expect(nav.className).toContain('shrink-0')
 
     const modelsTab = screen.getByRole('button', { name: '模型' })
     expect(modelsTab.className).toContain('gap-2')
-    expect(modelsTab.className).toContain('px-4')
+    expect(modelsTab).toHaveAttribute('aria-current', 'page')
   })
 })

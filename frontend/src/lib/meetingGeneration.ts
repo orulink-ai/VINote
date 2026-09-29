@@ -1,4 +1,5 @@
 import { apiJson } from './api'
+import { formatMeetingTitle } from './meetingTitle'
 import type { NoteRecord } from '../stores/noteLibraryStore'
 import type { WorkspaceSelection } from '../stores/teamStore'
 import {
@@ -59,15 +60,7 @@ export class MissingMeetingTaskError extends MeetingGenerationError {
 }
 
 export function createMeetingRecordingTitle(date = new Date(), locale = 'zh-CN') {
-  const formatter = new Intl.DateTimeFormat(locale, {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
-  const prefix = locale.startsWith('zh') ? '会议录音' : 'Meeting recording'
-  return `${prefix} ${formatter.format(date)}`
+  return formatMeetingTitle(date, '', locale)
 }
 
 export function buildMeetingRecordingFile(audioBlob: Blob, startedAt = new Date()) {
@@ -95,7 +88,7 @@ export async function submitMeetingRecording(
       style: 'meeting',
       workflow: 'meeting',
       traceSource: 'desktop_recording',
-      extras: `录制开始时间：${input.startedAt.toISOString()}。${input.endedAt ? `录制结束时间：${input.endedAt.toISOString()}。` : '录制结束时间未知。'}这是录制时间，不代表实际会议起止；录制可能暂停，禁止用音频时长推算会议结束时间。`,
+      extras: `录制开始时间：${input.startedAt.toISOString()}。${input.endedAt ? `录制结束时间：${input.endedAt.toISOString()}。` : '录制结束时间未知。'}这是录制时间，不代表实际会议起止；录制可能暂停，禁止用音频时长推算会议结束时间。最终纪要首行请用一级标题概括原文支持的会议主题，不含日期，不沿用录制占位名称。`,
       summaryMode: input.summaryMode,
       outputLanguage: input.outputLanguage,
       modelProfileId: input.modelProfileId,

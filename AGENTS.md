@@ -61,15 +61,15 @@ The backend can also run as a lightweight MCP server through `mcp_server.py`.
 - Backend dev server: `uvicorn main:app --host 0.0.0.0 --port 8900 --reload`
 - Backend direct run: `python main.py`
 - Fresh-checkout setup without starting the app: `yarn setup`
-- Desktop + backend entry points: `yarn client:test:dev` (LAN test development), `yarn client:dev` (local development). `yarn dev` remains a test-development compatibility alias. See `docs/running-scripts.md`.
+- Source desktop: `yarn dev:desktop:lan` / `yarn dev:desktop:public`; source web: `yarn dev:web:lan` / `yarn dev:web:public`. All start the local backend and Vite. See `docs/running-scripts.md`.
 - Root backend-only entry point: `yarn dev:api`
-- Root browser frontend entry point: `yarn dev:web`
+- Root browser entry points: `yarn dev:web:lan` / `yarn dev:web:public` (backend + Vite + browser).
 - Merge-ready project validation: `yarn verify`
   - `yarn dev` auto-selects a Python executable with backend dependencies; `VINOTE_PYTHON=/path/to/python` overrides it.
   - Configured database failures are reported; the startup script does not switch to another database. Without DATABASE_URL the backend uses its SQLite default.
 - Frontend install: `cd frontend && npm install`
 - Frontend web dev server only: `cd frontend && npm run web:dev`
-- Tauri desktop hot-reload dev: `yarn client:test:dev` or `yarn client:dev` from the repository root
+- Source desktop: `yarn dev:desktop:lan` / `yarn dev:desktop:public`; source web: `yarn dev:web:lan` / `yarn dev:web:public`. All start the local backend and Vite. See `docs/running-scripts.md`.
 - Windows source development keeps Tauri/Vite output in the invoking terminal. `scripts/windows-backend-dev.py` isolates Uvicorn reload signals in a hidden console with output forwarded to that terminal; do not use Windows `detached: true` for the desktop toolchain.
 - Frontend build: `cd frontend && npm run build`
 - Frontend preview: `cd frontend && npm run preview`
@@ -120,7 +120,7 @@ Frontend Vite settings live in `frontend/.env.local`:
   - local dev special case: when the frontend runs on port `3100`, the sidebar `Document` link defaults to `http://localhost:3101/`
 
 Tauri desktop settings live in `frontend/src-tauri/tauri.conf.json`:
-- `beforeDevCommand` runs `node ../scripts/ensure-web-dev.mjs`, so Tauri desktop development reuses an existing Vite server on port `3100` or starts one when needed, without requiring Bash on Windows.
+- Direct Tauri invocation retains `beforeDevCommand` (`ensure-web-dev.mjs`). Canonical source commands use `dev.mjs` to own Vite and disable that hook; occupied ports are rejected rather than reused. No Bash is required on Windows.
 - Use root `yarn package:test` or `yarn package:release`: scripts/build-desktop.mjs packages the Python backend and FFmpeg, builds the frontend with same-origin requests, and invokes Tauri with a generated resource/bundle config. Direct `tauri build` does not prepare these resources.
 - Desktop bundles are generated under `frontend/src-tauri/target/release/bundle/`; macOS defaults to a `.app` bundle.
 
@@ -188,9 +188,9 @@ Update `README.md`, this `AGENTS.md`, or both whenever you change:
 - Cloud session linking must match the current local user's normalized email and must never replace an existing issuer/subject. Registration keeps email/password fixed after sending the code; switching back to login resets the form.
 - `cloud_account_service.py` owns VINote Supabase email OTP linking, encrypted sessions and token rotation. `VINOTE_SUPABASE_URL` / `VINOTE_SUPABASE_PUBLISHABLE_KEY` enable personal authentication; configured personal auth never falls back to the deployment key.
 - Cloud account endpoints under `/api/vilab/account` require local VINote authentication. `cloud_accounts` maps local users to unique `(issuer, subject)` identities.
-- Source development and desktop packages use the deployed LAN VILab Server at `http://192.168.1.143:9876` by default. An explicit `VILAB_SERVER_URL` override remains available for isolated service development.
+- `scripts/service-environments.mjs` fixes LAN to `http://192.168.1.143:9876` and public to `https://api.orulink.ai`. The six product entry points ignore all VILab URL environment overrides. Standalone `dev:api` retains the generic override.
 
-Desktop packaging: scripts/desktop_backend.py initializes per-install secrets and SQLite in the user app data directory. Release-only desktop_backend.rs starts the bundled backend on a persisted per-install loopback port and stops it on exit. Test development and packaged builds default to http://192.168.1.143:9876; ordinary development defaults to http://127.0.0.1:9878. Desktop channels use VINOTE_TEST_VILAB_SERVER_URL / VINOTE_DEV_VILAB_SERVER_URL / VINOTE_RELEASE_VILAB_SERVER_URL rather than the generic VILAB_SERVER_URL; standalone backend commands still use the generic variable. The two products remain independent processes/repos.
+Desktop packaging: scripts/desktop_backend.py initializes per-install secrets and SQLite in the user app data directory. Release-only desktop_backend.rs starts the bundled backend on a persisted per-install loopback port and stops it on exit. `yarn package:release` fixes the public VILab Origin; `yarn package:test` fixes LAN. Installation identities remain separate. VINote and VILab remain independent processes/repos.
 
 Fresh-checkout startup: yarn dev runs bootstrap-dev.mjs to install frontend dependencies, create .venv and install requirements, and create .env with unique local secrets and config/desktop-public.json account defaults. Existing .env is preserved. --setup-only performs initialization without opening a window. Node 22+, Python, Rust/platform compilers and FFmpeg are system prerequisites.
 
@@ -204,7 +204,7 @@ Fresh-checkout startup: yarn dev runs bootstrap-dev.mjs to install frontend depe
 - `speaker_clustering_service.py` refines automatic grouping using sustained-turn embeddings, average linkage and silhouette selection. Short uncertain turns remain unknown; overlap remains explicit. Group count and silhouette are not identity accuracy guarantees.
 - Meeting summaries synthesize themes, confirmed decisions and explicit actions; omit unsupported owners/deadlines/open questions. Both one-shot and hierarchical prompts keep wall-clock metadata separate from media offsets and avoid a duplicate closing AI summary.
 - `app/llm/meeting_review.py` owns fact-review prompts. Meeting one-shot drafts are reviewed against original transcripts; hierarchical chunks are reviewed before merge, and final consistency is checked against reviewed chunks. Empty/failed reviews fail rather than returning the draft. Cloud review prefers available `MEETING_REVIEW_MODEL` (default `gpt-6-astra`), falls back to the primary model when absent, and never changes global preferences. Custom/local providers reuse their current model. Packaging includes this non-secret preference; calls and actual review model remain traced.
-- `bootstrap-dev.mjs` checks/prepares local speaker runtime/models. `desktop-build-profile.mjs` owns release/test identity and configuration isolation. Test development, test packages and release packages default to the deployed LAN ViLab Origin at `http://192.168.1.143:9876`; ordinary development defaults to local port 9878. Channel-specific overrides and command semantics are documented in `docs/running-scripts.md`. Build entry points and artifacts are documented in `docs/desktop-packaging.md`; never package `.env` or private meeting artifacts.
+- `bootstrap-dev.mjs` prepares speaker runtime/models; web startup skips Rust checks. `dev.mjs` owns all four source modes, their process lifecycle and port checks. `desktop-build-profile.mjs` owns package identity/configuration and uses shared fixed origins. See `docs/running-scripts.md` and `docs/desktop-packaging.md`; never package `.env` or private meeting artifacts.
 
 - `/meetings` owns meeting setup/history; `meetingCapture.ts` captures selected microphone plus optional display/system audio. Main-window `MeetingRecorderDock` owns the stream; `MeetingRecorderController` forwards native floating-window actions via Tauri events.
 - Capture acquisition is cancellable. Screen selection waits for the user without a fixed timeout; microphone acquisition has a 20-second timeout. Cancel/reset/unmount releases acquired sources and stops late permission results. Runtime recorder errors release tracks and update the dock; stopping releases devices before async file finalization. Pausing retains capture for resuming; stopping/discarding releases it.
@@ -212,9 +212,11 @@ Fresh-checkout startup: yarn dev runs bootstrap-dev.mjs to install frontend depe
 - `speaker_diarization_service.py` runs whole-recording local sherpa-onnx Pyannote/3D-Speaker clustering independently from cloud STT covering the entire recording (chunked when necessary). Provider timestamps are aligned by interval overlap; whole-file-only text is aligned in sequence by detected speaking duration and marked estimated. IDs are local to the recording; overlap labels indicate uncertain attribution, not separated overlapping audio.
 - Media generation routes accept `diarize` and optional `speaker_count` (1–20); authenticated `GET /api/meeting-capabilities` returns `diarization.available`. Source development installs optional `requirements.diarization.txt` and models via `scripts/setup_diarization.py`; `DIARIZATION_MODEL_DIR` defaults to `data/models/diarization`. Desktop packaging stages these models.
 - Uploaded video reuses its source file for screenshot extraction. Audio-only notes remove screenshot placeholders. Meeting video notes use `meeting_video`; audio uses `meeting_recording`.
-- `scripts/check_meeting_generation.py --live` uses real cloud services through in-process desktop API routes and saves a personal test note. This is not a native capture/UI test. Explicit transient STT HTTP 502/503/504 and transport/timeouts retry at most twice; authentication and unknown errors fail immediately. VILab transcription requests are capped at 300 seconds (approximately 9.6 MB PCM WAV), including when optional generic chunking is disabled. Successful chunks are cached for retry; explicit no-speech sections are retained as unrecognized intervals. This bound is not a guarantee against upstream outages.
+- `scripts/check_meeting_generation.py --live` uses real cloud services through in-process desktop API routes and saves a personal test note. This is not a native capture/UI test. Explicit transient STT HTTP 502/503/504 and transport/timeouts retry at most twice; authentication and unknown errors fail immediately. VILab transcription requests are capped at 60 seconds including overlap (approximately 1.92 MB PCM WAV), identically for LAN and public servers, including when optional generic chunking is disabled. Successful chunks are cached for retry; explicit no-speech sections are retained as unrecognized intervals. This bound is not a guarantee against upstream outages.
 
 ## Langfuse observability
+
+Source-run HTTP tests may register task IDs and short labels in ignored `data/dev-tasks.json`. `frontend/devTasksPlugin.ts` serves these registrations only in Vite development; `SourceTaskProgress` uses authenticated task APIs to show live status in the open desktop/web UI. Production bundles exclude this panel. All four canonical source launchers use Vite HMR and Uvicorn reload; backend edits can interrupt active generation workers.
 
 `app/services/tracing_service.py` owns Langfuse SDK 4 tracing for desktop requests only. Tauri identifies itself with `X-VINote-Client: desktop`; browser, Pi and ordinary backend calls must not initialize tracing. Business root names are exactly `桌面端｜会议纪要` and `桌面端｜笔记整理`, selected by product workflow rather than media type. Source desktop, test packages and release packages all trace; source desktop startup and packaging reject missing project configuration, while ordinary backend startup does not. Network/export failures remain fail-open for business tasks. Root chains correlate task_id/sessionId, hash local user IDs, use Chinese stage names, and record complete STT/LLM inputs and outputs, actual model parameters, usage and latency. Never record media binary, credentials, auth headers, local absolute paths or raw speaker embeddings. Configure LANGFUSE_BASE_URL, LANGFUSE_PUBLIC_KEY, LANGFUSE_SECRET_KEY and optional LANGFUSE_RELEASE. Both package profiles bundle the build-managed Langfuse credentials in backend resources; these are extractable by package holders, never commit or log them. This exception does not permit bundling .env, model keys or user credentials. Old per-install langfuse.env is ignored. Environments are development/test/production. Both builds require frozen-backend synthetic trace ingestion plus API readback and store a credential-free receipt in manifest.json. See docs/langfuse.md for scope and limitations.
 
@@ -224,7 +226,7 @@ Meeting setup automatically enables speaker diarization with automatic speaker c
 
 Meeting capture uses the selected microphone as its required audio source. Screen recording requests video only, and the screen picker chooses only the recorded window or display. Persisted legacy options may still contain a system-audio flag, but capture ignores it so Windows/WebView system-audio failures never block recording. Display capture support depends on the runtime and screen picker.
 
-Stopping saves its blob and PendingMeeting metadata in IndexedDB and releases capture resources. Recording-only mode returns to /meetings without STT/LLM; minutes mode automatically generates and saves the note, always using complete media for audio and video. LocalRecordingCard owns replay/download/confirmed deletion/later generation. A saved recording is visible without a note; generation retains the local original and history until explicit user deletion. Preserve actual recording start/end separately from generation time and meeting wall-clock context.
+Stopping saves its blob and PendingMeeting metadata in IndexedDB and releases capture resources. All captures return to /meetings?recordingSaved=<id> without STT/LLM, including persisted legacy minutes-mode settings. SavedRecordingChoice verifies ownership and durable idle status, then asks whether to generate notes; only an explicit choice starts processing complete media. Declining preserves local history. Failed local saves must succeed before offering generation. LocalRecordingCard owns replay/download/confirmed deletion/later generation. A saved recording is visible without a note; generation retains the local original and history until explicit user deletion. Preserve actual recording start/end separately from generation time and meeting wall-clock context.
 
 MeetingMediaService owns GET/DELETE /api/notes/{note_id}/recording. File deletion preserves notes, transcripts, screenshots and the user's imported original. Deletion requires the note creator, matching recording_owner marker, and a single referencing note; unverified legacy/shared recordings remain downloadable. Only regular audio/video files under the task's media directory may be deleted. A recording_deleted marker prevents playback fallback to cached source audio. Local user-visible deletion uses a strict IndexedDB transaction and reports failures.
 
@@ -237,17 +239,17 @@ Successful local saving sets `localRecordingSaved` independently of generation s
 
 ### Meeting minutes completion (2026-09-18)
 
-- `meeting_video_analysis_service.py` samples up to 24 timestamped frames and sends actual images to the deployed `gpt-5.6-luna` model. Visual evidence is included in summary and fact review separately from speech. This is sampled frame analysis, not exhaustive video understanding; absent vision service fails the task while local media remains available. `visual_observations.json` records evidence and offsets. Langfuse records offsets/text/model/usage, never image binaries.
+- `meeting_video_analysis_service.py` samples up to 24 timestamped frames and sends actual images to a dynamically resolved deployed model: prefer the task-snapshotted LLM selection; if explicitly unsupported/unavailable, use a deployed available model with explicit vision support. Missing vision metadata permits an actual call of the selected model, not an assumption of support. Visual evidence is included in summary and fact review separately from speech. This is sampled frame analysis, not exhaustive video understanding; absent vision service fails the task while local media remains available. `visual_observations.json` records evidence and offsets. Langfuse records offsets/text/model/usage, never image binaries.
 - Saved unavailable cloud model preferences resolve to a validated service default for new tasks. Explicit invalid selections still fail; running snapshots do not change. The fallback has its own trace stage.
 - Desktop main capture uses the native controller without a simultaneous in-page recording dock. Terminal main-window states close the native controller. A saved server note must retain the original recording before deleting the local pending copy.
 
 - Desktop source startup isolates child process groups/consoles on Windows as well as Unix, so Python reload control signals cannot terminate the sibling Tauri window. Shutdown still terminates each owned process tree.
 
-Development channels use separate Tauri identities (`app.vinote.desktop.dev` and `app.vinote.desktop.test.dev`) and tracing environments, while the source backend database still follows repository configuration. Run one source instance at a time; the launcher rejects an occupied backend port rather than reusing unknown settings. `client:*:dev:plan` is a read-only configuration preview without bootstrapping or launching services.
+LAN/public source desktop identities remain `app.vinote.desktop.test.dev` / `app.vinote.desktop.dev`; both trace as development. Web does not enable desktop tracing. Source databases follow repository configuration, and web modes share the browser Origin/storage. Run one source instance at a time; reject occupied ports 8900/3100. All six canonical commands support `:plan` without launching or bootstrapping.
 
 ## 会后统一处理（2026-09-21）
 
-两种模式在录制期间均不调用 ASR 或总结模型。结束后先保存完整原始媒体、释放设备并关闭控制；纪要模式自动执行会后处理。说话人区分继续使用本地模型，VILab 负责完整音频转写和总结，结果按时间戳对齐。视频使用实际代表帧证据，不代表逐帧理解。
+会议页只确认麦克风；点击“开始会议”后再选择是否共享屏幕，选择共享才打开系统选择器，不预选是否生成纪要。录制期间不调用 ASR 或总结模型；结束后先保存完整原始媒体、释放设备并关闭控制，再由用户选择“生成会议纪要”或“暂不生成”。暂不生成时保留本地历史，之后仍可手动生成。说话人区分继续使用本地模型，VILab 负责完整音频转写和总结，结果按时间戳对齐。视频使用实际代表帧证据，不代表逐帧理解。
 
 分段转写显示已完成音频时长、比例及基于实际分段耗时估算的剩余转写时间；整段请求没有中间结果时不虚构进度。所有进度采集仅在录制结束后运行。
 
@@ -265,3 +267,14 @@ VINote-app 的 recordingLibrary 按账号持久化原音频和录音草稿；gen
 上传生成入口在任务目录写入不可覆盖的 generation_client 标记，保存笔记时从任务读取到 notes.generation_client（启动时兼容迁移旧表）。App 与桌面列表/详情显示 App 生成或桌面端生成；历史缺失显示来源未知，不能用当前保存/编辑客户端猜测。登录来源审计仍不向用户显示。
 
 App 文档与脚本：子仓库 README.md / README.en.md 与 docs/build-and-deployment{,.en}.md 为当前直接 Supabase/VILab 架构说明；父仓库 docs/app-integration.md / docs/en/app-integration.md 记录边界。App npm android:standalone 是调试签名验收包；android:release / android:bundle 必须使用 VINOTE_ANDROID_* 签名环境变量，禁止回退调试证书。父仓库桌面运行和打包命令不隐式构建 App。
+
+Video analysis never hardcodes a model name. `/api/vilab/models` retains capability metadata; model selection, traces and visual cache use the actual model, with cache also scoped to the server Origin. Source progress hides already-terminal tasks on initial load; results observed during the current session can be dismissed without deleting artifacts.
+
+Cloud chat transport: VINote summary, fact review and sampled video analysis request SSE (`stream=true`) from VILab. `cloud_chat_stream.py` aggregates only final content, preserves usage, consumes reasoning/heartbeat events without storing them as answers, and rejects missing completion markers, truncation, provider errors and overlong streams. This avoids waiting for a complete non-streaming response behind the public proxy; silent upstream stalls can still time out. Model selection remains deployment-driven.
+
+会议标题默认采用 `YYYY-MM-DD HH:mm｜内容`：以已记录的录制开始时间创建“待生成纪要”占位，完成后从最终纪要主题生成标题；不使用生成时间冒充会议时间。本地录制支持改名，纪要详情支持编辑标题；生成时保留手动改过的录制或草稿标题。
+
+
+### Note reading layout
+
+Saved audio/video notes open in rendered preview mode; Markdown source is shown only when the user chooses Edit or Split. The note route fills the remaining app height with independent content scrolling, keeping its toolbar and media player visible. Key moments open in a Sheet on demand instead of permanently consuming note width. Local video uses a normal-aspect side panel on wide windows (stacked on narrow windows), with an expanded workspace view that keeps the same video element and playback position. Audio retains its bottom playback bar. Key-moment cards wrap long text and contain complete thumbnails without expanding the rail.

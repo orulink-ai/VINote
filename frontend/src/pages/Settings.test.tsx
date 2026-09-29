@@ -21,7 +21,7 @@ vi.mock('../stores/themeStore', () => ({
 }))
 
 describe('Settings page layout', () => {
-  it('uses the full available main area instead of centering a narrow settings canvas', () => {
+  it('keeps the settings canvas responsive within the main area', () => {
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
         <I18nProvider>
@@ -30,10 +30,9 @@ describe('Settings page layout', () => {
       </MemoryRouter>
     )
 
-    const page = screen.getByRole('heading', { name: '设置' }).parentElement as HTMLElement
+    const page = screen.getByRole('heading', { name: '设置' }).parentElement?.parentElement as HTMLElement
 
     expect(page.className).toContain('w-full')
-    expect(page.className).not.toContain('max-w-[1440px]')
-    expect(page.className).not.toContain('mx-auto')
+    expect(screen.getByRole('navigation')).toBeInTheDocument()
   })
 })

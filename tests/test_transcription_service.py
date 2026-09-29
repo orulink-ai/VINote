@@ -50,7 +50,7 @@ class TranscriptionServiceTest(unittest.TestCase):
                 self.assertEqual(chunks[0].trim_start, 0)
                 self.assertEqual(chunks[-1].trim_end, 10800)
                 for chunk in chunks:
-                    self.assertLessEqual(chunk.chunk_end - chunk.chunk_start, 300)
+                    self.assertLessEqual(chunk.chunk_end - chunk.chunk_start, 60)
                 for previous, current in zip(chunks, chunks[1:]):
                     self.assertEqual(previous.trim_end, current.trim_start)
 
@@ -61,7 +61,36 @@ class TranscriptionServiceTest(unittest.TestCase):
                 patch.object(service, "_transcribe_chunk", return_value=TranscriptResult(None, "ok", [])):
             service._transcribe_in_chunks(audio_path="test.wav", duration=60,
                                          transcriber=VILabTranscriber("http://localhost", "test"))
-            self.assertEqual(specs.call_args.kwargs["request_duration_limit"], 300)
+            self.assertEqual(specs.call_args.kwargs["request_duration_limit"], 60)
+
+    def test_short_cloud_chunks_cover_boundaries_with_overlap(self):
+        from app.config import settings
+        from app.transcribers.vilab_transcriber import VILabTranscriber
+        service = TranscriptionService()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "input.wav"
+            source.write_bytes(b"audio")
+            for origin in ("http://192.168.1.143:9876", "https://api.orulink.ai"):
+                transcriber = VILabTranscriber(origin, "unused")
+                for duration in (60, 60.001, 121.125, 1687.022):
+                    with self.subTest(origin=origin, duration=duration), \
+                            patch.object(settings, "transcription_chunk_overlap_seconds", 120):
+                        chunks = service._build_chunk_specs(
+                            audio_path=str(source), duration=duration, temp_dir=Path(directory),
+                            request_duration_limit=transcriber.max_request_duration_seconds)
+                        if duration == 60:
+                            self.assertEqual(chunks, [])
+                            continue
+                        self.assertEqual(chunks[0].trim_start, 0)
+                        self.assertAlmostEqual(chunks[-1].trim_end, duration, places=3)
+                        for chunk in chunks:
+                            self.assertGreater(chunk.trim_end, chunk.trim_start)
+                            self.assertLessEqual(chunk.chunk_end - chunk.chunk_start, 60.001)
+                            self.assertLessEqual(chunk.chunk_start, chunk.trim_start)
+                            self.assertGreaterEqual(chunk.chunk_end, chunk.trim_end)
+                        for previous, current in zip(chunks, chunks[1:]):
+                            self.assertEqual(previous.trim_end, current.trim_start)
+                            self.assertGreater(previous.chunk_end, current.chunk_start)
 
     def test_explicit_silent_chunk_preserves_other_speech_and_offsets(self):
         from app.models.transcript import NoSpeechDetectedError

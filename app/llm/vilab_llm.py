@@ -32,12 +32,13 @@ class VILabLLM(_BasePromptLLM):
         # the input. Notes must use VILab Server's authenticated chat gateway instead.
         system_prompt += ("\n仅根据提供的原文整理。严禁补充原文未提供的日期、人物、时长、"
                           "决策、待办或结论；缺少信息时省略相应章节，不要推断。")
-        record_model_parameters({"stream": False})
+        record_model_parameters({"stream": True})
         update_current(metadata={"prompt_version": hashlib.sha256(system_prompt.encode()).hexdigest()[:16]})
         update_current(input=[{"role": "system", "content": content_summary(system_prompt)},
                               {"role": "user", "content": content_summary(user_prompt)}])
         data = VILabCloudService().request(self.user_id, "POST", "/openai/v1/chat/completions", json={
-            "model": self.model, "stream": False,
+            "model": self.model, "stream": True,
+            "stream_options": {"include_usage": True},
             "messages": [{"role": "system", "content": system_prompt},
                          {"role": "user", "content": user_prompt}],
         })

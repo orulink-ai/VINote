@@ -271,6 +271,7 @@ export function STTProfileManager() {
               {profiles.filter(profile => profile.id !== 'vilab-cloud').map((profile) => (
                 <div
                   key={profile.id}
+                  data-profile-id={profile.id}
                   className={clsx('rounded-xl border p-4 transition-colors hover:bg-muted/35', editingId === profile.id && 'border-foreground/30 bg-muted/45')}
                 >
                   <div className="grid gap-4">

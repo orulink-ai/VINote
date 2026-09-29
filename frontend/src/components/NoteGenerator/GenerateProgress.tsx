@@ -92,6 +92,7 @@ export function GenerateProgress({ status, progress, currentStep, error, message
           return (
             <div
               key={step.key}
+              data-state={stepStatus}
               className={cn(
                 'flex items-center gap-3 border-l-2 border-transparent p-3',
                 stepStatus === 'processing' ? 'border-primary/30 bg-primary/5' : 'border-transparent'

@@ -1,6 +1,6 @@
 # App 与桌面端集成边界
 
-[English](en/app-integration.md) · [App 中文说明](../VINote-app/README.md) · [App 运行与打包](../VINote-app/docs/build-and-deployment.md)
+[English](en/app-integration.md) · [App 中文说明](https://github.com/orulink-ai/VINote-app/blob/main/README.md) · [App 运行与打包](https://github.com/orulink-ai/VINote-app/blob/main/docs/build-and-deployment.md)
 
 `VINote-app/` 是独立 React Native Git 子模块，远端为 https://github.com/orulink-ai/VINote-app ，主分支为 `main`；父仓库集成分支为 `dev`。首次拉取执行 `git submodule update --init --recursive`；不要使用 `--remote` 绕过父仓库固定的已审查提交。App 提交先推送，再提交父仓库 gitlink。
 

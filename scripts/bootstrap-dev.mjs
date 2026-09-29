@@ -9,9 +9,9 @@ function exec(command, args) {
   if (result.error || result.status !== 0) throw new Error(`Setup failed: ${command}. Check network/toolchain and retry yarn dev.`)
 }
 
-export function bootstrap() {
+export function bootstrap({ desktop = true } = {}) {
   if (Number(process.versions.node.split('.')[0]) < 22) throw new Error('Node.js 22 or newer is required.')
-  if (spawnSync('cargo', ['--version'], { windowsHide: true }).status !== 0) throw new Error('Install Rust and platform build tools first (Windows C++ Build Tools / macOS Xcode Command Line Tools).')
+  if (desktop && spawnSync('cargo', ['--version'], { windowsHide: true }).status !== 0) throw new Error('Install Rust and platform build tools first (Windows C++ Build Tools / macOS Xcode Command Line Tools).')
   if (!existsSync(join(root, 'frontend/node_modules/@tauri-apps/cli/tauri.js'))) {
     console.log('[setup] Installing frontend dependencies...')
     // Yarn invokes Node with its own executable path on Windows and macOS.

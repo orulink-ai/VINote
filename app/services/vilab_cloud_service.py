@@ -1,5 +1,6 @@
 """Server-managed VILab access, independent of ViTalk accounts."""
 import httpx
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from fastapi import HTTPException
@@ -76,6 +77,16 @@ class VILabCloudService:
             headers["Authorization"] = "Bearer " + settings.vilab_api_key
         try:
             timeout = kwargs.pop("timeout", 300)
+            if path == "/openai/v1/chat/completions" and (kwargs.get("json") or {}).get("stream") is True:
+                from app.services.cloud_chat_stream import collect_chat_stream
+                started = time.monotonic()
+                with httpx.stream(method, settings.vilab_server_url + path,
+                                  headers=headers, timeout=timeout, **kwargs) as response:
+                    if response.status_code in {401, 403}:
+                        raise HTTPException(502, "云端服务未接受当前身份，请检查账号登录及服务端可信身份来源配置")
+                    if not response.is_success:
+                        raise HTTPException(502, f"云端模型请求失败（HTTP {response.status_code}）")
+                    return collect_chat_stream(response, started=started)
             response = httpx.request(method, settings.vilab_server_url + path,
                                     headers=headers, timeout=timeout, **kwargs)
         except httpx.RequestError:
@@ -133,7 +144,8 @@ class VILabCloudService:
 
     def models(self, user_id):
         data = self.request(user_id, "GET", "/v1/models")
-        return [{"id": m["id"], "modelType": m["modelType"], "runtimeStatus": m.get("runtimeStatus", "")}
+        return [{"id": m["id"], "modelType": m["modelType"], "runtimeStatus": m.get("runtimeStatus", ""),
+                 **({"capabilities": m["capabilities"]} if isinstance(m.get("capabilities"), dict) else {})}
                 for m in data.get("data", []) if isinstance(m.get("id"), str) and m.get("modelType") in {"asr", "llm"}]
 
     def select(self, user_id, mode, asr_model, llm_model):

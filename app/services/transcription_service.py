@@ -263,6 +263,13 @@ class TranscriptionService:
         if core_duration <= 0:
             return []
 
+        if request_duration_limit is not None and max_chunk_duration <= 60.0:
+            # The normal 15s minimum overlap is too large for short requests.
+            # Keep boundary context inside the request limit, never added to it.
+            overlap = min(max(0.0, float(settings.transcription_chunk_overlap_seconds)),
+                          max_chunk_duration / 12)
+            core_duration = max_chunk_duration - 2 * overlap
+
         total = max(1, math.ceil(duration / core_duration))
         chunks: list[ChunkSpec] = []
         trim_start = 0.0
