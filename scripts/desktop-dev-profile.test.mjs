@@ -30,7 +30,9 @@ for (const target of ['desktop', 'web']) {
       })
       const plan = JSON.parse(stdout)
       assert.equal(plan.target, target)
-      assert.equal(plan.server, serviceOrigin(environment))
+      assert.equal(plan.environment, environment)
+      assert.equal(plan.server, undefined)
+      assert.equal(stdout.includes(serviceOrigin(environment)), false)
       assert.equal(plan.backend, 'http://127.0.0.1:8900')
       assert.equal(stdout.includes('must-not-print'), false)
     })
@@ -41,7 +43,8 @@ test('legacy development command now resolves to public instead of localhost', (
   const stdout = execFileSync(process.execPath, ['scripts/legacy-command.mjs', 'client:dev', 'dev:desktop:public', '--plan'], {
     encoding: 'utf8', windowsHide: true, env: stale, stdio: ['ignore', 'pipe', 'pipe'],
   })
-  assert.equal(JSON.parse(stdout).server, serviceOrigin('public'))
+  assert.equal(JSON.parse(stdout).environment, 'public')
+  assert.equal(JSON.parse(stdout).server, undefined)
 })
 
 test('occupied API port blocks web startup without terminating its owner', async () => {

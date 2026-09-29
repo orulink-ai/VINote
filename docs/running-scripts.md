@@ -7,10 +7,10 @@
 | 用途 | 命令 | 固定 VILab Server |
 | --- | --- | --- |
 | 桌面源码·内网 | `yarn dev:desktop:lan` | `http://192.168.1.143:9876` |
-| 桌面源码·公网 | `yarn dev:desktop:public` | `https://api.orulink.ai` |
+| 桌面源码·公网 | `yarn dev:desktop:public` | `官方公网服务` |
 | 网页源码·内网 | `yarn dev:web:lan` | `http://192.168.1.143:9876` |
-| 网页源码·公网 | `yarn dev:web:public` | `https://api.orulink.ai` |
-| 正式安装包 | `yarn package:release` | `https://api.orulink.ai` |
+| 网页源码·公网 | `yarn dev:web:public` | `官方公网服务` |
+| 正式安装包 | `yarn package:release` | `官方公网服务` |
 | 测试安装包 | `yarn package:test` | `http://192.168.1.143:9876` |
 
 地址集中定义在 `scripts/service-environments.mjs`，这六个入口忽略 `VILAB_SERVER_URL` 及旧 `VINOTE_TEST_VILAB_SERVER_URL` / `VINOTE_DEV_VILAB_SERVER_URL` / `VINOTE_RELEASE_VILAB_SERVER_URL` 的覆盖。修改固定地址须修改该模块，不写入用户 `.env`。

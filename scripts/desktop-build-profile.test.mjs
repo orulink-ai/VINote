@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { resolveDesktopProfile } from './desktop-build-profile.mjs'
+import { resolveDesktopProfile, publicTracingReceipt } from './desktop-build-profile.mjs'
 
 const tracing = { LANGFUSE_PUBLIC_KEY: 'pk-test', LANGFUSE_SECRET_KEY: 'sk-test' }
 const input = { env: tracing, version: '0.5.0', buildId: '20260914T180000Z', publicConfig: {
@@ -53,3 +53,10 @@ for (const channel of ['test', 'release']) {
     assert.throws(() => resolveDesktopProfile({ ...input, channel, env: { ...tracing, LANGFUSE_BASE_URL: 'https://user:password@example.com' } }), /Langfuse/)
   })
 }
+
+test('public tracing receipts omit deployment and trace coordinates', () => {
+  assert.deepEqual(publicTracingReceipt({ observations: 8, mock_provider: true,
+    environment: 'production', release: '0.3.0', trace_url: 'https://private.invalid/trace',
+    trace_id: 'private-id', task_id: 'private-task', secret: 'private-secret' }),
+  { observations: 8, mock_provider: true, environment: 'production', release: '0.3.0' })
+})
