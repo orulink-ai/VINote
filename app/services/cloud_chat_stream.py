@@ -40,10 +40,17 @@ def collect_chat_stream(response, *, started: float, max_seconds: float = 900) -
         model = data.get("model") or model
         if isinstance(data.get("usage"), dict):
             usage = data["usage"]
-        for choice in data.get("choices") or []:
+        choices = data.get("choices") or []
+        if not isinstance(choices, list):
+            raise HTTPException(502, "云端模型返回无效的流式候选结果")
+        for choice in choices:
+            if not isinstance(choice, dict):
+                raise HTTPException(502, "云端模型返回无效的流式候选结果")
             if choice.get("index", 0) != 0:
                 continue
             delta = choice.get("delta") or {}
+            if not isinstance(delta, dict):
+                raise HTTPException(502, "云端模型返回无效的流式内容")
             content = delta.get("content")
             # Reasoning keeps the connection active but is not the final answer.
             if isinstance(content, str):

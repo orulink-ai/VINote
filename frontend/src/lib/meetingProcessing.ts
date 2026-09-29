@@ -81,6 +81,7 @@ async function run(recording: PendingMeeting, language: string, audio?: Blob) {
         const draft = await library.loadNoteById(draftId!)
         const originalTitle = pending.options.title.trim() || createMeetingRecordingTitle(new Date(pending.startedAt), language)
         const finalTitle = draft?.title && draft.title !== originalTitle ? draft.title : generatedTitle
+        if (useAuthStore.getState().user?.id !== pending.ownerId) throw new MeetingGenerationError('saving', '账号已切换，请使用原账号恢复保存。')
         const saved = await library.updateNote(draftId!, finalTitle, content, 'done')
         if (saved) await persist({ options: { ...current.options, title: finalTitle } })
         return saved

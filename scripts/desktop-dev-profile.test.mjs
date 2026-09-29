@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
-import { createServer } from 'node:net'
+import { createConnection, createServer } from 'node:net'
 import test from 'node:test'
 import { resolveDesktopDevProfile } from './desktop-dev-profile.mjs'
 import { serviceOrigin } from './service-environments.mjs'
@@ -44,13 +44,14 @@ test('legacy development command now resolves to public instead of localhost', (
   assert.equal(JSON.parse(stdout).server, serviceOrigin('public'))
 })
 
-test('occupied API port blocks web startup without terminating its owner', async t => {
+test('occupied API port blocks web startup without terminating its owner', async () => {
   const server = createServer()
+  let ownsServer = false
   try {
     await new Promise((resolve, reject) => { server.once('error', reject); server.listen(8900, '127.0.0.1', resolve) })
+    ownsServer = true
   } catch (error) {
-    if (error.code === 'EADDRINUSE') { t.skip('API port already in use'); return }
-    throw error
+    if (error.code !== 'EADDRINUSE') throw error
   }
   try {
     const child = spawn(process.execPath, ['scripts/dev.mjs', '--target', 'web', '--environment', 'public'], { windowsHide: true })
@@ -60,8 +61,13 @@ test('occupied API port blocks web startup without terminating its owner', async
     const code = await new Promise((resolve, reject) => { child.on('error', reject); child.on('exit', resolve) })
     assert.equal(code, 1)
     assert.match(output, /8900|开发实例已运行/)
-    assert.equal(server.listening, true)
+    if (ownsServer) assert.equal(server.listening, true)
+    await new Promise((resolve, reject) => {
+      const socket = createConnection({ host: '127.0.0.1', port: 8900 })
+      socket.once('connect', () => { socket.destroy(); resolve() })
+      socket.once('error', reject)
+    })
   } finally {
-    await new Promise(resolve => server.close(resolve))
+    if (ownsServer) await new Promise(resolve => server.close(resolve))
   }
 })

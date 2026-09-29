@@ -13,6 +13,8 @@ from app.services.vilab_cloud_service import VILabCloudService
 def _vision_support(model: dict) -> bool | None:
     """Honor explicit capability metadata; absent metadata is not a rejection."""
     capabilities = model.get('capabilities') or {}
+    if not isinstance(capabilities, dict):
+        return None
     vision = capabilities.get('vision')
     if isinstance(vision, bool):
         return vision

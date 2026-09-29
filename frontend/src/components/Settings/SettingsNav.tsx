@@ -29,6 +29,7 @@ export function SettingsNav({ activeTab, onChange }: SettingsNavProps) {
       {tabs.map((tab) => (
         <Button
           key={tab.key}
+          aria-current={activeTab === tab.key ? 'page' : undefined}
           onClick={() => onChange(tab.key)}
           variant={activeTab === tab.key ? 'secondary' : 'ghost'}
           className="min-w-max justify-start lg:w-full"

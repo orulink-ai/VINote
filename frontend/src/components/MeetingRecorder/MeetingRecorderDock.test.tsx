@@ -9,6 +9,7 @@ import { I18nProvider } from '../../lib/i18n'
 import { useMeetingRecorderStore } from '../../stores/meetingRecorderStore'
 
 const navigate = vi.fn()
+const authUser = vi.hoisted(() => ({ id: 'user-1' }))
 const pendingRows = vi.hoisted(() => new Map<string, import('../../lib/audioStorage').PendingMeeting>())
 const audioRecorderMock = vi.hoisted(() => ({
   start: vi.fn(),
@@ -80,7 +81,7 @@ vi.mock('../../hooks/useAudioRecorder', () => ({
 }))
 
 vi.mock('../../stores/authStore', () => ({
-  useAuthStore: Object.assign(() => ({ initialized: true, user: { id: 'user-1' } }), { getState: () => ({ user: { id: 'user-1' } }) }),
+  useAuthStore: Object.assign(() => ({ initialized: true, user: { id: 'user-1' } }), { getState: () => ({ user: authUser }) }),
 }))
 
 vi.mock('../../stores/languageStore', () => ({
@@ -177,6 +178,7 @@ async function restoreSavedRecording() {
 describe('MeetingRecorderDock', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    authUser.id = 'user-1'
     loadNoteMock.mockResolvedValue(null)
     pendingRows.clear()
     useMeetingRecorderStore.getState().resetSession()
@@ -223,6 +225,17 @@ describe('MeetingRecorderDock', () => {
     await restoreSavedRecording()
     await waitFor(() => expect(updateNoteMock).toHaveBeenCalledWith('draft-1', '我的修订标题', '# Summary', 'done'))
     await waitFor(() => expect([...pendingRows.values()][0].options.title).toBe('我的修订标题'))
+  })
+
+  it('does not save under a switched account after awaiting the draft title', async () => {
+    loadNoteMock.mockImplementation(async () => { authUser.id = 'other-user'; return null })
+    renderDock()
+    await startMeeting()
+    await userEvent.click(screen.getByRole('button', { name: '停止' }))
+    await restoreSavedRecording()
+    await waitFor(() => expect([...pendingRows.values()][0].processingStatus).toBe('failed'))
+    expect(updateNoteMock).not.toHaveBeenCalled()
+    expect([...pendingRows.values()][0].processingError).toContain('账号已切换')
   })
 
   it('generates a time and summary subject title for an unnamed recording', async () => {

@@ -1,6 +1,6 @@
 # App and desktop integration boundaries
 
-[简体中文](../app-integration.md) · [App README](../../VINote-app/README.en.md) · [App build guide](../../VINote-app/docs/build-and-deployment.en.md)
+[简体中文](../app-integration.md) · [App README](https://github.com/orulink-ai/VINote-app/blob/main/README.en.md) · [App build guide](https://github.com/orulink-ai/VINote-app/blob/main/docs/build-and-deployment.en.md)
 
 `VINote-app/` is an independent React Native Git submodule at https://github.com/orulink-ai/VINote-app with `main` as its main branch. The parent integrates into `dev`. Initialize with `git submodule update --init --recursive`; do not use `--remote` to bypass the reviewed pinned commit. Push app commits before updating the parent gitlink.
 

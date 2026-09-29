@@ -33,6 +33,8 @@ def test_collects_content_usage_and_ignores_reasoning_and_heartbeats():
     [delta("partial")], [delta("partial", "stop")],
     [delta("truncated", "length"), "[DONE]"], [delta("blocked", "content_filter"), "[DONE]"],
     [delta("partial"), {"error": {"message": "provider secret"}}], ["invalid json"],
+    [{"choices": "invalid"}], [{"choices": [None]}],
+    [{"choices": [{"delta": "invalid"}]}],
 ])
 def test_never_accepts_partial_or_failed_output(events):
     with pytest.raises(HTTPException) as error:
