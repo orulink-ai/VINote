@@ -278,3 +278,6 @@ Cloud chat transport: VINote summary, fact review and sampled video analysis req
 ### Note reading layout
 
 Saved audio/video notes open in rendered preview mode; Markdown source is shown only when the user chooses Edit or Split. The note route fills the remaining app height with independent content scrolling, keeping its toolbar and media player visible. Key moments open in a Sheet on demand instead of permanently consuming note width. Local video uses a normal-aspect side panel on wide windows (stacked on narrow windows), with an expanded workspace view that keeps the same video element and playback position. Audio retains its bottom playback bar. Key-moment cards wrap long text and contain complete thumbnails without expanding the rail.
+
+
+Release version alignment: source, web, backend API and production desktop share base version 0.3.0; test bundles append -test. scripts/project-version.mjs enforces the manifests and lock files before source startup and packaging. Canonical LAN/public origins remain unchanged. Publish desktop assets only after frozen-runtime and tracing smoke checks, with the artifact manifest and SHA-256 tied to the merged release commit.

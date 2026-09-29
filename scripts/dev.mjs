@@ -6,6 +6,7 @@ import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from '
 import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { resolveDesktopDevProfile } from './desktop-dev-profile.mjs'
+import { assertProjectVersion } from './project-version.mjs'
 const { values } = parseArgs({ options: {
   target: { type: 'string', default: 'desktop' },
   environment: { type: 'string', default: 'lan' },
@@ -15,6 +16,7 @@ const { values } = parseArgs({ options: {
 if (!['desktop', 'web'].includes(values.target)) throw new Error('Target must be desktop or web')
 const desktop = values.target === 'desktop'
 loadEnv()
+assertProjectVersion()
 const baseConfig = JSON.parse(readFileSync(join(root, 'frontend/src-tauri/tauri.conf.json'), 'utf8'))
 const profile = resolveDesktopDevProfile({ environment: values.environment, version: baseConfig.version })
 if (values.plan) {

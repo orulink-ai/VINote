@@ -1,15 +1,17 @@
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync, copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve, sep as pathSeparator } from 'node:path'
 import { parseArgs } from 'node:util'
 import { resolveDesktopProfile, checksum } from './desktop-build-profile.mjs'
 import { root, python, loadEnv } from './runtime.mjs'
 import { bootstrap } from './bootstrap-dev.mjs'
+import { assertProjectVersion } from './project-version.mjs'
 const { values } = parseArgs({ options: {
   channel: { type: 'string', default: 'release' },
   'build-id': { type: 'string' }, plan: { type: 'boolean', default: false },
 } })
 loadEnv()
+assertProjectVersion()
 const baseConfig = JSON.parse(readFileSync(join(root, 'frontend/src-tauri/tauri.conf.json'), 'utf8'))
 const profile = resolveDesktopProfile({ channel: values.channel, version: baseConfig.version, env: process.env,
   publicConfig: JSON.parse(readFileSync(join(root, 'config/desktop-public.json'), 'utf8')),
@@ -37,6 +39,12 @@ if (spawnSync(py, ['-c', 'import PyInstaller'], { stdio: 'ignore' }).status !== 
   exec(py, ['-m', 'pip', 'install', '-r', join(root, 'requirements.desktop-build.txt')])
 }
 const staging = join(root, '.desktop-build', profile.channel)
+function clearBuildOutput(directory) {
+  const buildRoot = resolve(root, '.desktop-build')
+  const target = resolve(directory)
+  if (!target.startsWith(buildRoot + pathSeparator)) throw new Error('Build cleanup must stay inside .desktop-build')
+  rmSync(target, { recursive: true, force: true })
+}
 mkdirSync(join(staging, 'bin'), { recursive: true })
 exec(py, [join(root, 'scripts/setup_diarization.py'), '--models-dir', join(staging, 'models/diarization')])
 writeFileSync(join(staging, 'desktop-config.json'), JSON.stringify(profile.config, null, 2))
@@ -93,14 +101,14 @@ const targetDir = join(staging, 'target')
 // Tauri keeps versioned packages in the shared channel target directory. Clear
 // only bundle outputs so a new manifest cannot publish an installer from an
 // earlier version while retaining the expensive Rust compilation cache.
-rmSync(join(targetDir, 'release', 'bundle'), { recursive: true, force: true })
+clearBuildOutput(join(targetDir, 'release', 'bundle'))
 exec(process.execPath, [join(root, 'frontend/node_modules/@tauri-apps/cli/tauri.js'), 'build', '--config', tauriConfig], {
   cwd: join(root, 'frontend'), env: { ...process.env, CARGO_TARGET_DIR: targetDir },
 })
 const { readdirSync, cpSync } = await import('node:fs')
 const bundleDir = join(targetDir, 'release/bundle')
 const artifacts = join(root, '.desktop-build/artifacts', profile.channel, profile.version, profile.buildId)
-rmSync(artifacts, { recursive: true, force: true })
+clearBuildOutput(artifacts)
 mkdirSync(artifacts, { recursive: true })
 const files = []
 for (const type of process.platform === 'win32' ? ['nsis'] : ['macos', 'dmg']) {

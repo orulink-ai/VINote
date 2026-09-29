@@ -4,7 +4,7 @@ import { serviceOrigin } from './service-environments.mjs'
 export function resolveDesktopProfile({ channel = 'release', version, env = {}, publicConfig, buildId }) {
   if (!['release', 'test'].includes(channel)) throw new Error('Channel must be release or test')
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Base version must be major.minor.patch')
-  if (!/^[a-zA-Z0-9._-]+$/.test(buildId)) throw new Error('Invalid build ID')
+  if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(buildId)) throw new Error('Invalid build ID')
   const test = channel === 'test'
   const origin = serviceOrigin(test ? 'lan' : 'public')
   const url = new URL(origin)

@@ -38,7 +38,7 @@ test('stale URL overrides cannot change the bundled public server or leak creden
 
 test('invalid channel, file identifiers and bundled secret keys fail early', () => {
   assert.throws(() => resolveDesktopProfile({ ...input, channel: 'other' }))
-  assert.throws(() => resolveDesktopProfile({ ...input, buildId: '../escape' }))
+  for (const buildId of ['../escape', '.', '..']) assert.throws(() => resolveDesktopProfile({ ...input, buildId }))
   assert.throws(() => resolveDesktopProfile({ ...input, env: { ...tracing, VINOTE_SUPABASE_PUBLISHABLE_KEY: 'sb_secret_bad' } }))
 })
 

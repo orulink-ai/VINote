@@ -4,7 +4,7 @@
 
 VINote is a full-stack workspace that turns video or audio content into structured Markdown notes.
 
-Current release: `v0.2.0`
+Current release: `v0.3.0`
 
 Current stack:
 

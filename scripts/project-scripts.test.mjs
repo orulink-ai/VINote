@@ -3,8 +3,13 @@ import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
 import { root } from './runtime.mjs'
+import { assertProjectVersion } from './project-version.mjs'
 
 const packageJson = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
+
+test('backend, web, desktop and package locks share the release base version', () => {
+  assert.equal(assertProjectVersion(), packageJson.version)
+})
 
 test('root scripts expose one canonical runtime and package command set', () => {
   const scripts = packageJson.scripts
