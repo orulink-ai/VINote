@@ -64,7 +64,7 @@ API 参考：
 
 ### 云端模型部署配置
 
-账号等配置仍由部署管理员在根目录 `.env` 设置。源码入口明确选择内网或公网；正式包固定连接 `https://api.orulink.ai`，测试包固定连接 `http://192.168.1.143:9876`，这些入口不接受 VILab 地址环境变量覆盖。独立后端仍读取 `VILAB_SERVER_URL`。详见[运行脚本规范](docs/running-scripts.md)。Supabase 配置与模型供应商密钥管理保持原有方式。
+账号等配置仍由部署管理员在根目录 `.env` 设置。源码入口明确选择内网或公网；正式包固定连接 `官方公网服务`，测试包固定连接 `http://192.168.1.143:9876`，这些入口不接受 VILab 地址环境变量覆盖。独立后端仍读取 `VILAB_SERVER_URL`。详见[运行脚本规范](docs/running-scripts.md)。Supabase 配置与模型供应商密钥管理保持原有方式。
 
 「设置 → 模型服务」提供云端与本地/自定义运行模式切换，并按 VINote 用户保存。视频链接、文件上传、文字稿和会议录音统一遵循该模式；进行中的任务保持开始处理时的配置，切换只影响后续任务。
 
@@ -357,7 +357,7 @@ npm run build
 
 会议草稿会额外调用 LLM 对照转写复核主体、决策和行动后再返回，增加一次模型调用；长会议先逐块复核，再合并并核对一致性。云端复核优先使用 `MEETING_REVIEW_MODEL`（默认 `gpt-6-astra`），仅在服务列为可用时选择；未提供该模型或设为空值则沿用原模型，本地/自定义模式始终使用当前模型。全局模型选择不变。复核失败不静默返回未复核稿；这项复核不能恢复录音缺失信息或保证所有识别错误都已消除。
 
-正式版使用 `yarn package:release`，固定连接 `https://api.orulink.ai`；测试版使用 `yarn package:test`，固定连接 `http://192.168.1.143:9876`。测试版保留独立安装身份和数据目录。产物与校验清单位于 `.desktop-build/artifacts/`，详见[打包说明](docs/desktop-packaging.md)。
+正式版使用 `yarn package:release`，固定连接 `官方公网服务`；测试版使用 `yarn package:test`，固定连接 `http://192.168.1.143:9876`。测试版保留独立安装身份和数据目录。产物与校验清单位于 `.desktop-build/artifacts/`，详见[打包说明](docs/desktop-packaging.md)。
 
 真实会议生成验证可运行 `python scripts/check_meeting_generation.py data/diarization-four-speakers.wav --live --speakers 4 --output data/meeting-live-report.json`。它调用桌面端共用的上传、任务、保存、逐字稿和媒体接口，真实消耗云端 STT/LLM，并在当前唯一关联账号的个人空间保存一条标注「测试」的笔记；多账号需传 `--user-id`。该后台检查不验证原生麦克风、录屏权限或桌面窗口交互。
 

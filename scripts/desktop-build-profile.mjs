@@ -49,3 +49,9 @@ export function resolveDesktopProfile({ channel = 'release', version, env = {}, 
 export function checksum(contents) {
   return createHash('sha256').update(contents).digest('hex')
 }
+
+// Release assets contain validation results, never deployment coordinates.
+export function publicTracingReceipt(receipt) {
+  return Object.fromEntries(['observations', 'mock_provider', 'environment', 'release']
+    .filter(key => Object.hasOwn(receipt, key)).map(key => [key, receipt[key]]))
+}

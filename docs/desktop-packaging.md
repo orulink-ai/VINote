@@ -7,8 +7,8 @@
 | 运行方式 | 命令 | 固定 VILab 地址 | 数据位置 |
 | --- | --- | --- | --- |
 | 内网桌面源码 | `yarn dev:desktop:lan` | `http://192.168.1.143:9876` | 仓库配置指定的位置 |
-| 公网桌面源码 | `yarn dev:desktop:public` | `https://api.orulink.ai` | 仓库配置指定的位置 |
-| 正式安装包 | `yarn package:release` | `https://api.orulink.ai` | `app.vinote.desktop` 对应应用数据目录 |
+| 公网桌面源码 | `yarn dev:desktop:public` | `官方公网服务` | 仓库配置指定的位置 |
+| 正式安装包 | `yarn package:release` | `官方公网服务` | `app.vinote.desktop` 对应应用数据目录 |
 | 测试安装包 | `yarn package:test` | `http://192.168.1.143:9876` | `app.vinote.desktop.test` 对应应用数据目录 |
 
 `yarn desktop:build` 保持兼容，等同于正式版。地址统一定义在 `scripts/service-environments.mjs`，不接受 `.env` 或终端的通用/旧渠道 VILab URL 覆盖。Langfuse 地址独立配置，默认仍为内网；公网 VILab 不代表外网追踪已可达。
@@ -30,7 +30,7 @@ yarn client:test
 
 - 中间目录：`.desktop-build/release/` 或 `.desktop-build/test/`。
 - 发布候选产物：`.desktop-build/artifacts/<渠道>/<版本>/<构建标识>/`。
-- 同目录 `manifest.json` 记录版本、渠道、服务地址、代码提交、工作区是否有未提交改动，以及安装文件 SHA-256。
+- 同目录 `manifest.json` 记录版本、渠道、代码提交、工作区是否有未提交改动，以及安装文件 SHA-256。
 
 这两个命令生成可分发安装包，不自动上传 GitHub、对象存储或应用商店。请依次执行构建命令，不同时启动两个渠道构建；前端构建输出仍共用 `frontend/dist`。macOS 产物必须在 macOS 构建，签名、公证仍需相应凭证。
 
@@ -66,4 +66,6 @@ yarn client:test
 
 开发源码、网页、后端 API 与正式安装包统一使用基础版本 `0.3.0`，测试包仍为 `0.3.0-test`。`scripts/project-version.mjs` 在源码启动和打包前验证根 package、前端及锁文件、Tauri、Cargo 和后端版本一致，不一致时停止。版本调整不改变四个源码入口或两个打包入口的固定服务地址。
 
-正式发布先在功能分支审查并运行 `yarn verify`，PR CI 通过后合并 `dev`。从合并后的干净提交运行 `yarn client:production`；校验冻结后端、Langfuse 读回、manifest 的提交与公网服务地址，并计算安装包 SHA-256，再把同一提交标记为 `v0.3.0`，上传安装包、manifest 和校验文件到正式 GitHub Release。不要发布测试包或工作区私人文件。macOS 安装包需另外在 macOS 构建。
+正式发布先在功能分支审查并运行 `yarn verify`，PR CI 通过后合并 `dev`。从合并后的干净提交运行 `yarn client:production`；校验冻结后端、Langfuse 读回、manifest 的提交与包内正式服务配置，并计算安装包 SHA-256，再把同一提交标记为 `v0.3.0`，上传安装包、manifest 和校验文件到正式 GitHub Release。不要发布测试包或工作区私人文件。macOS 安装包需另外在 macOS 构建。
+
+公开 Release 说明、构建 manifest、启动日志与计划输出不展示服务域名。完整服务配置和 Langfuse 追踪链接仅用于本地构建验收；公开 manifest 只保留版本、提交、文件校验值和脱敏后的验证结果。运行时连接地址仍由内部配置提供，无法以文档脱敏保证地址不可被客户端提取。

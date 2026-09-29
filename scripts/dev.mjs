@@ -20,7 +20,8 @@ assertProjectVersion()
 const baseConfig = JSON.parse(readFileSync(join(root, 'frontend/src-tauri/tauri.conf.json'), 'utf8'))
 const profile = resolveDesktopDevProfile({ environment: values.environment, version: baseConfig.version })
 if (values.plan) {
-  console.log(JSON.stringify({ ...profile,
+  const { server: _server, ...publicProfile } = profile
+  console.log(JSON.stringify({ ...publicProfile,
     ...(!desktop ? { productName: 'VINote Web Dev', identifier: undefined, tracingEnvironment: null } : {}),
     target: values.target, backend: 'http://127.0.0.1:8900', frontend: 'http://127.0.0.1:3100' }, null, 2))
   process.exit(0)
@@ -100,7 +101,7 @@ try {
     if (!await healthy('http://127.0.0.1:8900/healthz')) throw new Error('VINote backend did not start; check the error above.')
   }
   if (!closing) {
-    console.log(`[${values.target}/${profile.environment}] 界面: http://127.0.0.1:3100; VINote API: http://127.0.0.1:8900; VILab: ${profile.server}; Langfuse: ${desktop ? profile.tracingEnvironment : 'disabled'}`)
+    console.log(`[${values.target}/${profile.environment}] 界面: http://127.0.0.1:3100; VINote API: http://127.0.0.1:8900; VILab: ${profile.environment}; Langfuse: ${desktop ? profile.tracingEnvironment : 'disabled'}`)
     const viteArgs = [join(root, 'frontend/node_modules/vite/bin/vite.js'), '--host', '127.0.0.1', '--port', '3100', '--strictPort']
     if (!desktop) viteArgs.push('--open')
     start(process.execPath, viteArgs, { cwd: join(root, 'frontend') })

@@ -2,7 +2,7 @@ import { spawnSync } from 'node:child_process'
 import { mkdirSync, writeFileSync, copyFileSync, existsSync, readFileSync, rmSync } from 'node:fs'
 import { join, resolve, sep as pathSeparator } from 'node:path'
 import { parseArgs } from 'node:util'
-import { resolveDesktopProfile, checksum } from './desktop-build-profile.mjs'
+import { resolveDesktopProfile, checksum, publicTracingReceipt } from './desktop-build-profile.mjs'
 import { root, python, loadEnv } from './runtime.mjs'
 import { bootstrap } from './bootstrap-dev.mjs'
 import { assertProjectVersion } from './project-version.mjs'
@@ -19,7 +19,7 @@ const profile = resolveDesktopProfile({ channel: values.channel, version: baseCo
 })
 if (values.plan) {
   console.log(JSON.stringify({ channel: profile.channel, productName: profile.productName, version: profile.version,
-    identifier: profile.identifier, server: profile.config.VILAB_SERVER_URL, buildId: profile.buildId }, null, 2))
+    identifier: profile.identifier, service: profile.channel === 'release' ? 'official-cloud' : 'lan', buildId: profile.buildId }, null, 2))
   process.exit(0)
 }
 bootstrap()
@@ -130,8 +130,8 @@ const dirty = gitRun('diff', '--quiet').status !== 0
   || gitRun('diff', '--cached', '--quiet').status !== 0
   || Boolean(git('ls-files', '--others', '--exclude-standard'))
 writeFileSync(join(artifacts, 'manifest.json'), JSON.stringify({ channel: profile.channel, version: profile.version,
-  buildId: profile.buildId, identifier: profile.identifier, server: profile.config.VILAB_SERVER_URL,
+  buildId: profile.buildId, identifier: profile.identifier,
   platform: process.platform, arch: process.arch, commit: git('rev-parse', 'HEAD'),
   dirty,
-  langfuse: JSON.parse(readFileSync(join(staging, 'smoke-data/langfuse-smoke.json'), 'utf8')), files }, null, 2))
+  langfuse: publicTracingReceipt(JSON.parse(readFileSync(join(staging, 'smoke-data/langfuse-smoke.json'), 'utf8'))), files }, null, 2))
 console.log(`Desktop ${profile.channel} artifacts: ${artifacts}`)
