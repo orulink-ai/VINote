@@ -1,6 +1,7 @@
 """Server-managed VILab access, independent of ViTalk accounts."""
 import httpx
 import time
+import logging
 from contextlib import contextmanager
 from contextvars import ContextVar
 from fastapi import HTTPException
@@ -10,9 +11,42 @@ from app.db import session_scope
 from app.db_models import VILabPreferenceDB
 
 _task_source: ContextVar[tuple[str, dict] | None] = ContextVar("vinote_task_model_source", default=None)
+logger = logging.getLogger(__name__)
 
 
 class VILabCloudService:
+    def _request_chat_stream(self, method, path, headers, timeout, kwargs):
+        from app.services.cloud_chat_stream import collect_chat_stream
+
+        # Retry only transient transport failures. Each attempt gets a new
+        # collector so a broken response can never contaminate the final note.
+        transient = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
+        started = time.monotonic()
+        for attempt in range(1, 3):
+            received_headers = False
+            try:
+                with httpx.stream(method, settings.vilab_server_url + path,
+                                  headers=headers, timeout=timeout, **kwargs) as response:
+                    received_headers = True
+                    if response.status_code in {401, 403}:
+                        raise HTTPException(502, "云端服务未接受当前身份，请检查账号登录及服务端可信身份来源配置")
+                    if not response.is_success:
+                        raise HTTPException(502, f"云端模型请求失败（HTTP {response.status_code}）")
+                    return collect_chat_stream(response, started=started)
+            except transient as error:
+                elapsed = time.monotonic() - started
+                logger.warning(
+                    "Cloud chat transport failed: kind=%s attempt=%d headers=%s elapsed_seconds=%.1f",
+                    type(error).__name__, attempt, received_headers, elapsed,
+                )
+                if attempt < 2 and elapsed < 900:
+                    time.sleep(1)
+                    continue
+                detail = ("云端模型响应超时，请稍后重试" if isinstance(error, httpx.TimeoutException)
+                          else "云端模型响应连接中断，请稍后重试" if received_headers
+                          else "无法连接云端模型服务，请稍后重试")
+                raise HTTPException(502, detail) from None
+
     def validate_ready(self, user_id, *, needs_stt=True):
         if not user_id:
             return
@@ -78,18 +112,11 @@ class VILabCloudService:
         try:
             timeout = kwargs.pop("timeout", 300)
             if path == "/openai/v1/chat/completions" and (kwargs.get("json") or {}).get("stream") is True:
-                from app.services.cloud_chat_stream import collect_chat_stream
-                started = time.monotonic()
-                with httpx.stream(method, settings.vilab_server_url + path,
-                                  headers=headers, timeout=timeout, **kwargs) as response:
-                    if response.status_code in {401, 403}:
-                        raise HTTPException(502, "云端服务未接受当前身份，请检查账号登录及服务端可信身份来源配置")
-                    if not response.is_success:
-                        raise HTTPException(502, f"云端模型请求失败（HTTP {response.status_code}）")
-                    return collect_chat_stream(response, started=started)
+                return self._request_chat_stream(method, path, headers, timeout, kwargs)
             response = httpx.request(method, settings.vilab_server_url + path,
                                     headers=headers, timeout=timeout, **kwargs)
-        except httpx.RequestError:
+        except httpx.RequestError as error:
+            logger.warning("Cloud request transport failed: kind=%s", type(error).__name__)
             raise HTTPException(502, "无法连接云端模型服务，请稍后重试") from None
         if response.status_code in {401, 403}:
             raise HTTPException(502, "云端服务未接受当前身份，请检查账号登录及服务端可信身份来源配置")
