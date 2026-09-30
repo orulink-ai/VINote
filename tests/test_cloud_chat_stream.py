@@ -62,3 +62,58 @@ def test_cloud_request_actually_uses_streaming_transport():
             result = VILabCloudService().request("user", "POST", "/openai/v1/chat/completions", json={"stream": True})
     assert result["choices"][0]["message"]["content"] == "done"
     assert seen[0].headers["authorization"] == "Bearer test-key"
+
+
+class BrokenStream(httpx.SyncByteStream):
+    def __iter__(self):
+        yield b'data: {"choices":[{"delta":{"content":"discard me"}}]}\n\n'
+        raise httpx.RemoteProtocolError("secret endpoint and credential")
+
+
+@pytest.mark.parametrize("recover", [True, False])
+def test_interrupted_stream_retries_without_retaining_partial_content(recover, caplog):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if len(seen) == 1 or not recover:
+            return httpx.Response(200, stream=BrokenStream())
+        return response([delta("complete", "stop"), "[DONE]"])
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client, \
+            patch("app.services.vilab_cloud_service.settings") as settings, \
+            patch("app.services.vilab_cloud_service.httpx.stream", side_effect=client.stream), \
+            patch("app.services.vilab_cloud_service.time.sleep"):
+        settings.vilab_server_url = "https://example.test"
+        settings.cloud_auth_url = ""
+        settings.vilab_api_key = "test-key"
+        if recover:
+            result = VILabCloudService().request("user", "POST", "/openai/v1/chat/completions", json={"stream": True})
+            assert result["choices"][0]["message"]["content"] == "complete"
+        else:
+            with pytest.raises(HTTPException) as error:
+                VILabCloudService().request("user", "POST", "/openai/v1/chat/completions", json={"stream": True})
+            assert "连接中断" in error.value.detail
+    assert len(seen) == 2
+    assert "RemoteProtocolError" in caplog.text
+    assert "secret endpoint" not in caplog.text
+    assert "test-key" not in caplog.text
+
+
+@pytest.mark.parametrize("status,events", [(401, []), (403, []), (500, []), (200, [delta("partial")])])
+def test_stream_http_and_completion_errors_are_not_transport_retried(status, events):
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return response(events) if status == 200 else httpx.Response(status)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client, \
+            patch("app.services.vilab_cloud_service.settings") as settings, \
+            patch("app.services.vilab_cloud_service.httpx.stream", side_effect=client.stream):
+        settings.vilab_server_url = "https://example.test"
+        settings.cloud_auth_url = ""
+        settings.vilab_api_key = "test-key"
+        with pytest.raises(HTTPException):
+            VILabCloudService().request("user", "POST", "/openai/v1/chat/completions", json={"stream": True})
+    assert len(seen) == 1
