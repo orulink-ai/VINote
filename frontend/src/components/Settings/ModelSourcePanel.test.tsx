@@ -66,10 +66,10 @@ it('a failed mode save retains the confirmed global mode', async () => {
 })
 
 
-it('only offers available deployed models and hides unavailable saved selections', async () => {
+it('shows all configured models including unavailable ones without resurrecting removed selections', async () => {
   vi.mocked(apiJson).mockResolvedValue([
     { id: 'deployed', modelType: 'llm', runtimeStatus: 'available' },
-    { id: 'unconfigured', modelType: 'llm', runtimeStatus: 'missing_api_key' },
+    { id: 'configured-no-key', modelType: 'llm', runtimeStatus: 'missing_api_key' },
     { id: 'disabled-asr', modelType: 'asr', runtimeStatus: 'disabled' },
   ])
   useAppModeStore.setState({ config: { configured: true, mode: 'cloud', asr_model: '', llm_model: 'removed-model' } })
@@ -77,7 +77,11 @@ it('only offers available deployed models and hides unavailable saved selections
   await screen.findByText(/原选择已不可用/)
   await userEvent.click(screen.getAllByRole('combobox')[1])
   expect(await screen.findByRole('option', { name: 'deployed' })).toBeInTheDocument()
-  expect(screen.queryByText(/unconfigured|removed-model|disabled-asr/)).not.toBeInTheDocument()
+  expect(screen.getByRole('option', { name: /configured-no-key/ })).toHaveAttribute('aria-disabled', 'true')
+  expect(screen.queryByText('removed-model')).not.toBeInTheDocument()
+  await userEvent.keyboard('{Escape}')
+  await userEvent.click(screen.getAllByRole('combobox')[0])
+  expect(screen.getByRole('option', { name: /disabled-asr/ })).toHaveAttribute('aria-disabled', 'true')
 })
 
 it('refresh replaces the catalog and a failed refresh does not retain old models', async () => {

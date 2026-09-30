@@ -30,7 +30,7 @@ it('saves an available summary model while preserving the speech selection', asy
   const summary = screen.getByRole('combobox', { name: '内容总结 / 画面分析' })
   await waitFor(() => expect(summary).not.toBeDisabled())
   await userEvent.click(summary)
-  expect(screen.queryByRole('option', { name: /offline/ })).not.toBeInTheDocument()
+  expect(screen.getByRole('option', { name: /offline/ })).toHaveAttribute('aria-disabled', 'true')
   await userEvent.click(screen.getByRole('option', { name: 'second', exact: true }))
   expect(mocks.save).toHaveBeenCalledWith('speech', 'second')
   await userEvent.click(screen.getByRole('combobox', { name: '语音转写' }))
