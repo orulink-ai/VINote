@@ -1,0 +1,16 @@
+{
+  "repository": "https://github.com/orulink-ai/agent-dev-journal",
+  "version": "1.0.0",
+  "ref": "v1.0.0",
+  "commit": "6f027da3d172785e99121e7a4fb1949fc393f68b",
+  "installed_at": "2026-10-08T16:28:28+08:00",
+  "paths": {
+    "templates/AGENTS.fragment.md": "AGENTS.md",
+    "templates/dev_log/README.md": "documents/dev_log/README.md",
+    "templates/dev_log/temp_log.md": "documents/dev_log/temp_log.md"
+  },
+  "profile": null,
+  "adaptations": [
+    "保留目标项目既有规则与历史文档；无既有开发档案目录，采用标准 documents/dev_log 路径。"
+  ]
+}
