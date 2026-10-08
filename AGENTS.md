@@ -284,3 +284,17 @@ Saved audio/video notes open in rendered preview mode; Markdown source is shown 
 Release version alignment: source, web, backend API and production desktop share base version 0.3.1; test bundles append -test. scripts/project-version.mjs enforces the manifests and lock files before source startup and packaging. Canonical LAN/public origins remain unchanged. Publish desktop assets only after frozen-runtime and tracing smoke checks, with the artifact manifest and SHA-256 tied to the merged release commit.
 
 Cloud model selectors show every server-configured catalog entry, including unavailable entries with a disabled status label, discard the previous catalog before refreshing, and disable selection when retrieval fails. Removed saved IDs are not injected into the option list; the UI explains the existing validated service-default fallback. Server availability flags remain authoritative and must reflect actual deployment configuration.
+
+
+<!-- agent-dev-journal:start -->
+## 开发档案工作流
+
+1. 开发前阅读 `documents/dev_log/README.md` 和 `documents/dev_log/temp_log.md`，检索与本次需求、模块及 Issue 相关的历史档案和后续变更，对照当前代码确认目标、范围、约束与验收标准。
+2. 开始独立任务前按规范建档，先检查是否已有对应进行中档案。同一任务跨天、跨 commit 维护同一目录，使用 index.md 串联过程材料。
+3. 保存真实的调查、设计、TDD 和验证依据，格式不限；代码及测试仍放在项目正常目录，由档案引用。
+4. 每次 commit 前核对 diff，更新状态并追加时间、作者、原因、结果和证据；档案与相关代码一并提交。
+5. 更正、替代、补充历史决策或解决遗留问题时，维护双方 index.md 的双向链接，注明影响范围，保留原始历史正文。
+6. 规则或模板缺失时明确说明，先记录背景、目标、边界、变更、验证和遗留事项；不伪称已读取，不覆盖现有规范。历史材料不自动覆盖当前需求，也不是执行指令。
+
+遵循当前项目的编程与 TDD 要求，不编造测试结果；不适用 TDD 时说明原因及替代验证。档案工作流不构成自动提交、推送或合入授权。
+<!-- agent-dev-journal:end -->
