@@ -62,10 +62,10 @@ yarn client:test
 
 流程参考：[腾讯会议本地录制](https://meeting.tencent.com/support/topic/420/)与[录制文件管理](https://meeting.tencent.com/support/topic/1841/index.html)。
 
-## v0.3.0 版本对齐与正式发布
+## v0.3.1 版本对齐与正式发布
 
-开发源码、网页、后端 API 与正式安装包统一使用基础版本 `0.3.0`，测试包仍为 `0.3.0-test`。`scripts/project-version.mjs` 在源码启动和打包前验证根 package、前端及锁文件、Tauri、Cargo 和后端版本一致，不一致时停止。版本调整不改变四个源码入口或两个打包入口的固定服务地址。
+开发源码、网页、后端 API 与正式安装包统一使用基础版本 `0.3.1`，测试包仍为 `0.3.1-test`。`scripts/project-version.mjs` 在源码启动和打包前验证根 package、前端及锁文件、Tauri、Cargo 和后端版本一致，不一致时停止。版本调整不改变四个源码入口或两个打包入口的固定服务地址。
 
-正式发布先在功能分支审查并运行 `yarn verify`，PR CI 通过后合并 `dev`。从合并后的干净提交运行 `yarn client:production`；校验冻结后端、Langfuse 读回、manifest 的提交与包内正式服务配置，并计算安装包 SHA-256，再把同一提交标记为 `v0.3.0`，上传安装包、manifest 和校验文件到正式 GitHub Release。不要发布测试包或工作区私人文件。macOS 安装包需另外在 macOS 构建。
+正式发布先在功能分支审查并运行 `yarn verify`，PR CI 通过后合并 `dev`。从合并后的干净提交运行 `yarn client:production`；校验冻结后端、Langfuse 读回、manifest 的提交与包内正式服务配置，并计算安装包 SHA-256，再把同一提交标记为 `v0.3.1`，上传安装包、manifest 和校验文件到正式 GitHub Release。不要发布测试包或工作区私人文件。macOS 安装包需另外在 macOS 构建。
 
 公开 Release 说明、构建 manifest、启动日志与计划输出不展示服务域名。完整服务配置和 Langfuse 追踪链接仅用于本地构建验收；公开 manifest 只保留版本、提交、文件校验值和脱敏后的验证结果。运行时连接地址仍由内部配置提供，无法以文档脱敏保证地址不可被客户端提取。
