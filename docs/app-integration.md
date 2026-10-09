@@ -16,12 +16,12 @@
 
 ## 运行与打包入口
 
-父仓库既有 `yarn client:dev`、`yarn client:test:dev`、`yarn client:test`、`yarn client:production` 只针对桌面端，不会启动或打包 App；原命令语义不变。App 在子目录执行 `npm ci`，使用 `npm start` / `npm run android` 开发；`npm run android:standalone` 生成内置 JS 调试签名验收 APK，`android:release` / `android:bundle` 要求自有签名环境变量。详见子仓库双语打包说明；不把 APK、私有录音、令牌和密钥提交到任一仓库。
+父仓库既有 `yarn client:dev`、`yarn client:test:dev`、`yarn client:test`、`yarn client:production` 只针对桌面端，不会启动或打包 App；原命令语义不变。App 在子目录执行 `npm ci` 后，使用 `npm run android:test:debug` / `android:test:apk` 运行或打包内网 VINote Test，使用 `npm run android:vinote:debug` / `android:vinote:apk` 运行或打包公网 VINote。两个 Debug 模式连接 Metro；公网 Debug 使用独立包名以保护正式版本机数据。公网 APK 需要发布签名。详见子仓库双语打包说明；不把 APK、私有录音、令牌和密钥提交到任一仓库。
 
-当前 App 1.1.0 使用 LAN 部署配置，Android 账号出口也依赖 LAN。独立包不依赖 USB/Metro，不等于无需内网。公网穿透未部署；iOS 源码待 Mac/iPhone 编译和验证；生成需前台；说话人区分暂停。桌面端说话人能力不自动赋予 App。
+当前 Android 0.1.0 提供内网 VINote Test 和公网 VINote 两个独立包；测试包仍需访问内网服务，正式包使用公网 HTTPS VILab。两版共用 Supabase 账号入口，但手机本机数据互不共享。独立 APK 不依赖 USB/Metro。iOS 源码待 Mac/iPhone 编译和验证；生成需前台；说话人区分暂停。桌面端说话人能力不自动赋予 App。
 
 ## 合并与验证
 
 App 合并 `main` 后，父仓库更新到准确提交，再合并 `dev`。不强推、不重写历史。`dev` 的 push 通常触发 `.github/workflows/deploy-pi-dev.yml` 部署 Pi 测试环境；需要仅合并、不部署时，在合并提交消息使用 GitHub 支持的 `[skip ci]`。这不修改工作流，也不部署 VILab。
 
-本次审查验证包含 App 单测/类型与配置回归、父仓库账号/笔记来源/云端模型相关测试，以及前端生产构建。真机历史验收范围见 App 文档，不把测试通过表述为 iOS、公网、后台处理均已支持。
+本次 App 审查验证包含单测、类型、配置回归及 Android 双包构建。真机曾完成公网短语音生成和内网 28 分钟会议样例；0.1.0 包完成覆盖安装和启动检查。真机历史验收范围见 App 文档，不把这些结果表述为 iOS、长录音公网稳定性或后台生成均已验证。

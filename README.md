@@ -400,6 +400,6 @@ VINote 桌面端使用独立 Langfuse 项目追踪生成链路，业务根名称
 
 本地历史持久化任务 ID、草稿 ID、失败阶段和进度。POST /api/task/{task_id}/retry 校验录制所有者与媒体后复用任务和有效产物。旧进程中断任务显示可重试。保存笔记后保留本地原始媒体直到用户明确删除。
 
-App 独立仓库、账号与本机数据边界、运行/打包入口及验证限制见 [App 集成说明](docs/app-integration.md)。
+App 独立仓库、账号与本机数据边界、运行/打包入口及验证限制见 [App 集成说明](docs/app-integration.md)。手机端在 `VINote-app` 子目录提供四个 Android 入口：`android:test:debug`、`android:test:apk`（内网 VINote Test）和 `android:vinote:debug`、`android:vinote:apk`（公网 VINote）。
 
 会议标题默认采用 `YYYY-MM-DD HH:mm｜内容`：以已记录的录制开始时间创建“待生成纪要”占位，完成后从最终纪要主题生成标题；不使用生成时间冒充会议时间。本地录制支持改名，纪要详情支持编辑标题；生成时保留手动改过的录制或草稿标题。
