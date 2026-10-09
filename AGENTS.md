@@ -271,6 +271,7 @@ App 文档与脚本：子仓库 README.md / README.en.md 与 docs/build-and-depl
 Video analysis never hardcodes a model name. `/api/vilab/models` retains capability metadata; model selection, traces and visual cache use the actual model, with cache also scoped to the server Origin. Source progress hides already-terminal tasks on initial load; results observed during the current session can be dismissed without deleting artifacts.
 
 Cloud chat transport: VINote summary, fact review and sampled video analysis request SSE (`stream=true`) from VILab. `cloud_chat_stream.py` aggregates only final content, preserves usage, consumes reasoning/heartbeat events without storing them as answers, and rejects missing completion markers, truncation, provider errors and overlong streams. This avoids waiting for a complete non-streaming response behind the public proxy; silent upstream stalls can still time out. Model selection remains deployment-driven.
+Transient SSE transport failures retry once with a fresh collector and the original stream time budget. Partial answers are discarded; HTTP/auth errors and invalid completion markers are not retried. Diagnostic logs include only exception type, attempt, header-receipt status and elapsed seconds, never raw exception text, endpoints, credentials or meeting content. Installed desktop builds require repackaging to receive this behavior.
 
 会议标题默认采用 `YYYY-MM-DD HH:mm｜内容`：以已记录的录制开始时间创建“待生成纪要”占位，完成后从最终纪要主题生成标题；不使用生成时间冒充会议时间。本地录制支持改名，纪要详情支持编辑标题；生成时保留手动改过的录制或草稿标题。
 
