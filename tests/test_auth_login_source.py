@@ -7,10 +7,10 @@ from sqlalchemy import create_engine, select
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.db_models import AuthLoginEventDB, UserDB
+from app.db_models import AuthLoginEventDB, CloudAccountDB, UserDB
 from app.models.auth import UserResponse
 from app.routers import auth
-from app.services import auth_audit_service
+from app.services import auth_audit_service, auth_service
 
 
 @pytest.fixture
@@ -63,7 +63,14 @@ def test_failed_login_is_not_recorded_as_success(setup, monkeypatch):
 
 def test_desktop_and_mobile_stay_authenticated_when_other_client_logs_out(setup, monkeypatch):
     from app.services.auth_service import create_access_token
-    http, _ = setup
+    http, sessions = setup
+    monkeypatch.setattr(auth_service, "session_scope", sessions)
+    with sessions() as db:
+        db.add(CloudAccountDB(
+            user_id="test-user", issuer=auth.settings.cloud_auth_url,
+            subject="test-subject", email="test@example.com",
+            session_encrypted="unused",
+        ))
     user = UserResponse(id="test-user", email="test@example.com")
     monkeypatch.setattr(auth, "create_access_token", create_access_token)
     monkeypatch.setattr(auth, "get_user_by_id", lambda user_id: user)
