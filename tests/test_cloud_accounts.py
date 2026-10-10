@@ -4,12 +4,15 @@ from contextlib import contextmanager
 
 import pytest
 from fastapi import HTTPException
+from fastapi import Request
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base
-from app.db_models import CloudAccountDB
+from app.db_models import CloudAccountDB, UserDB
 from app.services import cloud_account_service as module
+from app.services import auth_service
+from app.models.auth import UserResponse
 
 
 @pytest.fixture
@@ -27,6 +30,27 @@ def cloud(monkeypatch, tmp_path):
     monkeypatch.setattr(module.settings, "model_profile_encryption_key", "test-encryption")
     yield module.CloudAccountService(), sessions
     engine.dispose()
+
+
+def test_old_project_session_cannot_authenticate_after_account_switch(cloud, monkeypatch):
+    _, sessions = cloud
+    monkeypatch.setattr(auth_service, "session_scope", sessions)
+    with sessions() as db:
+        db.add(UserDB(id="local-a", email="user@example.com", password_hash="unused"))
+        db.add(CloudAccountDB(user_id="local-a", issuer="https://old.supabase.co",
+                              subject="old-subject", email="user@example.com",
+                              session_encrypted="old-session"))
+    token = auth_service.create_access_token(UserResponse(id="local-a", email="user@example.com"))
+    request = Request({"type": "http", "headers": [
+        (b"cookie", f"{auth_service.settings.auth_cookie_name}={token}".encode())]})
+    assert auth_service.get_optional_current_user(request, None) is None
+    with pytest.raises(HTTPException) as error:
+        auth_service.get_current_user(request, None)
+    assert error.value.status_code == 401
+
+    with sessions() as db:
+        db.get(CloudAccountDB, "local-a").issuer = module.settings.cloud_auth_url
+    assert auth_service.get_current_user(request, None).user_id == "local-a"
 
 
 def test_login_stores_encrypted_personal_session_and_rejects_cross_account_link(cloud, monkeypatch):

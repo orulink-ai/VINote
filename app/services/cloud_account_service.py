@@ -60,6 +60,8 @@ def _request(path, payload=None, token=None, method=None):
             "same_password": "新密码不能与当前密码相同。",
             "user_already_exists": "账号已注册，请登录或使用忘记密码。",
             "email_exists": "邮箱已注册，请登录或使用忘记密码。",
+            "signup_disabled": "新账号注册尚未开放，请联系管理员。",
+            "weak_password": "密码不符合账号安全要求，请使用至少 6 位且更复杂的密码。",
         }
         if response.status_code >= 500:
             raise HTTPException(502, "账号服务暂时不可用，请稍后重试。")

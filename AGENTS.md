@@ -281,7 +281,7 @@ Transient SSE transport failures retry once with a fresh collector and the origi
 Saved audio/video notes open in rendered preview mode; Markdown source is shown only when the user chooses Edit or Split. The note route fills the remaining app height with independent content scrolling, keeping its toolbar and media player visible. Key moments open in a Sheet on demand instead of permanently consuming note width. Local video uses a normal-aspect side panel on wide windows (stacked on narrow windows), with an expanded workspace view that keeps the same video element and playback position. Audio retains its bottom playback bar. Key-moment cards wrap long text and contain complete thumbnails without expanding the rail.
 
 
-Release version alignment: source, web, backend API and production desktop share base version 0.3.1; test bundles append -test. scripts/project-version.mjs enforces the manifests and lock files before source startup and packaging. Canonical LAN/public origins remain unchanged. Publish desktop assets only after frozen-runtime and tracing smoke checks, with the artifact manifest and SHA-256 tied to the merged release commit.
+Release version alignment: source, web, backend API and production desktop share base version 0.3.2; test bundles append -test. scripts/project-version.mjs enforces the manifests and lock files before source startup and packaging. Canonical LAN/public origins remain unchanged. Publish desktop assets only after frozen-runtime and tracing smoke checks, with the artifact manifest and SHA-256 tied to the merged release commit.
 
 Cloud model selectors show every server-configured catalog entry, including unavailable entries with a disabled status label, discard the previous catalog before refreshing, and disable selection when retrieval fails. Removed saved IDs are not injected into the option list; the UI explains the existing validated service-default fallback. Server availability flags remain authoritative and must reflect actual deployment configuration.
 
@@ -298,3 +298,5 @@ Cloud model selectors show every server-configured catalog entry, including unav
 
 遵循当前项目的编程与 TDD 要求，不编造测试结果；不适用 TDD 时说明原因及替代验证。档案工作流不构成自动提交、推送或合入授权。
 <!-- agent-dev-journal:end -->
+
+账户项目切换后，已启用云端认证的部署只接受映射到当前 VINOTE_SUPABASE_URL 的本地会话；旧项目 Cookie 要求重新登录，不迁移旧账号数据。未配置云端认证时保留本地登录。

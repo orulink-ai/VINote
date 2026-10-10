@@ -8,7 +8,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.db import session_scope
-from app.db_models import UserDB
+from app.db_models import CloudAccountDB, UserDB
 from app.models.auth import AuthCredentials, AuthenticatedUser, UserResponse
 
 _bearer = HTTPBearer(auto_error=False)
@@ -103,6 +103,14 @@ def _decode_token(token: str) -> AuthenticatedUser:
     return AuthenticatedUser(user_id=user_id, email=payload.get("email"))
 
 
+def _uses_current_account_project(user_id: str) -> bool:
+    if not settings.cloud_auth_url:
+        return True
+    with session_scope() as db:
+        account = db.get(CloudAccountDB, user_id)
+        return bool(account and account.issuer == settings.cloud_auth_url)
+
+
 def _extract_token(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None,
@@ -122,7 +130,10 @@ def get_current_user(
     token = _extract_token(request, credentials)
     if not token:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Authentication required")
-    return _decode_token(token)
+    user = _decode_token(token)
+    if not _uses_current_account_project(user.user_id):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Please sign in to the current account project")
+    return user
 
 
 def get_optional_current_user(
@@ -132,4 +143,5 @@ def get_optional_current_user(
     token = _extract_token(request, credentials)
     if not token:
         return None
-    return _decode_token(token)
+    user = _decode_token(token)
+    return user if _uses_current_account_project(user.user_id) else None
