@@ -520,6 +520,9 @@ describe("NoteEditor transcript evidence", () => {
     fireEvent.click(turn);
 
     expect(screen.getAllByTestId("source-video")).toHaveLength(1);
+    expect(screen.getByRole("region", { name: "Source video" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Meeting video" })).not.toBeInTheDocument();
+    expect(apiMock.apiJson.mock.calls.some(([path]) => String(path).endsWith('/recording'))).toBe(false);
     expect(video.currentTime).toBe(62);
     expect(window.HTMLMediaElement.prototype.play).toHaveBeenCalled();
 

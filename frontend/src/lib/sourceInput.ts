@@ -5,3 +5,10 @@ export function sourceVideoUrl(value: string) {
   if (url.username || url.password) throw new Error('链接不能包含账号密码')
   return url.href
 }
+
+export function isBilibiliSourceUrl(value: string) {
+  try {
+    const host = new URL(sourceVideoUrl(value)).hostname.toLowerCase();
+    return ['bilibili.com', 'www.bilibili.com', 'm.bilibili.com', 'b23.tv'].includes(host);
+  } catch { return false; }
+}

@@ -17,6 +17,12 @@ vi.mock("../../lib/i18n", () => ({
   }),
 }));
 afterEach(cleanup);
+it('does not advertise screenshots for Bilibili audio intake and keeps saving pending', () => {
+  render(<GenerateProgress audioOnlySource status="processing" currentStep="transcribing" />);
+  expect(screen.queryByText('截图')).not.toBeInTheDocument();
+  expect(screen.getByRole('listitem', { name: '保存笔记：待开始' })).toHaveAttribute('data-stage-state', 'pending');
+  expect(screen.getByRole('heading', { name: '语音转写' })).toBeVisible();
+});
 it('uses hollow future steps and one animated current step at meeting step two of four', () => {
   render(<GenerateProgress meeting status="processing" currentStep="transcribing" />);
   const list = screen.getByRole('list', { name: '会议纪要处理步骤' });

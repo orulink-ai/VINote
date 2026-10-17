@@ -706,7 +706,7 @@ export function NoteEditor() {
           <div className="min-w-0 flex-1">
             <p className="mb-2 text-xs text-muted-foreground">{zh ? isMeetingContent ? '会议纪要' : '笔记' : isMeetingContent ? 'Meeting notes' : 'Note'}</p>
             {workspaceMode === 'preview' ? <h1 className="break-words text-2xl font-medium">{localTitle || copy.noteEditor.untitled}</h1> : <div className="grid gap-2"><Label htmlFor="note-detail-title">{zh ? isMeetingContent ? '会议名称' : '笔记标题' : isMeetingContent ? 'Meeting title' : 'Note title'}</Label><Input id="note-detail-title" type="text" value={localTitle} disabled={saving} onChange={event => setLocalTitle(event.target.value)} placeholder={copy.noteEditor.untitled} className="w-full min-w-0 text-base" /></div>}
-            <p className="mt-2 text-xs leading-5 text-muted-foreground">{currentNote ? `${zh ? '已保存：' : 'Saved: '}${new Date(currentNote.createdAt).toLocaleString()} · ` : ''}{noteOrigin(generationClient, zh)} · {workspaceBadge}</p>
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">{[currentNote ? `${zh ? '已保存：' : 'Saved: '}${new Date(currentNote.createdAt).toLocaleString()}` : '', ['desktop', 'mobile', 'web'].includes(generationClient || '') ? noteOrigin(generationClient, zh) : '', workspaceBadge].filter(Boolean).join(' · ')}</p>
           </div>
           <div role="group" aria-label={zh ? '主要内容操作' : 'Primary content actions'} className="flex flex-wrap items-start gap-2">
             {hasUnsavedChanges ? <Button onClick={() => void handleSave()} size="sm" disabled={saving || !localTitle.trim()} aria-label={saving ? copy.noteEditor.saving : copy.noteEditor.save}><Save className="size-4" />{saving ? copy.noteEditor.saving : copy.noteEditor.save}</Button> : <Button variant="outline" size="sm" onClick={() => { setNoteView('summary'); setWorkspaceMode(workspaceMode === 'preview' ? 'write' : 'preview'); }} disabled={saving}><Edit3 />{workspaceMode === 'preview' ? zh ? '编辑' : 'Edit' : zh ? '返回阅读' : 'Back to reading'}</Button>}
@@ -1083,7 +1083,7 @@ export function NoteEditor() {
           />
         )}
 
-        {id && isAudioNote && (
+        {id && isAudioNote && isMeetingContent && (
           <aside
             aria-label={zh ? "原录音" : "Original recording"}
             className="flex min-w-0 shrink-0 flex-col gap-4 border-b bg-card p-4 lg:order-first lg:w-60 lg:border-b-0 lg:border-r lg:p-6 xl:w-64"
@@ -1115,7 +1115,7 @@ export function NoteEditor() {
         )}
         {isVideoNote && localMediaUrl ? (
           <section
-            aria-label={zh ? "会议视频" : "Meeting video"}
+            aria-label={zh ? isMeetingContent ? "会议视频" : "来源视频" : isMeetingContent ? "Meeting video" : "Source video"}
             className={
               videoExpanded
                 ? "absolute inset-0 z-10 flex min-h-0 flex-col bg-card"
@@ -1124,7 +1124,7 @@ export function NoteEditor() {
           >
             <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
               <span className="text-sm font-medium">
-                {zh ? "会议视频" : "Meeting video"}
+                {zh ? isMeetingContent ? "会议视频" : "来源视频" : isMeetingContent ? "Meeting video" : "Source video"}
               </span>
               <Button
                 variant="ghost"
@@ -1135,14 +1135,14 @@ export function NoteEditor() {
                 {videoExpanded ? <Minimize2 /> : <Maximize2 />}
                 {videoExpanded
                   ? zh
-                    ? "返回纪要"
+                    ? isMeetingContent ? "返回纪要" : "返回正文"
                     : "Back to notes"
                   : zh
                     ? "放大视频"
                     : "Expand video"}
               </Button>
             </div>
-            {id && (
+            {id && isMeetingContent && (
               <SavedRecordingActions
                 key={id}
                 noteId={id}
@@ -1175,7 +1175,7 @@ export function NoteEditor() {
               {!videoExpanded && (
                 <p className="mt-3 text-xs text-muted-foreground">
                   {zh
-                    ? "点击纪要或逐字稿中的时间，可跳转到对应画面。"
+                    ? isMeetingContent ? "点击纪要或逐字稿中的时间，可跳转到对应画面。" : "点击正文或逐字稿中的时间，可跳转到对应画面。"
                     : "Select a timestamp in the notes or transcript to seek the video."}
                 </p>
               )}

@@ -15,7 +15,7 @@ import { GenerateProgress } from '../components/NoteGenerator/GenerateProgress'
 import { TaskModelConfirmationSheet } from '../components/NoteGenerator/TaskModelConfirmationSheet'
 import { useI18n } from '../lib/i18n'
 import { apiJson, ApiError } from '../lib/api'
-import { sourceVideoUrl } from '../lib/sourceInput'
+import { sourceVideoUrl, isBilibiliSourceUrl } from '../lib/sourceInput'
 import { formatContentTitle } from '../lib/meetingTitle'
 import { useModelProfileStore } from '../stores/modelProfileStore'
 import { useNoteGenerationStore } from '../stores/noteGenerationStore'
@@ -652,7 +652,7 @@ export function NoteGenerator() {
     {readingTask ? <section role="status" aria-live="polite" aria-busy="true" className="rounded-xl border p-6">
       {readOnlyTask ? <h2 className="text-lg font-medium text-balance">正在读取处理进度</h2> : <h1 className="text-lg font-medium text-balance">正在读取处理进度</h1>}
       <p className="mt-2 text-sm text-muted-foreground text-pretty">正在查询原任务，读取后显示实际阶段和处理结果。</p>
-    </section> : running ? <GenerateProgress status={status} progress={progress} processedSeconds={transcriptionMeasure?.processed} totalSeconds={transcriptionMeasure?.total ?? analysisMeasure.total} receivedSeconds={analysisMeasure.received} speakerDetectionProgress={analysisMeasure.detection} speakersReady={analysisMeasure.speakersReady} currentStep={currentStep} error={sourceRecoveryCopy(error)} message={sourceRecoveryCopy(taskMessage)} meeting={isMeeting} documentSource={receipt?.sourceType === 'file' || uploadMode === 'document'} /> : <>
+    </section> : running ? <GenerateProgress status={status} progress={progress} processedSeconds={transcriptionMeasure?.processed} totalSeconds={transcriptionMeasure?.total ?? analysisMeasure.total} receivedSeconds={analysisMeasure.received} speakerDetectionProgress={analysisMeasure.detection} speakersReady={analysisMeasure.speakersReady} currentStep={currentStep} error={sourceRecoveryCopy(error)} message={sourceRecoveryCopy(taskMessage)} meeting={isMeeting} audioOnlySource={receipt?.sourceType === 'audio' || isBilibiliSourceUrl(receipt?.sourceUrl || videoUrl)} documentSource={receipt?.sourceType === 'file' || uploadMode === 'document'} /> : <>
       {!restoringSource && <section className="border-b py-3">
         <div className="mb-3 flex items-start justify-between gap-4"><div className="flex items-start gap-3"><div><h2 className="text-lg font-semibold">{isMeeting ? '选择会议文件' : '选择笔记来源'}</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">{isMeeting ? '支持音频、视频和已有逐字稿。' : '粘贴网页或视频链接，或上传 PDF、Word、音视频和文字文件。PDF、Word 上限 20 MB，PDF 上限 200 页。'}</p></div></div></div>
         <fieldset disabled={!!receipt || recoveryUnavailable}><FileUploader videoUrl={videoUrl} urlError={visibleSourceError} urlInputRef={sourceInput} onVideoUrlChange={value => { if (!receipt) { setVideoUrl(value); setSourceError('') } }} onFileSelect={value => { if (!receipt) setSelectedFile(value) }} onModeChange={value => { if (!receipt) { setUploadMode(value); setSourceError('') } }} fileUploadEnabled initialMode={uploadMode} file={selectedFile} urlEnabled={!isMeeting} meetingOnly={isMeeting} /></fieldset>

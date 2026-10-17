@@ -136,7 +136,7 @@ class NoteService:
                 base_url=base_url,
                 preloaded_transcript=None,
                 user_id=user_id,
-                source_video_url=video_url,
+                source_video_url=None if audio_meta.platform == "bilibili" else video_url,
                 task_start_time=task_start_time,
                 step_timings=step_timings,
                 diarize=diarize,
@@ -291,10 +291,30 @@ class NoteService:
     def _download_audio(self, *, video_url: str, task_dir: Path) -> AudioDownloadResult:
         cached_audio = self.artifact_service.load_audio_meta(task_dir)
         if cached_audio:
+            if cached_audio.platform == "bilibili":
+                # Historical caches may point at an unbound global download.
+                # Do not migrate, re-download or transcribe those implicitly.
+                owner = task_dir / "recording_owner"
+                retained = self.artifact_service.resolve_source_media(task_dir)
+                cached_path = Path(cached_audio.file_path)
+                if (task_dir.is_symlink() or (task_dir / "media").is_symlink()
+                        or (task_dir / "source_media.json").is_symlink()
+                        or owner.is_symlink() or not owner.is_file()
+                        or not owner.read_text(encoding="utf-8").strip()
+                        or not retained or cached_path.is_symlink()
+                        or retained.parent != (task_dir.resolve() / "media")
+                        or cached_path.resolve() != retained):
+                    raise ValueError("已保留的视频音轨暂不可用，请新建任务或导入原文件；已有资料已保留")
             logger.info("[Download] cache hit for task_dir=%s", task_dir)
             return cached_audio
 
         audio_meta = self.downloader.download(video_url=video_url, output_dir=str(settings.data_dir))
+        if audio_meta.platform == "bilibili":
+            # Bind the unmodified device-downloaded track to this task before
+            # ASR. Copy/record only: never remove the retained download.
+            original = self.artifact_service.stage_source_media(
+                task_dir, audio_meta.file_path, media_kind="audio")
+            audio_meta.file_path = str(original)
         self.artifact_service.save_audio_meta(task_dir, audio_meta)
         return audio_meta
 
@@ -542,7 +562,10 @@ class NoteService:
     def _enrich_markdown_with_media(self, context: PipelineContext, transcript, markdown: str) -> str:
         self.artifact_service.update_status(
             context.task_dir, "summarizing", "正在整理正文与媒体引用…", stage="enriching_media")
-        if context.style == "meeting" or transcript.metadata.get("source_kind") == "document":
+        if (context.audio_meta.platform == "bilibili" or context.style == "meeting"
+                or transcript.metadata.get("source_kind") == "document"):
+            # Bilibili intake has already acquired its source audio on-device.
+            # Do not fetch a full video or invoke ScreenshotService's fallback.
             return re.sub(r"\[\[Screenshot:\d{1,3}:\d{2}\]\]", "", markdown)
         update_current(input={"duration_seconds": context.audio_meta.duration})
         media_url = ""

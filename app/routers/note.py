@@ -470,17 +470,50 @@ def generate_note_async(
             return claim.model_dump(exclude_none=True)
         result = _queue_source_job(claim.task_id if claim else task_id, job, background_tasks, user, request)
         return _accept_source(user, claim, result)
+    from urllib.parse import urlsplit
+    from app.services.bilibili_source_service import INPUT_HOSTS, validate_input
+    try:
+        parsed = urlsplit(req.video_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("请提供有效且不含账号密码的视频链接")
+        if parsed.hostname in INPUT_HOSTS:
+            req = req.model_copy(update={"video_url": validate_input(req.video_url)})
+    except ValueError as exc:
+        raise HTTPException(400, "请提供有效且不含账号密码的视频链接，并检查分P编号") from exc
     trace_context = _desktop_trace_context(
         request, workflow=req.workflow, source="url", media_type="video",
         title=None, url=req.video_url, summary_mode=req.summary_mode,
         output_language=req.output_language,
     )
-    if trace_context is not None:
+    if trace_context is not None and req.workflow == "meeting":
         req = req.model_copy(update={"diarize": True, "speaker_count": None})
+    req = req.model_copy(update={"style": req.style or "detailed"})
+    # Fingerprint the actual worker options, including desktop overrides. Only
+    # a newly reserved claim may publish a new pending task or queue work.
+    claim = _reserve_source(request, user, SourceInput(kind="url", url=req.video_url),
+                            req.model_dump(exclude={"video_url"}))
+    if claim and not claim.created:
+        return claim.model_dump(exclude_none=True)
+    task_id = claim.task_id if claim else task_id
+    artifacts = _note_service.artifact_service
+    folder = artifacts.create_task_dir(task_id)
+    owner_path = folder / "recording_owner"
+    if owner_path.is_symlink() or (owner_path.exists() and
+            owner_path.read_text(encoding="utf-8") != (user.user_id if user else None)):
+        raise HTTPException(404, "Task not found")
+    if user:
+        owner_path.write_text(user.user_id, encoding="utf-8")
+    record_origin(folder, request.headers.get("X-VINote-Client", ""))
+    # Do not capture models or write request.json here: capture may perform a
+    # slow catalog request, and the worker's frozen-model guard still owns it.
+    artifacts.update_status(folder, "pending", "任务已提交，正在准备来源…", retryable=False)
+    result = _accept_source(user, claim,
+                            {"task_id": task_id, "status": "pending", "source_type": "video",
+                             "message": "Task submitted"})
     background_tasks.add_task(_run_task, task_id=task_id, req=req,
                               user_id=user.user_id if user else None,
                               trace_context=trace_context)
-    return {"task_id": task_id, "status": "pending", "message": "Task submitted"}
+    return result
 
 
 @router.post("/generate_sync", response_model=NoteResponse)
@@ -496,7 +529,7 @@ def generate_note_sync(
             url=req.video_url, summary_mode=req.summary_mode,
             output_language=req.output_language,
         )
-        effective_diarize = req.diarize or trace_context is not None
+        effective_diarize = req.diarize or (trace_context is not None and req.workflow == "meeting")
         with desktop_trace(trace_context):
             result = _note_service.generate(
                 video_url=req.video_url, task_id=task_id, platform=req.platform,

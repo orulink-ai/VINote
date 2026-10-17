@@ -24,6 +24,7 @@ interface GenerateProgressProps {
   message?: string;
   documentSource?: boolean;
   meeting?: boolean;
+  audioOnlySource?: boolean;
 }
 
 export function GenerateProgress({
@@ -37,6 +38,7 @@ export function GenerateProgress({
   error,
   documentSource = false,
   meeting = false,
+  audioOnlySource = false,
 }: GenerateProgressProps) {
   const { copy } = useI18n();
   const steps = documentSource ? [
@@ -53,13 +55,15 @@ export function GenerateProgress({
     { key: "downloading", label: copy.progress.downloadAudio },
     { key: "transcribing", label: copy.progress.transcribeAudio },
     { key: "summarizing", label: copy.progress.generateNote },
-    {
+    ...(!audioOnlySource ? [{
       key: "screenshots",
       label: copy.progress.processScreenshots,
-    },
+    }] : []),
+    { key: "saving", label: "保存笔记" },
   ];
   const phase = meeting && ['parallel_analysis', 'diarizing', 'aligning', 'transcript_ready'].includes(currentStep) ? 'transcribing'
-    : meeting && currentStep === 'uploading' ? 'preparing' : currentStep;
+    : (meeting || documentSource) && currentStep === 'uploading' ? 'preparing'
+    : !meeting && !documentSource && currentStep === 'preparing' ? 'uploading' : currentStep;
   const stepLabels = Object.fromEntries(
     steps.map((step) => [step.key, step.label]),
   );
@@ -97,9 +101,9 @@ export function GenerateProgress({
       style={value !== undefined ? { width: `${value}%` } : undefined} />
   </div>;
   const stageTitle = status === 'success' ? copy.progress.completed : status === 'failed' ? copy.progress.failed
-    : meeting ? '正在生成会议纪要' : analysis ? '转写与说话人分析' : stepLabels[phase] || copy.progress.preparing;
+    : meeting ? '正在生成会议纪要' : analysis ? '语音转写' : stepLabels[phase] || copy.progress.preparing;
   const statusCopy = analysis
-    ? savedTranscript && speakersReady ? '音频分析已完成，接下来生成纪要。'
+    ? savedTranscript && speakersReady ? (meeting ? '音频分析已完成，接下来生成纪要。' : '转写已完成，接下来生成笔记。')
       : receivedMeasured && receivedSeconds! >= totalSeconds! && !savedTranscript ? '音频已提交，正在等待最终逐字稿。'
       : meeting ? '转写和说话人分析完成后，将生成纪要；返回后可继续查看。'
       : '转写完成后，将生成笔记；返回后可继续查看。'
