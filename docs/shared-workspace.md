@@ -27,6 +27,8 @@ flowchart LR
 
 ## 部署准备
 
+> 以下为已取消同步方案的历史步骤，不能用于当前部署。文中 `deploy/workspace/` 文件已不在当前产品交付树中；旧副本仅保留在独立恢复档案，清理时不恢复这些脚本。当前显式公网内容处理使用 [内容 runtime](./cloud-content-runtime.md) 与 `deploy/content/`，它不恢复跨设备同步。
+
 部署目录为 `deploy/workspace`。将 `cloud.env.example` 复制为忽略提交的 `cloud.env`，由管理员配置固定 HTTPS 域名、Postgres、Supabase Auth 与 Storage 服务端密钥。禁止将密钥放进 App、前端或聊天。
 
 1. 管理员一次配置 Postgres 连接、现有 Supabase 的公开密钥和 Storage 服务端密钥，并持久保存应用加密密钥。使用独立 VINote 数据库；数据库角色须拥有 VINote 表或相应服务端 RLS 权限。
