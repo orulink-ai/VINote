@@ -101,6 +101,7 @@ class NoteService:
         user_id: Optional[str] = None,
         diarize: bool = False,
         speaker_count: int | None = None,
+        asr_model: str | None = None,
     ) -> NoteResult:
         del platform
 
@@ -169,6 +170,7 @@ class NoteService:
         user_id: Optional[str] = None,
         diarize: bool = False,
         speaker_count: int | None = None,
+        asr_model: str | None = None,
     ) -> NoteResult:
         task_start_time = time.time()
         if not os.path.exists(file_path):
@@ -240,6 +242,7 @@ class NoteService:
         api_key: str | None = None,
         base_url: str | None = None,
         user_id: Optional[str] = None,
+        asr_model: str | None = None,
     ) -> NoteResult:
         task_start_time = time.time()
         task_dir = self.artifact_service.create_task_dir(task_id)

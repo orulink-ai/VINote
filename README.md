@@ -80,6 +80,8 @@ API 参考：
 
 「设置 → 模型服务」提供云端与本地/自定义运行模式切换，并按 VINote 用户保存。视频链接、文件上传、文字稿和会议录音统一遵循该模式；进行中的任务保持开始处理时的配置，切换只影响后续任务。
 
+新 URL/上传请求可成对提供 `asr_model` 与 `model_name`，经模型目录校验后只冻结当前云端任务；本地模式拒绝该模型对，不改全局偏好或已有快照，旧 `model_name` 单项行为保持兼容。
+
 用户在设置中选择云端 STT 与 LLM 模型并保存。转写使用 `/v1/asr/transcriptions`，总结使用 `/openai/v1/chat/completions`。VILab 返回整段转写时仅标记文件级时间范围，不提供虚构的逐句时间戳。云端返回 401/403 时需要管理员修复服务鉴权，用户仍可直接切换本地模式；切换模式本身不依赖云端在线。
 
 新增 VINote API 均要求登录：`GET/PUT /api/vilab/config`、`PUT /api/vilab/mode`、`GET /api/vilab/models`。自定义密钥按需读取接口为 `POST /api/model-profiles/{id}/reveal-key`、`POST /api/stt-profiles/{id}/reveal-key`，响应禁用缓存。

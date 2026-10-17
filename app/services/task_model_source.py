@@ -70,11 +70,28 @@ def capture_source(user_id, options, confirmation=None):
     value = {"version": 1, "owner": user_id, "mode": cloud["mode"],
              "server_url": cloud.get("server_url", settings.vilab_server_url), "asr_model": "", "llm_model": "",
              "needs_stt": options.get("needs_stt", True)}
+    # asr_model is the explicit new paired-selection marker. model_name alone
+    # retains its historical cloud/default and local/custom behavior.
+    paired = options.get("asr_model") is not None and confirmation is None
+    if paired:
+        choices = {"asr_model": options.get("asr_model"), "llm_model": options.get("model_name")}
+        if any(not isinstance(name, str) or not name.strip() or name != name.strip()
+               or len(name) > 200 for name in choices.values()):
+            raise HTTPException(422, "请同时明确选择 ASR 和 LLM 两个模型")
+        if value["mode"] != "cloud":
+            raise HTTPException(409, "当前为本地模型模式，未切换到请求中的云端模型")
+        if not settings.vilab_server_url:
+            raise HTTPException(503, "云端模型服务尚未配置")
+        models = service.models(user_id)
+        for key, kind in (("asr_model", "asr"), ("llm_model", "llm")):
+            service._validate_selection(models, choices[key], kind)
+        value.update(choices)
     if value["mode"] == "cloud":
-        choices = {key: cloud.get(key, "") for key in ("asr_model", "llm_model")}
-        if (not choices["llm_model"] or value["needs_stt"] and not choices["asr_model"]) and confirmation is None:
-            choices = service.defaults(user_id)
-        value.update({key: choices.get(key) for key in ("asr_model", "llm_model")})
+        if not paired:
+            choices = {key: cloud.get(key, "") for key in ("asr_model", "llm_model")}
+            if (not choices["llm_model"] or value["needs_stt"] and not choices["asr_model"]) and confirmation is None:
+                choices = service.defaults(user_id)
+            value.update({key: choices.get(key) for key in ("asr_model", "llm_model")})
         if not value["llm_model"] or value["needs_stt"] and not value["asr_model"]:
             raise ValueError("云端当前模型未配置，请联系服务管理员")
     else:

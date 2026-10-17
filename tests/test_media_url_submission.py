@@ -127,7 +127,7 @@ def test_accepted_duplicate_survives_service_restart_without_queue_or_state_rese
 def test_unknown_reserved_claim_is_read_only_not_recreated_or_requeued(env):
     req = NoteRequest(video_url=URL)
     claim = env.note._source_requests.reserve(env.owner.user_id, "unknown-media",
-        SourceSubmission(source=SourceInput(kind="url", url=URL), options=req.model_dump(exclude={"video_url"})))
+        SourceSubmission(source=SourceInput(kind="url", url=URL), options=req.model_dump(exclude={"video_url", "asr_model"})))
     result, tasks = submit(env, "unknown-media")
     assert result["state"] == "reserved" and result["task_id"] == claim.task_id
     assert not tasks.tasks and not env.output.exists()
@@ -234,7 +234,7 @@ def test_sync_media_entry_has_same_workflow_boundary(env, monkeypatch, workflow,
 def test_old_forced_diarization_receipt_is_not_rewritten_to_new_note_options(env):
     old = NoteRequest(video_url=URL, workflow="note_organization", diarize=True, speaker_count=None)
     old_claim = env.note._source_requests.reserve(env.owner.user_id, "old-desktop-note",
-        SourceSubmission(source=SourceInput(kind="url", url=URL), options=old.model_dump(exclude={"video_url"})))
+        SourceSubmission(source=SourceInput(kind="url", url=URL), options=old.model_dump(exclude={"video_url", "asr_model"})))
     folder = env.artifacts.create_task_dir(old_claim.task_id)
     (folder / "recording_owner").write_text(env.owner.user_id, encoding="utf-8")
     frozen = folder / "task_model_source.json"
@@ -252,4 +252,16 @@ def test_old_forced_diarization_receipt_is_not_rewritten_to_new_note_options(env
     assert result["task_id"] == old_claim.task_id and not tasks.tasks
     assert "source_type" not in result
     assert env.note._source_requests.get(env.owner.user_id, "old-desktop-note").source_type is None
+    env.forbidden.assert_not_called()
+
+
+def test_explicit_pair_participates_in_media_operation_identity(env):
+    pair = {"asr_model": "chosen-asr", "model_name": "chosen-llm"}
+    first, queued = submit(env, "paired-media", **pair)
+    repeated, no_queue = submit(env, "paired-media", **pair)
+    assert first["task_id"] == repeated["task_id"]
+    assert len(queued.tasks) == 1 and not no_queue.tasks
+    with pytest.raises(HTTPException) as exc:
+        submit(env, "paired-media", **{**pair, "asr_model": "different-asr"})
+    assert exc.value.status_code == 409
     env.forbidden.assert_not_called()

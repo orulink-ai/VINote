@@ -8,6 +8,7 @@ Cross-device meeting/note synchronization has been cancelled by the user. Deskto
 
 ## Latest reviewed workflow contracts (2026-10-12)
 
+- 2026-10-17 explicit model pair: new URL/upload requests may provide `asr_model` and `model_name` together for catalog-validated freezing of the current cloud task only; local mode rejects the pair, global preferences and existing snapshots remain unchanged, and legacy `model_name` alone retains its behavior.
 - 2026-10-17 public video intake: cloud content exposes Bilibili only via `video_url_platforms`, strict HTTPS source validation and per-hop DNS-pinned API/CDN downloads. No generic yt-dlp/curl/network FFmpeg is exposed; no credentials leave the content/model service. Read-only POST `/api/content-service/video-source` creates no operation and invokes no model. Downloads precede ASR/LLM; preserve canonical BV/part identity and signed URLs remain ephemeral. HTTP 412 is a source-access failure, not proof of video deletion or model failure. Download-only acceptance is not end-to-end inference acceptance.
 - Desktop Bilibili intake downloads the source audio on-device through `bilibili_source_service`, binds the retained original to its owner/task with canonical BV/part identity, and never fetches remote video for screenshots.
 

@@ -51,6 +51,8 @@ def _reserve_source(request, user, source, options, *, task_id=None):
         raise HTTPException(401, "请登录后提交可恢复的来源任务")
     if options.get("api_key"):
         raise HTTPException(400, "请使用已保存的模型配置，不支持临时密钥")
+    # Absent new fields must not alter fingerprints of historical submissions.
+    options = {key: value for key, value in options.items() if key != "asr_model" or value is not None}
     return _source_requests.reserve(user.user_id, operation,
         SourceSubmission(source=source, options=options), task_id=task_id)
 
@@ -436,6 +438,7 @@ def _build_note_request_fields(
     diarize: bool = False,
     speaker_count: int | None = None,
     workflow: str = "note_organization",
+    asr_model: str | None = None,
 ) -> LocalFileRequest:
     return LocalFileRequest(
         workflow="meeting" if workflow == "meeting" else "note_organization",
@@ -450,6 +453,7 @@ def _build_note_request_fields(
         model_profile_id=model_profile_id,
         stt_profile_id=stt_profile_id,
         model_name=model_name,
+        asr_model=asr_model,
         api_key=api_key,
         base_url=base_url,
     )
@@ -536,10 +540,13 @@ def generate_note_sync(
                 style=req.style or "detailed", summary_mode=req.summary_mode,
                 extras=req.extras, output_language=req.output_language,
                 model_profile_id=req.model_profile_id, stt_profile_id=req.stt_profile_id,
+                **({"asr_model": req.asr_model} if req.asr_model is not None else {}),
                 model_name=req.model_name, api_key=req.api_key, base_url=req.base_url,
                 user_id=user.user_id if user else None,
                 diarize=effective_diarize, speaker_count=req.speaker_count,
             )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("[API] generate_sync failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -788,11 +795,14 @@ def generate_from_file_sync(
                 output_language=req.output_language,
                 model_profile_id=req.model_profile_id,
                 stt_profile_id=req.stt_profile_id,
+                **({"asr_model": req.asr_model} if req.asr_model is not None else {}),
                 model_name=req.model_name,
                 api_key=req.api_key,
                 base_url=req.base_url,
                 user_id=user.user_id if user else None,
             )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("[API] generate_from_file_sync failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -824,6 +834,7 @@ async def generate_from_upload(
     model_profile_id: str | None = Form(None),
     stt_profile_id: str | None = Form(None),
     model_name: str | None = Form(None),
+    asr_model: str | None = Form(None, max_length=200),
     api_key: str | None = Form(None),
     base_url: str | None = Form(None),
     workflow: str = Form("note_organization"),
@@ -852,7 +863,7 @@ async def generate_from_upload(
                 text = document_text(filename, content)
                 job = {"options": dict(summary_mode=normalized_summary_mode, output_language=normalized_output_language,
                     extras=extras, model_profile_id=model_profile_id, stt_profile_id=stt_profile_id,
-                    model_name=model_name, api_key=api_key, base_url=base_url)}
+                    asr_model=asr_model, model_name=model_name, api_key=api_key, base_url=base_url)}
                 # Never persist ad-hoc API keys in recovery artifacts.
                 if api_key:
                     raise ValueError("文档处理请使用已保存的模型配置，不支持临时密钥")
@@ -889,7 +900,7 @@ async def generate_from_upload(
                         claim = _reserve_source(request, user, _document_source(info["filename"], content, local_file_id),
                             dict(summary_mode=normalized_summary_mode, output_language=normalized_output_language,
                                  extras=extras, model_profile_id=model_profile_id, stt_profile_id=stt_profile_id,
-                                 model_name=model_name, api_key=api_key, base_url=base_url,
+                                 asr_model=asr_model, model_name=model_name, api_key=api_key, base_url=base_url,
                                  title=title or Path(info["filename"]).stem), task_id=info["task_id"])
                         if not claim.created:
                             return claim.model_dump(exclude_none=True)
@@ -933,6 +944,7 @@ async def generate_from_upload(
                 output_language=normalized_output_language,
                 model_profile_id=model_profile_id,
                 stt_profile_id=stt_profile_id,
+                **({"asr_model": asr_model} if asr_model is not None else {}),
                 model_name=model_name,
                 api_key=api_key,
                 base_url=base_url,
@@ -958,7 +970,7 @@ async def generate_from_upload(
             task_dir = _note_service.artifact_service.create_task_dir(task_id)
             ensure_source(task_dir, user.user_id if user else None,
                 dict(model_profile_id=model_profile_id, stt_profile_id=stt_profile_id,
-                     model_name=model_name, api_key=api_key, base_url=base_url), allow_capture=True)
+                     asr_model=asr_model, model_name=model_name, api_key=api_key, base_url=base_url), allow_capture=True)
             record_origin(task_dir, request.headers.get("X-VINote-Client", ""))
             media_dir = task_dir / "media"
             media_dir.mkdir(parents=True, exist_ok=True)
@@ -996,6 +1008,7 @@ async def generate_from_upload(
                 output_language=normalized_output_language,
                 model_profile_id=model_profile_id,
                 stt_profile_id=stt_profile_id,
+                **({"asr_model": asr_model} if asr_model is not None else {}),
                 model_name=model_name,
                 api_key=api_key,
                 base_url=base_url,
@@ -1047,6 +1060,7 @@ async def generate_from_upload_sync(
     model_profile_id: str | None = Form(None),
     stt_profile_id: str | None = Form(None),
     model_name: str | None = Form(None),
+    asr_model: str | None = Form(None, max_length=200),
     api_key: str | None = Form(None),
     base_url: str | None = Form(None),
     workflow: str = Form("note_organization"),
@@ -1091,6 +1105,7 @@ async def generate_from_upload_sync(
                     output_language=normalized_output_language,
                     model_profile_id=model_profile_id,
                     stt_profile_id=stt_profile_id,
+                    **({"asr_model": asr_model} if asr_model is not None else {}),
                     model_name=model_name,
                     api_key=api_key,
                     base_url=base_url,
@@ -1100,7 +1115,7 @@ async def generate_from_upload_sync(
             task_dir = _note_service.artifact_service.create_task_dir(task_id)
             ensure_source(task_dir, user.user_id if user else None,
                 dict(model_profile_id=model_profile_id, stt_profile_id=stt_profile_id,
-                     model_name=model_name, api_key=api_key, base_url=base_url), allow_capture=True)
+                     asr_model=asr_model, model_name=model_name, api_key=api_key, base_url=base_url), allow_capture=True)
             record_origin(task_dir, request.headers.get("X-VINote-Client", ""))
             media_dir = task_dir / "media"
             media_dir.mkdir(parents=True, exist_ok=True)
@@ -1133,6 +1148,7 @@ async def generate_from_upload_sync(
                 output_language=normalized_output_language,
                 model_profile_id=model_profile_id,
                 stt_profile_id=stt_profile_id,
+                **({"asr_model": asr_model} if asr_model is not None else {}),
                 model_name=model_name,
                 api_key=api_key,
                 base_url=base_url,
@@ -1158,11 +1174,14 @@ async def generate_from_upload_sync(
                     output_language=req.output_language,
                     model_profile_id=req.model_profile_id,
                     stt_profile_id=req.stt_profile_id,
+                    **({"asr_model": req.asr_model} if req.asr_model is not None else {}),
                     model_name=req.model_name,
                     api_key=req.api_key,
                     base_url=req.base_url,
                     user_id=user.user_id if user else None,
                 )
+    except HTTPException:
+        raise
     except ValueError as exc:
         logger.error("[API] generate_from_upload_sync failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1190,6 +1209,7 @@ def _run_task(task_id: str, req: NoteRequest, user_id: str | None,
                 style=req.style or "detailed", summary_mode=req.summary_mode,
                 extras=req.extras, output_language=req.output_language,
                 model_profile_id=req.model_profile_id, stt_profile_id=req.stt_profile_id,
+                **({"asr_model": req.asr_model} if req.asr_model is not None else {}),
                 model_name=req.model_name, api_key=req.api_key, base_url=req.base_url,
                 user_id=user_id,
                 diarize=req.diarize, speaker_count=req.speaker_count,
@@ -1241,6 +1261,7 @@ def _run_task_from_file(task_id: str, req: LocalFileRequest, user_id: str | None
                 output_language=req.output_language,
                 model_profile_id=req.model_profile_id,
                 stt_profile_id=req.stt_profile_id,
+                **({"asr_model": req.asr_model} if req.asr_model is not None else {}),
                 model_name=req.model_name,
                 api_key=req.api_key,
                 base_url=req.base_url,
@@ -1312,6 +1333,7 @@ def _run_task_from_transcript(
     base_url: str | None,
     user_id: str | None,
     trace_context: DesktopTraceContext | None = None,
+    asr_model: str | None = None,
 ):
     try:
         with desktop_trace(trace_context):
@@ -1325,6 +1347,7 @@ def _run_task_from_transcript(
                 output_language=output_language,
                 model_profile_id=model_profile_id,
                 stt_profile_id=stt_profile_id,
+                **({"asr_model": asr_model} if asr_model is not None else {}),
                 model_name=model_name,
                 api_key=api_key,
                 base_url=base_url,

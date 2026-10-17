@@ -26,6 +26,7 @@ class NoteRequest(BaseModel):
     model_profile_id: Optional[str] = None
     stt_profile_id: Optional[str] = None
     model_name: Optional[str] = None
+    asr_model: Optional[str] = Field(default=None, max_length=200)
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     workflow: TraceWorkflow = "note_organization"
@@ -43,6 +44,7 @@ class LocalFileRequest(BaseModel):
     model_profile_id: Optional[str] = None
     stt_profile_id: Optional[str] = None
     model_name: Optional[str] = None
+    asr_model: Optional[str] = Field(default=None, max_length=200)
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     workflow: TraceWorkflow = "note_organization"
