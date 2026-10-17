@@ -31,7 +31,7 @@
 - 飞书测试先暴露脱离会话后读取失效，已通过 expunge 修复；补充了单次 state、异公司、跨账号隔离、部分通知重试、未知创建结果关联、租约中断、正文批次继续及 Bearer 校验测试。正文保存历史另验证了原文保留、同内容不重复记录及其他账号无法读取。
 - 最终后端 pytest：239 passed、8 subtests passed；10 个既有弃用告警。桌面前端全量 31 文件 132 项通过，最后相关 37 项复核通过；TypeScript/Vite 生产构建成功。Rust cargo check --lib 成功。开发/构建脚本 18 项通过。
 - 手机 TypeScript 通过，30 个测试套件共 117 项通过，部署/构建脚本 5 项通过。Android 公网源码 Debug 编译成功（后续 0.2.0 原生版本 APK 也已构建，未发布），iOS 未在 Windows 构建。
-- 20:49 启动桌面公网源码实例，窗口 VINote Public Dev、Vite 3100、API 8900 自动重载保持运行。20:50 启动 Metro 8081，USB <device-serial> reverse，安装并启动 com.vinoteapp.dev，保留原账号与数据；源码 Fast Refresh 保持运行，截图确认记录工作台及已有会议正常显示。原生安装仍为本次初始 Debug 元数据，后续 JS/TS 实时更新。
+- 20:49 启动桌面公网源码实例，窗口 VINote Public Dev、Vite 3100、API 8900 自动重载保持运行。20:50 启动 Metro 8081，USB 验收设备（标识已省略） reverse，安装并启动 com.vinoteapp.dev，保留原账号与数据；源码 Fast Refresh 保持运行，截图确认记录工作台及已有会议正常显示。原生安装仍为本次初始 Debug 元数据，后续 JS/TS 实时更新。
 - 初始 Gradle 的 Java NIO 临时目录别名导致 loopback connection 异常；仅当前构建设置 -Djdk.net.unixdomain.tmpdir=D:\tool 后成功，未修改系统全局网络。安装、启动成功，当前应用进程日志未见启动异常。完整新页面录音/飞书真实服务验收尚未进行。
 - 维护 README、AGENTS 与 docs/feishu-integration.md，记录实际配置/接口/边界。两仓 diff 空白检查通过（手机按已存 CRLF 使用 cr-at-eol 检查）。未提交、推送、合入或部署。
 
