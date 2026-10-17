@@ -4,6 +4,7 @@ from typing import Optional
 from fastapi import HTTPException
 
 from app.config import settings
+from app.services.task_model_source import verify_stt_result
 from app.models.stt_profile import (
     GROQ_STT_BASE_URL,
     LocalSTTSupportStatus,
@@ -336,6 +337,7 @@ class STTProfileService:
     def set_default_profile(self, user_id: str, profile_id: str) -> STTProfileResponse:
         return self.repository.set_default_profile(user_id, profile_id)
 
+    @verify_stt_result
     def resolve_config(self, *, user_id: Optional[str], stt_profile_id: Optional[str]) -> ResolvedSTTConfig:
         if user_id:
             from app.services.vilab_cloud_service import VILabCloudService
@@ -343,7 +345,7 @@ class STTProfileService:
             service = VILabCloudService()
             cloud = service.status(user_id)
             if cloud["mode"] == "cloud" and cloud["asr_model"]:
-                return ResolvedSTTConfig(provider="vliab-server", base_url=settings.vilab_server_url,
+                return ResolvedSTTConfig(provider="vliab-server", base_url=cloud.get("server_url") or settings.vilab_server_url,
                                          model_name=cloud["asr_model"], cloud_user_id=user_id)
             if cloud["mode"] == "cloud":
                 raise HTTPException(400, "云端模式尚未选择转写模型，请在设置中选择，或切换到本地模式")

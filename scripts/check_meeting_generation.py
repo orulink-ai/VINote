@@ -116,7 +116,7 @@ def main():
             for call in stt_calls:
                 stt_input = call.get("input") or {}
                 assert stt_input.get("transcription_scope") == "complete_recording", stt_input
-                assert stt_input.get("diarization_turn_count", 0) > 0, stt_input
+                assert stt_input.get("diarization_parallel") is True, stt_input
         llm_calls = [item for item in observations if item.get("type") == "GENERATION"
                      and item.get("name", "").startswith("LLM｜")]
         assert llm_calls and all(item.get("model") and item.get("input") is not None

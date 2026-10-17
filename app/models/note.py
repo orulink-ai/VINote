@@ -16,6 +16,8 @@ TraceWorkflow = Literal["meeting", "note_organization"]
 
 class NoteRequest(BaseModel):
     video_url: str
+    diarize: bool = False
+    speaker_count: int | None = Field(default=None, ge=1, le=20)
     platform: str = "auto"
     style: Optional[str] = "detailed"
     summary_mode: SummaryMode = "default"
@@ -24,6 +26,7 @@ class NoteRequest(BaseModel):
     model_profile_id: Optional[str] = None
     stt_profile_id: Optional[str] = None
     model_name: Optional[str] = None
+    asr_model: Optional[str] = Field(default=None, max_length=200)
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     workflow: TraceWorkflow = "note_organization"
@@ -41,6 +44,7 @@ class LocalFileRequest(BaseModel):
     model_profile_id: Optional[str] = None
     stt_profile_id: Optional[str] = None
     model_name: Optional[str] = None
+    asr_model: Optional[str] = Field(default=None, max_length=200)
     api_key: Optional[str] = None
     base_url: Optional[str] = None
     workflow: TraceWorkflow = "note_organization"
@@ -65,10 +69,14 @@ class TaskStatusResponse(BaseModel):
     stage: Optional[str] = None
     progress: Optional[float] = None
     processed_seconds: Optional[float] = None
+    received_seconds: Optional[float] = None
+    speaker_detection_progress: Optional[float] = None
+    speaker_analysis_ready: Optional[bool] = None
     total_seconds: Optional[float] = None
     eta_seconds: Optional[float] = None
     updated_at: Optional[str] = None
     retryable: Optional[bool] = None
+    error_code: Optional[str] = None
     failed_stage: Optional[str] = None
     attempt: Optional[int] = None
 

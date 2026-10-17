@@ -6,6 +6,16 @@ from dataclasses import replace
 import numpy as np
 
 
+def supported_voice_groups(labels, durations):
+    """Require repeated sustained evidence; keep isolated outliers unknown."""
+    return {label: index for index, label in enumerate(
+        label for label in sorted(set(labels))
+        if labels.count(label) >= 2
+        and sum(min(8.0, duration) for value, duration in zip(labels, durations)
+                if value == label) >= 6.0
+    )}
+
+
 def cluster_embeddings(features, *, max_speakers=20):
     """Average-linkage clustering with silhouette selection of the group count.
 
@@ -88,25 +98,35 @@ def refine_speaker_turns(turns, samples, embedding_model):
     keys = list(vectors)
     features = np.asarray(list(vectors.values()))
     labels, score = cluster_embeddings(features)
-    reliable = len(features) >= 3 and (len(set(labels)) == 1 or score >= 0.2)
-    centroids = np.asarray([features[np.asarray(labels) == label].mean(axis=0) for label in sorted(set(labels))])
+    groups = sorted(set(labels))
+    supported = supported_voice_groups(labels, [turns[index].end - turns[index].start for index in keys])
+    reliable = len(features) >= 3 and bool(supported) and (len(groups) == 1 or score >= 0.2)
+    centroids = np.asarray([features[np.asarray(labels) == label].mean(axis=0) for label in groups])
     centroids /= np.maximum(np.linalg.norm(centroids, axis=1, keepdims=True), 1e-8)
     direct = dict(zip(keys, labels))
+    # Bound supplementary inference, including long meetings with many short turns.
+    additional = set(sorted(
+        (i for i, turn in enumerate(turns)
+         if i not in candidates and turn.speaker_id != 'speaker_overlap'
+         and turn.end - turn.start >= 0.6),
+        key=lambda i: turns[i].end - turns[i].start, reverse=True,
+    )[:128])
     refined = []
     for index, turn in enumerate(turns):
         label = 'speaker_unknown'
         if turn.speaker_id == 'speaker_overlap':
             label = 'speaker_overlap'
-        elif reliable and index in direct:
-            label = f'speaker_{direct[index] + 1}'
-        elif reliable and turn.end - turn.start >= 0.6:
+        elif reliable and index in direct and direct[index] in supported:
+            label = f'speaker_{supported[direct[index]] + 1}'
+        elif reliable and index in additional:
             value = extract(index)
             if value is not None:
                 scores = centroids @ value
                 order = np.argsort(scores)
                 margin = scores[order[-1]] - scores[order[-2]] if len(order) > 1 else 1
-                if scores[order[-1]] >= 0.45 and margin >= 0.08:
-                    label = f'speaker_{int(order[-1]) + 1}'
+                nearest = groups[int(order[-1])]
+                if nearest in supported and scores[order[-1]] >= 0.45 and margin >= 0.08:
+                    label = f'speaker_{supported[nearest] + 1}'
         updated = replace(turn, speaker_id=label)
         if refined and label == refined[-1].speaker_id and turn.start - refined[-1].end <= 1:
             refined[-1] = replace(refined[-1], end=turn.end)
@@ -115,7 +135,9 @@ def refine_speaker_turns(turns, samples, embedding_model):
     return refined, {
         'method': 'sustained-turn-average-linkage',
         'reliable': reliable,
-        'speaker_count': len(set(labels)) if reliable else 0,
+        'speaker_count': len(supported) if reliable else 0,
+        'rejected_groups': len(groups) - len(supported),
+        'revision': 2,
         'silhouette_score': round(score, 4),
         'representative_turns': len(features),
     }

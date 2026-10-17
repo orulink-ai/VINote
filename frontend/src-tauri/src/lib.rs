@@ -46,6 +46,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             request_microphone_access,
+            open_external_url,
             open_recorder_window,
             close_recorder_window,
             set_recorder_active,
@@ -57,6 +58,17 @@ pub fn run() {
         .expect("error while building VINote");
 
     app.run(handle_run_event);
+}
+
+#[tauri::command]
+fn open_external_url(app: AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let parsed = Url::parse(&url).map_err(|_| "invalid_url")?;
+    let host = parsed.host_str().unwrap_or("");
+    if parsed.scheme() != "https" || !host.ends_with(".feishu.cn") || !parsed.username().is_empty() || parsed.password().is_some() {
+        return Err("unsupported_external_url".into());
+    }
+    app.opener().open_url(url, None::<&str>).map_err(|_| "unable_to_open_browser".into())
 }
 
 fn recorder_window_url() -> &'static str {
@@ -169,7 +181,7 @@ async fn open_recorder_window(app: AppHandle, controller: Option<bool>) -> Resul
 }
 
 #[tauri::command]
-fn close_recorder_window(
+async fn close_recorder_window(
     app: AppHandle,
     state: State<'_, RecorderRuntimeState>,
 ) -> Result<(), String> {
@@ -188,7 +200,7 @@ fn apply_recorder_window_layout(window: &tauri::WebviewWindow, layout: &str) -> 
 }
 
 #[tauri::command]
-fn set_recorder_window_layout(app: AppHandle, layout: String) -> Result<(), String> {
+async fn set_recorder_window_layout(app: AppHandle, layout: String) -> Result<(), String> {
     let window = app
         .get_webview_window(RECORDER_WINDOW_LABEL)
         .ok_or_else(|| "recorder_window_not_found".to_string())?;
@@ -196,7 +208,7 @@ fn set_recorder_window_layout(app: AppHandle, layout: String) -> Result<(), Stri
 }
 
 #[tauri::command]
-fn set_recorder_window_size(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
+async fn set_recorder_window_size(app: AppHandle, width: f64, height: f64) -> Result<(), String> {
     let window = app
         .get_webview_window(RECORDER_WINDOW_LABEL)
         .ok_or_else(|| "recorder_window_not_found".to_string())?;
@@ -211,7 +223,7 @@ fn set_recorder_active(active: bool, state: State<'_, RecorderRuntimeState>) {
 }
 
 #[tauri::command]
-fn show_main_window(app: AppHandle, route: Option<String>) -> Result<(), String> {
+async fn show_main_window(app: AppHandle, route: Option<String>) -> Result<(), String> {
     let window = app
         .get_webview_window(MAIN_WINDOW_LABEL)
         .ok_or_else(|| "main_window_not_found".to_string())?;

@@ -207,9 +207,13 @@ export function useAudioRecorder() {
         diskRef.current = disk
       }
       const mimeType = options?.screen
-        ? ['video/webm;codecs=vp9,opus', 'video/webm;codecs=vp8,opus', 'video/webm'].find(type => MediaRecorder.isTypeSupported(type)) || ''
+        ? ['video/webm;codecs=vp8,opus', 'video/webm;codecs=vp9,opus', 'video/webm'].find(type => MediaRecorder.isTypeSupported(type)) || ''
         : getPreferredAudioMimeType()
-      const recorder = mimeType ? new MediaRecorder(stream, { mimeType, ...(options?.screen ? { videoBitsPerSecond: 1500000 } : {}) }) : new MediaRecorder(stream)
+      const recorder = new MediaRecorder(stream, {
+        ...(mimeType ? { mimeType } : {}),
+        audioBitsPerSecond: 128000,
+        ...(options?.screen ? { videoBitsPerSecond: 6000000 } : {}),
+      })
 
       streamRef.current = stream
       recorderRef.current = recorder

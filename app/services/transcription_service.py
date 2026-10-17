@@ -20,6 +20,7 @@ from app.models.stt_profile import LOCAL_STT_PROVIDERS, ResolvedSTTConfig
 from app.models.transcript import TranscriptResult, TranscriptSegment
 from app.services.stt_profile_service import STTProfileService
 from app.transcribers.base import Transcriber
+from app.transcribers.vilab_transcriber import VILabTranscriber
 
 logger = logging.getLogger(__name__)
 
@@ -111,7 +112,7 @@ class TranscriptionService:
     @staticmethod
     def _transcribe_chunk(transcriber, file_path, chunk=None, trace_context=None):
         model = getattr(transcriber, "model", None) or type(transcriber).__name__
-        metadata = {"adapter": type(transcriber).__name__, "streamed": False,
+        metadata = {"adapter": type(transcriber).__name__, "streamed": isinstance(transcriber, VILabTranscriber),
                     "provider": getattr(transcriber, "provider", type(transcriber).__name__)}
         audio_path = Path(file_path)
         input_payload = {
@@ -138,16 +139,19 @@ class TranscriptionService:
             from app.models.transcript import NoSpeechDetectedError
             try:
                 result = transcriber.transcribe(file_path=file_path)
-            except NoSpeechDetectedError:
+            except NoSpeechDetectedError as exc:
                 if chunk is None:
                     raise
                 # An explicitly empty recognition for a silent section must not
                 # discard speech in the rest of a long recording.
                 result = TranscriptResult(None, "", [], metadata={
+                    **getattr(exc, "asr_metadata", {}),
                     "unrecognized_segments": [{"start": chunk.trim_start,
                                                "end": chunk.trim_end,
                                                "reason": "upstream_no_speech"}]})
-            update_current(output={
+            actual_model = result.metadata.get("model", model)
+            update_current(model=actual_model, metadata={**metadata,
+                           "requested_model": model, "asr_attempts": result.metadata.get("asr_attempts", [])}, output={
                 "text": content_summary(result.full_text),
                 "language": result.language,
                 "segments": [{"start": segment.start, "end": segment.end,
@@ -275,6 +279,12 @@ class TranscriptionService:
         trim_start = 0.0
 
         for index in range(1, total + 1):
+            # Container durations can exceed an exact core boundary by a
+            # fraction of a millisecond. Do not send a zero-length final core.
+            if duration - trim_start <= 0.001 and chunks:
+                chunks[-1].trim_end = round(duration, 3)
+                chunks[-1].chunk_end = round(duration, 3)
+                break
             trim_end = duration if index == total else min(duration, trim_start + core_duration)
             chunk_start = max(0.0, trim_start - overlap)
             chunk_end = min(duration, trim_end + overlap)
@@ -282,7 +292,7 @@ class TranscriptionService:
                 ChunkSpec(
                     index=index,
                     total=total,
-                    file_path=temp_dir / f"chunk_{index:03d}.mp3",
+                    file_path=temp_dir / f"chunk_{index:03d}{'.wav' if request_duration_limit == 12 else '.mp3'}",
                     chunk_start=round(chunk_start, 3),
                     chunk_end=round(chunk_end, 3),
                     trim_start=round(trim_start, 3),
@@ -290,6 +300,16 @@ class TranscriptionService:
                 )
             )
             trim_start = trim_end
+
+        # A very short tail may already be present in the preceding request's
+        # overlap. Promote that captured tail to its core instead of making an
+        # almost-empty extra ASR request (common with encoded video padding).
+        if len(chunks) >= 2 and chunks[-2].chunk_end >= chunks[-1].trim_end - 0.001:
+            chunks[-2].trim_end = chunks[-1].trim_end
+            chunks.pop()
+
+        for chunk in chunks:
+            chunk.total = len(chunks)
 
         logger.info(
             "[Transcribe] chunking enabled file=%s duration=%.1fs chunks=%s max_chunk=%.1fs overlap=%.1fs",
@@ -322,8 +342,8 @@ class TranscriptionService:
             "1",
             "-ar",
             "16000",
-            "-b:a",
-            f"{bitrate}k",
+            *(["-c:a", "pcm_s16le"] if chunk.file_path.suffix == ".wav"
+              else ["-b:a", f"{bitrate}k"]),
             str(chunk.file_path),
         ]
         subprocess.run(cmd, capture_output=True, text=True, check=True)
@@ -401,6 +421,14 @@ class TranscriptionService:
         metadata = {**metadata, "stt_request_count": len(chunk_results),
                     "unrecognized_segments": [item for _, result in chunk_results
                                               for item in result.metadata.get("unrecognized_segments", [])]}
+        actual_models = list(dict.fromkeys(result.metadata["model"] for _, result in chunk_results
+                                          if result.metadata.get("model")))
+        if actual_models:
+            metadata["models"] = actual_models
+            # A mixed transcript must not be attributed solely to its first model.
+            metadata["model"] = actual_models[0] if len(actual_models) == 1 else "mixed"
+            metadata["asr_attempts"] = [{**attempt, "chunk_index": chunk.index}
+                for chunk, result in chunk_results for attempt in result.metadata.get("asr_attempts", [])]
         if any(result.full_text.strip() and result.metadata.get("timestamp_granularity") != "segment"
                for _, result in chunk_results):
             metadata["timestamp_granularity"] = "chunk"
@@ -422,11 +450,45 @@ class TranscriptionService:
         cache_identity: str = "",
         trace_context: dict | None = None,
     ) -> TranscriptResult:
+        try:
+            return self._transcribe_chunks(
+                audio_path=audio_path, duration=duration, transcriber=transcriber,
+                update_status=update_status, chunk_cache_dir=chunk_cache_dir,
+                cache_identity=cache_identity, trace_context=trace_context,
+            )
+        except Exception as exc:
+            if update_status:
+                from app.services.task_failure import failure_details
+                details = {"retryable": True, **failure_details(exc)}
+                update_status("failed", str(exc), failed_stage="transcribing", **details)
+            raise
+
+    def _transcribe_chunks(
+        self,
+        *,
+        audio_path: str,
+        duration: float,
+        transcriber: Transcriber,
+        update_status: StatusCallback | None = None,
+        chunk_cache_dir: Path | None = None,
+        cache_identity: str = "",
+        trace_context: dict | None = None,
+    ) -> TranscriptResult:
         with tempfile.TemporaryDirectory(prefix="transcribe_chunks_", dir=settings.data_dir) as temp_dir:
+            def stream_progress(received, total, confirmed, offset=0):
+                if update_status:
+                    update_status("transcribing", f"已提交识别 {self._format_seconds(offset + received)} / {self._format_seconds(duration)}；完整逐字稿待确认",
+                                  stage="transcribing", progress=min(0.99, (offset + received) / duration),
+                                  received_seconds=offset + received, processed_seconds=offset + confirmed, total_seconds=duration)
+            if hasattr(transcriber, "progress_callback"):
+                transcriber.progress_callback = stream_progress
             cloud_request_limit = getattr(transcriber, "max_request_duration_seconds", None)
-            if cloud_request_limit is not None and (not math.isfinite(duration) or duration <= 0):
+            if (cloud_request_limit is not None or isinstance(transcriber, VILabTranscriber)) and (not math.isfinite(duration) or duration <= 0):
                 raise ValueError("无法读取录音时长，已保留原始媒体，请重试；未向云端提交未校验的大文件。")
-            chunk_specs = self._build_chunk_specs(
+            # Framed transport already owns service-declared session boundaries.
+            # Generic overlapping HTTP chunks can lose whole-session evidence
+            # during midpoint trimming, so they must not split this adapter.
+            chunk_specs = [] if isinstance(transcriber, VILabTranscriber) else self._build_chunk_specs(
                 audio_path=audio_path,
                 duration=duration,
                 temp_dir=Path(temp_dir),
@@ -455,6 +517,7 @@ class TranscriptionService:
                     update_current(metadata={"whole_audio_cache_hit": True})
                 if update_status:
                     update_status("transcribing", "完整录音转写完成", stage="transcribing",
+                                  progress=1.0 if duration > 0 else None,
                                   processed_seconds=duration, total_seconds=duration, eta_seconds=None)
                 return result
 
@@ -462,7 +525,6 @@ class TranscriptionService:
             transcription_started_at = time.monotonic()
             reused_chunks = False
             for chunk in chunk_specs:
-                self._extract_chunk(audio_path=audio_path, chunk=chunk)
                 logger.info(
                     "[Transcribe] chunk=%s/%s source=%s range=%s-%s trim=%s-%s",
                     chunk.index,
@@ -479,13 +541,16 @@ class TranscriptionService:
                     update_status(
                         "transcribing",
                         (
-                            f"Transcribing chunk {chunk.index}/{chunk.total} "
+                            f"正在转写第 {chunk.index}/{chunk.total} 块（已完成 {len(chunk_results)} 块） "
                             f"({self._format_seconds(chunk.trim_start)} - {self._format_seconds(chunk.trim_end)})..."
                         ),
                         stage="transcribing", progress=progress_before,
                         processed_seconds=processed_before, total_seconds=duration,
                         eta_seconds=((time.monotonic() - transcription_started_at) / progress_before) * (1 - progress_before) if progress_before > 0 and not reused_chunks else None,
                     )
+                self._extract_chunk(audio_path=audio_path, chunk=chunk)
+                if hasattr(transcriber, "progress_callback"):
+                    transcriber.progress_callback = lambda received, total, confirmed, offset=chunk.chunk_start: stream_progress(received, total, confirmed, offset)
                 if chunk_cache_dir is not None:
                     from app.services.task_artifact_service import TaskArtifactService
                     cache_key = hashlib.sha256((cache_identity + TaskArtifactService._sha256(chunk.file_path)).encode()).hexdigest()
@@ -512,7 +577,8 @@ class TranscriptionService:
                     eta = (elapsed / progress) * (1.0 - progress) if progress > 0 and not reused_chunks else None
                     update_status(
                         "transcribing",
-                        f"Transcribed {self._format_seconds(processed)} of {self._format_seconds(duration)}",
+                        (f"已完成 {chunk.index}/{chunk.total} 块，"
+                         f"已处理 {self._format_seconds(processed)} / {self._format_seconds(duration)}"),
                         stage="transcribing", progress=progress, processed_seconds=processed,
                         total_seconds=duration, eta_seconds=eta,
                     )
@@ -532,10 +598,24 @@ class TranscriptionService:
         speaker_count: int | None = None,
         chunk_cache_dir: Path | None = None,
     ) -> TranscriptResult:
+        from app.services.asr_execution_binding import current_execution, require_task_execution
+        binding = current_execution()
+        if binding is not None:
+            if chunk_cache_dir is None or user_id != binding.owner:
+                raise ValueError('本次处理缺少已核验的转写目录')
+            binding.validate(owner=user_id, source=audio_path, chunks=chunk_cache_dir)
+        elif chunk_cache_dir is not None:
+            require_task_execution(user_id, None, chunk_cache_dir.parent, audio_path)
         cached = load_cached()
-        if cached and bool(cached.metadata.get("speaker_diarization")) == diarize:
+        if cached and bool(cached.metadata.get("speaker_diarization")) == diarize and (
+            not diarize or (cached.metadata.get("analysis_parallel")
+                            and cached.metadata.get("asr_evidence")
+                            and cached.metadata.get("speaker_evidence"))
+        ):
             update_current(metadata={"cache_hit": True})
             logger.info("[Transcribe] cache hit for audio=%s", audio_path)
+            if update_status:
+                update_status("transcribing", "已读取保存的完整转写，继续生成正文…", stage="transcript_ready")
             return cached
 
         resolved_config = None if self.transcriber else self.stt_profile_service.resolve_config(
@@ -543,6 +623,10 @@ class TranscriptionService:
             stt_profile_id=stt_profile_id,
         )
         transcriber = self.transcriber or create_transcriber(resolved_config)
+        if binding is not None:
+            if not isinstance(transcriber, VILabTranscriber):
+                raise ValueError('本次处理未使用已确认的转写模型')
+            binding.validate_model(transcriber.cloud_user_id, transcriber.base_url, transcriber.model)
         cache_identity = json.dumps(resolved_config.model_dump(exclude={"api_key"}) if resolved_config else {"type": type(transcriber).__name__}, sort_keys=True)
         if resolved_config:
             update_current(metadata={"provider": resolved_config.provider,
@@ -565,6 +649,7 @@ class TranscriptionService:
                     trace_context=context,
                 ),
                 speaker_count=speaker_count, update_status=update_status,
+                evidence_dir=chunk_cache_dir.parent if chunk_cache_dir else None,
             )
         else:
             duration = self.get_audio_duration(audio_path)
@@ -574,7 +659,7 @@ class TranscriptionService:
                 chunk_cache_dir=chunk_cache_dir, cache_identity=cache_identity,
             )
         if update_status:
-            update_status("transcribing", "Saving transcription...")
+            update_status("transcribing", "正在保存完整转写…", stage="saving_transcript")
 
         save_transcript(transcript)
         return transcript

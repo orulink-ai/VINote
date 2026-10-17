@@ -20,6 +20,7 @@ export type MeetingRecorderStage =
   | 'preparing_media'
   | 'transcribing'
   | 'diarizing'
+  | 'parallel_analysis'
   | 'aligning'
   | 'analyzing_video'
   | 'summarizing'
@@ -119,6 +120,7 @@ const retryDescriptions: Record<MeetingRecorderStage, string> = {
   preparing_media: '原始录制已保留，可重试媒体准备。',
   transcribing: '录制已经保存在本机，可稍后重新转写。',
   diarizing: '原始录制已保留，可重试本地说话人区分。',
+  parallel_analysis: '原始录制和已完成分析已保留，可继续转写与说话人分析。',
   aligning: '原始录制及有效产物已保留，可重试逐字稿对齐。',
   analyzing_video: '原始录制及有效逐字稿已保留，可重试画面分析。',
   summarizing: '录制和可用逐字稿已经保存在本机，可稍后重新生成纪要。',

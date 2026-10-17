@@ -3,6 +3,7 @@ Task artifact storage for note generation jobs.
 """
 import hashlib
 import json
+import math
 import os
 import shutil
 import threading
@@ -136,6 +137,9 @@ class TaskArtifactService:
         )
 
     def resolve_source_media(self, task_dir: Path) -> Optional[Path]:
+        if (task_dir / "source_reference.json").exists():
+            from app.services.retained_task_source import resolve_reference
+            return resolve_reference(self, task_dir)
         manifest_path = task_dir / "source_media.json"
         if not manifest_path.is_file():
             return None
@@ -182,11 +186,16 @@ class TaskArtifactService:
         stage: str | None = None,
         progress: float | None = None,
         processed_seconds: float | None = None,
+        received_seconds: float | None = None,
+        speaker_detection_progress: float | None = None,
+        speaker_analysis_ready: bool | None = None,
         total_seconds: float | None = None,
         eta_seconds: float | None = None,
         retryable: bool | None = None,
+        error_code: str | None = None,
         failed_stage: str | None = None,
         attempt: int | None = None,
+        asr_failure_context: dict | None = None,
     ) -> None:
         status_file = task_dir / "status.json"
         payload = {
@@ -196,16 +205,26 @@ class TaskArtifactService:
             "message": message,
             "updated_at": datetime.now().astimezone().isoformat(),
         }
-        if progress is not None:
+        if progress is not None and math.isfinite(progress):
             payload["progress"] = max(0.0, min(1.0, float(progress)))
-        if processed_seconds is not None:
+        if processed_seconds is not None and math.isfinite(processed_seconds):
             payload["processed_seconds"] = max(0.0, float(processed_seconds))
-        if total_seconds is not None:
+        if received_seconds is not None and math.isfinite(received_seconds):
+            payload["received_seconds"] = max(0.0, float(received_seconds))
+        if speaker_detection_progress is not None and math.isfinite(speaker_detection_progress):
+            payload["speaker_detection_progress"] = max(0.0, min(1.0, float(speaker_detection_progress)))
+        if speaker_analysis_ready is not None:
+            payload["speaker_analysis_ready"] = bool(speaker_analysis_ready)
+        if total_seconds is not None and math.isfinite(total_seconds):
             payload["total_seconds"] = max(0.0, float(total_seconds))
-        if eta_seconds is not None:
+        if eta_seconds is not None and math.isfinite(eta_seconds):
             payload["eta_seconds"] = max(0.0, float(eta_seconds))
         if retryable is not None:
             payload["retryable"] = retryable
+        if error_code is not None:
+            from app.services.asr_stream_service import _KNOWN_CODES
+            if error_code in _KNOWN_CODES:
+                payload["error_code"] = error_code
         if failed_stage:
             payload["failed_stage"] = failed_stage
         if attempt is not None:
@@ -218,9 +237,37 @@ class TaskArtifactService:
             try:
                 previous = json.loads(status_file.read_text(encoding="utf-8")) if status_file.exists() else {}
                 payload.setdefault("attempt", previous.get("attempt", 1))
+                restarting = (status in {"uploaded", "preparing", "downloading"}
+                              or payload["attempt"] != previous.get("attempt", 1))
+                # Parallel speaker callbacks must not revive a failed ASR attempt.
+                if previous.get("status") == "failed" and status != "failed" and not restarting:
+                    return
+                if not restarting:
+                    # These are completed audio coverage, not a whole-task percentage.
+                    # Keep the facts through speaker analysis, summarization and failure.
+                    for key in ("processed_seconds", "total_seconds", "received_seconds", "speaker_detection_progress", "speaker_analysis_ready"):
+                        if key in previous:
+                            payload.setdefault(key, previous[key])
+                    if status != "failed" and payload["stage"] == previous.get("stage"):
+                        if "progress" in previous:
+                            payload.setdefault("progress", previous["progress"])
                 if status == "failed":
+                    from app.services.task_failure import safe_asr_failure_context
+                    context = safe_asr_failure_context(asr_failure_context)
+                    if context is None and previous.get("status") == "failed" and not restarting:
+                        context = safe_asr_failure_context(previous.get("asr_failure_context"))
+                    if context is not None:
+                        context["task_attempt"] = payload["attempt"]
+                        payload["asr_failure_context"] = context
                     payload.setdefault("failed_stage", previous.get("failed_stage") or previous.get("stage"))
+                    if previous.get("status") == "failed":
+                        if previous.get("error_code"):
+                            payload.setdefault("error_code", previous["error_code"])
+                        if previous.get("retryable") is False:
+                            payload["retryable"] = False
                     payload.setdefault("retryable", True)
+                    from app.services.task_failure import recovery_status
+                    payload = recovery_status(payload)
                 self.write_json(temp_file, payload)
                 self._replace_status_file(temp_file, status_file)
             finally:
@@ -284,6 +331,11 @@ class TaskArtifactService:
             if payload.get("status") not in {"success", "failed", "not_found"} and payload.get("worker_id") != _WORKER_ID:
                 payload.update(status="failed", failed_stage=payload.get("stage"), retryable=True,
                                message="处理服务已中断，原始媒体和已有产物已保留，请重试。")
+                if (task_dir / "new_generation.json").exists():
+                    payload.update(retryable=False, error_code="unknown_result",
+                                   message="本次处理结果尚未确认，请查看本次任务记录，不要重复提交。")
+                payload.pop("progress", None)
+                payload.pop("eta_seconds", None)
             return payload
 
     def get_result(self, task_id: str) -> Optional[dict]:

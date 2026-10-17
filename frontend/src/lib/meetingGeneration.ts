@@ -12,7 +12,7 @@ import {
 } from './noteGenerationClient'
 
 export const MEETING_NOTE_SOURCE_TYPE = 'meeting_recording'
-export type MeetingGenerationStage = 'uploading' | 'preparing_media' | 'transcribing' | 'diarizing' | 'aligning' | 'analyzing_video' | 'summarizing' | 'saving' | 'completed'
+export type MeetingGenerationStage = 'uploading' | 'preparing_media' | 'transcribing' | 'diarizing' | 'parallel_analysis' | 'aligning' | 'analyzing_video' | 'summarizing' | 'saving' | 'completed'
 
 type SaveNote = (
   title: string,
@@ -127,7 +127,7 @@ export async function waitForMeetingTaskCompletion({
     if (status.status === 'success') return status
     if (status.status === 'failed' || status.status === 'not_found') {
       const failed = status.failed_stage
-      const known = ['preparing_media', 'transcribing', 'diarizing', 'aligning', 'analyzing_video', 'summarizing', 'saving']
+      const known = ['preparing_media', 'transcribing', 'parallel_analysis', 'diarizing', 'aligning', 'analyzing_video', 'summarizing', 'saving']
       throw new MeetingGenerationError(known.includes(failed || '') ? failed as typeof lastRunningStage : lastRunningStage, status.message || 'Meeting generation failed')
     }
     const stage = status.stage || status.status
@@ -137,6 +137,8 @@ export async function waitForMeetingTaskCompletion({
     } else if (stage === 'transcribing') {
       lastRunningStage = 'transcribing'
       onStage?.('transcribing')
+    } else if (stage === 'parallel_analysis') {
+      lastRunningStage = 'parallel_analysis'; onStage?.('parallel_analysis')
     } else if (stage === 'diarizing') {
       lastRunningStage = 'diarizing'; onStage?.('diarizing')
     } else if (stage === 'aligning') {

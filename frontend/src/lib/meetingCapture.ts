@@ -162,7 +162,7 @@ export async function captureMeetingSources(options: MeetingCaptureOptions, sign
       // comes from the selected microphone, including for persisted legacy options
       // that still carry systemAudio=true.
       display = await acquireStream(navigator.mediaDevices.getDisplayMedia({
-        video: { frameRate: { ideal: 10, max: 15 }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        video: { frameRate: { ideal: 30, max: 30 }, width: { ideal: 1920, max: 1920 }, height: { ideal: 1080, max: 1080 } },
         audio: false,
       }), signal, 'display').then(registerStream).catch(error => {
         if (signal?.aborted) throw error

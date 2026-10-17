@@ -2,6 +2,8 @@
 import httpx
 import time
 import logging
+import math
+import json
 from contextlib import contextmanager
 from contextvars import ContextVar
 from fastapi import HTTPException
@@ -14,38 +16,80 @@ _task_source: ContextVar[tuple[str, dict] | None] = ContextVar("vinote_task_mode
 logger = logging.getLogger(__name__)
 
 
+def _chat_failure(response):
+    """Project a bounded error envelope; never expose/log arbitrary messages."""
+    payload = {}
+    try:
+        raw = bytearray()
+        for block in response.iter_bytes(chunk_size=4096):
+            if len(raw) + len(block) > 65536:
+                break
+            raw.extend(block)
+        else:
+            payload = json.loads(raw)
+    except (httpx.HTTPError, ValueError, UnicodeError):
+        pass
+    error = payload.get('error') if isinstance(payload, dict) else None
+    error = error if isinstance(error, dict) else {}
+    codes = {'unauthorized', 'account_disabled', 'authentication_unavailable',
+             'invalid_api_key', 'authentication_error', 'permission_denied',
+             'access_denied', 'insufficient_quota', 'rate_limit_exceeded'}
+    types = {'vilab_error', 'invalid_request_error', 'authentication_error',
+             'permission_error', 'rate_limit_error', 'insufficient_quota'}
+    code = error.get('code')
+    kind = error.get('type')
+    code = code if isinstance(code, str) and code in codes else None
+    kind = kind if isinstance(kind, str) and kind in types else None
+    status = response.status_code
+    category = 'unclassified_rejection'
+    detail = f'云端模型或上游服务拒绝本次请求（HTTP {status}），原模型与已有转写保留。'
+    public_status = 502
+    if kind == 'vilab_error' and code == 'unauthorized' and status == 401:
+        category, detail = 'caller_auth', '云端服务未接受当前身份，请检查账号登录及服务端可信身份来源配置'
+    elif kind == 'vilab_error' and code == 'account_disabled' and status == 403:
+        category, detail = 'caller_disabled', '云端服务账号已停用，请联系服务管理员。'
+    elif kind == 'vilab_error' and code == 'authentication_unavailable' and status in {500, 503}:
+        category, detail = 'caller_auth_unavailable', '云端账号认证服务暂时不可用，请稍后核验服务状态。'
+        public_status = 503
+    elif code in {'invalid_api_key', 'authentication_error'} and status in {401, 403}:
+        category, detail = 'provider_auth', f'上游模型服务鉴权失败（HTTP {status}），请管理员检查模型服务凭证。'
+    elif code in {'permission_denied', 'access_denied'} and status in {401, 403}:
+        category, detail = 'provider_permission', f'上游模型服务拒绝访问权限（HTTP {status}），请管理员核验所选模型权限。'
+    elif code == 'insufficient_quota' and status in {402, 403, 429}:
+        category, detail = 'provider_quota', f'上游模型服务额度不足（HTTP {status}），请管理员核验。'
+    diagnostic = {'category': category, 'http_status': status}
+    if code:
+        diagnostic['error_code'] = code
+    if kind:
+        diagnostic['error_type'] = kind
+    logger.warning('Cloud chat rejected: %s', diagnostic)
+    failure = HTTPException(public_status, detail)
+    failure.cloud_failure_context = diagnostic
+    return failure
+
+
 class VILabCloudService:
-    def _request_chat_stream(self, method, path, headers, timeout, kwargs):
+    def _request_chat_stream(self, method, path, headers, timeout, kwargs, *, server_url=None):
         from app.services.cloud_chat_stream import collect_chat_stream
 
-        # Retry only transient transport failures. Each attempt gets a new
-        # collector so a broken response can never contaminate the final note.
-        transient = (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError)
+        # POST/stream interruption cannot prove inference did not run. Never
+        # replay automatically, including after response headers or partials.
         started = time.monotonic()
-        for attempt in range(1, 3):
-            received_headers = False
-            try:
-                with httpx.stream(method, settings.vilab_server_url + path,
-                                  headers=headers, timeout=timeout, **kwargs) as response:
-                    received_headers = True
-                    if response.status_code in {401, 403}:
-                        raise HTTPException(502, "云端服务未接受当前身份，请检查账号登录及服务端可信身份来源配置")
-                    if not response.is_success:
-                        raise HTTPException(502, f"云端模型请求失败（HTTP {response.status_code}）")
-                    return collect_chat_stream(response, started=started)
-            except transient as error:
-                elapsed = time.monotonic() - started
-                logger.warning(
-                    "Cloud chat transport failed: kind=%s attempt=%d headers=%s elapsed_seconds=%.1f",
-                    type(error).__name__, attempt, received_headers, elapsed,
-                )
-                if attempt < 2 and elapsed < 900:
-                    time.sleep(1)
-                    continue
-                detail = ("云端模型响应超时，请稍后重试" if isinstance(error, httpx.TimeoutException)
-                          else "云端模型响应连接中断，请稍后重试" if received_headers
-                          else "无法连接云端模型服务，请稍后重试")
-                raise HTTPException(502, detail) from None
+        received_headers = False
+        try:
+            with httpx.stream(method, (server_url or settings.vilab_server_url) + path,
+                              headers=headers, timeout=timeout, **kwargs) as response:
+                received_headers = True
+                if not response.is_success:
+                    raise _chat_failure(response)
+                return collect_chat_stream(response, started=started)
+        except httpx.RequestError as error:
+            logger.warning('Cloud chat transport failed: kind=%s attempt=1 headers=%s elapsed_seconds=%.1f',
+                           type(error).__name__, received_headers, time.monotonic() - started)
+            detail = ('云端模型响应超时，结果尚未确认，未自动重试' if isinstance(error, httpx.TimeoutException)
+                      else '云端模型响应连接中断，结果尚未确认，未自动重试' if received_headers
+                      else '无法连接云端模型服务，结果尚未确认，未自动重试')
+            raise HTTPException(502, detail) from None
 
     def validate_ready(self, user_id, *, needs_stt=True):
         if not user_id:
@@ -58,6 +102,13 @@ class VILabCloudService:
         defaults = self.defaults(user_id)
         if not defaults.get("llm_model") or (needs_stt and not defaults.get("asr_model")):
             raise ValueError("云端当前模型未配置，请联系服务管理员")
+        snapshot = _task_source.get()
+        if snapshot and snapshot[0] == user_id:
+            models = self.models(user_id)
+            self._validate_selection(models, defaults["llm_model"], "llm")
+            if needs_stt:
+                self._validate_selection(models, defaults["asr_model"], "asr")
+
 
     def defaults(self, user_id):
         snapshot = _task_source.get()
@@ -68,43 +119,49 @@ class VILabCloudService:
         # 完整且可用的显式选择不依赖旧版服务的默认模型配置。
         if all(selections.values()):
             models = self.models(user_id)
-            try:
-                self._validate_selection(models, selections["asr_model"], "asr")
-                self._validate_selection(models, selections["llm_model"], "llm")
-            except HTTPException:
-                pass  # 保留已下线模型回退到经过验证的服务默认值的行为。
-            else:
-                return selections
+            self._validate_selection(models, selections["asr_model"], "asr")
+            self._validate_selection(models, selections["llm_model"], "llm")
+            return selections
         defaults = self.request(user_id, "GET", "/v1/default-models")
         if any(selections.values()):
             models = self.models(user_id)
             for key, kind in (("asr_model", "asr"), ("llm_model", "llm")):
                 selected = selections[key]
                 if selected:
-                    try:
-                        self._validate_selection(models, selected, kind)
-                    except HTTPException:
-                        fallback = defaults.get(key)
-                        self._validate_selection(models, fallback, kind)
-                        from app.services.tracing_service import observation, update_current
-                        with observation("云端模型选择回退"):
-                            update_current(input={"kind": kind, "unavailable_model": selected},
-                                           output={"model": fallback, "reason": "saved_selection_unavailable"})
-                    else:
-                        defaults[key] = selected
+                    self._validate_selection(models, selected, kind)
+                    defaults[key] = selected
         return defaults
 
     @staticmethod
     def _validate_selection(models, name, kind):
-        if not any(model["id"] == name and model["modelType"] == kind
-                   and model.get("runtimeStatus") == "available" for model in models):
-            raise HTTPException(400, "所选云端模型当前不可用，请重新选择可用模型或跟随服务默认")
+        model = next((model for model in models if model["id"] == name and model["modelType"] == kind), None)
+        allowed = False
+        if model:
+            runtime = model.get("runtimeStatus")
+            health = model.get("availability")
+            if health is None:
+                allowed = runtime == "available"
+            elif isinstance(health, dict):
+                status = health.get("status")
+                if status == "available":
+                    allowed = runtime == "available"
+                elif status in {"service_error", "rate_limited"} and runtime in {"available", "not_available", "unavailable"}:
+                    retry_at = health.get("retryAt")
+                    allowed = (type(retry_at) in (int, float) and 0 < retry_at <= time.time() * 1000
+                               and math.isfinite(retry_at))
+        if not allowed:
+            raise HTTPException(400, "所选云端模型当前不可用，原模型已保留；请在恢复可用后重试或明确确认新的生成操作")
+
 
     def request(self, user_id, method, path, **kwargs):
         if not settings.vilab_server_url:
             raise HTTPException(503, "云端模型服务尚未配置，请联系管理员")
+        server_url = self.status(user_id).get("server_url") or settings.vilab_server_url
         headers = {}
-        if settings.cloud_auth_url:
+        if settings.content_cloud_runtime:
+            from app.services.cloud_content_identity import content_bearer
+            headers["Authorization"] = "Bearer " + content_bearer(user_id)
+        elif settings.cloud_auth_url:
             from app.services.cloud_account_service import CloudAccountService
             headers["Authorization"] = "Bearer " + CloudAccountService().access_token(user_id)
         elif settings.vilab_api_key:
@@ -112,12 +169,14 @@ class VILabCloudService:
         try:
             timeout = kwargs.pop("timeout", 300)
             if path == "/openai/v1/chat/completions" and (kwargs.get("json") or {}).get("stream") is True:
-                return self._request_chat_stream(method, path, headers, timeout, kwargs)
-            response = httpx.request(method, settings.vilab_server_url + path,
+                return self._request_chat_stream(method, path, headers, timeout, kwargs, server_url=server_url)
+            response = httpx.request(method, server_url + path,
                                     headers=headers, timeout=timeout, **kwargs)
         except httpx.RequestError as error:
             logger.warning("Cloud request transport failed: kind=%s", type(error).__name__)
             raise HTTPException(502, "无法连接云端模型服务，请稍后重试") from None
+        if path == '/openai/v1/chat/completions' and not response.is_success:
+            raise _chat_failure(response)
         if response.status_code in {401, 403}:
             raise HTTPException(502, "云端服务未接受当前身份，请检查账号登录及服务端可信身份来源配置")
         if not response.is_success:
@@ -155,14 +214,15 @@ class VILabCloudService:
                     "asr_model": row.asr_model if row else "", "llm_model": row.llm_model if row else ""}
 
     @contextmanager
-    def task_snapshot(self, user_id):
+    def task_snapshot(self, user_id, *, snapshot=None):
         """An in-flight task keeps its model mode if the user switches modes."""
         if not user_id:
             yield
             return
-        config = self.status(user_id)
-        if config["mode"] == "cloud":
+        config = dict(snapshot) if snapshot is not None else self.status(user_id)
+        if snapshot is None and config["mode"] == "cloud":
             config.update(self.defaults(user_id))
+        config.setdefault("configured", bool(config.get("server_url")))
         token = _task_source.set((user_id, config))
         try:
             yield
@@ -172,8 +232,13 @@ class VILabCloudService:
     def models(self, user_id):
         data = self.request(user_id, "GET", "/v1/models")
         return [{"id": m["id"], "modelType": m["modelType"], "runtimeStatus": m.get("runtimeStatus", ""),
-                 **({"capabilities": m["capabilities"]} if isinstance(m.get("capabilities"), dict) else {})}
-                for m in data.get("data", []) if isinstance(m.get("id"), str) and m.get("modelType") in {"asr", "llm"}]
+                 **({"availability": m["availability"]} if "availability" in m else {}),
+                 **({"capabilities": m["capabilities"]} if isinstance(m.get("capabilities"), dict) else {}),
+                 **{key: value.strip() for key in ("name", "providerId", "providerModel")
+                    if isinstance(value := m.get(key), str) and 0 < len(value) <= 120
+                    and value.strip() and "://" not in value
+                    and not any(ord(char) < 32 or ord(char) == 127 for char in value)}}
+                for m in data.get("data", []) if isinstance(m, dict) and isinstance(m.get("id"), str) and m.get("modelType") in {"asr", "llm"}]
 
     def select(self, user_id, mode, asr_model, llm_model):
         if mode == "cloud":

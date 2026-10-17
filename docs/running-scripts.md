@@ -48,9 +48,9 @@ yarn package:test:plan
 
 ## 打包与低层工具
 
-四个源码入口均使用 Vite HMR；前端修改自动同步到已打开的网页和桌面窗口。Python 后端使用 Uvicorn `--reload`，Rust 由 `tauri dev` 监听并重新编译。修改后端会重载工作进程，进行中的生成任务可能中断；安装包是固定构建产物，不具备源码热更新。
+四个源码入口均使用 Vite HMR；前端修改自动同步到已打开的网页和桌面窗口。Python 后端由 `scripts/backend-dev.py` 管理 Uvicorn 热重载，仅每秒监听 `app/`、`main.py`、`mcp_server.py`，避免扫描音频、模型和客户端构建目录，Rust 由 `tauri dev` 监听并重新编译。修改后端会重载工作进程，进行中的生成任务可能中断；安装包是固定构建产物，不具备源码热更新。
 
-接口脚本发起的本地测试可在被 Git 忽略的 `data/dev-tasks.json` 登记 `[{"taskId":"任务 UUID","label":"音频测试"}]`。源码界面显示“会议处理进度”，每两秒通过当前登录会话读取真实任务状态，包括错误、转写时长和服务端提供的预计剩余时间。任务注册接口仅存在于 Vite 开发服务，不包含媒体、凭证或转写内容，安装包不加载此面板。删除登记文件即可隐藏面板。
+接口脚本发起的本地测试可在被 Git 忽略的 `data/dev-tasks.json` 登记 `[{"taskId":"任务 UUID","label":"音频测试"}]`。源码界面显示“会议处理进度”，有活动任务或读取错误时每两秒通过当前登录会话读取真实任务状态，全部结束后放缓至每三十秒，包括错误、转写时长和服务端提供的预计剩余时间。任务注册接口仅存在于 Vite 开发服务，不包含媒体、凭证或转写内容，安装包不加载此面板。删除登记文件即可隐藏面板。
 
 正式与测试包保留独立安装身份和应用数据目录，可同时安装。两个渠道按顺序构建；产物位于 `.desktop-build/artifacts/<channel>/<version>/<buildId>/`，不自动上传或发布。Windows/macOS 须在对应系统构建，详见[桌面打包](desktop-packaging.md)。
 
@@ -70,7 +70,9 @@ yarn package:test:plan
 
 实现由 `dev.mjs` 共用启动与清理，`desktop-dev-profile.mjs` 解析源码身份，`service-environments.mjs` 提供固定地址，`bootstrap-dev.mjs` 准备依赖。`build-desktop.mjs` / `desktop-build-profile.mjs` 负责打包；`windows-backend-dev.py` 保留 Windows 信号隔离。
 
-内网、公网的 VILab 转写统一限制每次音频请求最多 60 秒（包含上下文重叠），不受关闭通用分段选项影响；首尾不足 60 秒时按实际长度处理。默认每侧最多保留 5 秒上下文，核心区间连续覆盖完整录音，合并后按核心区间计进度。此限制也适用于两种安装包。
+VILab 转写使用按音频时间节流的 VLA2 PCM WebSocket 小帧，不再按模型名称设置 12/60 秒请求 cap。小帧大小、传输节流与接收超时不是模型时长能力；只有服务明确返回 `audio_duration_exceeded` 及有效限制，才调整未完成区间。失败不自动换模型，只有已保存的 final 区间可作恢复检查点。公网阿里云 120/340 秒和火山 120 秒已有实际 final 证据；不代表任意模型、完整长录音或安装包均已验收。
+
+说话人完整检测与 refinement 在单个隔离子进程运行，父进程校验结果后保存 speaker evidence；有效缓存可在 ASR 重试时复用。20 秒真实模型诊断测得父心跳最大间隔 0.051 秒，子进程结束且无残留；这是原生模型 CLI 证据，不是完整产品验收。新任务先持久保存账号绑定的模型快照再写请求，旧无快照云任务须在确认 Sheet 核对具体服务、ASR/LLM 后恢复同一 task。2026-10-14 约 00:00，主线程已在 native 确认原 50 分钟任务的 Aliyun/Luna 并恢复；目前正在 ASR、speaker 已缓存，尚未完成。见[隔离验证](reviews/2026-10-13-speaker-worker-gil.md)与[模型确认](reviews/2026-10-13-task-model-confirmation.md)。
 
 开发进度面板只跟踪本次界面会话观察到的运行中任务；历史失败/成功任务不会重新挂在顶部，本次终态结果可关闭，关闭不删除媒体或任务产物。
 

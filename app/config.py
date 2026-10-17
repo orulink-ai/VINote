@@ -15,6 +15,20 @@ DEFAULT_SQLITE_PATH = BASE_DIR / "data" / "vinote.db"
 
 @dataclass
 class Settings:
+    feishu_app_id: str = os.getenv("FEISHU_APP_ID", "").strip()
+    feishu_app_secret: str = os.getenv("FEISHU_APP_SECRET", "").strip()
+    feishu_redirect_uri: str = os.getenv("FEISHU_REDIRECT_URI", "").strip()
+    feishu_tenant_key: str = os.getenv("FEISHU_TENANT_KEY", "").strip()
+    feishu_service_url: str = os.getenv("VINOTE_INTEGRATION_URL", "").rstrip("/")
+    workspace_service_url: str = os.getenv("VINOTE_WORKSPACE_URL", "").rstrip("/")
+    workspace_cloud_runtime: bool = os.getenv("VINOTE_WORKSPACE_CLOUD", "false").lower() == "true"
+    content_cloud_runtime: bool = os.getenv("VINOTE_CONTENT_CLOUD", "false").lower() == "true"
+    content_upload_max_bytes: int = int(os.getenv("VINOTE_CONTENT_UPLOAD_MAX_BYTES", "134217728"))
+    workspace_storage_url: str = os.getenv("VINOTE_STORAGE_URL", os.getenv("VINOTE_SUPABASE_URL", "")).rstrip("/")
+    workspace_storage_key: str = os.getenv("VINOTE_STORAGE_SERVICE_KEY", "")
+    workspace_storage_bucket: str = os.getenv("VINOTE_STORAGE_BUCKET", "vinote-content")
+    feishu_doc_base_url: str = os.getenv("FEISHU_DOC_BASE_URL", "").rstrip("/")
+    feishu_scopes: str = os.getenv("FEISHU_SCOPES", "offline_access docx:document docs:permission.member:create docs:permission.member:auth docs:permission.setting:read docs:permission.setting:write_only drive:drive.metadata:readonly wiki:space:read wiki:node:read wiki:node:create im:chat:read docx:document.block:convert contact:user:search")
     meeting_review_model: str = os.getenv("MEETING_REVIEW_MODEL", "gpt-6-astra").strip()
     diarization_cluster_threshold: float = float(os.getenv("DIARIZATION_CLUSTER_THRESHOLD", "0.5"))
     # Tracing is required for desktop source/test/release runtimes only.
@@ -96,6 +110,20 @@ class Settings:
     azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
 
     def __post_init__(self):
+        if self.content_cloud_runtime and not self.workspace_cloud_runtime:
+            raise ValueError("Cloud content requires VINOTE_WORKSPACE_CLOUD=true")
+        if not 1024 <= self.content_upload_max_bytes <= 512 * 1024 * 1024:
+            raise ValueError("Cloud content upload limit must be between 1 KiB and 512 MiB")
+        if self.workspace_cloud_runtime:
+            from urllib.parse import urlsplit
+            if not self.database_url.startswith(("postgresql://", "postgresql+psycopg://")):
+                raise ValueError("Cloud workspace requires PostgreSQL; SQLite fallback is forbidden")
+            if not self.cloud_auth_url or not self.cloud_auth_public_key:
+                raise ValueError("Cloud workspace requires Supabase authentication")
+            if not self.workspace_storage_key or urlsplit(self.workspace_storage_url).scheme != "https":
+                raise ValueError("Cloud workspace requires private HTTPS attachment storage")
+            if self.workspace_service_url or self.feishu_service_url:
+                raise ValueError("Cloud workspace must serve requests directly, not proxy to itself")
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 

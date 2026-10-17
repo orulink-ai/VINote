@@ -3,6 +3,7 @@ Note generation API routes.
 """
 from app.services.note_origin_service import record_origin
 import json
+import hashlib
 import logging
 import math
 import re
@@ -10,8 +11,9 @@ import uuid
 import threading
 from dataclasses import asdict, replace
 from pathlib import Path
+from typing import Annotated
 
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
 
 from app.config import settings
@@ -19,9 +21,17 @@ from app.llm.prompts import STYLE_MAP
 from app.models.auth import AuthenticatedUser
 from app.models.note import LocalFileRequest, NoteRequest, NoteResponse, SummaryMode, TaskStatusResponse
 from app.models.transcript import TranscriptResult, TranscriptSegment
-from app.services.auth_service import get_current_user, get_optional_current_user
+from app.services.generation_auth_service import (
+    get_generation_user as get_current_user,
+    get_optional_generation_user as get_optional_current_user,
+)
 from app.services.audio_normalizer import normalize_audio_for_transcription
 from app.services.note_service import NoteService
+from app.services.task_model_source import ensure_source
+from app.services.document_source_service import document_text, is_document_url, MAX_BYTES
+from app.services.source_note_job import run_source_job
+from app.models.source_request import SourceInput, SourceSubmission, SourceRequestReceipt
+from app.services.source_request_service import SourceRequestService
 from app.services.tracing_service import DesktopTraceContext, desktop_trace
 
 logger = logging.getLogger(__name__)
@@ -31,6 +41,63 @@ _note_service = NoteService()
 _FILE_TASK_LOCK = threading.RLock()
 _ACTIVE_FILE_TASKS: set[str] = set()
 _UPLOADING_MEETINGS: set[str] = set()
+_source_requests = SourceRequestService()
+
+
+def _reserve_source(request, user, source, options, *, task_id=None):
+    operation = request.headers.get("X-VINote-Operation-Id")
+    if operation is None:
+        return None  # Existing clients keep their historical submission behavior.
+    if not user:
+        raise HTTPException(401, "请登录后提交可恢复的来源任务")
+    if options.get("api_key"):
+        raise HTTPException(400, "请使用已保存的模型配置，不支持临时密钥")
+    # Absent new fields must not alter fingerprints of historical submissions.
+    options = {key: value for key, value in options.items() if key != "asr_model" or value is not None}
+    return _source_requests.reserve(user.user_id, operation,
+        SourceSubmission(source=source, options=options), task_id=task_id)
+
+
+def _accept_source(user, claim, result):
+    if claim is None:
+        return result
+    receipt = _source_requests.accept(user.user_id, claim.operation_id, claim.task_id,
+        status=result["status"], source_type=result.get("source_type"))
+    return {**result, **receipt.model_dump(exclude_none=True)}
+
+
+def _document_source(filename, content, retained_id=None):
+    sha = hashlib.sha256(content).hexdigest()
+    values = dict(file_type=Path(filename or "").suffix.lower(), filename=filename,
+                  size=len(content), sha256=sha)
+    return (SourceInput(kind="retained_file", retained_file_id=retained_id,
+                        retained_file_version=sha, **values) if retained_id
+            else SourceInput(kind="upload", **values))
+
+
+from app.services.task_new_generation import NewGenerationConfirmation, NewGenerationService
+from app.services.task_generation_context import frozen_generation_context
+
+
+@router.get("/task/{task_id}/new-generation-context")
+def new_generation_context(task_id: str, response: Response, user=Depends(get_current_user)):
+    response.headers["Cache-Control"] = "private, no-store"
+    return frozen_generation_context(user.user_id, task_id, active=task_id in _ACTIVE_FILE_TASKS)
+
+
+@router.post("/task/{task_id}/new-generation", response_model=SourceRequestReceipt)
+def accept_new_generation(task_id: str, body: NewGenerationConfirmation,
+                          background_tasks: BackgroundTasks, response: Response,
+                          user=Depends(get_current_user)):
+    response.headers["Cache-Control"] = "private, no-store"
+    return NewGenerationService(_source_requests).accept(user.user_id, task_id, body,
+        background_tasks, _run_task_from_file, active=task_id in _ACTIVE_FILE_TASKS)
+
+
+@router.get("/source-requests/{operation_id}", response_model=SourceRequestReceipt)
+def source_receipt(operation_id: str, response: Response, user=Depends(get_current_user)):
+    response.headers["Cache-Control"] = "no-store"
+    return _source_requests.get(user.user_id, operation_id)
 
 _ALLOWED_OUTPUT_LANGUAGES = {"en", "zh-CN"}
 _ALLOWED_SUMMARY_MODES = {"default", "accurate", "oneshot"}
@@ -133,7 +200,7 @@ def _normalize_source_type(value: str | None) -> str:
     normalized = (value or "media").strip().lower()
     if normalized in {"media", ""}:
         return "audio"
-    if normalized in {"audio", "video", "transcript"}:
+    if normalized in {"audio", "video", "transcript", "document"}:
         return normalized
     raise ValueError("Invalid source_type. Allowed values are audio, video, transcript.")
 
@@ -371,8 +438,11 @@ def _build_note_request_fields(
     base_url: str | None,
     diarize: bool = False,
     speaker_count: int | None = None,
+    workflow: str = "note_organization",
+    asr_model: str | None = None,
 ) -> LocalFileRequest:
     return LocalFileRequest(
+        workflow="meeting" if workflow == "meeting" else "note_organization",
         file_path=file_path,
         diarize=diarize,
         speaker_count=speaker_count,
@@ -384,6 +454,7 @@ def _build_note_request_fields(
         model_profile_id=model_profile_id,
         stt_profile_id=stt_profile_id,
         model_name=model_name,
+        asr_model=asr_model,
         api_key=api_key,
         base_url=base_url,
     )
@@ -397,17 +468,57 @@ def generate_note_async(
     user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
     task_id = str(uuid.uuid4())
+    if req.workflow == "note_organization" and is_document_url(req.video_url):
+        job = {"url": req.video_url, "options": req.model_dump(exclude={"video_url", "workflow", "platform", "diarize", "speaker_count", "style"})}
+        claim = _reserve_source(request, user, SourceInput(kind="url", url=req.video_url), job["options"])
+        if claim and not claim.created:
+            return claim.model_dump(exclude_none=True)
+        result = _queue_source_job(claim.task_id if claim else task_id, job, background_tasks, user, request)
+        return _accept_source(user, claim, result)
+    from urllib.parse import urlsplit
+    from app.services.bilibili_source_service import INPUT_HOSTS, validate_input
+    try:
+        parsed = urlsplit(req.video_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+            raise ValueError("请提供有效且不含账号密码的视频链接")
+        if parsed.hostname in INPUT_HOSTS:
+            req = req.model_copy(update={"video_url": validate_input(req.video_url)})
+    except ValueError as exc:
+        raise HTTPException(400, "请提供有效且不含账号密码的视频链接，并检查分P编号") from exc
     trace_context = _desktop_trace_context(
         request, workflow=req.workflow, source="url", media_type="video",
         title=None, url=req.video_url, summary_mode=req.summary_mode,
         output_language=req.output_language,
     )
-    if trace_context is not None:
+    if trace_context is not None and req.workflow == "meeting":
         req = req.model_copy(update={"diarize": True, "speaker_count": None})
+    req = req.model_copy(update={"style": req.style or "detailed"})
+    # Fingerprint the actual worker options, including desktop overrides. Only
+    # a newly reserved claim may publish a new pending task or queue work.
+    claim = _reserve_source(request, user, SourceInput(kind="url", url=req.video_url),
+                            req.model_dump(exclude={"video_url"}))
+    if claim and not claim.created:
+        return claim.model_dump(exclude_none=True)
+    task_id = claim.task_id if claim else task_id
+    artifacts = _note_service.artifact_service
+    folder = artifacts.create_task_dir(task_id)
+    owner_path = folder / "recording_owner"
+    if owner_path.is_symlink() or (owner_path.exists() and
+            owner_path.read_text(encoding="utf-8") != (user.user_id if user else None)):
+        raise HTTPException(404, "Task not found")
+    if user:
+        owner_path.write_text(user.user_id, encoding="utf-8")
+    record_origin(folder, request.headers.get("X-VINote-Client", ""))
+    # Do not capture models or write request.json here: capture may perform a
+    # slow catalog request, and the worker's frozen-model guard still owns it.
+    artifacts.update_status(folder, "pending", "任务已提交，正在准备来源…", retryable=False)
+    result = _accept_source(user, claim,
+                            {"task_id": task_id, "status": "pending", "source_type": "video",
+                             "message": "Task submitted"})
     background_tasks.add_task(_run_task, task_id=task_id, req=req,
                               user_id=user.user_id if user else None,
                               trace_context=trace_context)
-    return {"task_id": task_id, "status": "pending", "message": "Task submitted"}
+    return result
 
 
 @router.post("/generate_sync", response_model=NoteResponse)
@@ -423,17 +534,20 @@ def generate_note_sync(
             url=req.video_url, summary_mode=req.summary_mode,
             output_language=req.output_language,
         )
-        effective_diarize = req.diarize or trace_context is not None
+        effective_diarize = req.diarize or (trace_context is not None and req.workflow == "meeting")
         with desktop_trace(trace_context):
             result = _note_service.generate(
                 video_url=req.video_url, task_id=task_id, platform=req.platform,
                 style=req.style or "detailed", summary_mode=req.summary_mode,
                 extras=req.extras, output_language=req.output_language,
                 model_profile_id=req.model_profile_id, stt_profile_id=req.stt_profile_id,
+                **({"asr_model": req.asr_model} if req.asr_model is not None else {}),
                 model_name=req.model_name, api_key=req.api_key, base_url=req.base_url,
                 user_id=user.user_id if user else None,
                 diarize=effective_diarize, speaker_count=req.speaker_count,
             )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("[API] generate_sync failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -467,6 +581,8 @@ def _require_recording_access(task_id: str, user: AuthenticatedUser | None):
 def get_task_status(task_id: str, user: AuthenticatedUser | None = Depends(get_optional_current_user)):
     _require_recording_access(task_id, user)
     status_data = _note_service.get_status(task_id)
+    from app.services.task_failure import recovery_status
+    status_data = recovery_status(status_data)
     status = status_data.get("status", "not_found")
     message = status_data.get("message", "")
     result = None
@@ -487,28 +603,97 @@ def get_task_status(task_id: str, user: AuthenticatedUser | None = Depends(get_o
         langfuse_trace_id=status_data.get("langfuse_trace_id"),
         stage=status_data.get("stage"), progress=status_data.get("progress"),
         processed_seconds=status_data.get("processed_seconds"),
+        received_seconds=status_data.get("received_seconds"),
+        speaker_detection_progress=status_data.get("speaker_detection_progress"),
+        speaker_analysis_ready=status_data.get("speaker_analysis_ready"),
         total_seconds=status_data.get("total_seconds"),
         eta_seconds=status_data.get("eta_seconds"),
         updated_at=status_data.get("updated_at"), retryable=status_data.get("retryable"),
+        error_code=status_data.get("error_code"),
         failed_stage=status_data.get("failed_stage"), attempt=status_data.get("attempt"),
     )
 
 
+@router.get("/task/{task_id}/model-confirmation")
+def task_model_confirmation(task_id: str, user=Depends(get_current_user)):
+    """Read owner-validated recovery context; this never writes or starts generation."""
+    from app.services.task_model_source import SNAPSHOT_FILE, capture_source
+    from app.services.vilab_cloud_service import VILabCloudService
+    artifacts = _note_service.artifact_service
+    folder = artifacts.find_task_dir(task_id)
+    if not folder or not (folder / "recording_owner").exists() or (folder / "recording_owner").read_text(encoding="utf-8") != user.user_id:
+        raise HTTPException(404, "Task not found")
+    status = artifacts.get_status(task_id)
+    if task_id in _ACTIVE_FILE_TASKS or status.get("status") not in {"failed", "error"}:
+        raise HTTPException(409, "原任务正在处理或已完成，请先查询原任务状态")
+    if (folder / "source_job.json").exists():
+        job = json.loads((folder / "source_job.json").read_text(encoding="utf-8"))
+        options = dict(job.get("options", {}), needs_stt=False)
+        title = "原文档或链接"
+        if (folder / "document_text.json").exists():
+            title = json.loads((folder / "document_text.json").read_text(encoding="utf-8")).get("title") or title
+        source_type = "document"
+    else:
+        source = artifacts.resolve_source_media(folder)
+        if not source or not (folder / "request.json").exists():
+            raise HTTPException(409, "原任务缺少可恢复来源，请保留原件并查看处理历史")
+        options = json.loads((folder / "request.json").read_text(encoding="utf-8"))["request"]
+        title = options.get("title") or source.name
+        source_type = "media"
+    context = {"task_id": task_id, "source": {"title": title, "type": source_type}}
+    if (folder / SNAPSHOT_FILE).exists():
+        ensure_source(folder, user.user_id, options)
+        return {**context, "requires_confirmation": False}
+    selection = capture_source(user.user_id, options)
+    if selection["mode"] != "cloud":
+        raise HTTPException(409, "原任务缺少本地模型快照，请保留原件并另建明确确认的生成操作")
+    service = VILabCloudService()
+    with service.task_snapshot(user.user_id, snapshot=selection):
+        models = service.models(user.user_id)
+    allowed = True
+    for key, kind in (("asr_model", "asr"), ("llm_model", "llm")):
+        try:
+            service._validate_selection(models, selection[key], kind)
+        except HTTPException:
+            allowed = False
+    return {**context, "requires_confirmation": True, "can_confirm": allowed,
+            "selection": {key: selection[key] for key in ("mode", "server_url", "asr_model", "llm_model")}}
+
+
 @router.post("/task/{task_id}/retry")
-def retry_media_task(task_id: str, background_tasks: BackgroundTasks, user=Depends(get_current_user)):
+def retry_media_task(task_id: str, background_tasks: BackgroundTasks, user=Depends(get_current_user),
+                     model_confirmation: dict | None = Body(default=None)):
+    if model_confirmation is not None and not isinstance(model_confirmation, dict):
+        model_confirmation = None
     artifacts = _note_service.artifact_service
     with _FILE_TASK_LOCK:
         folder = artifacts.find_task_dir(task_id)
         if not folder or not (folder / "recording_owner").exists() or (folder / "recording_owner").read_text(encoding="utf-8") != user.user_id:
             raise HTTPException(404, "Task not found")
+        if (folder / "new_generation.json").exists():
+            raise HTTPException(409, {"code": "independent_operation_query_only",
+                "message": "本次独立提交只能查询原任务，不会重复执行。"})
         status = artifacts.get_status(task_id)
         if task_id in _ACTIVE_FILE_TASKS or status.get("status") == "success":
             return {"task_id": task_id, "status": status["status"]}
+        from app.services.task_failure import recovery_status
+        status = recovery_status(status)
+        if status.get("retryable") is False:
+            raise HTTPException(409, {"code": status.get("error_code") or "retry_not_confirmed",
+                "message": "原任务尚不能安全重试，请查询原结果；原文件已保留。"})
+        if (folder / "source_job.json").exists():
+            job = json.loads((folder / "source_job.json").read_text(encoding="utf-8"))
+            ensure_source(folder, user.user_id, dict(job.get("options", {}), needs_stt=False), confirmation=model_confirmation)
+            artifacts.update_status(folder, "preparing", "正在恢复笔记处理…", retryable=True)
+            _ACTIVE_FILE_TASKS.add(task_id)
+            background_tasks.add_task(_run_source_job, task_id, job, user.user_id)
+            return {"task_id": task_id, "status": "preparing"}
         source = artifacts.resolve_source_media(folder)
         if not source or not (folder / "request.json").exists():
             raise HTTPException(409, "原任务缺少可恢复信息，请保留本地录制。")
         saved = json.loads((folder / "request.json").read_text(encoding="utf-8"))
         req = LocalFileRequest(**{**saved["request"], "file_path": str(source)})
+        ensure_source(folder, user.user_id, req.model_dump(), confirmation=model_confirmation)
         trace = DesktopTraceContext(**saved["trace"]) if saved.get("trace") else None
         if trace:
             trace = replace(trace, input={**(trace.input or {}),
@@ -529,6 +714,12 @@ def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | N
     normalized_parts = Path(asset_path).parts
     if not normalized_parts or normalized_parts[0] not in {"screenshots", "media"}:
         raise HTTPException(status_code=404, detail="Artifact not found")
+
+    if (task_dir / "source_reference.json").exists() and normalized_parts[0] == "media":
+        source = _note_service.artifact_service.resolve_source_media(task_dir)
+        if source and asset_path == "media/" + source.name:
+            return FileResponse(source)
+        raise HTTPException(404, "Artifact not found")
 
     requested_path = (task_dir / asset_path).resolve()
     task_root = task_dir.resolve()
@@ -566,6 +757,8 @@ def generate_from_file_async(
     )
     if trace_context is not None:
         req = req.model_copy(update={"diarize": True, "speaker_count": None})
+    task_dir = _note_service.artifact_service.create_task_dir(task_id)
+    _persist_file_request(task_dir, req, user.user_id if user else None, trace_context)
     background_tasks.add_task(
         _run_task_from_file,
         task_id=task_id,
@@ -603,11 +796,14 @@ def generate_from_file_sync(
                 output_language=req.output_language,
                 model_profile_id=req.model_profile_id,
                 stt_profile_id=req.stt_profile_id,
+                **({"asr_model": req.asr_model} if req.asr_model is not None else {}),
                 model_name=req.model_name,
                 api_key=req.api_key,
                 base_url=req.base_url,
                 user_id=user.user_id if user else None,
             )
+    except HTTPException:
+        raise
     except Exception as exc:
         logger.error("[API] generate_from_file_sync failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
@@ -639,6 +835,7 @@ async def generate_from_upload(
     model_profile_id: str | None = Form(None),
     stt_profile_id: str | None = Form(None),
     model_name: str | None = Form(None),
+    asr_model: Annotated[str | None, Form(max_length=200)] = None,
     api_key: str | None = Form(None),
     base_url: str | None = Form(None),
     workflow: str = Form("note_organization"),
@@ -646,6 +843,7 @@ async def generate_from_upload(
     meeting_session_id: str | None = Form(None),
     meeting_mode: str | None = Form(None),
     meeting_type: str | None = Form(None),
+    local_file_id: str | None = Form(None),
     user: AuthenticatedUser | None = Depends(get_optional_current_user),
 ):
     try:
@@ -653,13 +851,75 @@ async def generate_from_upload(
         normalized_summary_mode = _normalize_summary_mode(summary_mode)
         normalized_output_language = _normalize_output_language(output_language)
         desktop_request = _is_desktop_request(request)
-        diarize = diarize or (desktop_request and normalized_source_type != "transcript")
+        diarize = diarize or (desktop_request and normalized_source_type not in {"transcript", "document"})
         if desktop_request:
             speaker_count = None
-        if diarize and normalized_source_type != "transcript":
+        if diarize and normalized_source_type not in {"transcript", "document"}:
             from app.services.speaker_diarization_service import SpeakerDiarizationService
             SpeakerDiarizationService.require_ready()
         task_id = str(uuid.uuid4())
+
+        if normalized_source_type == "document":
+            def queue_document(filename, content, retained_id=None):
+                text = document_text(filename, content)
+                job = {"options": dict(summary_mode=normalized_summary_mode, output_language=normalized_output_language,
+                    extras=extras, model_profile_id=model_profile_id, stt_profile_id=stt_profile_id,
+                    asr_model=asr_model, model_name=model_name, api_key=api_key, base_url=base_url)}
+                # Never persist ad-hoc API keys in recovery artifacts.
+                if api_key:
+                    raise ValueError("文档处理请使用已保存的模型配置，不支持临时密钥")
+                resolved_title = title or Path(filename or "文档").stem
+                claim = _reserve_source(request, user, _document_source(filename, content, retained_id),
+                    {**job["options"], "title": resolved_title})
+                if claim and not claim.created:
+                    return claim.model_dump(exclude_none=True)
+                result = _queue_source_job(claim.task_id if claim else task_id, job, background_tasks, user, request,
+                    {"title": resolved_title, "text": text})
+                return _accept_source(user, claim, result)
+
+            # Only the document branch accepts a registered device-local original.
+            # Resolve it by owner, and keep its lease until the task is attached.
+            if isinstance(local_file_id, str) and local_file_id:
+                if not user:
+                    raise HTTPException(401, "请登录后整理文件库文档")
+                from app.services.local_file_service import DOCUMENT, LocalFileService
+                local_files = LocalFileService()
+                with local_files.generation_lease(user.user_id, local_file_id):
+                    info, path = local_files.get(user.user_id, local_file_id)
+                    if path.suffix.lower() not in DOCUMENT:
+                        raise HTTPException(422, "请选择文件库中的 PDF 或 DOCX 文档")
+                    if info["task_id"] and request.headers.get("X-VINote-Operation-Id") is None:
+                        status = _note_service.artifact_service.get_status(info["task_id"]).get("status")
+                        if status not in {"failed", "error", "not_found"}:
+                            return {"task_id": info["task_id"], "status": status, "source_type": "file"}
+                        return {**retry_media_task(info["task_id"], background_tasks, user), "source_type": "file"}
+                    with path.open("rb") as original:
+                        content = original.read(MAX_BYTES + 1)
+                    if len(content) > MAX_BYTES:
+                        raise ValueError("PDF 和 Word 文件不能超过 20 MB")
+                    if info["task_id"]:
+                        claim = _reserve_source(request, user, _document_source(info["filename"], content, local_file_id),
+                            dict(summary_mode=normalized_summary_mode, output_language=normalized_output_language,
+                                 extras=extras, model_profile_id=model_profile_id, stt_profile_id=stt_profile_id,
+                                 asr_model=asr_model, model_name=model_name, api_key=api_key, base_url=base_url,
+                                 title=title or Path(info["filename"]).stem), task_id=info["task_id"])
+                        if not claim.created:
+                            return claim.model_dump(exclude_none=True)
+                        status = _note_service.artifact_service.get_status(info["task_id"]).get("status")
+                        result = ({"task_id": info["task_id"], "status": status, "source_type": "file"}
+                                  if status not in {"failed", "error", "not_found"} else
+                                  {**retry_media_task(info["task_id"], background_tasks, user), "source_type": "file"})
+                        return _accept_source(user, claim, result)
+                    result = queue_document(info["filename"], content, local_file_id)
+                    local_files.attach_task(user.user_id, local_file_id, result["task_id"], "note")
+                    return result
+
+            content = bytearray()
+            while chunk := await file.read(65536):
+                content.extend(chunk)
+                if len(content) > MAX_BYTES:
+                    raise ValueError("PDF 和 Word 文件不能超过 20 MB")
+            return queue_document(file.filename or "", bytes(content))
 
         if normalized_source_type == "transcript":
             _ensure_transcript_extension(file.filename)
@@ -685,6 +945,7 @@ async def generate_from_upload(
                 output_language=normalized_output_language,
                 model_profile_id=model_profile_id,
                 stt_profile_id=stt_profile_id,
+                **({"asr_model": asr_model} if asr_model is not None else {}),
                 model_name=model_name,
                 api_key=api_key,
                 base_url=base_url,
@@ -708,6 +969,9 @@ async def generate_from_upload(
                     _UPLOADING_MEETINGS.add(task_id)
                     reserved_upload = task_id
             task_dir = _note_service.artifact_service.create_task_dir(task_id)
+            ensure_source(task_dir, user.user_id if user else None,
+                dict(model_profile_id=model_profile_id, stt_profile_id=stt_profile_id,
+                     asr_model=asr_model, model_name=model_name, api_key=api_key, base_url=base_url), allow_capture=True)
             record_origin(task_dir, request.headers.get("X-VINote-Client", ""))
             media_dir = task_dir / "media"
             media_dir.mkdir(parents=True, exist_ok=True)
@@ -734,6 +998,7 @@ async def generate_from_upload(
                 upload_path = normalize_audio_for_transcription(upload_path)
             _note_service.artifact_service.update_status(task_dir, "uploaded", "Media uploaded")
             req = _build_note_request_fields(
+                workflow=workflow,
                 file_path=str(upload_path),
                 diarize=diarize,
                 speaker_count=speaker_count,
@@ -744,6 +1009,7 @@ async def generate_from_upload(
                 output_language=normalized_output_language,
                 model_profile_id=model_profile_id,
                 stt_profile_id=stt_profile_id,
+                **({"asr_model": asr_model} if asr_model is not None else {}),
                 model_name=model_name,
                 api_key=api_key,
                 base_url=base_url,
@@ -795,6 +1061,7 @@ async def generate_from_upload_sync(
     model_profile_id: str | None = Form(None),
     stt_profile_id: str | None = Form(None),
     model_name: str | None = Form(None),
+    asr_model: Annotated[str | None, Form(max_length=200)] = None,
     api_key: str | None = Form(None),
     base_url: str | None = Form(None),
     workflow: str = Form("note_organization"),
@@ -839,6 +1106,7 @@ async def generate_from_upload_sync(
                     output_language=normalized_output_language,
                     model_profile_id=model_profile_id,
                     stt_profile_id=stt_profile_id,
+                    **({"asr_model": asr_model} if asr_model is not None else {}),
                     model_name=model_name,
                     api_key=api_key,
                     base_url=base_url,
@@ -846,6 +1114,9 @@ async def generate_from_upload_sync(
                 )
         else:
             task_dir = _note_service.artifact_service.create_task_dir(task_id)
+            ensure_source(task_dir, user.user_id if user else None,
+                dict(model_profile_id=model_profile_id, stt_profile_id=stt_profile_id,
+                     asr_model=asr_model, model_name=model_name, api_key=api_key, base_url=base_url), allow_capture=True)
             record_origin(task_dir, request.headers.get("X-VINote-Client", ""))
             media_dir = task_dir / "media"
             media_dir.mkdir(parents=True, exist_ok=True)
@@ -867,6 +1138,7 @@ async def generate_from_upload_sync(
             if normalized_source_type == "audio":
                 upload_path = normalize_audio_for_transcription(upload_path)
             req = _build_note_request_fields(
+                workflow=workflow,
                 file_path=str(upload_path),
                 diarize=diarize,
                 speaker_count=speaker_count,
@@ -877,6 +1149,7 @@ async def generate_from_upload_sync(
                 output_language=normalized_output_language,
                 model_profile_id=model_profile_id,
                 stt_profile_id=stt_profile_id,
+                **({"asr_model": asr_model} if asr_model is not None else {}),
                 model_name=model_name,
                 api_key=api_key,
                 base_url=base_url,
@@ -902,11 +1175,14 @@ async def generate_from_upload_sync(
                     output_language=req.output_language,
                     model_profile_id=req.model_profile_id,
                     stt_profile_id=req.stt_profile_id,
+                    **({"asr_model": req.asr_model} if req.asr_model is not None else {}),
                     model_name=req.model_name,
                     api_key=req.api_key,
                     base_url=req.base_url,
                     user_id=user.user_id if user else None,
                 )
+    except HTTPException:
+        raise
     except ValueError as exc:
         logger.error("[API] generate_from_upload_sync failed: %s", exc, exc_info=True)
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -925,31 +1201,84 @@ async def generate_from_upload_sync(
     )
 
 
+def _persist_url_request(task_id: str, req: NoteRequest, user_id: str | None,
+                         trace_context: DesktopTraceContext | None) -> bool:
+    """Forward-only pending URL submission; never infer a historical request."""
+    from app.services.task_model_source import _bind_task_owner
+    from app.services.vilab_cloud_service import VILabCloudService
+    artifacts = _note_service.artifact_service
+    folder = artifacts.find_task_dir(task_id)
+    if not folder or artifacts.get_status(task_id).get("status") != "pending":
+        return False
+    _bind_task_owner(folder, artifacts.output_dir, user_id)
+    path = folder / "request.json"
+    if path.exists():
+        return False  # Existing submissions/recovery never acquire a new URL worker.
+    # Capture first: request.json would otherwise forbid fresh capture in the
+    # generation decorator. Neither this preparation nor validation runs ASR.
+    snapshot = ensure_source(folder, user_id, {**req.model_dump(), "needs_stt": True}, allow_capture=True)
+    with VILabCloudService().task_snapshot(user_id, snapshot=snapshot):
+        VILabCloudService().validate_ready(user_id)
+    artifacts.write_json(path, {"kind": "media_url",
+        "request": req.model_dump(exclude={"api_key", "base_url", "model_name"}),
+        "trace": asdict(trace_context) if trace_context else None})
+    return True
+
+
 def _run_task(task_id: str, req: NoteRequest, user_id: str | None,
               trace_context: DesktopTraceContext | None = None):
     try:
+        if not _persist_url_request(task_id, req, user_id, trace_context):
+            return
         with desktop_trace(trace_context):
             _note_service.generate(
                 video_url=req.video_url, task_id=task_id, platform=req.platform,
                 style=req.style or "detailed", summary_mode=req.summary_mode,
                 extras=req.extras, output_language=req.output_language,
                 model_profile_id=req.model_profile_id, stt_profile_id=req.stt_profile_id,
+                **({"asr_model": req.asr_model} if req.asr_model is not None else {}),
                 model_name=req.model_name, api_key=req.api_key, base_url=req.base_url,
                 user_id=user_id,
                 diarize=req.diarize, speaker_count=req.speaker_count,
             )
     except Exception as exc:
         logger.error("[Background] task failed task_id=%s error=%s", task_id, exc, exc_info=True)
+        # Snapshot/catalog failures happen before NoteService's own failure
+        # handler. Publish a terminal outcome rather than leave pending forever.
+        try:
+            artifacts = _note_service.artifact_service
+            folder = artifacts.find_task_dir(task_id)
+            marker = folder / "recording_owner" if folder else None
+            owned = (marker and not marker.is_symlink() and marker.is_file()
+                     and marker.read_text(encoding="utf-8") == user_id)
+            if folder and (owned or not user_id and not marker.exists()) and artifacts.get_status(task_id).get("status") != "failed":
+                artifacts.update_status(folder, "failed", "来源准备未完成，原提交和已有资料已保留，请核验原任务",
+                                        retryable=False)
+        except Exception:
+            logger.warning("[Background] cannot persist URL preparation failure task_id=%s", task_id)
 
 
 def _persist_file_request(task_dir: Path, req: LocalFileRequest, user_id: str | None,
                           trace_context: DesktopTraceContext | None) -> None:
+    owner_path = task_dir / "recording_owner"
+    if owner_path.exists() and owner_path.read_text(encoding="utf-8") != user_id:
+        raise HTTPException(404, "Task not found")
     if user_id:
-        (task_dir / "recording_owner").write_text(user_id, encoding="utf-8")
-    _note_service.artifact_service.write_json(task_dir / "request.json", {
+        owner_path.write_text(user_id, encoding="utf-8")
+    request_path = task_dir / "request.json"
+    ensure_source(task_dir, user_id, req.model_dump(), allow_capture=not request_path.exists())
+    if request_path.exists():
+        if user_id:
+            from app.services.task_original_service import TaskOriginalService
+            TaskOriginalService().register(user_id, task_dir, req.title)
+        return  # Keep the original request immutable during task recovery.
+    _note_service.artifact_service.write_json(request_path, {
         "request": req.model_dump(exclude={"api_key", "base_url", "model_name"}),
         "trace": asdict(trace_context) if trace_context else None,
     })
+    if user_id:
+        from app.services.task_original_service import TaskOriginalService
+        TaskOriginalService().register(user_id, task_dir, req.title)
 
 
 def _run_task_from_file(task_id: str, req: LocalFileRequest, user_id: str | None,
@@ -972,6 +1301,7 @@ def _run_task_from_file(task_id: str, req: LocalFileRequest, user_id: str | None
                 output_language=req.output_language,
                 model_profile_id=req.model_profile_id,
                 stt_profile_id=req.stt_profile_id,
+                **({"asr_model": req.asr_model} if req.asr_model is not None else {}),
                 model_name=req.model_name,
                 api_key=req.api_key,
                 base_url=req.base_url,
@@ -986,6 +1316,43 @@ def _run_task_from_file(task_id: str, req: LocalFileRequest, user_id: str | None
                 artifacts.update_status(folder, "failed", "会后处理异常中断，请重试。", retryable=True)
         except Exception:
             logger.exception("[Background] cannot persist failure task_id=%s", task_id)
+    finally:
+        with _FILE_TASK_LOCK:
+            _ACTIVE_FILE_TASKS.discard(task_id)
+
+
+def _queue_source_job(task_id, job, background_tasks, user, request, source=None):
+    if job.get("options", {}).get("api_key"):
+        raise HTTPException(400, "请使用已保存的模型配置，不支持临时密钥")
+    folder = _note_service.artifact_service.create_task_dir(task_id)
+    if user:
+        (folder / "recording_owner").write_text(user.user_id, encoding="utf-8")
+    ensure_source(folder, user.user_id if user else None, dict(job.get("options", {}), needs_stt=False),
+                  allow_capture=not (folder / "source_job.json").exists())
+    record_origin(folder, request.headers.get("X-VINote-Client", ""))
+    trace = _desktop_trace_context(request, workflow="note_organization", source="local_file" if source else "url",
+        media_type="document", title=source.get("title") if source else None,
+        url=job.get("url"), summary_mode=job.get("options", {}).get("summary_mode", "default"),
+        output_language=job.get("options", {}).get("output_language"))
+    if trace:
+        job = {**job, "trace": asdict(trace)}
+    (folder / "source_job.json").write_text(json.dumps(job), encoding="utf-8")
+    if source:
+        (folder / "document_text.json").write_text(json.dumps(source, ensure_ascii=False), encoding="utf-8")
+    _note_service.artifact_service.update_status(folder, "preparing", "正在准备来源正文…", retryable=True)
+    with _FILE_TASK_LOCK:
+        _ACTIVE_FILE_TASKS.add(task_id)
+    background_tasks.add_task(_run_source_job, task_id, job, user.user_id if user else None)
+    return {"task_id": task_id, "status": "preparing", "source_type": "file"}
+
+
+def _run_source_job(task_id, job, user_id):
+    try:
+        trace = DesktopTraceContext(**job["trace"]) if job.get("trace") else None
+        with desktop_trace(trace):
+            run_source_job(_note_service, task_id, job, user_id)
+    except Exception:
+        logger.warning("Document task failed task_id=%s", task_id)
     finally:
         with _FILE_TASK_LOCK:
             _ACTIVE_FILE_TASKS.discard(task_id)
@@ -1006,6 +1373,7 @@ def _run_task_from_transcript(
     base_url: str | None,
     user_id: str | None,
     trace_context: DesktopTraceContext | None = None,
+    asr_model: str | None = None,
 ):
     try:
         with desktop_trace(trace_context):
@@ -1019,6 +1387,7 @@ def _run_task_from_transcript(
                 output_language=output_language,
                 model_profile_id=model_profile_id,
                 stt_profile_id=stt_profile_id,
+                **({"asr_model": asr_model} if asr_model is not None else {}),
                 model_name=model_name,
                 api_key=api_key,
                 base_url=base_url,

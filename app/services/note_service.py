@@ -3,6 +3,7 @@ Core note generation pipeline orchestration.
 """
 import logging
 import json
+import math
 import re
 import os
 import time
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Optional
 
 from app.config import settings
+from app.services.task_model_source import freeze_generation_models
 from app.services.tracing_service import (content_summary, observation, traced,
                                           update_current, update_trace_input)
 from app.downloaders.base import Downloader
@@ -18,7 +20,7 @@ from app.downloaders.ytdlp_downloader import YtdlpDownloader
 from app.llm.prompts import normalize_output_language, normalize_summary_mode
 from app.models.audio import AudioDownloadResult
 from app.models.note import NoteResult
-from app.models.transcript import TranscriptResult
+from app.models.transcript import TranscriptResult, TranscriptSegment
 from app.services.llm_service import LLMService
 from app.services.note_media_service import NoteMediaService
 from app.services.screenshot_service import ScreenshotService
@@ -81,6 +83,7 @@ class NoteService:
         )
 
     @traced("笔记生成全链路", root=True, as_type="chain")
+    @freeze_generation_models
     def generate(
         self,
         video_url: str,
@@ -98,11 +101,14 @@ class NoteService:
         user_id: Optional[str] = None,
         diarize: bool = False,
         speaker_count: int | None = None,
+        asr_model: str | None = None,
     ) -> NoteResult:
         del platform
 
         task_start_time = time.time()
         task_dir = self.artifact_service.create_task_dir(task_id)
+        if user_id:
+            (task_dir / "recording_owner").write_text(user_id, encoding="utf-8")
         step_timings: dict[str, float] = {}
 
         try:
@@ -131,7 +137,7 @@ class NoteService:
                 base_url=base_url,
                 preloaded_transcript=None,
                 user_id=user_id,
-                source_video_url=video_url,
+                source_video_url=None if audio_meta.platform == "bilibili" else video_url,
                 task_start_time=task_start_time,
                 step_timings=step_timings,
                 diarize=diarize,
@@ -141,10 +147,12 @@ class NoteService:
             logger.error("[Pipeline] task=%s failed: %s", task_id, exc, exc_info=True)
             failed_dir = self.artifact_service.find_task_dir(task_id) or task_dir
             if failed_dir.exists():
-                self.artifact_service.update_status(failed_dir, "failed", str(exc))
+                from app.services.task_failure import failure_details
+                self.artifact_service.update_status(failed_dir, "failed", str(exc), **failure_details(exc))
             raise
 
     @traced("笔记生成全链路", root=True, as_type="chain")
+    @freeze_generation_models
     def generate_from_file(
         self,
         file_path: str,
@@ -162,6 +170,7 @@ class NoteService:
         user_id: Optional[str] = None,
         diarize: bool = False,
         speaker_count: int | None = None,
+        asr_model: str | None = None,
     ) -> NoteResult:
         task_start_time = time.time()
         if not os.path.exists(file_path):
@@ -212,10 +221,12 @@ class NoteService:
             logger.error("[Pipeline] local task=%s failed: %s", task_id, exc, exc_info=True)
             failed_dir = self.artifact_service.find_task_dir(task_id) or task_dir
             if failed_dir.exists():
-                self.artifact_service.update_status(failed_dir, "failed", str(exc))
+                from app.services.task_failure import failure_details
+                self.artifact_service.update_status(failed_dir, "failed", str(exc), **failure_details(exc))
             raise
 
     @traced("笔记生成全链路", root=True, as_type="chain")
+    @freeze_generation_models
     def generate_from_transcript(
         self,
         transcript: TranscriptResult,
@@ -231,9 +242,12 @@ class NoteService:
         api_key: str | None = None,
         base_url: str | None = None,
         user_id: Optional[str] = None,
+        asr_model: str | None = None,
     ) -> NoteResult:
         task_start_time = time.time()
         task_dir = self.artifact_service.create_task_dir(task_id)
+        if user_id:
+            (task_dir / "recording_owner").write_text(user_id, encoding="utf-8")
         step_timings: dict[str, float] = {}
 
         try:
@@ -272,17 +286,47 @@ class NoteService:
             logger.error("[Pipeline] transcript task=%s failed: %s", task_id, exc, exc_info=True)
             failed_dir = self.artifact_service.find_task_dir(task_id) or task_dir
             if failed_dir.exists():
-                self.artifact_service.update_status(failed_dir, "failed", str(exc))
+                from app.services.task_failure import failure_details
+                self.artifact_service.update_status(failed_dir, "failed", str(exc), **failure_details(exc))
             raise
 
     @traced("下载源媒体")
     def _download_audio(self, *, video_url: str, task_dir: Path) -> AudioDownloadResult:
         cached_audio = self.artifact_service.load_audio_meta(task_dir)
         if cached_audio:
+            if cached_audio.platform == "bilibili":
+                # Historical caches may point at an unbound global download.
+                # Do not migrate, re-download or transcribe those implicitly.
+                owner = task_dir / "recording_owner"
+                retained = self.artifact_service.resolve_source_media(task_dir)
+                cached_path = Path(cached_audio.file_path)
+                if (task_dir.is_symlink() or (task_dir / "media").is_symlink()
+                        or (task_dir / "source_media.json").is_symlink()
+                        or owner.is_symlink() or not owner.is_file()
+                        or not owner.read_text(encoding="utf-8").strip()
+                        or not retained or cached_path.is_symlink()
+                        or retained.parent != (task_dir.resolve() / "media")
+                        or cached_path.resolve() != retained):
+                    raise ValueError("已保留的视频音轨暂不可用，请新建任务或导入原文件；已有资料已保留")
             logger.info("[Download] cache hit for task_dir=%s", task_dir)
             return cached_audio
 
         audio_meta = self.downloader.download(video_url=video_url, output_dir=str(settings.data_dir))
+        if audio_meta.platform == "bilibili":
+            # Bind the unmodified device-downloaded track to this task before
+            # ASR. Copy/record only: never remove the retained download.
+            original = self.artifact_service.stage_source_media(
+                task_dir, audio_meta.file_path, media_kind="audio")
+            audio_meta.file_path = str(original)
+            request_path = task_dir / "request.json"
+            if request_path.is_file() and not request_path.is_symlink():
+                saved = json.loads(request_path.read_text(encoding="utf-8"))
+                if saved.get("kind") == "media_url":
+                    owner_path = task_dir / "recording_owner"
+                    if owner_path.is_file() and not owner_path.is_symlink():
+                        from app.services.task_original_service import TaskOriginalService
+                        TaskOriginalService().register(owner_path.read_text(encoding="utf-8"),
+                                                       task_dir, f"{audio_meta.title}{original.suffix}")
         self.artifact_service.save_audio_meta(task_dir, audio_meta)
         return audio_meta
 
@@ -385,6 +429,8 @@ class NoteService:
                 "保存结果",
                 input={"task_id": context.task_id, "markdown_characters": len(markdown)},
             ) as span:
+                self.artifact_service.update_status(
+                    final_dir, "summarizing", "正在保存生成结果…", stage="saving_result")
                 self.artifact_service.save_markdown(final_dir, markdown)
                 self.artifact_service.save_result(final_dir, result)
                 self.artifact_service.update_status(final_dir, "success", "Note generated successfully")
@@ -396,7 +442,8 @@ class NoteService:
             logger.info("[Pipeline] task=%s completed timings=%s", task_id, step_timings)
             return result
         except Exception as exc:
-            self.artifact_service.update_status(final_dir, "failed", str(exc))
+            from app.services.task_failure import failure_details
+            self.artifact_service.update_status(final_dir, "failed", str(exc), **failure_details(exc))
             raise
 
     @staticmethod
@@ -419,6 +466,8 @@ class NoteService:
 
     @traced("语音转写", as_type="chain")
     def _transcribe_audio(self, context: PipelineContext):
+        from app.services.asr_execution_binding import require_task_execution
+        require_task_execution(context.user_id, context.task_id, context.task_dir, context.audio_meta.file_path)
         if context.preloaded_transcript is not None:
             update_current(
                 input={"source": "uploaded_transcript", "stt_skipped": True},
@@ -448,8 +497,14 @@ class NoteService:
             ),
             user_id=context.user_id,
             stt_profile_id=context.stt_profile_id,
-            **({"chunk_cache_dir": context.task_dir / "transcription_chunks"} if context.diarize else {}),
+            chunk_cache_dir=context.task_dir / "transcription_chunks",
             **({"diarize": True, "speaker_count": context.speaker_count} if context.diarize else {}),
+        )
+        duration = context.audio_meta.duration
+        completed_audio = duration if math.isfinite(duration) and duration > 0 else None
+        self.artifact_service.update_status(
+            context.task_dir, "transcribing", "完整转写已保存，准备生成正文…", stage="transcript_ready",
+            processed_seconds=completed_audio, total_seconds=completed_audio,
         )
         context.step_timings["transcribe"] = time.time() - step_start
         update_current(
@@ -474,26 +529,28 @@ class NoteService:
             base_url=context.base_url,
         )
         summary_extras = context.extras
-        if context.style == "meeting":
-            manifest_path = context.task_dir / "source_media.json"
-            try:
-                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                manifest = {}
-            if manifest.get("media_kind") == "video":
-                from app.services.meeting_video_analysis_service import MeetingVideoAnalysisService
-                video_path = self.artifact_service.resolve_source_media(context.task_dir)
-                if not video_path:
-                    raise ValueError("找不到会议视频，无法分析画面")
-                self.artifact_service.update_status(context.task_dir, "summarizing", "正在分析会议视频画面…", stage="analyzing_video")
-                visual_evidence = MeetingVideoAnalysisService().analyze(
-                    video_path=video_path, duration=context.audio_meta.duration,
-                    user_id=context.user_id, task_dir=context.task_dir,
-                )
-                summary_extras = "\n\n".join(filter(None, [context.extras, visual_evidence]))
+        # Meeting visualization generation was cancelled. Preserve historical
+        # media, but do not run a new visual-analysis/illustration pipeline.
+        if context.style == "meeting" and transcript.metadata.get("unrecognized_segments"):
+            coverage = json.dumps(transcript.metadata["unrecognized_segments"], ensure_ascii=False)
+            summary_extras = "\n\n".join(filter(None, [summary_extras,
+                "【识别覆盖缺口，时间为录音偏移秒数】" + coverage +
+                "\n这些区间未识别出文字，不代表确定静音；不得推断缺失发言、决定或行动。只依据已有转写和独立视觉证据总结。"
+            ]))
+        summary_segments = transcript.segments
+        if context.style == "meeting" and transcript.metadata.get("asr_evidence"):
+            # Supply independent evidence rather than estimated sentence attribution.
+            raw = transcript.metadata["asr_evidence"]
+            turns = transcript.metadata.get("speaker_evidence", [])
+            summary_segments = [TranscriptSegment(**segment) for segment in raw["segments"]] or [
+                TranscriptSegment(0, context.audio_meta.duration, raw["full_text"])]
+            for segment in summary_segments:
+                segment.timestamp_estimated = raw.get("metadata", {}).get("timestamp_granularity") != "segment"
+                segment.speaker_evidence = [turn for turn in turns
+                                           if turn["end"] > segment.start and turn["start"] < segment.end]
         markdown = llm.summarize(
             title=context.audio_meta.title,
-            segments=transcript.segments,
+            segments=summary_segments,
             style=context.style,
             summary_mode=context.summary_mode,
             extras=summary_extras,
@@ -515,6 +572,13 @@ class NoteService:
 
     @traced("提取关键帧")
     def _enrich_markdown_with_media(self, context: PipelineContext, transcript, markdown: str) -> str:
+        self.artifact_service.update_status(
+            context.task_dir, "summarizing", "正在整理正文与媒体引用…", stage="enriching_media")
+        if (context.audio_meta.platform == "bilibili" or context.style == "meeting"
+                or transcript.metadata.get("source_kind") == "document"):
+            # Bilibili intake has already acquired its source audio on-device.
+            # Do not fetch a full video or invoke ScreenshotService's fallback.
+            return re.sub(r"\[\[Screenshot:\d{1,3}:\d{2}\]\]", "", markdown)
         update_current(input={"duration_seconds": context.audio_meta.duration})
         media_url = ""
         if self.artifact_service.resolve_source_media(context.task_dir) or (context.audio_meta.file_path and os.path.exists(context.audio_meta.file_path)):

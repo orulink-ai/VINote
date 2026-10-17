@@ -1,3 +1,4 @@
 [submodule "VINote-app"]
 	path = VINote-app
 	url = https://github.com/orulink-ai/VINote-app.git
+	branch = main

@@ -46,7 +46,7 @@ STYLE_INSTRUCTIONS: dict[OutputLanguage, dict[str, str]] = {
 4. 行动事项：只列明确提出的任务，可用“事项｜负责人｜期限｜完成标准”表格。任务存在但负责人或时间未说明时写“未明确”；禁止补造任务、验收标准和日期。
 5. 未决问题：仅列会议实际提出且未解决的问题，不把资料缺失编成议题。
 正文中按需附少量 [MM:SS] 引用供回听；智能章节或时间线仅可作为最后的辅助索引，不替代主题总结。不为了格式重复相同信息，不强行输出金句或空表格。
-输入含说话人标签时，核心观点、不同意见和明确承诺必须保留对应标签（例如“说话人1提出……；说话人2补充……”），按议题组织，不机械抄录。长内容的分段稿与合并稿都保留归属，不把不同人的意见合并成所有人的共识。沿用输入的说话人编号或已提供姓名，不猜测身份；归属未知、重叠或不确定时明确标为“说话人待确认”。发言人不自动等于行动负责人，仅明确承诺或指派才能填写负责人。播放或引用的声音不等于本人参加会议或操作播放。多人示例音频按内容总结，不硬套真实会议决策与待办。
+转写文本与独立说话人区间分别作为证据；转写只有分段时间时，区间重叠不等于逐句归属，不把整段分配给某人。独立时间轴中的编号只表示该窗口内发声，不是句子归属；这种观点及承诺用匿名表达，分段稿、合并稿与审核都删除无依据的编号归属。输入有明确逐句说话人标签时，核心观点、不同意见和明确承诺必须保留对应标签（例如“说话人1提出……；说话人2补充……”），按议题组织，不机械抄录。长内容的分段稿与合并稿都保留归属，不把不同人的意见合并成所有人的共识。沿用输入的说话人编号或已提供姓名，不猜测身份；归属未知、重叠或不确定时明确标为“说话人待确认”。发言人不自动等于行动负责人，仅明确承诺或指派才能填写负责人。播放或引用的声音不等于本人参加会议或操作播放。多人示例音频按内容总结，不硬套真实会议决策与待办。
 输出前核对：不得把原文已明确的渠道、范围或分工改写为“尚未确定”；不得把单个行动拆成多个空泛待办；没有明确提出的开放问题就省略未决章节。只有文件级时间戳时，不在每个主题重复无信息量的 [00:00]。""",
         "xiaohongshu": "风格要求：使用小红书风格，语气更轻松，适度使用 emoji 和高亮表达。",
     },
@@ -57,7 +57,7 @@ STYLE_INSTRUCTIONS: dict[OutputLanguage, dict[str, str]] = {
         "tutorial": "Style requirement: use a tutorial format and present the workflow as clear step-by-step guidance.",
         "meeting": """Produce actionable meeting minutes, not a chronological list of utterances.
 Choose supported sections only: an overview of the problem and 3–5 main outcomes; thematic discussion synthesizing conclusions, constraints and rationale across speakers; explicitly confirmed decisions separated from proposals; explicit actions with task/owner/deadline/completion criterion; and questions actually raised but unresolved.
-Mark an existing action's missing fields as unspecified; never invent tasks, owners, deadlines or acceptance criteria. Omit empty sections and avoid duplication. Use occasional [MM:SS] evidence links; a chapter timeline is only a supplementary appendix, never the main summary. Preserve transcript speaker labels on key viewpoints, disagreements and explicit commitments, including across chunk summaries and merging. Never infer identities or equate the person speaking with the action owner. Mark uncertain attribution explicitly. Quoted or played voices are not necessarily participants or playback operators. Demonstration recordings must not acquire invented meeting decisions or follow-ups.""",
+Mark an existing action's missing fields as unspecified; never invent tasks, owners, deadlines or acceptance criteria. Omit empty sections and avoid duplication. Use occasional [MM:SS] evidence links; a chapter timeline is only a supplementary appendix, never the main summary. ASR text and independent speaker intervals are separate evidence. Chunk timestamps cannot establish sentence attribution; never assign the whole chunk to one speaker. Speaker IDs listed only in independent intervals are not sentence labels; use anonymous wording and remove unsupported IDs during chunk review and merging. Preserve explicit transcript speaker labels on key viewpoints, disagreements and explicit commitments, including across chunk summaries and merging. Never infer identities or equate the person speaking with the action owner. Mark uncertain attribution explicitly. Quoted or played voices are not necessarily participants or playback operators. Demonstration recordings must not acquire invented meeting decisions or follow-ups.""",
         "xiaohongshu": "Style requirement: use a Xiaohongshu-style tone with light emoji usage and stronger highlights.",
     },
 }
@@ -71,6 +71,7 @@ SYSTEM_PROMPTS: dict[OutputLanguage, str] = {
 
 输出要求：
 - 只返回最终 Markdown，不要包裹在代码块中。
+- 首行使用一个 Markdown 一级标题，用 12–30 字概括原文的主要议题。不要仅写“会议纪要”或“总结”，不要臆造日期、决策或人物。
 - 不要把章节标题写成有序列表，使用标准 Markdown 标题层级。
 - 数学公式使用 LaTeX 语法。
 
@@ -91,6 +92,7 @@ Language requirements:
 
 Output requirements:
 - Return only the final Markdown content. Do not wrap it in a code block.
+- Start with one descriptive Markdown H1 summarizing the main source topic in 5–12 words. Avoid generic titles such as "Meeting minutes" or "Summary"; never invent dates, decisions or people.
 - Do not format section headings as numbered lists; use normal Markdown heading levels.
 - Use LaTeX syntax for math expressions.
 
@@ -99,7 +101,7 @@ Editing principles:
 2. You may reorganize sentences, paragraphs, headings, and lists, but do not change the meaning.
 3. Remove greetings, filler words, repetition, and obviously irrelevant content.
 4. Preserve important facts, examples, steps, conclusions, and recommendations.
-5. Add [[Screenshot:MM:SS]] only when a supported timestamp and useful visual context exist; do not force screenshots.
+5. Output a text-only Markdown meeting summary. Do not generate illustrations, Mermaid diagrams or screenshot placeholders.
 6. Do not invent unseen visual content or treat a presented proposal as a confirmed decision.
 7. Use the supplied start and end times for speaking turns; never substitute the next speaker's start time for a turn's end.
 8. Keep actual meeting start/end times separate from accumulated recording duration. Recording may pause or contain separate segments. Never infer meeting times from media duration, the last segment or a filename date; use explicitly supplied actual times, or omit them. Chapter timestamps are recording offsets, not wall-clock times.""",

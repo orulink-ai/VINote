@@ -11,10 +11,10 @@ export function ProfileSettingsPanel({ email }: ProfileSettingsPanelProps) {
   return (
     <div>
       <div>
-        <label className="mb-2 block text-sm font-medium">{copy.settings.email}</label>
-        <div className="flex items-center gap-2 border-y px-1 py-4 text-muted-foreground">
+        <p className="mb-2 text-sm font-medium">{copy.settings.email}</p>
+        <div className="flex min-w-0 items-center gap-2 rounded-lg bg-muted px-3 py-3 text-sm">
           <Mail className="w-4 h-4" />
-          {email || copy.settings.notSignedIn}
+          <span className="min-w-0 break-all">{email || copy.settings.notSignedIn}</span>
         </div>
       </div>
     </div>

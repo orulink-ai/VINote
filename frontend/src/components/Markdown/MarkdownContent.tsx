@@ -1,6 +1,10 @@
-import type { ComponentType, ReactNode } from 'react'
-import ReactMarkdown from 'react-markdown'
+import { isValidElement, useMemo, type ComponentType, type ReactNode } from 'react'
+import { SimpleFlowchart } from './SimpleFlowchart'
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown'
+import { ContentImage, type RemoteImagePolicy } from './ContentImage'
+import { attachmentId } from '@/lib/workspaceAttachments'
 import remarkGfm from 'remark-gfm'
+import { remarkRecordingTimestamps } from '../../lib/remarkRecordingTimestamps'
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
 import {
@@ -13,10 +17,13 @@ import { slugifyHeadingText } from '../../lib/markdownKeyMoments'
 
 interface MarkdownContentProps {
   content: string
+  compact?: boolean
   className?: string
   videoUrl?: string
   mediaUrl?: string
   onVideoJump?: (seconds: number) => void
+  remoteImagePolicy?: RemoteImagePolicy
+  imageSessionKey?: string
 }
 
 function flattenText(children: ReactNode): string {
@@ -66,12 +73,16 @@ function createHeading(level: 'h1' | 'h2' | 'h3', className: string) {
   }
 }
 
-export function MarkdownContent({ content, className, videoUrl, mediaUrl, onVideoJump }: MarkdownContentProps) {
-  return (
-    <div className={className}>
+export function MarkdownContent({ content, compact = false, className, videoUrl, mediaUrl, onVideoJump, remoteImagePolicy = 'confirm', imageSessionKey = '' }: MarkdownContentProps) {
+  // Keep the rendered subtree alive during unrelated workspace updates. An
+  // inline Markdown component type would discard per-image load/retry state.
+  const document = useMemo(() => (
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        key={JSON.stringify([content, remoteImagePolicy, imageSessionKey])}
+        urlTransform={(url, key) => key === 'src' && attachmentId(url) ? url : defaultUrlTransform(url)}
+        remarkPlugins={[remarkGfm, [remarkRecordingTimestamps, { mediaUrl: onVideoJump ? mediaUrl : undefined }]]}
         components={{
+          pre: ({ children }) => isValidElement<{ className?: string }>(children) && children.props.className === 'language-mermaid' ? <>{children}</> : <pre>{children}</pre>,
           table: ({ children }) => (
             <table className="w-full border-collapse my-4 text-sm overflow-x-auto block">{children}</table>
           ),
@@ -90,6 +101,7 @@ export function MarkdownContent({ content, className, videoUrl, mediaUrl, onVide
           ),
           code({ className, children, ...props }) {
             const match = /language-(\w+)/.exec(className || '')
+            if (match?.[1] === 'mermaid') return <SimpleFlowchart source={String(children).replace(/\n$/, '')} />
             return match ? (
               <CodeHighlighter
                 style={oneDark}
@@ -105,9 +117,9 @@ export function MarkdownContent({ content, className, videoUrl, mediaUrl, onVide
               </code>
             )
           },
-          h1: createHeading('h1', 'text-2xl font-bold mb-4 pb-2 border-b scroll-mt-24'),
-          h2: createHeading('h2', 'text-xl font-bold mt-6 mb-3 scroll-mt-24'),
-          h3: createHeading('h3', 'text-lg font-semibold mt-4 mb-2 scroll-mt-24'),
+          h1: createHeading('h1', compact ? 'text-base font-medium mb-3 scroll-mt-24' : 'text-xl font-medium mb-4 scroll-mt-24'),
+          h2: createHeading('h2', compact ? 'text-sm font-medium mt-5 mb-2 scroll-mt-24' : 'text-lg font-medium mt-6 mb-3 scroll-mt-24'),
+          h3: createHeading('h3', compact ? 'text-sm font-medium mt-4 mb-2 scroll-mt-24' : 'text-base font-medium mt-4 mb-2 scroll-mt-24'),
           p: ({ children }) => <p className="mb-3 leading-relaxed">{children}</p>,
           ul: ({ children }) => <ul className="list-disc pl-6 mb-3">{children}</ul>,
           ol: ({ children }) => <ol className="list-decimal pl-6 mb-3">{children}</ol>,
@@ -146,14 +158,7 @@ export function MarkdownContent({ content, className, videoUrl, mediaUrl, onVide
               </a>
             )
           },
-          img: ({ src, alt }) => (
-            <img
-              src={src ? resolveContentUrl(src) : undefined}
-              alt={alt || 'Screenshot'}
-              className="mb-4 border border-border"
-              loading="lazy"
-            />
-          ),
+          img: ({ src, alt }) => <ContentImage key={content} src={src} alt={alt} remoteImagePolicy={remoteImagePolicy} imageSessionKey={imageSessionKey} />,
           blockquote: ({ children }) => (
             <blockquote className="my-4 border-l-4 border-primary pl-4 italic text-muted-foreground">
               {children}
@@ -163,6 +168,6 @@ export function MarkdownContent({ content, className, videoUrl, mediaUrl, onVide
       >
         {content}
       </ReactMarkdown>
-    </div>
-  )
+  ), [content, compact, videoUrl, mediaUrl, onVideoJump, remoteImagePolicy, imageSessionKey])
+  return <div className={className}>{document}</div>
 }

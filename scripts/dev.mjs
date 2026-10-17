@@ -91,7 +91,7 @@ try {
   bootstrap({ desktop })
   loadEnv() // First checkout may have created .env during bootstrap.
   {
-    const backendArgs = ['-m', 'uvicorn', 'main:app', '--host', '127.0.0.1', '--port', '8900', '--reload']
+    const backendArgs = [join(root, 'scripts/backend-dev.py'), '--host', '127.0.0.1', '--port', '8900']
     if (process.platform === 'win32') backendArgs.unshift(join(root, 'scripts/windows-backend-dev.py'))
     start(python(), backendArgs)
     for (let i = 0; i < 60 && !closing; i++) {

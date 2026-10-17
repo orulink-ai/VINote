@@ -1,0 +1,12 @@
+{
+  "folders": [
+    { "name": "VINote 桌面端与后端（dev）", "path": "." },
+    { "name": "VINote App（main）", "path": "VINote-app" }
+  ],
+  "settings": {
+    "git.autoRepositoryDetection": true,
+    "git.detectSubmodules": true,
+    "git.repositoryScanMaxDepth": 2,
+    "scm.alwaysShowRepositories": true
+  }
+}

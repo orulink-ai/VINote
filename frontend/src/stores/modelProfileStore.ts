@@ -64,18 +64,22 @@ const clearProfileTestResult = (
   Object.entries(results).filter(([resultProfileId]) => resultProfileId !== profileId),
 )
 
+let profileRequest = 0;
 export const useModelProfileStore = create<ModelProfileState>((set, get) => ({
   ...emptyState,
   loadProfiles: async () => {
+    const request = ++profileRequest;
     set({ loading: true, error: '' })
     try {
       const profiles = await fetchModelProfiles()
+      if (request !== profileRequest) return;
       set((state) => ({
         profiles,
         loading: false,
         selectedProfileId: syncDefaultSelection(profiles, state.selectedProfileId),
       }))
     } catch (error) {
+      if (request !== profileRequest) return;
       set({
         loading: false,
         error: error instanceof Error ? error.message : 'Failed to load model profiles',
@@ -202,5 +206,5 @@ export const useModelProfileStore = create<ModelProfileState>((set, get) => ({
     }
   },
   selectProfile: (id) => set({ selectedProfileId: id }),
-  reset: () => set(emptyState),
+  reset: () => { ++profileRequest; set(emptyState) },
 }))
