@@ -11,6 +11,7 @@ import uuid
 import threading
 from dataclasses import asdict, replace
 from pathlib import Path
+from typing import Annotated
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.responses import FileResponse
@@ -834,7 +835,7 @@ async def generate_from_upload(
     model_profile_id: str | None = Form(None),
     stt_profile_id: str | None = Form(None),
     model_name: str | None = Form(None),
-    asr_model: str | None = Form(None, max_length=200),
+    asr_model: Annotated[str | None, Form(max_length=200)] = None,
     api_key: str | None = Form(None),
     base_url: str | None = Form(None),
     workflow: str = Form("note_organization"),
@@ -1060,7 +1061,7 @@ async def generate_from_upload_sync(
     model_profile_id: str | None = Form(None),
     stt_profile_id: str | None = Form(None),
     model_name: str | None = Form(None),
-    asr_model: str | None = Form(None, max_length=200),
+    asr_model: Annotated[str | None, Form(max_length=200)] = None,
     api_key: str | None = Form(None),
     base_url: str | None = Form(None),
     workflow: str = Form("note_organization"),
@@ -1200,9 +1201,35 @@ async def generate_from_upload_sync(
     )
 
 
+def _persist_url_request(task_id: str, req: NoteRequest, user_id: str | None,
+                         trace_context: DesktopTraceContext | None) -> bool:
+    """Forward-only pending URL submission; never infer a historical request."""
+    from app.services.task_model_source import _bind_task_owner
+    from app.services.vilab_cloud_service import VILabCloudService
+    artifacts = _note_service.artifact_service
+    folder = artifacts.find_task_dir(task_id)
+    if not folder or artifacts.get_status(task_id).get("status") != "pending":
+        return False
+    _bind_task_owner(folder, artifacts.output_dir, user_id)
+    path = folder / "request.json"
+    if path.exists():
+        return False  # Existing submissions/recovery never acquire a new URL worker.
+    # Capture first: request.json would otherwise forbid fresh capture in the
+    # generation decorator. Neither this preparation nor validation runs ASR.
+    snapshot = ensure_source(folder, user_id, {**req.model_dump(), "needs_stt": True}, allow_capture=True)
+    with VILabCloudService().task_snapshot(user_id, snapshot=snapshot):
+        VILabCloudService().validate_ready(user_id)
+    artifacts.write_json(path, {"kind": "media_url",
+        "request": req.model_dump(exclude={"api_key", "base_url", "model_name"}),
+        "trace": asdict(trace_context) if trace_context else None})
+    return True
+
+
 def _run_task(task_id: str, req: NoteRequest, user_id: str | None,
               trace_context: DesktopTraceContext | None = None):
     try:
+        if not _persist_url_request(task_id, req, user_id, trace_context):
+            return
         with desktop_trace(trace_context):
             _note_service.generate(
                 video_url=req.video_url, task_id=task_id, platform=req.platform,
@@ -1216,6 +1243,19 @@ def _run_task(task_id: str, req: NoteRequest, user_id: str | None,
             )
     except Exception as exc:
         logger.error("[Background] task failed task_id=%s error=%s", task_id, exc, exc_info=True)
+        # Snapshot/catalog failures happen before NoteService's own failure
+        # handler. Publish a terminal outcome rather than leave pending forever.
+        try:
+            artifacts = _note_service.artifact_service
+            folder = artifacts.find_task_dir(task_id)
+            marker = folder / "recording_owner" if folder else None
+            owned = (marker and not marker.is_symlink() and marker.is_file()
+                     and marker.read_text(encoding="utf-8") == user_id)
+            if folder and (owned or not user_id and not marker.exists()) and artifacts.get_status(task_id).get("status") != "failed":
+                artifacts.update_status(folder, "failed", "来源准备未完成，原提交和已有资料已保留，请核验原任务",
+                                        retryable=False)
+        except Exception:
+            logger.warning("[Background] cannot persist URL preparation failure task_id=%s", task_id)
 
 
 def _persist_file_request(task_dir: Path, req: LocalFileRequest, user_id: str | None,

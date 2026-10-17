@@ -318,6 +318,15 @@ class NoteService:
             original = self.artifact_service.stage_source_media(
                 task_dir, audio_meta.file_path, media_kind="audio")
             audio_meta.file_path = str(original)
+            request_path = task_dir / "request.json"
+            if request_path.is_file() and not request_path.is_symlink():
+                saved = json.loads(request_path.read_text(encoding="utf-8"))
+                if saved.get("kind") == "media_url":
+                    owner_path = task_dir / "recording_owner"
+                    if owner_path.is_file() and not owner_path.is_symlink():
+                        from app.services.task_original_service import TaskOriginalService
+                        TaskOriginalService().register(owner_path.read_text(encoding="utf-8"),
+                                                       task_dir, f"{audio_meta.title}{original.suffix}")
         self.artifact_service.save_audio_meta(task_dir, audio_meta)
         return audio_meta
 

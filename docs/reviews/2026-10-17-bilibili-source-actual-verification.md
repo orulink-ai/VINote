@@ -45,7 +45,7 @@ App 产品提交 `8975515`，离线 124 suites / 1153 tests、TypeScript 通过�
 
 新下载原音轨通过现有 `stage_source_media` 归档，绑定当前任务并保留原下载文件；不删除设备上的原文件。历史 B 站缓存缺 owner、缺任务原媒体绑定或路径不一致时拒绝复用，不迁移旧任务、不重下载或重跑识别。`NoteService` 对 B 站来源不传远程截图 URL，并在媒体增强入口阻断全视频下载和截图注入，避免音轨已取得后再次隐式访问 B 站。
 
-设备行为及相邻后端离线回归 **136 项通过**：覆盖真实编排中的下载、原媒体归档、替身 ASR/LLM、结果保存，来源 URL/raw_info 保留，下载失败零 ASR/LLM，以及 source index 的 owner/task/workflow 隔离。测试均为离线替身，不是新安全下载器的真实模型全链路验收。新安全下载器的真实网络证据目前仅为本文前述两条视频的 **download-only 成功**。
+设备行为及相邻后端离线回归 **136 项通过**：覆盖真实编排中的下载、原媒体归档、替身 ASR/LLM、结果保存，来源 URL/raw_info 保留，下载失败零 ASR/LLM，以及 source index 的 owner/task/workflow 隔离。该阶段测试均为离线替身，当时真实网络证据仅为本文前述两条视频的 **download-only 成功**；后续新 41 秒任务的安全下载器真实全链验收另记如下，不回写这轮测试的证据性质。
 
 ## 桌面 73 秒视频实际生成与 UI 重开
 
@@ -60,7 +60,37 @@ App 产品提交 `8975515`，离线 124 suites / 1153 tests、TypeScript 通过�
 | 保存产物 | 原任务 transcript/result 均存在 |
 | 已保存笔记 | `aa43895e-8686-4cf8-87d8-7d4d2d6b5adb`，已通过 UI 返回并重新打开 |
 
-**执行版本边界：该任务由旧 worker 完成，实际走原 yt-dlp/截图路径。** 热更新曾进入 graceful shutdown 并等待原 worker 完成；不能把任务的真实成功归为新安全下载器成功。保留原任务、真实转写与结果，不为验证新代码再次提交 ASR。新 worker 已启动也不能改变原任务的执行归属。后续可用 download-only 检查新来源路径，并复用已有真实 transcript 验证后续行为；该后续检查尚不能记为已完成。
+**执行版本边界：该任务由旧 worker 完成，实际走原 yt-dlp/截图路径。** 热更新曾进入 graceful shutdown 并等待原 worker 完成；不能把任务的真实成功归为新安全下载器成功。保留原任务、真实转写与结果，不为验证新代码再次提交 ASR。后续安全下载器的真实全链验证使用了全新 41 秒视频任务，没有重跑这条 73 秒任务。
+
+## 桌面新安全下载器：41 秒任务真实完整成功
+
+主线程在桌面选择全新、未处理的 `BV18tAnzvE9J`（汉服科普，约 41 秒），UI 确认原选择豆包 bigmodel ASR 与 DeepSeek 均可用，只点击一次开始整理；未更换模型或重跑旧 ASR。
+
+| 项目 | 实际证据 |
+| --- | --- |
+| 新任务 | `e208562d-b4a4-4b6f-bdfa-528cdcdcd950` |
+| 执行 worker | `62f2543f968c4529b03e5fed15e792cb` |
+| 来源身份 | `BV18tAnzvE9J_p1` |
+| 下载与原件 | 新专用下载器生成 audio_meta/source_media，声明为 audio，保留 M4A 音轨 |
+| ASR | 原选豆包模型完成，session 1 / attempt 1 success |
+| 总结与保存 | DeepSeek 完成，RAW status/stage success；UI 13:07:58 保存成功 |
+| 结果 | 原来源时长 41 秒，正文 774 字符 |
+| 已保存笔记 | `2eacd6fa-209e-4eaf-a2cd-aaab67289f40` |
+| 进度 | 首次 pending/download 正常，无旧 not_found 竞态；生成位于第 4/5 步，无截图阶段 |
+
+这是**新桌面安全下载器→真实 ASR→真实 LLM→保存**的独立成功证据，已超出此前 download-only 边界。只读原件检查确认文件存在且位于任务内，大小、SHA 与 manifest 一致，audio_meta 指向同一音轨；账号已保存笔记与任务 owner 一致。现有 FileLibrary 会从已保存笔记的 task/owner/source_media 关联列出原件，不依赖补造历史 request。
+
+实际发现笔记 `source_type: video` 被直接用于播放器选择，导致 M4A 显示为黑色视频区域。后端现对单笔记 get/create/update 只读投影可选 `media_kind`，额外验证当前用户、规范任务 UUID 映射及非链接普通 owner 标记，仅接受可解析的原媒体声明；缺失或不可信时保持空值，不改历史 source_type、不扩媒体 GET 权限，list 不扫描全部原件。后端相邻 **97 项离线回归通过**；主线程前端 store/NoteEditor 的 **30 项定向测试与 TypeScript 检查通过**。两端复制到 live 后，主线程实际确认该笔记的 `media_kind: audio` 显示原声音频控件，无黑色视频、无“无媒体/录制现场”的错误侧栏，并增加经 http(s) 来源 URL 校验的“打开来源”链接。
+
+后续实际返回列表重开又发现缓存缺口：`loadNoteById` 直接返回无 `media_kind` 的列表缓存，播放器回退 source_type 后再次出现黑色视频，因此当时撤回了首次重开通过的结论；最终缓存修复后的独立复验结果见下，不能混用两个阶段。
+
+主线程已修 store：媒体任务缓存缺 mediaKind 时读取单 note 并替换缓存；一般网络失败保留同账号缓存正文并显示错误，401/403/404 不返回缓存，保留 accountEpoch 隔离。主线程报告 NoteEditor 26 项及 store 9 项共 **35 项测试与 TypeScript 检查通过**（NoteEditor 26 项为近期已跑，store 补充故障测试后为 9 项，不冒称同一批执行）。最终实际 back→list→打开 `2eacd6fa-209e-4eaf-a2cd-aaab67289f40` 已通过：fresh state 仍显示原声音频控件 0:40，“打开来源” href 为原 BV，无黑色视频、无错误侧栏。`desktop-bili-note-reopened.jpg` 已由主线程覆盖为该次正确版本，保留在 ignored data，不提交截图附件。至此真实下载、ASR、LLM、保存及最终列表重开均通过，未重复提交识别。
+
+### 后续 forward-only 原件索引修复（仅源码/离线）
+
+上述 41 秒任务没有 `request.json/source_original.json`，本轮**未补写、迁移或重新执行它**；其当前原件可达性依赖已保存笔记的媒体关联。后续源码为新 pending URL worker 增加小型 typed request 持久化：先确认冻结 snapshot 和模型可用性，再保存脱敏 NoteRequest/workflow，排除 api_key/base_url/model_name；新音轨归档后复用 TaskOriginalService 注册 owner/task/workflow 索引，预检失败写 failed，不遗留 pending。已有 success/failed/执行中任务不补写或重排。
+
+该后续修复通过 **157 项离线回归**，包括真实 URL worker 与完整 pipeline、替身 ASR/LLM，测试不手写 request；验证 ASR 前原件即可独立读取、失败保留原件、预检失败零 ASR、旧任务字节不变。随后给新索引文件名补上原音轨后缀（如 `.m4a`），对应 note/meeting 两项真实 worker 定向测试再次通过，确认原件读取/导出元数据保留后缀，未重复全部回归。这不是该索引补修已部署或已在真实新任务执行的证据，不追加推理来替代已有验收。
 
 ## 首次轮询与产品标签修复
 
@@ -70,7 +100,7 @@ App 产品提交 `8975515`，离线 124 suites / 1153 tests、TypeScript 通过�
 
 主线程完成普通视频标签及进度文案调整：会议录音操作仅用于会议，视频笔记按视频来源显示；进度按准备、下载、转写、生成、保存呈现，B 站不显示截图阶段。主线程报告定向 **56 项测试及 TypeScript 检查通过**；本文记录其验证结果，未重复执行。
 
-## App native 构建与本轮发现（待修复复验）
+## App native 前期构建与发现（历史失败证据）
 
 以下为主线程补充的实际检查记录，独立于前述 App 公网 412 预检和桌面任务验收：
 
@@ -78,14 +108,44 @@ App 产品提交 `8975515`，离线 124 suites / 1153 tests、TypeScript 通过�
 - 首次检查（记录标识前缀 `37d8`）使用 Android User-Agent 下载时返回 HTTP 403。同一新视频 `BV13At46PEGQ`（40 秒）在电脑 resolve 成功；诊断版将 User-Agent 对齐 Python 侧后，native 音轨下载成功。
 - 上述前后对照仅证明诊断版完成了这次设备下载，不能把成功唯一归因于 User-Agent；时间、请求上下文和服务端访问条件并未被完整隔离。没有据此宣称原视频失效、确定 B 站具体规则或证明整条 App 生成链可用。
 - 原提交 UUID `fe919471-dd39-4aae-80c7-9d79fb437f77` 的 upload 提交失败，提示模型不可用；服务端只保留 reserved 回执，关联任务 `eeac6639-22aa-4e16-9096-526509b42740`，任务目录不存在（folder=false），**零 ASR 调用**。不能将 reserved 记为已接受执行、上传处理成功或已生成笔记，也不以新的提交替换这份失败证据。
-- 排查发现 App `noteIntake` 没有传递用户选定的模型；Darwin 正在补修。本文记录的是已发现问题与修复进行中状态，尚无该修复后的实际设备全链路验收。
+- 当时排查发现 App `noteIntake` 没有传递用户选定的模型，由 Darwin 补修；当时的下载成功不作为全链通过证据，后续最终包的独立验收见下节。
 
 ## 开发后端成对模型选择兼容修复（离线证据）
 
 开发后端 URL JSON 和上传 form 现可传递 `asr_model` 与 `model_name`，由 `capture_source` 统一校验、冻结当前云任务；成对字段必须明确完整且通过目录校验，本地模式明确拒绝，不补默认模型、不改全局偏好、不替换旧 snapshot，旧 `model_name` 单项及未提供新字段的 operation 指纹保持兼容。专项与冻结模型、来源回执、上传、鉴权、公网 runtime、设备链相邻回归 **219 项离线测试通过**，全程使用替身目录与执行，无真实 ASR/LLM 调用；这不代表已复制到 live、部署或 App 修复后实际验收。手机第三包 SHA256 前缀 `51111baf…` 已构建，主线程当时记录为尚未安装，待重连后另补实测。
 
-## 待补验收
+## App 最终 native 包完整成功与 UI 重开
 
-- 新安全下载器在桌面新任务中的真实 ASR/LLM 全链路尚未验收；不能用旧 worker 的上述成功替代。
-- App 已有上述诊断版音轨下载成功证据；模型选择补修后的提交、真实生成、保存与重新打开仍待实际验收，不能将单次下载成功扩大为完整通过。前述公网 412 错误路径检查保留为历史证据。
+主线程在实际手机核验最终包（摘要前缀 `db67fca…`），完成 `BV13At46PEGQ` 的 native 音轨下载→明确创建新的上传操作→ASR→LLM→保存→返回列表并重新打开正文，结果如下：
+
+| 项目 | 实际证据 |
+| --- | --- |
+| 新 upload operation | `13bb0148-371c-4b79-b223-909b63b53a72` |
+| 新任务 | `c1bd219e-c723-4a48-852f-e8253bba0a9a` |
+| 冻结 ASR | `asr:6:aliyun:22:paraformer-realtime-v2` |
+| 冻结 LLM | `deepseek-v4.1-flash` |
+| 服务端原始状态文件 | RAW `status.json` 的 status、stage 均为 `success` |
+| 结果时长 | 39.520375 秒 |
+| 正文长度 | 742 字符 |
+| 转写分段 | 1 段，不据此声称逐句时间戳精度 |
+| App 保存与重开 | 12:55:38 保存，实际返回列表后点击该笔记，正文打开成功 |
+
+这是最终 App 包的独立真实完整链路证据，未重跑或覆盖前述 reserved 失败提交、桌面 73 秒成功任务；主线程随后完成以下来源与文件库实际核验：
+
+- [x] 重开笔记后展开“来源与身份”，`BV13At46PEGQ`、第 1 P 及原 HTTPS 链接显示正确。
+- [x] FileLibrary“笔记资料”保留两份各显示 317.8 KB 的 M4A，分别对应旧 reserved 提交与新 success 提交；未因新成功而删除旧文件。
+- [x] 打开新文件后可见源链接及关联的已保存笔记标题。
+- [x] “会议资料”中 5 份原录音独立保留；文件 Sheet 已关闭并返回。
+
+诊断时应只读原任务 RAW `status.json` 核验实际状态：新启动的独立 Python CLI 调用 `TaskArtifactService.get_status` 会因自身 `WORKER_ID` 与原执行进程不同而投影为处理中断；该投影不是原文件中的真实任务失败，不得据此重排任务或再次提交 ASR。
+
+本次 App 成功使用设备侧获取音轨后上传模型处理，**不证明云机直接抓取 B 站的 412 已消失**；前述宿主 HTTP/1.1、HTTP/2 及容器对照证据保持有效，也不改变旧桌面任务由原 yt-dlp/截图 worker 执行的版本归属。
+
+## 验收范围与未测项
+
+- 桌面新安全下载器的 41 秒真实下载/ASR/LLM/保存，以及最终缓存修复后的列表重开、0:40 音频控件和原来源链接均已实际通过。后续 forward-only 原件索引补修仍仅有源码与离线证据（157 项回归及补后缀后的 2 项定向测试），未用新的真实 ASR 任务验证，旧任务未迁移，本轮不再追加识别。
+- App 最终 native 包的下载、提交、真实生成、保存、列表重开正文、原 BV/分 P/链接展示及上述文件库检查已实际通过；其他来源、模型及失败恢复不由本次单视频成功推定通过。
+- Native 下载取消尚未实测，保持待验收。
 - 不追加模型调用、不重跑已成功任务，不发布下载媒体、完整转写、签名 CDN URL、账号令牌或私人 Cookie。
+
+最终补充：App 40秒样本的保留元数据为一次ASR session、一次attempt成功。桌面新41秒样本同样为一次session、一次attempt成功；媒体类型与列表缓存修复使用已有保存结果复验，没有重新调用识别。

@@ -9,6 +9,7 @@ type NoteRow = {
   content: string
   video_url: string | null
   source_type: string | null
+  media_kind?: 'audio' | 'video' | null
   generation_client?: string | null
   task_id: string | null
   status: string
@@ -25,6 +26,7 @@ export interface NoteRecord {
   content: string
   videoUrl?: string
   sourceType?: string
+  mediaKind?: 'audio' | 'video'
   generationClient?: string
   taskId?: string
   status: string
@@ -79,6 +81,7 @@ const mapRow = (row: NoteRow): NoteRecord => ({
   content: row.content ?? '',
   videoUrl: row.video_url ?? undefined,
   sourceType: row.source_type ?? undefined,
+  mediaKind: row.media_kind ?? undefined,
   generationClient: row.generation_client ?? undefined,
   taskId: row.task_id ?? undefined,
   status: row.status,
@@ -142,7 +145,9 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
   loadNoteById: async (id) => {
     const epoch = accountEpoch;
     const existing = get().notes.find((note) => note.id === id)
-    if (existing) {
+    const needsMediaDetail = existing?.taskId && existing.mediaKind === undefined &&
+      ['video', 'audio', 'meeting_video', 'meeting_recording'].includes(existing.sourceType || '')
+    if (existing && !needsMediaDetail) {
       return existing
     }
 
@@ -151,7 +156,8 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
       if (epoch !== accountEpoch) return null;
       const note = mapRow(data)
       set((state) => ({
-        notes: state.notes.some((item) => item.id === note.id) ? state.notes : [note, ...state.notes],
+        notes: state.notes.some((item) => item.id === note.id)
+          ? state.notes.map(item => item.id === note.id ? note : item) : [note, ...state.notes],
       }))
       return note
     } catch (error) {
@@ -160,7 +166,8 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
       set({
         error: error instanceof Error ? error.message : 'Failed to load note',
       })
-      return null
+      const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : 0
+      return existing && (!status || status >= 500) ? existing : null
     }
   },
   saveNote: async (title, content, videoUrl, taskId, workspace, sourceType, status = 'done') => {

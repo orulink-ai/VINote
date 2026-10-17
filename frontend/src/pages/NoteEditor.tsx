@@ -1,5 +1,6 @@
 import { resolvePageParent, pageParentLabel } from '@/lib/navigation';
 import { noteOrigin } from "@/lib/noteOrigin";
+import { sourceVideoUrl } from "@/lib/sourceInput";
 import { FeishuDelivery } from "@/components/Notes/FeishuDelivery";
 import { FeishuDocumentFooter } from "@/components/Notes/FeishuDocumentFooter";
 import { RecordingWaveform } from "@/components/Notes/RecordingWaveform";
@@ -331,9 +332,13 @@ export function NoteEditor() {
     id && taskId && !recordingDeleted ? `/api/notes/${id}/media` : undefined;
   const isAudioNote =
     Boolean(localMediaUrl) &&
-    ["audio", "meeting_recording"].includes(sourceType);
+    (currentNote?.mediaKind ? currentNote.mediaKind === "audio" : ["audio", "meeting_recording"].includes(sourceType));
   const isVideoNote =
-    Boolean(localMediaUrl) && ["video", "meeting_video"].includes(sourceType);
+    Boolean(localMediaUrl) && (currentNote?.mediaKind ? currentNote.mediaKind === "video" : ["video", "meeting_video"].includes(sourceType));
+  const originalSourceUrl = (() => {
+    try { return videoUrl ? sourceVideoUrl(videoUrl) : undefined; }
+    catch { return undefined; }
+  })();
   const splitLabel = locale.startsWith("zh") ? "对照" : "Split";
   const workspaceBadge =
     noteScope === "team"
@@ -1039,7 +1044,7 @@ export function NoteEditor() {
                       )}
                     </div>
 
-                    {videoUrl && !isVideoNote ? (
+                    {videoUrl && !isVideoNote && !isAudioNote ? (
                       <div className="hidden w-[320px] shrink-0 border-l border-border bg-card/80 p-4 xl:flex dark:border-border ">
                         <VideoReferencePanel
                           noteId={id}
@@ -1206,6 +1211,9 @@ export function NoteEditor() {
                 )
               }
             />
+            {originalSourceUrl && <Button variant="outline" asChild>
+              <a href={originalSourceUrl} target="_blank" rel="noreferrer">{zh ? "打开来源" : "Open source"}</a>
+            </Button>}
           </div>
         </div>
       ) : null}

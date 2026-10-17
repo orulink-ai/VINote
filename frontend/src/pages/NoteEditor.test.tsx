@@ -500,6 +500,24 @@ describe("NoteEditor transcript evidence", () => {
     }
   });
 
+  it("plays a retained video-link audio track as audio without meeting recording actions", async () => {
+    noteStoreMock.loadNoteById.mockResolvedValue({
+      id: "note-1", title: "Video link", content: "# Audio-track summary",
+      sourceType: "video", mediaKind: "audio", videoUrl: "https://www.bilibili.com/video/BV1234567890/",
+      taskId: "task-1", status: "done", scope: "personal",
+      createdAt: "2026-07-01T00:00:00Z", updatedAt: "2026-07-01T00:00:00Z",
+    });
+    renderEditor("/note/note-1?view=transcript");
+    const turn = await screen.findByText("We agreed to activate Sortformer.");
+    const audio = screen.getByTestId("source-audio") as HTMLAudioElement;
+    expect(screen.queryByTestId("source-video")).not.toBeInTheDocument();
+    expect(screen.queryByText("从笔记跳回录制现场")).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open source" })).toHaveAttribute("href", "https://www.bilibili.com/video/BV1234567890/");
+    expect(apiMock.apiJson.mock.calls.some(([path]) => String(path).endsWith('/recording'))).toBe(false);
+    fireEvent.click(turn);
+    expect(audio.currentTime).toBe(62);
+  });
+
   it("keeps one shared local video player available from the transcript view", async () => {
     noteStoreMock.loadNoteById.mockResolvedValue({
       id: "note-1",
