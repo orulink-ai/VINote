@@ -5,7 +5,6 @@ import { readWorkspaceCache, writeWorkspaceCache } from "@/lib/workspaceCache";
 import { useAuthStore } from "./authStore";
 import { useNoteLibraryStore, type NoteRecord } from "./noteLibraryStore";
 import type { ItemSyncPolicies } from '@/lib/itemSyncPolicy';
-import { contentResetReceipt } from '@/lib/contentResetReceipt';
 
 type Mapping = { key: string; revision: number; fingerprint: string };
 // Kept only to recover pre-removal requests. These records are never dispatched.
@@ -39,7 +38,8 @@ interface State extends CachedState {
   changeDeleted: (key: string, deleted: boolean) => Promise<WorkspaceNote | null>;
 }
 const blank = (): CachedState => ({ itemPolicies: {}, items: [], details: {}, mappings: {}, pending: [],
-  lastSync: '', deviceId: crypto.randomUUID(), localOnlyVersion: 1, retainedSyncOperations: [], cloudBaselines: {} });
+  lastSync: '', deviceId: crypto.randomUUID(), localOnlyVersion: 1, retainedSyncOperations: [], cloudBaselines: {},
+  serviceId: undefined, appliedContentResets: [], clearedContentKeys: [], contentResetCleanupVersion: undefined });
 let epoch = 0;
 const snapshot = (s: CachedState): CachedState => ({ itemPolicies: s.itemPolicies, serviceId: s.serviceId,
   items: s.items, details: s.details, mappings: s.mappings, pending: s.pending, lastSync: s.lastSync,
@@ -66,16 +66,16 @@ const currentVersion = (note: WorkspaceNote): WorkspaceVersion => ({ id: `retain
 
 /** Pure, repeatable migration. The old operations/baselines remain recoverable;
  * pending is no longer an active queue and cloud tombstones are respected. */
-function localize(source: CachedState, owner: string): CachedState {
+function localize(source: CachedState): CachedState {
+  if (source.appliedContentResets?.length && !source.clearedContentKeys?.length) {
+    throw new Error('历史内容整理尚未完成，请在原设备重试；已有资料已保留');
+  }
   const details = { ...source.details };
   const summaries = new Map(source.items.map(item => [item.key, item]));
   const baselines = { ...(source.cloudBaselines || {}) };
   const archive = [...(source.retainedSyncOperations || [])];
   const mappings = { ...source.mappings };
-  const applyReset = owner === contentResetReceipt.owner && !(source.appliedContentResets || []).includes(contentResetReceipt.id);
-  const clearedKeys = new Set<string>(applyReset ? [...contentResetReceipt.cloudKeys,
-    ...contentResetReceipt.desktopIds,
-    ...contentResetReceipt.desktopIds.map(id => mappings[id]?.key || `desktop-${id}`)] : []);
+  const clearedKeys = clearedAliases(source);
   const retainBaseline = (note: WorkspaceNote) => {
     const list = baselines[note.key] || [];
     if (!list.some(old => JSON.stringify(old) === JSON.stringify(note))) baselines[note.key] = [...list, note];
@@ -95,6 +95,7 @@ function localize(source: CachedState, owner: string): CachedState {
     if (item) summaries.set(key, { ...item, deleted: true });
   }
   for (const op of source.pending) {
+    if (clearedKeys.has(op.key) || (op.localId && clearedKeys.has(op.localId))) continue;
     if (!archive.some(old => JSON.stringify(old) === JSON.stringify(op))) archive.push(op);
     if (op.baseline) retainBaseline(op.baseline);
     if (op.conflict) retainBaseline(op.conflict);
@@ -123,21 +124,54 @@ function localize(source: CachedState, owner: string): CachedState {
     summaries.set(op.key, details[op.key]);
   }
   for (const note of Object.values(details)) summaries.set(note.key, { ...note, deleted: note.deleted || summaries.get(note.key)?.deleted === true });
-  return { ...source, details, items: [...summaries.values()], mappings, pending: [],
+  return purgeClearedContent({ ...source, details, items: [...summaries.values()], mappings, pending: [],
     itemPolicies: Object.fromEntries([...Object.keys(source.itemPolicies || {}), ...summaries.keys(), ...Object.keys(mappings)].map(key => [key, 'local'])),
     localOnlyVersion: 1, retainedSyncOperations: archive, cloudBaselines: baselines,
-    appliedContentResets: applyReset ? [...(source.appliedContentResets || []), contentResetReceipt.id] : source.appliedContentResets,
-    clearedContentKeys: [...new Set([...(source.clearedContentKeys || []), ...clearedKeys])] };
+    clearedContentKeys: [...clearedKeys] });
 }
 
 type Scope = { owner: string; epoch: number };
 
-function purgeResetContent(source: CachedState, owner: string): CachedState {
-  if (owner !== contentResetReceipt.owner) return source;
-  const keys = new Set<string>([...contentResetReceipt.cloudKeys, ...contentResetReceipt.desktopIds,
-    ...contentResetReceipt.desktopIds.map(id => `desktop-${id}`), ...(source.clearedContentKeys || [])]);
-  for (const [id, mapping] of Object.entries(source.mappings)) if (keys.has(id)) keys.add(mapping.key);
-  for (const key of [...keys]) keys.add(`recovered-cleared-${key}`);
+// Ledger entries belong to this account's existing device cache, never a
+// product-bundled owner or content list. Preserve old aliases without growing
+// recovered-cleared prefixes on every restart.
+function clearedAliases(source: CachedState): Set<string> {
+  const keys = new Set(source.clearedContentKeys || []);
+  const add = (key: string) => {
+    const prefix = 'recovered-cleared-';
+    let root = key;
+    while (root.startsWith(prefix)) root = root.slice(prefix.length);
+    keys.add(key); keys.add(root); keys.add(prefix + root);
+    if (root.startsWith('desktop-')) {
+      const localId = root.slice('desktop-'.length);
+      keys.add(localId); keys.add(prefix + localId);
+    } else {
+      // The local-note projection also recognizes the unwrapped local ID.
+      // Preserve its documented desktop alias even after mappings were purged.
+      keys.add('desktop-' + root); keys.add(prefix + 'desktop-' + root);
+    }
+  };
+  let previous = -1;
+  while (previous !== keys.size) {
+    previous = keys.size;
+    for (const key of [...keys]) add(key);
+    for (const [id, mapping] of Object.entries(source.mappings)) {
+      if (keys.has(id) || keys.has(`desktop-${id}`) || keys.has(mapping.key)) {
+        add(id); add(`desktop-${id}`); add(mapping.key);
+      }
+    }
+    for (const op of [...source.pending, ...(source.retainedSyncOperations || [])]) {
+      if (keys.has(op.key) || (op.localId && (keys.has(op.localId) || keys.has(`desktop-${op.localId}`)))) {
+        add(op.key);
+        if (op.localId) { add(op.localId); add(`desktop-${op.localId}`); }
+      }
+    }
+  }
+  return keys;
+}
+
+function purgeClearedContent(source: CachedState): CachedState {
+  const keys = clearedAliases(source);
   const details = { ...source.details };
   const histories = source.retainedSyncOperations || [];
   for (const key of keys) {
@@ -149,7 +183,7 @@ function purgeResetContent(source: CachedState, owner: string): CachedState {
     mappings: Object.fromEntries(Object.entries(source.mappings).filter(([id, mapping]) => !keys.has(id) && !keys.has(mapping.key))),
     itemPolicies: Object.fromEntries(Object.entries(source.itemPolicies).filter(([key]) => !keys.has(key))),
     cloudBaselines: Object.fromEntries(Object.entries(source.cloudBaselines || {}).filter(([key]) => !keys.has(key))),
-    retainedSyncOperations: histories.filter(op => !keys.has(op.key)),
+    retainedSyncOperations: histories.filter(op => !keys.has(op.key) && !(op.localId && keys.has(op.localId))),
     clearedContentKeys: [...keys], contentResetCleanupVersion: 2 };
 }
 
@@ -202,7 +236,7 @@ export const useWorkspaceStore = create<State>((set, get) => {
     itemSyncMode: () => 'local',
     setItemSync: async (_reference, enabled) => { if (enabled) throw new Error('同步功能已移除，内容仍可保存和编辑'); },
     initialize: async owner => {
-      if (get().owner === owner && get().ready && (owner !== contentResetReceipt.owner || get().contentResetCleanupVersion === 2)) return;
+      if (get().owner === owner && get().ready && get().contentResetCleanupVersion === 2) return;
       const run = ++epoch;
       set({ ...blank(), owner, ready: false, busy: false, error: '', status: null });
       try {
@@ -210,7 +244,7 @@ export const useWorkspaceStore = create<State>((set, get) => {
         const cached = await readWorkspaceCache<CachedState>(owner);
         if (run !== epoch || !sameOwner(owner)) return;
         // Do not fill the migration version from blank() before checking an old cache.
-        const recovered = purgeResetContent(localize(cached ? { ...blank(), ...cached, localOnlyVersion: cached.localOnlyVersion } : blank(), owner), owner);
+        const recovered = localize(cached ? { ...blank(), ...cached, localOnlyVersion: cached.localOnlyVersion } : blank());
         if (run !== epoch || !sameOwner(owner)) return;
         // Recovery is durable before exposing an empty pending queue.
         await writeWorkspaceCache(owner, structuredClone(recovered));
@@ -225,7 +259,7 @@ export const useWorkspaceStore = create<State>((set, get) => {
       if (!get().ready || get().busy || !currentScope(scope)) return;
       if (!get().pending.length && get().localOnlyVersion === 1) return;
       set({ busy: true });
-      try { await commit(scope, () => set(localize(snapshot(get()), scope.owner))); }
+      try { await commit(scope, () => set(localize(snapshot(get())))); }
       catch (cause) { if (currentScope(scope)) set({ error: message(cause) }); }
       finally { if (currentScope(scope)) set({ busy: false }); }
     },
@@ -233,7 +267,7 @@ export const useWorkspaceStore = create<State>((set, get) => {
       const scope = scopeFor(); requireReady(scope);
       if (get().pending.length || get().localOnlyVersion !== 1) {
         if (get().busy) throw new Error('正在保存，请稍后重试读取');
-        await commit(scope, () => set(localize(snapshot(get()), scope.owner)));
+        await commit(scope, () => set(localize(snapshot(get()))));
       }
       return read(reference, scope);
     },
@@ -244,7 +278,7 @@ export const useWorkspaceStore = create<State>((set, get) => {
       try {
         let note!: WorkspaceNote;
         await commit(scope, () => {
-          set(localize(snapshot(get()), scope.owner));
+          set(localize(snapshot(get())));
           const key = canonicalKey(reference);
           if (get().contentResetCleanupVersion === 2 && get().clearedContentKeys?.includes(key)) throw new Error('这份历史内容已清理，请新建笔记保存修改');
           const old = get().details[key];
@@ -276,7 +310,7 @@ export const useWorkspaceStore = create<State>((set, get) => {
       set({ busy: true });
       try {
         // Fold even unknown old writes before changing the local tombstone.
-        if (get().pending.length || get().localOnlyVersion !== 1) await commit(scope, () => set(localize(snapshot(get()), scope.owner)));
+        if (get().pending.length || get().localOnlyVersion !== 1) await commit(scope, () => set(localize(snapshot(get()))));
         const note = await read(reference, scope);
         const next = note.deleted === deleted ? note : { ...note, deleted, revision: note.revision + 1, updated_at: new Date().toISOString() };
         await commit(scope, () => accept(next));
