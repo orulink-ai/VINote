@@ -100,6 +100,7 @@ def capabilities(response: Response, user=Depends(request_user)):
             "sources": ["public_webpage", "document", "transcript", "audio", "video_upload", "bilibili"],
             "video_url": True, "video_url_platforms": ["bilibili"],
             "video_source_preflight": 1,
+            "text_extraction_protocol": 1,
             "video_url_reason": "OTHER_VIDEO_PLATFORMS_NOT_SUPPORTED",
             "max_upload_bytes": settings.content_upload_max_bytes,
             "models_configured": bool(settings.vilab_server_url),

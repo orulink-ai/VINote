@@ -55,6 +55,9 @@ def create_app() -> FastAPI:
     app.include_router(first_party_translation.router, prefix="/api")
     from app.routers import content_plugins
     app.include_router(content_plugins.router, prefix="/api")
+    if not settings.workspace_cloud_runtime or settings.content_cloud_runtime:
+        from app.routers.content_extraction import router as extraction_router
+        app.include_router(extraction_router, prefix="/api")
     if settings.workspace_cloud_runtime:
         if settings.content_cloud_runtime:
             from app.routers.cloud_content import router as content_router
