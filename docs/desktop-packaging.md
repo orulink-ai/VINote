@@ -44,6 +44,10 @@ yarn client:test
 
 包内保存服务 Origin、Supabase publishable 配置，以及按用户要求固定接入的 Langfuse 项目配置。Langfuse 凭据由构建环境注入后端资源，可被安装包持有人提取，不进入 Git、前端或日志。不保存开发 `.env`、个人会话、模型 API key、JWT 密钥或会议音频。每个安装身份独立初始化本地密钥。
 
+公网 Release 和内网 Test 都在 `desktop-config.json` 固定写入 `VINOTE_INTEGRATION_URL`，供冻结后端的 `settings.feishu_service_url` 使用；它是 VINote 集成服务，与 VILab 模型服务分别配置。地址仅接受源码指定的 HTTPS 集成端点，不接受开发 `.env`、终端或公开账号配置的同名覆盖，也不打包飞书 App Secret、租户凭据或存储服务密钥。冻结后端启动时优先应用包内值，因此正式包不依赖开发目录的 `.env` 才能发现飞书服务。两通道复用同一套公网账号与飞书集成服务；只有 VILab 模型连接按渠道分别固定为 LAN 或公网，忽略相反渠道地址覆盖，不互相回退。共享账号/集成不代表将 LAN 模型请求发往公网，也不把笔记或原件改为跨设备同步。此合同覆盖之前“全部服务内网化”的描述。
+
+2026-10-17 的 0.3.3 首轮构建缺少该配置，已生成的旧安装包不会因源码修复而变化，发布前须从修复提交重新打包。profile 与冻结后端配置的离线回归不等于正式包飞书授权、发布或通知实际成功；本次修复未重跑构建或任何 ASR/LLM。
+
 两种渠道必须提供 `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`，地址默认 `http://192.168.1.118:3000`。构建时使用冻结后端发送合成链路并从 Langfuse API 读回，失败即阻止打包；manifest 保存 `langfuse` 回执。两种包分别标记 `test`/`production`，均无需额外 `langfuse.env`，详见 [Langfuse 接入说明](langfuse.md)。
 
 会议事实复核的模型偏好 `MEETING_REVIEW_MODEL` 也会写入公开配置，默认 `gpt-6-astra`；两种包一致。构建环境可显式覆盖（空字符串表示沿用当前模型）。只在云端目录确认模型可用后使用，不会切换用户的全局模型。复核会增加真实 LLM 调用，当前模型仍负责初稿；本地/自定义模型复核复用当前提供方。
@@ -67,5 +71,7 @@ yarn client:test
 开发源码、网页、后端 API 与正式安装包统一使用基础版本 `0.3.1`，测试包仍为 `0.3.1-test`。`scripts/project-version.mjs` 在源码启动和打包前验证根 package、前端及锁文件、Tauri、Cargo 和后端版本一致，不一致时停止。版本调整不改变四个源码入口或两个打包入口的固定服务地址。
 
 正式发布先在功能分支审查并运行 `yarn verify`，PR CI 通过后合并 `dev`。从合并后的干净提交运行 `yarn client:production`；校验冻结后端、Langfuse 读回、manifest 的提交与包内正式服务配置，并计算安装包 SHA-256，再把同一提交标记为 `v0.3.1`，上传安装包、manifest 和校验文件到正式 GitHub Release。不要发布测试包或工作区私人文件。macOS 安装包需另外在 macOS 构建。
+
+manifest 的 `dirty` 仍保守检查构建结束时的已暂存、未暂存和未跟踪变更；Tauri 更新受跟踪的 `gen/schemas` 也会使其为 true。不按目录统一忽略或自动恢复这些文件，以免掩盖用户修改。应只读审查差异及构建前后证据；不能把工具生成物触发的 dirty 直接描述为业务源码修改，也不能把 dirty=false 当作完整输入快照证明。
 
 公开 Release 说明、构建 manifest、启动日志与计划输出不展示服务域名。完整服务配置和 Langfuse 追踪链接仅用于本地构建验收；公开 manifest 只保留版本、提交、文件校验值和脱敏后的验证结果。运行时连接地址仍由内部配置提供，无法以文档脱敏保证地址不可被客户端提取。

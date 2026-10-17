@@ -1,6 +1,17 @@
 import { createHash } from 'node:crypto'
 import { serviceOrigin } from './service-environments.mjs'
 
+const desktopIntegrationUrl = 'https://supabase-vinote.orulink.ai/vinote-api'
+
+export function validateDesktopIntegrationUrl(value) {
+  const url = new URL(value)
+  if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash
+      || ![desktopIntegrationUrl, desktopIntegrationUrl + '/'].includes(value)) {
+    throw new Error('Desktop packages require the fixed shared VINote integration endpoint')
+  }
+  return desktopIntegrationUrl
+}
+
 export function resolveDesktopProfile({ channel = 'release', version, env = {}, publicConfig, buildId }) {
   if (!['release', 'test'].includes(channel)) throw new Error('Channel must be release or test')
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Base version must be major.minor.patch')
@@ -13,6 +24,7 @@ export function resolveDesktopProfile({ channel = 'release', version, env = {}, 
   }
   const config = {
     VILAB_SERVER_URL: url.origin,
+    VINOTE_INTEGRATION_URL: validateDesktopIntegrationUrl(desktopIntegrationUrl),
     VINOTE_SUPABASE_URL: env.VINOTE_SUPABASE_URL || publicConfig.VINOTE_SUPABASE_URL,
     VINOTE_SUPABASE_PUBLISHABLE_KEY: env.VINOTE_SUPABASE_PUBLISHABLE_KEY || publicConfig.VINOTE_SUPABASE_PUBLISHABLE_KEY,
     LANGFUSE_RELEASE: test ? `${version}-test` : version,
