@@ -17,6 +17,11 @@ def get_optional_generation_user(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
 ) -> AuthenticatedUser | None:
+    if settings.content_cloud_runtime:
+        # Only the public ASGI boundary verifies/provisions this identity. Never
+        # fall back to a device cookie, email match or an unsigned JWT claim.
+        from app.services.cloud_content_identity import request_user
+        return request_user(request)
     try:
         user = local_user(request, credentials)
         if user is None and (credentials or request.cookies.get(settings.auth_cookie_name)):

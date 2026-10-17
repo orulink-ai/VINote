@@ -158,7 +158,10 @@ class VILabCloudService:
             raise HTTPException(503, "云端模型服务尚未配置，请联系管理员")
         server_url = self.status(user_id).get("server_url") or settings.vilab_server_url
         headers = {}
-        if settings.cloud_auth_url:
+        if settings.content_cloud_runtime:
+            from app.services.cloud_content_identity import content_bearer
+            headers["Authorization"] = "Bearer " + content_bearer(user_id)
+        elif settings.cloud_auth_url:
             from app.services.cloud_account_service import CloudAccountService
             headers["Authorization"] = "Bearer " + CloudAccountService().access_token(user_id)
         elif settings.vilab_api_key:

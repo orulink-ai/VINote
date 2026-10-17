@@ -9,6 +9,8 @@ from app.db import init_db
 
 
 def create_app() -> FastAPI:
+    if settings.content_cloud_runtime and not settings.workspace_cloud_runtime:
+        raise ValueError("Cloud content requires the protected workspace cloud runtime")
     from app.routers import auth, feishu, mcp, mcp_connections, model_profiles, note, note_library, preferences, share, stt_profiles, teams, workspace, workspace_attachments
 
     app = FastAPI(
@@ -45,17 +47,25 @@ def create_app() -> FastAPI:
 
     from app.routers import vilab
     app.include_router(feishu.router, prefix="/api")
-    app.include_router(workspace.router, prefix="/api")
-    app.include_router(workspace_attachments.router, prefix="/api")
+    if not settings.content_cloud_runtime:
+        app.include_router(workspace.router, prefix="/api")
+        app.include_router(workspace_attachments.router, prefix="/api")
     app.include_router(mcp_connections.router, prefix="/api")
     from app.routers import first_party_translation
     app.include_router(first_party_translation.router, prefix="/api")
     from app.routers import content_plugins
     app.include_router(content_plugins.router, prefix="/api")
     if settings.workspace_cloud_runtime:
+        if settings.content_cloud_runtime:
+            from app.routers.cloud_content import router as content_router
+            from app.services.cloud_content_identity import ContentCredentialMiddleware
+            app.include_router(content_router, prefix="/api")
+            app.add_middleware(ContentCredentialMiddleware)
         # Shared content servers do not expose the device's upload/capture,
         # local account or public-share APIs. Originals stay on their device.
         return app
+    from app.routers.content_capabilities import router as capabilities_router
+    app.include_router(capabilities_router, prefix="/api")
     app.include_router(vilab.router, prefix="/api")
     app.include_router(auth.router, prefix="/api")
     from app.routers import files

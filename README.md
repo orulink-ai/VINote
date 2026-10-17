@@ -1,5 +1,7 @@
 # VINote
 
+公网内容处理的显式开关、Bearer 鉴权、私有表及能力边界见 [公网内容 runtime](./docs/cloud-content-runtime.md)。默认保持关闭；它不恢复跨设备同步。
+
 [English README](./README.en.md)
 
 VINote 是一个将视频或音频内容转换为结构化 Markdown 笔记的全栈工作台。
