@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { resolveDesktopProfile, publicTracingReceipt } from './desktop-build-profile.mjs'
+import { resolveDesktopProfile, publicTracingReceipt, validateReleaseIntegrationUrl } from './desktop-build-profile.mjs'
 
 const tracing = { LANGFUSE_PUBLIC_KEY: 'pk-test', LANGFUSE_SECRET_KEY: 'sk-test' }
 const input = { env: tracing, version: '0.5.0', buildId: '20260914T180000Z', publicConfig: {
@@ -24,6 +24,39 @@ test('test and release packages use separate identities and fixed deployment ori
 test('review model preference can explicitly reuse the primary model', () => {
   const profile = resolveDesktopProfile({ ...input, env: { ...tracing, MEETING_REVIEW_MODEL: '' } })
   assert.equal(profile.config.MEETING_REVIEW_MODEL, '')
+})
+
+test('release bundles only the fixed VINote integration endpoint without development Feishu secrets', () => {
+  const profile = resolveDesktopProfile({ ...input, env: { ...tracing,
+    VINOTE_INTEGRATION_URL: 'http://127.0.0.1:8900',
+    FEISHU_APP_ID: 'fixture-id', FEISHU_APP_SECRET: 'fixture-secret',
+    FEISHU_TENANT_KEY: 'fixture-tenant', VINOTE_WORKSPACE_URL: 'https://untrusted.invalid',
+    VINOTE_STORAGE_SERVICE_KEY: 'fixture-private',
+  }, publicConfig: { ...input.publicConfig, VINOTE_INTEGRATION_URL: 'https://untrusted.invalid' } })
+  assert.equal(profile.config.VINOTE_INTEGRATION_URL, 'https://supabase-vinote.orulink.ai/vinote-api')
+  for (const key of ['FEISHU_APP_ID', 'FEISHU_APP_SECRET', 'FEISHU_TENANT_KEY', 'VINOTE_WORKSPACE_URL', 'VINOTE_STORAGE_SERVICE_KEY']) {
+    assert.equal(Object.hasOwn(profile.config, key), false)
+  }
+})
+
+test('LAN package does not inherit the new public integration endpoint or an environment override', () => {
+  const profile = resolveDesktopProfile({ ...input, channel: 'test', env: { ...tracing,
+    VINOTE_INTEGRATION_URL: 'https://supabase-vinote.orulink.ai/vinote-api',
+  } })
+  assert.equal(Object.hasOwn(profile.config, 'VINOTE_INTEGRATION_URL'), false)
+  assert.equal(profile.config.VILAB_SERVER_URL, 'http://192.168.1.143:9876')
+})
+
+test('release integration validation rejects alternate origins, credentials, transport and extra routes', () => {
+  const expected = 'https://supabase-vinote.orulink.ai/vinote-api'
+  assert.equal(validateReleaseIntegrationUrl(expected), expected)
+  assert.equal(validateReleaseIntegrationUrl(expected + '/'), expected)
+  for (const value of ['', 'http://127.0.0.1:8900', 'https://api.orulink.ai',
+    'https://untrusted.invalid/vinote-api', expected + '/api', expected + '?key=fixture', expected + '#fragment',
+    'https://user:fixture@supabase-vinote.orulink.ai/vinote-api',
+    'https://supabase-vinote.orulink.ai:8443/vinote-api']) {
+    assert.throws(() => validateReleaseIntegrationUrl(value))
+  }
 })
 
 test('stale URL overrides cannot change the bundled public server or leak credentials', () => {
