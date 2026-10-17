@@ -88,7 +88,8 @@ def request_user(request: Request) -> AuthenticatedUser:
 
 
 def protected_path(path: str) -> bool:
-    return (path in {"/api/generate", "/api/generate_from_upload", "/api/content-service/capabilities"}
+    return (path in {"/api/generate", "/api/generate_from_upload", "/api/content-service/capabilities",
+                     "/api/content-service/video-source"}
             or path.startswith(("/api/task/", "/api/source-requests/")))
 
 
@@ -111,7 +112,7 @@ class ContentCredentialMiddleware:
             if not authorization.startswith("Bearer ") or not 1 <= len(authorization[7:]) <= 8192:
                 raise HTTPException(401, "请使用 VINote Bearer 登录凭证")
             user = await anyio.to_thread.run_sync(lambda: verified_user(authorization[7:],
-                provision=scope["path"] != "/api/content-service/capabilities"))
+                provision=not scope["path"].startswith("/api/content-service/")))
         except HTTPException as error:
             return await JSONResponse({"detail": error.detail}, error.status_code)(scope, receive, send)
         body_limit = (settings.content_upload_max_bytes + 1024 * 1024

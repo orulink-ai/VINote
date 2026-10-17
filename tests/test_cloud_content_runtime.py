@@ -93,7 +93,8 @@ def test_caps_verified_read_only_no_model_or_schema_mutation(runtime):
     result = runtime.client.get("/api/content-service/capabilities", headers=headers())
     assert result.status_code == 200
     assert {k: result.json()[k] for k in ("content_service_protocol", "generation", "sync", "video_url")} == {
-        "content_service_protocol": 1, "generation": True, "sync": False, "video_url": False}
+        "content_service_protocol": 1, "generation": True, "sync": False, "video_url": True}
+    assert result.json()["video_url_platforms"] == ["bilibili"]
     with db.session_scope() as session:
         assert session.scalar(select(func.count()).select_from(identity.ContentIdentityDB)) == 0
     assert runtime.provider_calls == []
@@ -367,3 +368,96 @@ def test_request_budget_prevents_unbounded_json_and_unknown_length_upload(runtim
     monkeypatch.setattr(settings, "content_upload_max_bytes", 1024)
     assert upload(runtime, content=b"x" * 1025).status_code == 413
     assert runtime.provider_calls == []
+
+
+def test_video_preview_is_authenticated_read_only_and_never_dispatches_models(runtime, monkeypatch):
+    from app.services import bilibili_source_service as bili
+    source = SimpleNamespace(canonical_url="https://www.bilibili.com/video/BV1Pyta66EDh/?p=2",
+        title="Offline video", video_id="BV1Pyta66EDh_p2", duration=60,
+        audio_url="https://media.example/secret-signed-path")
+    seen = []
+    monkeypatch.setattr(bili, "resolve", lambda url: (seen.append(url), source)[1])
+    path = "/api/content-service/video-source"
+    assert runtime.client.post(path, json={"url": source.canonical_url}).status_code == 401
+    result = runtime.client.post(path, headers=headers(), json={"url": source.canonical_url})
+    assert result.status_code == 200
+    assert result.json()["video_id"] == source.video_id
+    assert "audio_url" not in result.json() and "signed" not in result.text
+    assert runtime.provider_calls == []
+    assert not list(runtime.root.iterdir())
+    with db.session_scope() as session:
+        assert session.scalar(select(func.count()).select_from(identity.ContentIdentityDB)) == 0
+
+
+def test_video_preview_blocked_is_source_error_without_task_or_model(runtime, monkeypatch):
+    from app.services import bilibili_source_service as bili
+    def blocked(_):
+        raise bili.BilibiliSourceError("VIDEO_SOURCE_BLOCKED")
+    monkeypatch.setattr(bili, "resolve", blocked)
+    result = runtime.client.post("/api/content-service/video-source", headers=headers(),
+        json={"url": "https://www.bilibili.com/video/BV12iFezdEZS/"})
+    assert result.status_code == 503
+    assert result.json()["detail"]["code"] == "VIDEO_SOURCE_BLOCKED"
+    assert "尚未开始转写" in result.json()["detail"]["message"]
+    assert not list(runtime.root.iterdir()) and runtime.provider_calls == []
+
+
+def test_bilibili_download_failure_does_not_call_asr_or_summary_or_requeue(runtime, monkeypatch):
+    from app.routers import cloud_content
+    from app.services import bilibili_source_service as bili
+    monkeypatch.setattr(cloud_content, "_public_target", lambda u: (u, u))
+    seen = []
+    def unavailable(url):
+        seen.append(url)
+        raise ValueError("video unavailable")
+    monkeypatch.setattr(bili, "resolve", unavailable)
+    body = {"video_url": "https://www.bilibili.com/video/BV1Pyta66EDh"}
+    result = runtime.client.post("/api/generate", headers=headers(operation="video-once"), json=body)
+    assert result.status_code == 200
+    task = result.json()["task_id"]
+    read = runtime.client.get("/api/task/" + task, headers=headers())
+    assert read.json()["status"] == "failed"
+    assert read.json()["retryable"] is False
+    assert all(method == "GET" for _, _, method, _ in runtime.provider_calls)
+    count = len(runtime.provider_calls)
+    again = runtime.client.post("/api/generate", headers=headers(operation="video-once"), json=body)
+    assert again.json()["task_id"] == task
+    assert seen == [body["video_url"]] and len(runtime.provider_calls) == count
+
+
+def test_bilibili_download_normalize_pipeline_retains_source_and_repeated_receipt(runtime, monkeypatch):
+    from app.routers import cloud_content
+    from app.services import bilibili_source_service as bili
+    from app.models.transcript import TranscriptResult, TranscriptSegment
+    monkeypatch.setattr(cloud_content, "_public_target", lambda u: (u, u))
+    source = SimpleNamespace(canonical_url="https://www.bilibili.com/video/BV1Pyta66EDh?p=2",
+        title="Offline source part two", video_id="BV1Pyta66EDh_p2", duration=1)
+    downloads, recognized = [], []
+    monkeypatch.setattr(bili, "resolve", lambda _: source)
+    def download(src, target, limit):
+        assert src is source and limit == settings.content_upload_max_bytes
+        downloads.append(target)
+        with wave.open(str(target), "wb") as audio:
+            audio.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+            audio.writeframes(b"\x01\x00" * 16000)
+    monkeypatch.setattr(bili, "download_audio", download)
+    def transcribe(service, context):
+        assert context.source_video_url is None  # No unrestricted screenshot downloader.
+        assert context.audio_meta.platform == "bilibili"
+        assert context.audio_meta.video_id == source.video_id
+        recognized.append(context.task_id)
+        return TranscriptResult("zh", "Offline video words", [TranscriptSegment(0, 1, "Offline video words")])
+    monkeypatch.setattr(worker.VideoContentService, "_transcribe_audio", transcribe)
+    body = {"video_url": source.canonical_url}
+    result = runtime.client.post("/api/generate", headers=headers(operation="video-success"), json=body)
+    assert result.status_code == 200, result.text
+    task = result.json()["task_id"]
+    read = runtime.client.get("/api/task/" + task, headers=headers()).json()
+    assert read["status"] == "success", read
+    assert read["result"]["platform"] == "bilibili" and read["result"]["video_id"] == source.video_id
+    folder = worker.artifacts().find_task_dir(task)
+    assert json.loads((folder / "video_source.json").read_text())["url"] == source.canonical_url
+    assert (folder / "media" / "source.m4a").is_file()
+    count = len(runtime.provider_calls)
+    assert runtime.client.post("/api/generate", headers=headers(operation="video-success"), json=body).json()["task_id"] == task
+    assert len(downloads) == len(recognized) == 1 and len(runtime.provider_calls) == count

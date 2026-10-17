@@ -1,5 +1,6 @@
 """Public jobs reuse the device pipeline, with no stored cloud session."""
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 from fastapi import HTTPException
@@ -19,6 +20,18 @@ from app.transcribers.vilab_transcriber import VILabTranscriber
 class ContentTranscriber(VILabTranscriber):
     def _recognition_bearer(self):
         return content_bearer(self.cloud_user_id)
+
+
+class VideoContentService(NoteService):
+    """Keep source identity without invoking the unrestricted video downloader.
+
+    Only the vetted audio file enters the ordinary pipeline. In particular,
+    source_video_url stays None so screenshot enrichment cannot fetch URLs.
+    """
+    def _build_local_audio_meta(self, **values):
+        meta = super()._build_local_audio_meta(**values)
+        return replace(meta, title=values.get("title") or self.video_source.title,
+                       video_id=self.video_source.video_id, platform="bilibili")
 
 
 def artifacts():
@@ -105,8 +118,9 @@ def run_job(task_id, owner, job):
         snapshot = job["snapshot"]
         transcriber = (ContentTranscriber(settings.vilab_server_url, "",
                        model=snapshot["asr_model"], cloud_user_id=owner)
-                       if job["kind"] == "media" else None)
-        service = NoteService(artifact_service=storage,
+                       if job["kind"] in {"media", "video_url"} else None)
+        service_class = VideoContentService if job["kind"] == "video_url" else NoteService
+        service = service_class(artifact_service=storage,
                               transcription_service=TranscriptionService(transcriber=transcriber))
         if job["kind"] == "document":
             run_source_job(service, task_id, job["source_job"], owner)
@@ -114,17 +128,38 @@ def run_job(task_id, owner, job):
             service.generate_from_transcript(task_id=task_id, user_id=owner,
                 transcript=job["transcript"], **job["generation"])
         else:
+            if job["kind"] == "video_url":
+                from app.services.bilibili_source_service import resolve, download_audio
+                storage.update_status(folder, "downloading", "正在读取 B 站视频…", retryable=False)
+                source = resolve(job["video_url"])
+                media = folder / "media"
+                media.mkdir(exist_ok=True)
+                original = media / "source.m4a"
+                download_audio(source, original, settings.content_upload_max_bytes)
+                # Do not persist signed CDN URLs or forward account credentials.
+                storage.write_json(folder / "video_source.json", {
+                    "url": source.canonical_url, "platform": "bilibili",
+                    "video_id": source.video_id, "title": source.title,
+                    "duration": source.duration})
+                service.video_source = source
+                job = {**job, "path": str(original), "generation": {
+                    **job["generation"], "title": job["generation"].get("title") or source.title}}
             target = folder / "media" / "normalized.wav"
             normalize_media(Path(job["path"]), target)
             req = LocalFileRequest(file_path=str(target), **job["generation"])
             storage.write_json(folder / "request.json", {"request": req.model_dump(), "trace": None})
             service.generate_from_file(task_id=task_id, user_id=owner, **req.model_dump(exclude={"workflow"}))
-    except Exception:
+    except Exception as error:
         # Do not serialize exceptions, tokens or downstream URLs in public jobs.
         current = storage.find_task_dir(task_id) or folder
         if current:
             state = storage.get_status(task_id)
             from app.services.task_failure import recovery_status
             safe = recovery_status(state)
+            from app.services.bilibili_source_service import BilibiliSourceError
+            if isinstance(error, BilibiliSourceError):
+                storage.update_status(current, "failed", str(error), retryable=False,
+                                      failed_stage="downloading", error_code=error.code)
+                return
             storage.update_status(current, "failed", "处理未完成，已有资料与原提交已保留，请核验原任务",
                                   retryable=False, **{key: safe[key] for key in ("error_code", "failed_stage") if key in safe})

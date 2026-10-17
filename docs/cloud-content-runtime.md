@@ -39,14 +39,19 @@
 | 端点 | 行为 |
 | --- | --- |
 | GET `/api/content-service/capabilities` | 验证 Bearer；返回协议和能力，不创建身份映射/任务，不查询模型 |
-| POST `/api/generate` | 仅普通公开网页/公开文档，复用逐跳解析并绑定公网 IP 的提取器 |
+| POST `/api/generate` | 公开网页/文档及 B 站 BV、av、b23 视频链接；模型快照与提交回执冻结后处理 |
+| POST `/api/content-service/video-source` | 只读 B 站元数据预检，不创建任务/身份映射、不查询或调用模型，不返回签名 CDN 地址 |
 | POST `/api/generate_from_upload` | 有界文档、逐字稿和媒体上传；禁止客户端服务地址、临时密钥、本机路径/文件 ID |
 | GET `/api/source-requests/{operation_id}` | 只读当前 owner 的 durable 原提交 |
 | GET `/api/task/{task_id}` | 严格归属后读取状态/结果；缺失 owner marker、标记不符或链接文件均失败关闭 |
 
 协议包含 `content_service_protocol:1`、`generation:true`、`sync:false`、`max_upload_bytes`。预检仍需真实 Bearer，只说明身份和本机配置能力，不表示模型或 ASR 已验收。
 
-**公网视频 URL 本轮暂未开放，`video_url:false`。** 客户端必须在粘贴链接的提交前提示能力限制；不能只在开始处理后显示错误。yt-dlp/curl/ffmpeg 的多级重定向、CDN 和子进程下载需要独立出口隔离；仅入口域名白名单不足以防止内部地址访问。本轮不添加假出口保证开关。可提交设备已有媒体；媒体固定 demuxer、只允许 file/pipe 协议规范化为 WAV，MOV 禁止外部 data reference，限制时长/体积对应资源消耗，不允许偷偷截断后继续转写。支持的容器为 WAV、MP3、MP4/M4A、WebM、FLAC、Ogg；其他格式可能需先转换。
+**公网视频链接按平台声明能力**：`video_url:true`、`video_url_platforms:["bilibili"]` 仅表示支持 B 站专用协议，不保证当前网络可访问平台；其他视频平台仍拒绝。B 站入口先校验 HTTPS、严格域名、BV/av/分 P 或 b23 短链。`bilibili_source_service.py` 只访问固定公开 API 和允许的音频 CDN；每次跳转重新校验域名及全部 DNS 结果，TCP 绑定已验证公网 IP，保留原 Host/SNI 与 TLS 校验，禁止环境代理、Cookie 和账号凭证转发。流式下载有字节与时间预算，临时文件完整校验后才提交，不覆盖已有文件。不会回退通用 yt-dlp/curl 或联网 FFmpeg。
+
+视频处理依次解析来源、下载 AAC 音轨、规范化音频、冻结模型下转写与总结、保存结果。保留 BV/分 P、原链接与标题；下载签名不持久化。原媒体来自 DASH 音轨，不需要为纯文字总结下载完整画面。公网暂不启用视频截图富化，避免通用下载器形成第二条不受控网络出口。模型阶段只在真实媒体完整准备后发生；失败不换模型、不重放任务。401/403/412/429 返回固定安全的来源受限提示，不误报为 ASR 失败。
+
+媒体固定 demuxer、只允许 file/pipe 协议规范化为 WAV，MOV 禁止外部 data reference。规范化仍受资源限制，不能偷偷截断后继续转写。支持 WAV、MP3、MP4/M4A、WebM、FLAC、Ogg。客户端可直接导入已有媒体；公网能力不是同步功能。
 
 普通设备模式提供相同 capabilities 路径，使用现有 generation 鉴权；`video_url:true`，2 GiB 产品选择上限，文档 20 MiB。其设备生成行为不因公网模式而改变。
 

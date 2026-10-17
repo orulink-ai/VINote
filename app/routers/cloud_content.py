@@ -97,8 +97,10 @@ def capabilities(response: Response, user=Depends(request_user)):
     return {"content_service_protocol": 1, "generation": True, "sync": False,
             "protocol": 1, "enabled": True, "bearer_required": True,
             "operation_receipts": 1, "task_owner_required": True,
-            "sources": ["public_webpage", "document", "transcript", "audio", "video_upload"],
-            "video_url": False, "video_url_reason": "DOWNLOAD_EGRESS_NOT_ENFORCED",
+            "sources": ["public_webpage", "document", "transcript", "audio", "video_upload", "bilibili"],
+            "video_url": True, "video_url_platforms": ["bilibili"],
+            "video_source_preflight": 1,
+            "video_url_reason": "OTHER_VIDEO_PLATFORMS_NOT_SUPPORTED",
             "max_upload_bytes": settings.content_upload_max_bytes,
             "models_configured": bool(settings.vilab_server_url),
             "diarization_available": bool(SpeakerDiarizationService.readiness()["available"])}
@@ -112,7 +114,30 @@ def generation_options(options):
             "model_name": None, "api_key": None, "base_url": None}
 
 
-def submit(request, user, source, options, background, *, upload=None, source_job=None):
+class VideoSourceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    url: str = Field(min_length=1, max_length=8192)
+
+
+@router.post("/content-service/video-source")
+def video_source(body: VideoSourceRequest, response: Response, user=Depends(request_user)):
+    """Read source metadata only; no task, model selection or inference."""
+    from app.services.bilibili_source_service import resolve, BilibiliSourceError
+    response.headers["Cache-Control"] = "no-store"
+    try:
+        source = resolve(body.url)
+    except BilibiliSourceError as error:
+        status_code = 422 if error.code == "VIDEO_SOURCE_INVALID" else 503
+        raise HTTPException(status_code, {"code": error.code, "message": str(error)}) from None
+    except ValueError as error:
+        raise HTTPException(422, "请检查 B 站视频链接与分 P 编号") from None
+    except (httpx.HTTPError, OSError):
+        raise HTTPException(502, "暂时无法读取视频，请稍后重试") from None
+    return {"platform": "bilibili", "url": source.canonical_url,
+            "title": source.title, "video_id": source.video_id, "duration": source.duration}
+
+
+def submit(request, user, source, options, background, *, upload=None, source_job=None, video_url=None):
     receipts = SourceRequestService()
     claim = receipts.reserve(user.user_id, operation(request), SourceSubmission(
         source=source, options=options.model_dump(exclude_none=True)))
@@ -133,7 +158,12 @@ def submit(request, user, source, options, background, *, upload=None, source_jo
     from app.services.note_origin_service import record_origin
     record_origin(folder, request.headers.get("X-VINote-Client", ""))
     job = {"snapshot": snapshot, "generation": generation_options(options)}
-    if source_job is not None:
+    if video_url is not None:
+        job.update(kind="video_url", video_url=video_url)
+        job["generation"].update(diarize=options.diarize, speaker_count=options.speaker_count,
+                                 workflow=options.workflow)
+        storage.write_json(folder / "video_source.json", {"url": video_url, "platform": "bilibili"})
+    elif source_job is not None:
         job.update(kind="document", source_job=source_job)
         storage.write_json(folder / "source_job.json", source_job)
     elif options.source_type == "document":
@@ -177,13 +207,19 @@ async def generate(request: Request, background: BackgroundTasks, user=Depends(r
         platform = payload.pop("platform", "auto")
         if platform != "auto" or not isinstance(url, str) or len(url) > 8192:
             raise ValueError()
-        options = options_from({**payload, "source_type": "document"})
         parsed = httpx.URL(url)
         if (parsed.scheme not in {"http", "https"} or not parsed.host
                 or parsed.username or parsed.password):
             raise ValueError()
-        if not is_document_url(url):
-            raise HTTPException(503, "公网视频链接处理尚未开放，请导入设备上的原媒体文件")
+        from app.services.bilibili_source_service import is_bilibili_url, validate_input
+        video = is_bilibili_url(url)
+        if video:
+            # Validate syntax before reserving an operation or querying models;
+            # retain the submitted URL in its immutable receipt fingerprint.
+            validate_input(url)
+        options = options_from({**payload, "source_type": "video" if video else "document"})
+        if not video and not is_document_url(url):
+            raise HTTPException(503, "目前支持 B 站视频及公开网页；其他视频请导入原文件")
         # Numeric/private targets fail before model preparation; each actual
         # extraction hop resolves and pins again via the existing safe fetcher.
         import anyio
@@ -193,7 +229,9 @@ async def generate(request: Request, background: BackgroundTasks, user=Depends(r
     source_job = {"url": url, "options": {k: v for k, v in generation_options(options).items() if k != "title"}}
     import anyio
     return await anyio.to_thread.run_sync(lambda: submit(request, user, SourceInput(kind="url", url=url),
-                                                        options, background, source_job=source_job))
+                                                        options, background,
+                                                        source_job=None if video else source_job,
+                                                        video_url=url if video else None))
 
 
 @router.post("/generate_from_upload")
