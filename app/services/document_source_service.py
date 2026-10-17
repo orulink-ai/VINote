@@ -41,7 +41,9 @@ def _public_target(url):
         addresses = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
     except OSError:
         raise ValueError("找不到这个网站，请检查链接或网络后重试") from None
-    if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
+    resolved = [ipaddress.ip_address(item[4][0]) for item in addresses]
+    if not resolved or any(not address.is_global or address.is_multicast or address.is_reserved
+                           or (address.version == 6 and address.is_site_local) for address in resolved):
         raise ValueError("不支持本机、内网或保留地址，请使用公开网页")
     return parsed, parsed.copy_with(host=str(ipaddress.ip_address(addresses[0][4][0])))
 
@@ -95,8 +97,14 @@ def document_text(filename, data):
     return text
 
 
-def webpage_text(url):
+def webpage_text(url, *, reject_media=False, include_source_type=False):
+    def extracted(title, text, kind):
+        return (title, text, kind) if include_source_type else (title, text)
+
     for _ in range(6):
+        if reject_media and (not is_document_url(url) or Path(urlparse(url).path).suffix.lower() in {
+                '.wav', '.aac', '.flac', '.ogg', '.opus', '.mkv', '.avi', '.m4v', '.mpd', '.ts'}):
+            raise ValueError('视频链接不属于文字提取，请在设备读取音轨')
         original, target = _public_target(url)
         # Isolate each hop: different domains may share the pinned IP, but must
         # never share a preceding domain's TLS connection or IP-keyed cookies.
@@ -120,9 +128,9 @@ def webpage_text(url):
                             raise ValueError("网页或文档超过 20 MB，请下载并分段导入")
                     kind = response.headers.get("content-type", "").lower()
                     if "application/pdf" in kind or urlparse(url).path.lower().endswith(".pdf"):
-                        return "PDF 文档", document_text("source.pdf", bytes(data))
+                        return extracted("PDF 文档", document_text("source.pdf", bytes(data)), 'document')
                     if "wordprocessingml" in kind or urlparse(url).path.lower().endswith(".docx"):
-                        return "Word 文档", document_text("source.docx", bytes(data))
+                        return extracted("Word 文档", document_text("source.docx", bytes(data)), 'document')
                     if "html" not in kind:
                         raise ValueError("这个链接不是可读取的网页、PDF 或 Word 文档")
                     from bs4 import BeautifulSoup
@@ -136,7 +144,7 @@ def webpage_text(url):
                         raise ValueError("网页未提供可读取正文，可能依赖登录或动态加载；请导出文件再导入")
                     if len(text) > MAX_TEXT:
                         raise ValueError("网页正文过长，请分段保存后导入")
-                    return title[:200], text
+                    return extracted(title[:200], text, 'webpage')
             except httpx.RequestError:
                 raise ValueError("网页读取超时或连接失败，请检查网络后重试") from None
     raise ValueError("网页跳转过多，请复制最终页面链接")

@@ -89,7 +89,8 @@ def request_user(request: Request) -> AuthenticatedUser:
 
 def protected_path(path: str) -> bool:
     return (path in {"/api/generate", "/api/generate_from_upload", "/api/content-service/capabilities",
-                     "/api/content-service/video-source"}
+                     "/api/content-service/video-source", "/api/content-service/extract-url",
+                     "/api/content-service/extract-file"}
             or path.startswith(("/api/task/", "/api/source-requests/")))
 
 
@@ -123,7 +124,8 @@ class ContentCredentialMiddleware:
                 raise ValueError()
         except ValueError:
             return await JSONResponse({"detail": "请求内容超过服务限制"}, 413)(scope, receive, send)
-        writing = scope["method"] == "POST"
+        writing = scope["method"] == "POST" and scope["path"] not in {
+            '/api/content-service/extract-url', '/api/content-service/extract-file'}
         acquired = False
         if writing:
             acquired = _submission_slot.acquire(blocking=False)
