@@ -44,7 +44,7 @@ yarn client:test
 
 包内保存服务 Origin、Supabase publishable 配置，以及按用户要求固定接入的 Langfuse 项目配置。Langfuse 凭据由构建环境注入后端资源，可被安装包持有人提取，不进入 Git、前端或日志。不保存开发 `.env`、个人会话、模型 API key、JWT 密钥或会议音频。每个安装身份独立初始化本地密钥。
 
-公网 Release 还在 `desktop-config.json` 固定写入 `VINOTE_INTEGRATION_URL`，供冻结后端的 `settings.feishu_service_url` 使用；它是 VINote 集成服务，与 VILab 模型服务分别配置。地址仅接受源码指定的 HTTPS 集成端点，不接受开发 `.env`、终端或公开账号配置的同名覆盖，也不打包飞书 App Secret、租户凭据或存储服务密钥。冻结后端启动时优先应用包内值，因此正式包不依赖开发目录的 `.env` 才能发现飞书服务。此补丁只针对公网 Release，LAN/test 未新增公网集成地址，LAN 集成方案需独立确认。
+公网 Release 和内网 Test 都在 `desktop-config.json` 固定写入 `VINOTE_INTEGRATION_URL`，供冻结后端的 `settings.feishu_service_url` 使用；它是 VINote 集成服务，与 VILab 模型服务分别配置。地址仅接受源码指定的 HTTPS 集成端点，不接受开发 `.env`、终端或公开账号配置的同名覆盖，也不打包飞书 App Secret、租户凭据或存储服务密钥。冻结后端启动时优先应用包内值，因此正式包不依赖开发目录的 `.env` 才能发现飞书服务。两通道复用同一套公网账号与飞书集成服务；只有 VILab 模型连接按渠道分别固定为 LAN 或公网，忽略相反渠道地址覆盖，不互相回退。共享账号/集成不代表将 LAN 模型请求发往公网，也不把笔记或原件改为跨设备同步。此合同覆盖之前“全部服务内网化”的描述。
 
 2026-10-17 的 0.3.3 首轮构建缺少该配置，已生成的旧安装包不会因源码修复而变化，发布前须从修复提交重新打包。profile 与冻结后端配置的离线回归不等于正式包飞书授权、发布或通知实际成功；本次修复未重跑构建或任何 ASR/LLM。
 

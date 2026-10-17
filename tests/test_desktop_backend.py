@@ -30,15 +30,15 @@ def test_backend_exits_when_desktop_is_force_closed():
             process.wait(timeout=5)
 
 
-@pytest.mark.parametrize('integration_url', [None, 'https://supabase-vinote.orulink.ai/vinote-api'])
-def test_packaged_config_keeps_user_secrets_and_data_outside_bundle(tmp_path, monkeypatch, integration_url):
+@pytest.mark.parametrize('model_origin', ['http://192.168.1.143:9876', 'https://api.orulink.ai'])
+def test_packaged_config_keeps_user_secrets_and_data_outside_bundle(tmp_path, monkeypatch, model_origin):
     entry = Path(__file__).resolve().parents[1] / 'scripts' / 'desktop_backend.py'
     spec = importlib.util.spec_from_file_location('desktop_entry', entry)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     bundle = tmp_path / 'bundle'
     bundle.mkdir()
-    model_origin = 'https://api.orulink.ai' if integration_url else 'http://192.168.1.143:9876'
+    integration_url = 'https://supabase-vinote.orulink.ai/vinote-api'
     config = {
         'VILAB_SERVER_URL': model_origin,
         'VINOTE_SUPABASE_URL': 'https://example.supabase.co',

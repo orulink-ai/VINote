@@ -1,15 +1,15 @@
 import { createHash } from 'node:crypto'
 import { serviceOrigin } from './service-environments.mjs'
 
-const releaseIntegrationUrl = 'https://supabase-vinote.orulink.ai/vinote-api'
+const desktopIntegrationUrl = 'https://supabase-vinote.orulink.ai/vinote-api'
 
-export function validateReleaseIntegrationUrl(value) {
+export function validateDesktopIntegrationUrl(value) {
   const url = new URL(value)
   if (url.protocol !== 'https:' || url.username || url.password || url.search || url.hash
-      || ![releaseIntegrationUrl, releaseIntegrationUrl + '/'].includes(value)) {
-    throw new Error('Desktop release requires the fixed public VINote integration endpoint')
+      || ![desktopIntegrationUrl, desktopIntegrationUrl + '/'].includes(value)) {
+    throw new Error('Desktop packages require the fixed shared VINote integration endpoint')
   }
-  return releaseIntegrationUrl
+  return desktopIntegrationUrl
 }
 
 export function resolveDesktopProfile({ channel = 'release', version, env = {}, publicConfig, buildId }) {
@@ -24,7 +24,7 @@ export function resolveDesktopProfile({ channel = 'release', version, env = {}, 
   }
   const config = {
     VILAB_SERVER_URL: url.origin,
-    ...(!test ? { VINOTE_INTEGRATION_URL: validateReleaseIntegrationUrl(releaseIntegrationUrl) } : {}),
+    VINOTE_INTEGRATION_URL: validateDesktopIntegrationUrl(desktopIntegrationUrl),
     VINOTE_SUPABASE_URL: env.VINOTE_SUPABASE_URL || publicConfig.VINOTE_SUPABASE_URL,
     VINOTE_SUPABASE_PUBLISHABLE_KEY: env.VINOTE_SUPABASE_PUBLISHABLE_KEY || publicConfig.VINOTE_SUPABASE_PUBLISHABLE_KEY,
     LANGFUSE_RELEASE: test ? `${version}-test` : version,
