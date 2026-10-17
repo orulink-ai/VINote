@@ -1,5 +1,7 @@
 # 2026-10-13 产品 / UX 闭环审查
 
+> 本页为历史审查记录。仓库源码位置以路径标注，不作为文档站页面链接；历史行号可能随修改变化。
+
 最新结论（2026-10-14 约 00:00 后）：尚不能判定整条链路验收通过。G1 原录制详情、保存提示和 Dock 已完成前端确认入口集成；另旧 50 分钟任务的 NoteGenerator 409 确认 Sheet 已由主线程实际 native 核对原 Aliyun/Luna 一致并点击恢复。该任务正在 ASR、speaker 已缓存，未完成全文、总结或新纪要保存。用户报告 Desktop 340 秒采集样本导入生成链通过，不替代完整四样本。下方新增联合验收表优先于初次审查的历史状态；其他 G 项仍按各自证据更新，不赋予虚构评分。
 
 ## 范围与证据规则
@@ -13,7 +15,7 @@
 
 ## 采用的计划与源码
 
-产品依据：[根规则](../../AGENTS.md)、[App 规则](../../VINote-app/AGENTS.md)、[最终导航与返回契约](../plans/2026-10-11-workspace-v3/navigation-final.md)、[流式 ASR 计划及更新](../plans/2026-10-13-adaptive-asr.md)、[飞书 API 契约](../feishu-api-contract.md)。同时核对根 / App 开发档案规范与模板。
+产品依据：根规则（源码位置：`AGENTS.md`）、App 规则（源码位置：`VINote-app/AGENTS.md`）、[最终导航与返回契约](../plans/2026-10-11-workspace-v3/navigation-final.md)、[流式 ASR 计划及更新](../plans/2026-10-13-adaptive-asr.md)、[飞书 API 契约](../feishu-api-contract.md)。同时核对根 / App 开发档案规范与模板。
 
 桌面阅读：`pages/Meetings.tsx`、`MeetingCaptureWorkspace.tsx`、`MeetingRecorderDock.tsx`、`MeetingWorkbench.tsx`、`LocalRecordingPreview.tsx`、`lib/meetingProcessing.ts`、`pages/NoteEditor.tsx`、`Notes/FeishuDelivery.tsx`、`pages/FeishuSettings.tsx`、`Settings/FeishuDestinationPicker.tsx`。
 

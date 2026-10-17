@@ -86,3 +86,7 @@
 ### 文档构建补充
 
 使用已有 docs 依赖 junction、Node 384MB 和离线守卫执行 VitePress。脱敏设备文案改为普通文字，旧记录 Option 类型使用行内代码，Vue 解析错误已消除；后续构建仍失败于 29 个死链（含既有本机源码绝对路径、跨目录引用）。没有修改 ignoreDeadLinks 或排除 reviews；此轮不宣称完整 yarn verify 通过。Tauri/Rust 原生构建未运行，按授权由后续发布流程处理。产品代码测试不重复运行。
+
+### 文档构建结论更正
+
+主线程在候选四份历史文档中修复全部 29 个死链：保留源码和证据路径，改为历史路径标注并说明行号可能变化；保留文档站真实页面链接。未全局 ignoreDeadLinks、未排除 reviews、未创建空证据文件。Node 384MB 完整 VitePress 构建成功，原日志 data/docs-build-repaired.log，5.97s。核对时恢复区间标记 `[1,3)` 并去掉一处转换遗留的孤立左方括号，最终候选另行完整 docs 构建复验成功，5.78s，日志 data/docs-build-repaired-final.log。此前“docs 构建缺项”结论已由此次通过取代；产品源码无变化，既有完整 pytest/Vitest/tsc/Vite 结果继续有效，不重复运行。各分项检查通过不等于实际执行完整 yarn verify；Tauri/Rust 原生构建仍按本轮范围未运行。

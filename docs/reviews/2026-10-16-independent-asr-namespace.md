@@ -1,5 +1,7 @@
 # 独立 operation 转写命名空间：源码与离线证据
 
+> 本页为历史审查记录。仓库源码位置以路径标注，不作为文档站页面链接；历史行号可能随修改变化。
+
 2026-10-16，Windows，根仓库本地修改。未提交、未部署；零云调用、未操作手机。用户提供的 public health/部署状态不作为本实现的 provider 验收证据。
 
 ## 授权与执行
@@ -49,4 +51,4 @@
 | copy_context 正常/异常退出/延迟 context | 运行中绑定一致；退出后复用旧 context 被拒绝 |
 | 同原件但不同 normalized WAV | 不导入错误前缀 |
 
-完整 child cache 收尾追加 **4 个参数化用例**；Red 2 failed / 2 passed，修复后同一 16 模块 union 为 **292 passed，17 subtests passed，5 既有 warnings，20.21 秒，exit0**（此前 288 passed）。warnings 为 Starlette 弃用和 4 个 legacy empty-speech 用例中的 SQLAlchemy NULL primary-key 提示。包括 unknown 后更换 normalized WAV 的 namespace 逃逸反例。改动 Python 文件的 py_compile、目标 tracked diff 的空白检查通过。回归命令及过程记录于 [开发档案](../../documents/dev_log/2026-10-16/2026-10-16_153737_wugui_无Issue_独立转写命名空间/index.md)；只说明离线源码行为，实际 provider acceptance 仍未通过。
+完整 child cache 收尾追加 **4 个参数化用例**；Red 2 failed / 2 passed，修复后同一 16 模块 union 为 **292 passed，17 subtests passed，5 既有 warnings，20.21 秒，exit0**（此前 288 passed）。warnings 为 Starlette 弃用和 4 个 legacy empty-speech 用例中的 SQLAlchemy NULL primary-key 提示。包括 unknown 后更换 normalized WAV 的 namespace 逃逸反例。改动 Python 文件的 py_compile、目标 tracked diff 的空白检查通过。回归命令及过程记录于 开发档案（源码位置：`documents/dev_log/2026-10-16/2026-10-16_153737_wugui_无Issue_独立转写命名空间/index.md`）；只说明离线源码行为，实际 provider acceptance 仍未通过。
