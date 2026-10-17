@@ -18,7 +18,7 @@ hero:
 
 features:
   - title: Workflow-first
-    details: "Start from the real flow: sign in, submit a source, poll a task, save notes, and continue editing."
+    details: "Start from the real flow: sign in, submit a URL or upload local media/transcripts, poll a task, save notes, and continue editing."
   - title: No duplicated API tables
     details: "This site explains usage. Swagger and ReDoc remain the authoritative schema and try-it-out reference."
   - title: Integration-ready
@@ -30,7 +30,7 @@ features:
 Use this docs site for:
 
 - what VINote is for
-- how user workflows behave
+- how URL, local upload, and transcript-first workflows behave
 - how authentication works
 - how route groups map to workflows
 - how MCP and deployment fit in

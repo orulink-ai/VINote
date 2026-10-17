@@ -16,6 +16,7 @@ COPY docker/nginx.conf /etc/nginx/conf.d/default.conf
 COPY docker/40-runtime-config.sh /docker-entrypoint.d/40-runtime-config.sh
 COPY --from=build /frontend/dist /usr/share/nginx/html
 
-RUN chmod +x /docker-entrypoint.d/40-runtime-config.sh
+RUN sed -i 's/\r$//' /docker-entrypoint.d/40-runtime-config.sh \
+    && chmod +x /docker-entrypoint.d/40-runtime-config.sh
 
 EXPOSE 80

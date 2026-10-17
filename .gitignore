@@ -18,6 +18,7 @@ env/
 # IDE
 .idea/
 .vscode/
+.codex/
 .claude/
 *.swp
 *.swo
@@ -28,6 +29,8 @@ nul
 frontend/.env
 frontend/.env.local
 frontend/.env.*.local
+frontend/src-tauri/target/
+frontend/src-tauri/gen/schemas/windows-schema.json
 node_modules/
 docs/.vitepress/cache/
 docs/.vitepress/dist/
@@ -52,3 +55,6 @@ output/
 
 # Local deployment config
 deploy/pi/local.env
+.desktop-build/
+# Server-only shared service configuration
+deploy/workspace/cloud.env

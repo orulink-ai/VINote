@@ -1,9 +1,15 @@
-import { useEffect, useState } from 'react'
+import { Button } from '../ui/button'
+import { Input } from '../ui/input'
+import { NativeSelect } from '../ui/native-select'
+import { SavedApiKey } from './SavedApiKey'
+import { useEffect, useRef, useState } from 'react'
 import clsx from 'clsx'
 import { Plus, RotateCcw, Trash2, Wifi } from 'lucide-react'
 import { useI18n } from '../../lib/i18n'
 import { type ModelProfile, type ModelProfileDraft, type ProviderType } from '../../lib/modelProfiles'
 import { useModelProfileStore } from '../../stores/modelProfileStore'
+import { Badge } from '../ui/badge'
+import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '../ui/empty'
 
 const providerOptions: Array<{
   value: ProviderType
@@ -40,6 +46,7 @@ const profileToDraft = (profile: ModelProfile): ModelProfileDraft => ({
 export function ModelProfileManager() {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draft, setDraft] = useState<ModelProfileDraft>(makeDraft)
+  const formRef = useRef<HTMLFormElement>(null)
   const { copy } = useI18n()
 
   const {
@@ -48,6 +55,8 @@ export function ModelProfileManager() {
     saving,
     error,
     lastTestResult,
+    profileTestResults,
+    testingProfileIds,
     loadProfiles,
     createProfile,
     updateProfile,
@@ -66,9 +75,56 @@ export function ModelProfileManager() {
     setDraft(makeDraft())
   }
 
+  const editingProfile = editingId ? profiles.find((profile) => profile.id === editingId) : null
+  const editingDefaultProfile = Boolean(editingProfile?.isDefault)
+
   const startEdit = (profile: ModelProfile) => {
     setEditingId(profile.id)
     setDraft(profileToDraft(profile))
+  }
+
+  const readFormDraft = (): ModelProfileDraft => {
+    const form = formRef.current
+    if (!form) {
+      return draft
+    }
+
+    const formData = new FormData(form)
+    const field = (name: string, fallback: string) => {
+      const value = formData.get(name)
+      return typeof value === 'string' ? value : fallback
+    }
+
+    return {
+      name: field('name', draft.name),
+      provider: field('provider', draft.provider) as ProviderType,
+      baseUrl: field('baseUrl', draft.baseUrl),
+      modelName: field('modelName', draft.modelName),
+      apiKey: field('apiKey', draft.apiKey),
+      isDefault: editingDefaultProfile || formData.has('isDefault'),
+      isActive: formData.has('isActive'),
+    }
+  }
+
+  const handleSavedProfileTest = async (profile: ModelProfile) => {
+    startEdit(profile)
+    await testProfile(profile.id)
+  }
+
+  const handleSetDefaultProfile = async (profile: ModelProfile) => {
+    await setDefaultProfile(profile.id)
+    if (editingId === profile.id) {
+      setDraft((current) => ({ ...current, isDefault: true }))
+    }
+  }
+
+  const formatConnectionResult = (result: typeof lastTestResult) => {
+    if (!result) {
+      return ''
+    }
+    return result.ok
+      ? copy.modelProfiles.connectionSucceeded(result.latencyMs)
+      : copy.modelProfiles.connectionFailed(result.errorMessage || copy.modelProfiles.unknownError)
   }
 
   const handleProviderChange = (provider: ProviderType) => {
@@ -85,201 +141,245 @@ export function ModelProfileManager() {
   }
 
   const handleSave = async () => {
+    if (!formRef.current?.reportValidity()) {
+      return
+    }
+
+    const formDraft = readFormDraft()
     if (editingId) {
-      await updateProfile(editingId, draft)
+      await updateProfile(editingId, formDraft)
     } else {
-      await createProfile(draft)
+      await createProfile(formDraft)
     }
     resetForm()
   }
 
   const handleTest = async () => {
-    if (editingId && !draft.apiKey.trim()) {
+    const formDraft = readFormDraft()
+    if (editingId && !formDraft.apiKey.trim()) {
       await testProfile(editingId)
       return
     }
-    await testDraft(draft)
+    await testDraft(formDraft)
   }
 
   return (
-    <div className="space-y-6">
-      <div className="grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
-        <section className="space-y-4">
-          <div className="flex items-center justify-between">
+    <section className="py-2">
+      <div className="grid gap-6 lg:grid-cols-[minmax(280px,0.8fr)_minmax(420px,1.2fr)]">
+        <div className="min-w-0 border-t py-5">
+          <div className="flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <h3 className="text-lg font-semibold">{copy.modelProfiles.title}</h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                {copy.modelProfiles.body}
-              </p>
+              <div className="flex items-center gap-3">
+                <h3 className="text-xl font-semibold">{copy.modelProfiles.title}</h3>
+                <Badge variant="secondary">{profiles.length}</Badge>
+              </div>
+              <p className="mt-2 max-w-2xl text-sm leading-6 text-muted-foreground dark:text-muted-foreground">{copy.modelProfiles.body}</p>
             </div>
-            <button
+            <Button
               onClick={resetForm}
-              className="inline-flex items-center gap-2 px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
+              variant="outline" className="self-start"
             >
               <Plus className="w-4 h-4" />
               {copy.modelProfiles.newProfile}
-            </button>
+            </Button>
           </div>
 
           {loading ? (
-            <div className="p-4 rounded-xl border border-gray-200 dark:border-gray-700">{copy.modelProfiles.loading}</div>
+            <div className="border-b py-5 text-sm text-muted-foreground">{copy.modelProfiles.loading}</div>
           ) : profiles.length === 0 ? (
-            <div className="p-4 rounded-xl border border-dashed border-gray-200 dark:border-gray-700 text-sm text-gray-500 dark:text-gray-400">
-              {copy.modelProfiles.empty}
-            </div>
+            <Empty className="border border-dashed"><EmptyHeader><EmptyTitle>{copy.modelProfiles.empty}</EmptyTitle><EmptyDescription>{copy.modelProfiles.body}</EmptyDescription></EmptyHeader></Empty>
           ) : (
-            <div className="space-y-3">
-              {profiles.map((profile) => (
+            <div className="stealth-scroll mt-4 grid max-h-[620px] gap-3 overflow-y-auto pr-1">
+              {profiles.filter(profile => profile.id !== 'vilab-cloud').map((profile) => {
+                const profileResult = profileTestResults?.[profile.id]
+                const isTestingProfile = testingProfileIds?.includes(profile.id)
+                return (
                 <div
                   key={profile.id}
-                  className="p-4 rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#202020]"
+                  data-profile-id={profile.id}
+                  className={clsx('rounded-md border p-4 transition-colors hover:bg-muted/35', editingId === profile.id && 'border-foreground/30 bg-muted/45')}
                 >
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
+                  <div className="grid gap-4">
+                    <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="min-w-0 flex-1">
                       <div className="flex items-center gap-2 flex-wrap">
                         <h4 className="font-medium">{profile.name}</h4>
                         {profile.isDefault && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-primary-light/10 text-primary-light dark:bg-primary-dark/10 dark:text-primary-dark">
-                            {copy.modelProfiles.default}
-                          </span>
+                          <Badge>{copy.modelProfiles.default}</Badge>
                         )}
                         {!profile.isActive && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-gray-200 text-gray-600 dark:bg-gray-700 dark:text-gray-300">
-                            {copy.modelProfiles.inactive}
-                          </span>
+                          <Badge variant="outline">{copy.modelProfiles.inactive}</Badge>
                         )}
                       </div>
-                      <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
+                      <p className="text-sm text-muted-foreground dark:text-muted-foreground mt-1">
                         {profile.provider} / {profile.modelName}
                       </p>
-                      <p className="text-xs text-gray-400 mt-1 break-all">{profile.baseUrl}</p>
-                      <p className="text-xs text-gray-400 mt-1">{copy.modelProfiles.keyPrefix} {profile.apiKeyHint}</p>
+                      <p className="mt-2 break-all text-xs leading-5 text-muted-foreground">{profile.baseUrl}</p>
+                      <SavedApiKey key={profile.updatedAt} kind="model" profileId={profile.id} hint={profile.apiKeyHint} />
+                      {(isTestingProfile || profileResult) && (
+                        <p
+                          className={clsx(
+                            'mt-3 inline-flex rounded-full px-2.5 py-1 text-xs font-medium',
+                            isTestingProfile
+                              ? 'bg-blue-50 text-blue-700 dark:bg-blue-900/20 dark:text-blue-300'
+                              : profileResult?.ok
+                                ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-300'
+                                : 'bg-destructive/10 text-destructive dark:bg-red-900/20 dark:text-red-300'
+                          )}
+                        >
+                          {isTestingProfile ? '测试中...' : formatConnectionResult(profileResult)}
+                        </p>
+                      )}
                     </div>
-
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => void testProfile(profile.id)}
-                        className="p-2 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800"
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <Button
+                        onClick={() => void handleSavedProfileTest(profile)}
+                        disabled={isTestingProfile}
+                        variant="outline" size="sm"
                         title={copy.modelProfiles.testConnection}
                       >
                         <Wifi className="w-4 h-4" />
-                      </button>
-                      <button
+                        {copy.modelProfiles.testConnection}
+                      </Button>
+                      <Button
                         onClick={() => startEdit(profile)}
-                        className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-sm"
+                        variant="outline" size="sm"
                       >
                         {copy.modelProfiles.edit}
-                      </button>
+                      </Button>
                       {!profile.isDefault && (
-                        <button
-                          onClick={() => void setDefaultProfile(profile.id)}
-                          className="px-3 py-2 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-sm"
+                        <Button
+                          onClick={() => void handleSetDefaultProfile(profile)}
+                          variant="outline" size="sm"
                         >
                           {copy.modelProfiles.setDefault}
-                        </button>
+                        </Button>
                       )}
-                      <button
+                      <Button
                         onClick={() => void deleteProfile(profile.id)}
-                        className="p-2 rounded-lg border border-red-200 text-red-500 hover:bg-red-50 dark:border-red-900/30 dark:hover:bg-red-900/20"
+                        variant="ghost" size="icon" className="text-destructive hover:text-destructive"
                         title={copy.modelProfiles.delete}
                       >
                         <Trash2 className="w-4 h-4" />
-                      </button>
+                      </Button>
                     </div>
                   </div>
                 </div>
-              ))}
+                )
+              })}
             </div>
           )}
-        </section>
+        </div>
 
-        <section className="p-5 rounded-2xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#202020] space-y-4">
-          <div className="flex items-center justify-between">
+        <aside className="lg:sticky lg:top-8 lg:self-start">
+          <form
+            ref={formRef}
+            onSubmit={(event) => {
+              event.preventDefault()
+              void handleSave()
+            }}
+            className="grid gap-5 border-t py-5"
+          >
+          <div className="flex items-start justify-between gap-4">
             <div>
-              <h3 className="text-lg font-semibold">{editingId ? copy.modelProfiles.editTitle : copy.modelProfiles.createTitle}</h3>
-              <p className="text-sm text-gray-500 dark:text-gray-400">
-                {copy.modelProfiles.connectionBody}
-              </p>
+              <div className="flex items-center gap-2">
+                <h3 className="text-lg font-semibold">{editingId ? copy.modelProfiles.editTitle : copy.modelProfiles.createTitle}</h3>
+                <Badge variant="secondary">{editingId ? copy.modelProfiles.edit : copy.modelProfiles.newProfile}</Badge>
+              </div>
+              <p className="mt-2 text-sm leading-6 text-muted-foreground dark:text-muted-foreground">{copy.modelProfiles.connectionBody}</p>
             </div>
-            <button
+            <Button
               onClick={resetForm}
-              className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800"
+              variant="ghost" size="icon"
               title={copy.modelProfiles.resetForm}
             >
               <RotateCcw className="w-4 h-4" />
-            </button>
+            </Button>
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-2">{copy.modelProfiles.name}</label>
-            <input
+            <Input
+              name="name"
+              required
               value={draft.name}
               onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
               placeholder={copy.modelProfiles.namePlaceholder}
-              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
+              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-card  outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-2">{copy.modelProfiles.provider}</label>
-            <select
+            <NativeSelect
+              name="provider"
               value={draft.provider}
               onChange={(event) => handleProviderChange(event.target.value as ProviderType)}
-              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
+              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-card  outline-none focus:ring-2 focus:ring-ring"
             >
               {providerOptions.map((option) => (
                 <option key={option.value} value={option.value}>
                   {option.label}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-2">{copy.modelProfiles.baseUrl}</label>
-            <input
+            <Input
+              name="baseUrl"
+              required
               value={draft.baseUrl}
               onChange={(event) => setDraft((current) => ({ ...current, baseUrl: event.target.value }))}
               placeholder={providerOptions.find((item) => item.value === draft.provider)?.defaultBaseUrl}
-              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
+              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-card  outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-2">{copy.modelProfiles.model}</label>
-            <input
+            <Input
+              name="modelName"
+              required
               value={draft.modelName}
               onChange={(event) => setDraft((current) => ({ ...current, modelName: event.target.value }))}
               placeholder={copy.modelProfiles.modelPlaceholder}
-              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
+              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-card  outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
 
           <div>
             <label className="block text-sm font-medium mb-2">
-              {copy.modelProfiles.apiKey} {editingId ? <span className="text-xs text-gray-400">{copy.modelProfiles.keepCurrentKey}</span> : null}
+              {copy.modelProfiles.apiKey} {editingId ? <span className="text-xs text-muted-foreground">{copy.modelProfiles.keepCurrentKey}</span> : null}
             </label>
-            <input
+            <Input
+              name="apiKey"
+              required={!editingId}
               type="password"
               value={draft.apiKey}
               onChange={(event) => setDraft((current) => ({ ...current, apiKey: event.target.value }))}
               placeholder={editingId ? copy.modelProfiles.apiKeyEditPlaceholder : copy.modelProfiles.apiKeyCreatePlaceholder}
-              className="w-full px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] outline-none focus:ring-2 focus:ring-primary-light"
+              className="w-full px-4 py-2.5 rounded-lg border border-border dark:border-border bg-card  outline-none focus:ring-2 focus:ring-ring"
             />
           </div>
 
           <label className="flex items-center gap-3">
-            <input
+            <Input
+              name="isDefault"
               type="checkbox"
               checked={draft.isDefault}
-              onChange={(event) => setDraft((current) => ({ ...current, isDefault: event.target.checked }))}
+              disabled={editingDefaultProfile}
+              onChange={(event) => setDraft((current) => ({ ...current, isDefault: editingDefaultProfile || event.target.checked }))}
               className="w-4 h-4"
             />
             <span className="text-sm">{copy.modelProfiles.useAsDefault}</span>
           </label>
 
           <label className="flex items-center gap-3">
-            <input
+            <Input
+              name="isActive"
               type="checkbox"
               checked={draft.isActive}
               onChange={(event) => setDraft((current) => ({ ...current, isActive: event.target.checked }))}
@@ -294,7 +394,7 @@ export function ModelProfileManager() {
                 'p-3 rounded-lg text-sm',
                 lastTestResult?.ok
                   ? 'bg-green-50 text-green-700 dark:bg-green-900/20 dark:text-green-300'
-                  : 'bg-gray-50 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
+                  : 'bg-muted/40 text-foreground dark:bg-muted dark:text-muted-foreground'
               )}
             >
               {error || (
@@ -305,25 +405,26 @@ export function ModelProfileManager() {
             </div>
           )}
 
-          <div className="flex gap-3">
-            <button
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Button
+              type="button"
               onClick={() => void handleTest()}
               disabled={saving}
-              className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-lg border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors disabled:opacity-60"
+              variant="outline"
             >
               <Wifi className="w-4 h-4" />
               {copy.modelProfiles.testConnection}
-            </button>
-            <button
-              onClick={() => void handleSave()}
-              disabled={saving || !draft.name.trim() || !draft.baseUrl.trim() || !draft.modelName.trim() || (!editingId && !draft.apiKey.trim())}
-              className="flex-1 px-4 py-2.5 rounded-lg bg-primary-light dark:bg-primary-dark text-white font-medium hover:opacity-90 transition-opacity disabled:opacity-60"
+            </Button>
+            <Button
+              type="submit"
+              disabled={saving}
             >
               {editingId ? copy.modelProfiles.saveChanges : copy.modelProfiles.createProfile}
-            </button>
+            </Button>
           </div>
-        </section>
+          </form>
+        </aside>
       </div>
-    </div>
+    </section>
   )
 }

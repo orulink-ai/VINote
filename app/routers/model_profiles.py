@@ -53,3 +53,10 @@ def test_model_profile(payload: ModelProfileTestRequest, user: AuthenticatedUser
 @router.post("/model-profiles/{profile_id}/test", response_model=ModelProfileTestResponse)
 def test_saved_model_profile(profile_id: str, user: AuthenticatedUser = Depends(get_current_user)):
     return _service.test_saved_profile(user.user_id, profile_id)
+
+
+@router.post("/model-profiles/{profile_id}/reveal-key")
+def reveal_profile_key(profile_id: str, response: Response, user: AuthenticatedUser = Depends(get_current_user)):
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    return {"api_key": _service.reveal_api_key(user.user_id, profile_id)}

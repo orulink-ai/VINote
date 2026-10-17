@@ -10,6 +10,12 @@ from app.models.model_profile import ModelProfileTestRequest, ModelProfileTestRe
 
 logger = logging.getLogger(__name__)
 
+OPENAI_COMPATIBLE_TEST_TEMPERATURE = 0.7
+OPENAI_COMPATIBLE_TEST_MESSAGES = [
+    {"role": "system", "content": "You are a concise connection test assistant."},
+    {"role": "user", "content": "ping"},
+]
+
 
 class ModelProfileConnectionService:
     @staticmethod
@@ -56,8 +62,9 @@ class ModelProfileConnectionService:
                     headers=headers,
                     json={
                         "model": payload.model_name,
-                        "messages": [{"role": "user", "content": "ping"}],
+                        "messages": OPENAI_COMPATIBLE_TEST_MESSAGES,
                         "max_tokens": 1,
+                        "temperature": OPENAI_COMPATIBLE_TEST_TEMPERATURE,
                     },
                     timeout=20.0,
                 )

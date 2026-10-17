@@ -24,7 +24,7 @@ function resolveAbsoluteUrl(value: string) {
   }
 }
 
-function resolveBackendOrigin() {
+export function resolveBackendOrigin() {
   const apiBase = readRuntimeConfig('VITE_API_BASE_URL').trim()
 
   if (typeof window === 'undefined') {

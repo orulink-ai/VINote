@@ -15,6 +15,29 @@ DEFAULT_SQLITE_PATH = BASE_DIR / "data" / "vinote.db"
 
 @dataclass
 class Settings:
+    feishu_app_id: str = os.getenv("FEISHU_APP_ID", "").strip()
+    feishu_app_secret: str = os.getenv("FEISHU_APP_SECRET", "").strip()
+    feishu_redirect_uri: str = os.getenv("FEISHU_REDIRECT_URI", "").strip()
+    feishu_tenant_key: str = os.getenv("FEISHU_TENANT_KEY", "").strip()
+    feishu_service_url: str = os.getenv("VINOTE_INTEGRATION_URL", "").rstrip("/")
+    workspace_service_url: str = os.getenv("VINOTE_WORKSPACE_URL", "").rstrip("/")
+    workspace_cloud_runtime: bool = os.getenv("VINOTE_WORKSPACE_CLOUD", "false").lower() == "true"
+    workspace_storage_url: str = os.getenv("VINOTE_STORAGE_URL", os.getenv("VINOTE_SUPABASE_URL", "")).rstrip("/")
+    workspace_storage_key: str = os.getenv("VINOTE_STORAGE_SERVICE_KEY", "")
+    workspace_storage_bucket: str = os.getenv("VINOTE_STORAGE_BUCKET", "vinote-content")
+    feishu_doc_base_url: str = os.getenv("FEISHU_DOC_BASE_URL", "").rstrip("/")
+    feishu_scopes: str = os.getenv("FEISHU_SCOPES", "offline_access docx:document docs:permission.member:create docs:permission.member:auth docs:permission.setting:read docs:permission.setting:write_only drive:drive.metadata:readonly wiki:space:read wiki:node:read wiki:node:create im:chat:read docx:document.block:convert contact:user:search")
+    meeting_review_model: str = os.getenv("MEETING_REVIEW_MODEL", "gpt-6-astra").strip()
+    diarization_cluster_threshold: float = float(os.getenv("DIARIZATION_CLUSTER_THRESHOLD", "0.5"))
+    # Tracing is required for desktop source/test/release runtimes only.
+    langfuse_enabled: bool = True
+    desktop_runtime: bool = os.getenv("VINOTE_DESKTOP_RUNTIME", "false").lower() == "true"
+    langfuse_base_url: str = os.getenv("LANGFUSE_BASE_URL", "http://192.168.1.118:3000").rstrip("/")
+    langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
+    langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
+    langfuse_environment: str = os.getenv("LANGFUSE_TRACING_ENVIRONMENT", "development")
+    langfuse_release: str = os.getenv("LANGFUSE_RELEASE", "0.5.2")
+
     host: str = os.getenv("HOST", "0.0.0.0")
     port: int = int(os.getenv("PORT", "8900"))
     cors_allow_origins: str = os.getenv(
@@ -27,6 +50,9 @@ class Settings:
                 "http://127.0.0.1:3100",
                 "http://localhost:5173",
                 "http://127.0.0.1:5173",
+                "http://tauri.localhost",
+                "https://tauri.localhost",
+                "tauri://localhost",
             ]
         ),
     )
@@ -35,6 +61,8 @@ class Settings:
     llm_base_url: str = os.getenv("LLM_BASE_URL", "https://api.openai.com/v1")
     llm_model: str = os.getenv("LLM_MODEL", "gpt-4o-mini")
     llm_provider: str = os.getenv("LLM_PROVIDER", "openai-compatible")
+
+    diarization_model_dir: Path = Path(os.getenv("DIARIZATION_MODEL_DIR", str(BASE_DIR / "data" / "models" / "diarization")))
 
     transcriber_type: str = os.getenv("TRANSCRIBER_TYPE", "groq")
     groq_api_key: str = os.getenv("GROQ_API_KEY", "")
@@ -56,6 +84,9 @@ class Settings:
     summary_chunk_max_chars: int = int(os.getenv("SUMMARY_CHUNK_MAX_CHARS", "12000"))
     summary_chunk_max_segments: int = int(os.getenv("SUMMARY_CHUNK_MAX_SEGMENTS", "120"))
     summary_chunk_overlap_segments: int = int(os.getenv("SUMMARY_CHUNK_OVERLAP_SEGMENTS", "5"))
+    ytdlp_request_sleep_seconds: float = float(os.getenv("YTDLP_REQUEST_SLEEP_SECONDS", "1"))
+    ytdlp_download_sleep_seconds: float = float(os.getenv("YTDLP_DOWNLOAD_SLEEP_SECONDS", "3"))
+    ytdlp_max_download_sleep_seconds: float = float(os.getenv("YTDLP_MAX_DOWNLOAD_SLEEP_SECONDS", "6"))
 
     data_dir: Path = BASE_DIR / os.getenv("DATA_DIR", "data")
     output_dir: Path = BASE_DIR / os.getenv("OUTPUT_DIR", "output")
@@ -70,9 +101,23 @@ class Settings:
     share_base_url: str = os.getenv("SHARE_BASE_URL", "").strip()
 
     model_profile_encryption_key: str = os.getenv("MODEL_PROFILE_ENCRYPTION_KEY", "")
+    vilab_server_url: str = os.getenv("VILAB_SERVER_URL", "").rstrip("/")
+    vilab_api_key: str = os.getenv("VILAB_API_KEY", "")
+    cloud_auth_url: str = os.getenv("VINOTE_SUPABASE_URL", "").rstrip("/")
+    cloud_auth_public_key: str = os.getenv("VINOTE_SUPABASE_PUBLISHABLE_KEY", "")
     azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
 
     def __post_init__(self):
+        if self.workspace_cloud_runtime:
+            from urllib.parse import urlsplit
+            if not self.database_url.startswith(("postgresql://", "postgresql+psycopg://")):
+                raise ValueError("Cloud workspace requires PostgreSQL; SQLite fallback is forbidden")
+            if not self.cloud_auth_url or not self.cloud_auth_public_key:
+                raise ValueError("Cloud workspace requires Supabase authentication")
+            if not self.workspace_storage_key or urlsplit(self.workspace_storage_url).scheme != "https":
+                raise ValueError("Cloud workspace requires private HTTPS attachment storage")
+            if self.workspace_service_url or self.feishu_service_url:
+                raise ValueError("Cloud workspace must serve requests directly, not proxy to itself")
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.output_dir.mkdir(parents=True, exist_ok=True)
 

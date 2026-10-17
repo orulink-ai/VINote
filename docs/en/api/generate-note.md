@@ -1,12 +1,18 @@
 ---
 title: Generate Note
-description: Create an asynchronous note-generation task.
+description: Create a note-generation task from a URL or upload input.
 ---
 
 # Generate Note
 
-Primary endpoint:
+Common async endpoints:
 
 - `POST /api/generate`
+- `POST /api/generate_from_upload`
 
-Treat the response as task creation, then poll task status.
+Common sync endpoints:
+
+- `POST /api/generate_sync`
+- `POST /api/generate_from_upload_sync`
+
+Use JSON for URL input. Use `multipart/form-data` for local media or transcript uploads. When `source_type=transcript`, the backend skips STT and moves straight into summarization.

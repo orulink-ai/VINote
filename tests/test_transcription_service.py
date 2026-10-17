@@ -1,0 +1,353 @@
+import unittest
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+from app.models.stt_profile import ResolvedSTTConfig
+from app.models.transcript import TranscriptResult, TranscriptSegment
+from app.services.transcription_service import ChunkSpec, TranscriptionService, create_transcriber
+
+
+class FakeSTTProfileService:
+    def __init__(self):
+        self.calls: list[tuple[str | None, str | None]] = []
+        self.configs = {
+            "profile-1": ResolvedSTTConfig(provider="whisper", model_name="base", device="cpu"),
+            "profile-2": ResolvedSTTConfig(provider="faster-whisper", model_name="large-v3", device="cuda", compute_type="float16"),
+        }
+
+    def resolve_config(self, *, user_id: str | None, stt_profile_id: str | None):
+        self.calls.append((user_id, stt_profile_id))
+        return self.configs[stt_profile_id]
+
+
+class FakeTranscriber:
+    def __init__(self, marker: str):
+        self.marker = marker
+
+    def transcribe(self, file_path: str):
+        return TranscriptResult(
+            language="en",
+            full_text=self.marker,
+            segments=[TranscriptSegment(start=0.0, end=1.0, text=self.marker)],
+        )
+
+
+class TranscriptionServiceTest(unittest.TestCase):
+    def test_short_request_boundary_has_no_zero_length_final_core(self):
+        service = TranscriptionService()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.wav"
+            source.write_bytes(b"audio")
+            for duration in (30.0, 30.0001, 30.0008, 30.023, 30.9):
+                chunks = service._build_chunk_specs(
+                    audio_path=str(source), duration=duration,
+                    temp_dir=Path(directory), request_duration_limit=12,
+                )
+                self.assertEqual(len(chunks), 3)
+                self.assertTrue(all(chunk.trim_end > chunk.trim_start for chunk in chunks))
+                self.assertEqual([chunk.total for chunk in chunks], [3, 3, 3])
+                self.assertAlmostEqual(chunks[-1].trim_end, round(duration, 3), places=3)
+                self.assertGreaterEqual(chunks[-1].chunk_end, chunks[-1].trim_end)
+            longer = service._build_chunk_specs(
+                audio_path=str(source), duration=31.01,
+                temp_dir=Path(directory), request_duration_limit=12,
+            )
+            self.assertEqual(len(longer), 4)
+            self.assertEqual(longer[-1].trim_start, 30)
+
+    def test_failed_chunk_retains_real_progress_and_retry_reuses_cache(self):
+        from app.services.task_artifact_service import TaskArtifactService
+        service = TranscriptionService()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = TaskArtifactService(root / "output")
+            task = artifacts.create_task_dir("chunk-retry")
+            chunks = [ChunkSpec(1, 2, root / "one.wav", 0, 35, 0, 30),
+                      ChunkSpec(2, 2, root / "two.wav", 25, 60, 30, 60)]
+            for chunk in chunks:
+                chunk.file_path.write_bytes(str(chunk.index).encode())
+            args = dict(audio_path="unused.wav", duration=60, transcriber=FakeTranscriber("test"),
+                        chunk_cache_dir=task / "transcription_chunks", cache_identity="model-a",
+                        update_status=lambda status, message, **details: artifacts.update_status(
+                            task, status, message, **details))
+            result = TranscriptResult("en", "speech", [])
+            with patch.object(service, "_build_chunk_specs", return_value=chunks), \
+                    patch.object(service, "_extract_chunk"):
+                with patch.object(service, "_transcribe_chunk", side_effect=[result, RuntimeError("502")]):
+                    with self.assertRaisesRegex(RuntimeError, "502"):
+                        service._transcribe_in_chunks(**args)
+                status = artifacts.get_status("chunk-retry")
+                self.assertEqual(status["status"], "failed")
+                self.assertEqual(status["failed_stage"], "transcribing")
+                self.assertEqual(status["processed_seconds"], 30)
+                self.assertEqual(status["total_seconds"], 60)
+                artifacts.update_status(task, "uploaded", attempt=2)
+                with patch.object(service, "_transcribe_chunk", return_value=result) as call:
+                    service._transcribe_in_chunks(**args)
+                self.assertEqual(call.call_count, 1)
+                status = artifacts.get_status("chunk-retry")
+                self.assertEqual(status["processed_seconds"], 60)
+                self.assertIn("2/2", status["message"])
+                self.assertNotIn("eta_seconds", status)
+
+    def test_explicit_custom_request_bound_covers_three_hours_when_generic_chunking_disabled(self):
+        from app.config import settings
+        from app.transcribers.vilab_transcriber import VILabTranscriber
+        service = TranscriptionService()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "compressed.mp3"
+            source.write_bytes(b"small compressed input")
+            for enabled in (True, False):
+                with patch.object(settings, "transcription_chunking_enabled", enabled):
+                    chunks = service._build_chunk_specs(
+                        audio_path=str(source), duration=10800, temp_dir=Path(directory),
+                        request_duration_limit=60)
+                self.assertGreater(len(chunks), 1)
+                self.assertEqual(chunks[0].trim_start, 0)
+                self.assertEqual(chunks[-1].trim_end, 10800)
+                for chunk in chunks:
+                    self.assertLessEqual(chunk.chunk_end - chunk.chunk_start, 60)
+                for previous, current in zip(chunks, chunks[1:]):
+                    self.assertEqual(previous.trim_end, current.trim_start)
+
+    def test_streaming_orchestrator_does_not_apply_generic_chunk_limits(self):
+        from app.transcribers.vilab_transcriber import VILabTranscriber
+        service = TranscriptionService()
+        with patch.object(service, "_build_chunk_specs", return_value=[]) as specs, \
+                patch.object(service, "_transcribe_chunk", return_value=TranscriptResult(None, "ok", [])) as recognize:
+            service._transcribe_in_chunks(audio_path="test.wav", duration=60,
+                                         transcriber=VILabTranscriber("http://localhost", "test"))
+            specs.assert_not_called()
+            self.assertEqual(recognize.call_args.args[1], "test.wav")
+
+    def test_aliyun_model_name_never_selects_a_request_duration(self):
+        from app.transcribers.vilab_transcriber import VILabTranscriber
+        adapter = VILabTranscriber("https://api.orulink.ai", "unused", "asr:6:aliyun:22:paraformer-realtime-v2")
+        self.assertIsNone(adapter.max_request_duration_seconds)
+        service = TranscriptionService()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "audio.wav"
+            source.write_bytes(b"placeholder")
+            with patch.object(service, "_build_chunk_specs") as chunks, patch.object(
+                service, "_transcribe_chunk", return_value=TranscriptResult(None, "完整正文", [])) as recognize:
+                service._transcribe_in_chunks(audio_path=str(source), duration=65, transcriber=adapter)
+            chunks.assert_not_called()
+            self.assertEqual(recognize.call_count, 1)
+
+    def test_all_cloud_models_keep_whole_recording_and_ignore_generic_duration_caps(self):
+        from app.config import settings
+        from app.transcribers.vilab_transcriber import VILabTranscriber
+        service = TranscriptionService()
+        models = ("asr:6:aliyun:22:paraformer-realtime-v2", "asr:14:volcengine-asr:8:bigmodel", "asr:future:unknown")
+        for model in models:
+            for duration in (12, 20, 10800):
+                adapter = VILabTranscriber("https://example.test", "unused", model)
+                with self.subTest(model=model, duration=duration), patch.object(
+                    settings, "transcription_chunking_enabled", True
+                ), patch.object(service, "_build_chunk_specs") as chunks, patch.object(
+                    service, "_transcribe_chunk", return_value=TranscriptResult(None, "完整正文", [])
+                ) as recognize:
+                    result = service._transcribe_in_chunks(audio_path="source.webm", duration=duration, transcriber=adapter)
+                    chunks.assert_not_called()
+                    self.assertEqual(recognize.call_count, 1)
+                    self.assertEqual(recognize.call_args.args[1], "source.webm")
+                    self.assertEqual(result.full_text, "完整正文")
+
+    def test_selected_model_survives_merge_cache_and_trace(self):
+        service = TranscriptionService()
+        primary = "aliyun"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            chunks = [ChunkSpec(1, 2, root / "one.wav", 0, 11, 0, 10),
+                      ChunkSpec(2, 2, root / "two.wav", 9, 20, 10, 20)]
+            for chunk in chunks:
+                chunk.file_path.write_bytes(str(chunk.index).encode())
+            first = TranscriptResult("zh", "第一段", [], metadata={"model": primary,
+                "requested_model": primary, "asr_attempts": [{"model": primary, "status": "success"}]})
+            second = TranscriptResult("zh", "第二段", [], metadata={"model": primary,
+                "requested_model": primary, "asr_attempts": [
+                    {"model": primary, "status": "failed", "reason": "network"},
+                    {"model": primary, "status": "success"}]})
+            arguments = dict(audio_path="unused.wav", duration=20, transcriber=FakeTranscriber("unused"),
+                             chunk_cache_dir=root / "cache", cache_identity="selected-primary")
+            with patch.object(service, "_build_chunk_specs", return_value=chunks), patch.object(
+                service, "_extract_chunk"
+            ), patch.object(service, "_transcribe_chunk", side_effect=[first, second]) as call:
+                merged = service._transcribe_in_chunks(**arguments)
+                cached = service._transcribe_in_chunks(**arguments)
+            self.assertEqual(call.call_count, 2)
+            self.assertEqual(merged.metadata["models"], [primary])
+            self.assertEqual(merged.metadata["model"], primary)
+            self.assertEqual(merged.metadata["asr_attempts"][-1]["chunk_index"], 2)
+            self.assertEqual(cached.metadata, merged.metadata)
+            adapter = FakeTranscriber("unused")
+            adapter.model = primary
+            with patch.object(adapter, "transcribe", return_value=second), patch(
+                "app.services.transcription_service.update_current"
+            ) as update:
+                service._transcribe_chunk(adapter, str(chunks[1].file_path), chunks[1])
+            self.assertEqual(update.call_args.kwargs["model"], primary)
+
+    def test_explicit_custom_chunks_cover_boundaries_with_overlap(self):
+        from app.config import settings
+        from app.transcribers.vilab_transcriber import VILabTranscriber
+        service = TranscriptionService()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "input.wav"
+            source.write_bytes(b"audio")
+            for origin in ("http://192.168.1.143:9876", "https://api.orulink.ai"):
+                transcriber = VILabTranscriber(origin, "unused")
+                for duration in (60, 60.001, 121.125, 1687.022):
+                    with self.subTest(origin=origin, duration=duration), \
+                            patch.object(settings, "transcription_chunk_overlap_seconds", 120):
+                        chunks = service._build_chunk_specs(
+                            audio_path=str(source), duration=duration, temp_dir=Path(directory),
+                            request_duration_limit=60)
+                        if duration == 60:
+                            self.assertEqual(chunks, [])
+                            continue
+                        self.assertEqual(chunks[0].trim_start, 0)
+                        self.assertAlmostEqual(chunks[-1].trim_end, duration, places=3)
+                        for chunk in chunks:
+                            self.assertGreater(chunk.trim_end, chunk.trim_start)
+                            self.assertLessEqual(chunk.chunk_end - chunk.chunk_start, 60.001)
+                            self.assertLessEqual(chunk.chunk_start, chunk.trim_start)
+                            self.assertGreaterEqual(chunk.chunk_end, chunk.trim_end)
+                        for previous, current in zip(chunks, chunks[1:]):
+                            self.assertEqual(previous.trim_end, current.trim_start)
+                            self.assertGreater(previous.chunk_end, current.chunk_start)
+
+    def test_explicit_silent_chunk_preserves_other_speech_and_offsets(self):
+        from app.models.transcript import NoSpeechDetectedError
+        service = TranscriptionService()
+        chunk = ChunkSpec(1, 2, Path("silent.wav"), 0, 35, 0, 30)
+        adapter = FakeTranscriber("unused")
+        with patch.object(adapter, "transcribe", side_effect=NoSpeechDetectedError("no speech")):
+            empty = service._transcribe_chunk(adapter, "silent.wav", chunk)
+        speech = TranscriptResult("zh", "有效发言", [TranscriptSegment(5, 10, "有效发言")],
+                                  metadata={"timestamp_granularity": "segment"})
+        merged = service._merge_chunk_results(chunk_results=[
+            (chunk, empty), (ChunkSpec(2, 2, Path("speech.wav"), 25, 60, 30, 60), speech)])
+        self.assertEqual(merged.full_text, "有效发言")
+        self.assertEqual(merged.segments[0].start, 30)
+        self.assertEqual(merged.metadata["unrecognized_segments"][0]["end"], 30)
+        self.assertEqual(merged.metadata["timestamp_granularity"], "segment")
+
+    def test_whole_audio_result_survives_later_pipeline_failure(self):
+        service = TranscriptionService()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "recording.wav"
+            source.write_bytes(b"same-recording")
+            result = TranscriptResult(language="en", full_text="hello", segments=[])
+            updates = []
+            arguments = dict(audio_path=str(source), duration=60, transcriber=FakeTranscriber("test"),
+                             chunk_cache_dir=Path(directory) / "cache", cache_identity="model-a",
+                             update_status=lambda status, message, **details: updates.append(details))
+            with patch.object(service, "_build_chunk_specs", return_value=[]), \
+                    patch.object(service, "_transcribe_chunk", return_value=result) as call:
+                service._transcribe_in_chunks(**arguments)
+                service._transcribe_in_chunks(**arguments)
+                self.assertEqual(call.call_count, 1)
+                self.assertEqual(updates[-1]["processed_seconds"], 60)
+                self.assertIsNone(updates[-1]["eta_seconds"])
+                source.write_bytes(b"different-recording")
+                service._transcribe_in_chunks(**arguments)
+                self.assertEqual(call.call_count, 2)
+
+    def test_retry_reuses_successful_chunks_after_later_cloud_failure(self):
+        service = TranscriptionService()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            chunks = [ChunkSpec(1, 2, root / "first.wav", 0, 30, 0, 30),
+                      ChunkSpec(2, 2, root / "second.wav", 30, 60, 30, 60)]
+            for chunk in chunks:
+                chunk.file_path.write_bytes(str(chunk.index).encode())
+            result = TranscriptResult(language="en", full_text="hello", segments=[])
+            arguments = dict(audio_path="original.wav", duration=60, transcriber=FakeTranscriber("test"),
+                             chunk_cache_dir=root / "cache", cache_identity="model-a")
+            with patch.object(service, "_build_chunk_specs", return_value=chunks), patch.object(service, "_extract_chunk"):
+                with patch.object(service, "_transcribe_chunk", side_effect=[result, RuntimeError("cloud failed")]):
+                    with self.assertRaisesRegex(RuntimeError, "cloud failed"):
+                        service._transcribe_in_chunks(**arguments)
+                with patch.object(service, "_transcribe_chunk", return_value=result) as call:
+                    service._transcribe_in_chunks(**arguments)
+                    self.assertEqual(call.call_count, 1)
+                    self.assertEqual(call.call_args.args[1], str(chunks[1].file_path))
+                with patch.object(service, "_transcribe_chunk", return_value=result) as call:
+                    service._transcribe_in_chunks(**{**arguments, "cache_identity": "model-b"})
+                    self.assertEqual(call.call_count, 2)
+
+    def test_chunk_progress_counts_core_offsets_and_estimates_from_elapsed_time(self):
+        service = TranscriptionService()
+        chunks = [ChunkSpec(1, 2, Path("first.wav"), 0, 35, 0, 30),
+                  ChunkSpec(2, 2, Path("second.wav"), 25, 60, 30, 60)]
+        updates = []
+        result = TranscriptResult(language="en", full_text="hello", segments=[])
+        with patch.object(service, "_build_chunk_specs", return_value=chunks), \
+                patch.object(service, "_extract_chunk"), \
+                patch.object(service, "_transcribe_chunk", return_value=result), \
+                patch("app.services.transcription_service.time.monotonic", side_effect=[0, 10, 10, 20]):
+            service._transcribe_in_chunks(
+                audio_path="recording.wav", duration=60, transcriber=FakeTranscriber("test"),
+                update_status=lambda status, message, **details: updates.append(details))
+        self.assertEqual([item["processed_seconds"] for item in updates], [0, 30, 30, 60])
+        self.assertEqual([item["progress"] for item in updates], [0, .5, .5, 1])
+        self.assertIsNone(updates[0]["eta_seconds"])
+        self.assertEqual(updates[1]["eta_seconds"], 10)
+        self.assertEqual(updates[-1]["eta_seconds"], 0)
+
+    def test_create_transcriber_explains_missing_openai_whisper_dependency(self):
+        config = ResolvedSTTConfig(provider="whisper", model_name="base", device="cpu")
+
+        with patch("app.services.transcription_service.importlib.util.find_spec", return_value=None):
+            with self.assertRaisesRegex(RuntimeError, "pip install openai-whisper"):
+                create_transcriber(config)
+
+    def test_create_transcriber_explains_missing_faster_whisper_dependency(self):
+        config = ResolvedSTTConfig(provider="faster-whisper", model_name="base", device="cpu", compute_type="int8")
+
+        with patch("app.services.transcription_service.importlib.util.find_spec", return_value=object()):
+            with patch("builtins.__import__", side_effect=ImportError("No module named 'faster_whisper'")):
+                with self.assertRaisesRegex(RuntimeError, "requirements.local-transcribers.txt"):
+                    create_transcriber(config)
+
+    def test_transcribe_uses_selected_profile_per_task(self):
+        fake_profile_service = FakeSTTProfileService()
+        created_models: list[str] = []
+
+        def fake_create_transcriber(config: ResolvedSTTConfig):
+            marker = config.model_name or config.provider
+            created_models.append(marker)
+            return FakeTranscriber(marker)
+
+        service = TranscriptionService(stt_profile_service=fake_profile_service)
+
+        with patch("app.services.transcription_service.create_transcriber", side_effect=fake_create_transcriber), patch.object(
+            service,
+            "get_audio_duration",
+            return_value=0.0,
+        ):
+            first = service.transcribe(
+                audio_path="audio.mp3",
+                load_cached=lambda: None,
+                save_transcript=lambda result: None,
+                user_id="user-1",
+                stt_profile_id="profile-1",
+            )
+            second = service.transcribe(
+                audio_path="audio.mp3",
+                load_cached=lambda: None,
+                save_transcript=lambda result: None,
+                user_id="user-1",
+                stt_profile_id="profile-2",
+            )
+
+        self.assertEqual(fake_profile_service.calls, [("user-1", "profile-1"), ("user-1", "profile-2")])
+        self.assertEqual(created_models, ["base", "large-v3"])
+        self.assertEqual(first.full_text, "base")
+        self.assertEqual(second.full_text, "large-v3")
+
+
+if __name__ == "__main__":
+    unittest.main()

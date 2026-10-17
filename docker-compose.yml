@@ -62,7 +62,7 @@ services:
     ports:
       - "${FRONTEND_PORT:-3100}:80"
     healthcheck:
-      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/runtime-config.js >/dev/null 2>&1 || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O - http://127.0.0.1/api/auth/session >/dev/null 2>&1 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 5

@@ -21,6 +21,8 @@ interface ModelProfileState {
   error: string
   selectedProfileId: string
   lastTestResult: ConnectionTestResult | null
+  profileTestResults: Record<string, ConnectionTestResult>
+  testingProfileIds: string[]
   loadProfiles: () => Promise<void>
   createProfile: (draft: ModelProfileDraft) => Promise<ModelProfile>
   updateProfile: (id: string, draft: Partial<ModelProfileDraft>) => Promise<ModelProfile>
@@ -39,6 +41,8 @@ const emptyState = {
   error: '',
   selectedProfileId: '',
   lastTestResult: null as ConnectionTestResult | null,
+  profileTestResults: {} as Record<string, ConnectionTestResult>,
+  testingProfileIds: [] as string[],
 }
 
 const syncDefaultSelection = (profiles: ModelProfile[], currentId: string) => {
@@ -53,18 +57,29 @@ const mergeProfile = (profiles: ModelProfile[], updated: ModelProfile) =>
     updated.isDefault && profile.id !== updated.id ? { ...profile, isDefault: false } : profile
   ))
 
+const clearProfileTestResult = (
+  results: Record<string, ConnectionTestResult>,
+  profileId: string,
+) => Object.fromEntries(
+  Object.entries(results).filter(([resultProfileId]) => resultProfileId !== profileId),
+)
+
+let profileRequest = 0;
 export const useModelProfileStore = create<ModelProfileState>((set, get) => ({
   ...emptyState,
   loadProfiles: async () => {
+    const request = ++profileRequest;
     set({ loading: true, error: '' })
     try {
       const profiles = await fetchModelProfiles()
+      if (request !== profileRequest) return;
       set((state) => ({
         profiles,
         loading: false,
         selectedProfileId: syncDefaultSelection(profiles, state.selectedProfileId),
       }))
     } catch (error) {
+      if (request !== profileRequest) return;
       set({
         loading: false,
         error: error instanceof Error ? error.message : 'Failed to load model profiles',
@@ -101,6 +116,7 @@ export const useModelProfileStore = create<ModelProfileState>((set, get) => ({
         profiles,
         saving: false,
         selectedProfileId: syncDefaultSelection(profiles, get().selectedProfileId),
+        profileTestResults: clearProfileTestResult(get().profileTestResults, id),
       })
       return updated
     } catch (error) {
@@ -163,19 +179,32 @@ export const useModelProfileStore = create<ModelProfileState>((set, get) => ({
     }
   },
   testProfile: async (id) => {
-    set({ saving: true, error: '', lastTestResult: null })
+    set((state) => ({
+      saving: true,
+      error: '',
+      lastTestResult: null,
+      testingProfileIds: state.testingProfileIds.includes(id)
+        ? state.testingProfileIds
+        : [...state.testingProfileIds, id],
+    }))
     try {
       const result = await testSavedModelProfile(id)
-      set({ saving: false, lastTestResult: result })
+      set((state) => ({
+        saving: false,
+        lastTestResult: result,
+        profileTestResults: { ...state.profileTestResults, [id]: result },
+        testingProfileIds: state.testingProfileIds.filter((profileId) => profileId !== id),
+      }))
       return result
     } catch (error) {
       set({
         saving: false,
         error: error instanceof Error ? error.message : 'Failed to test model profile',
+        testingProfileIds: get().testingProfileIds.filter((profileId) => profileId !== id),
       })
       throw error
     }
   },
   selectProfile: (id) => set({ selectedProfileId: id }),
-  reset: () => set(emptyState),
+  reset: () => { ++profileRequest; set(emptyState) },
 }))

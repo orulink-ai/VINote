@@ -25,6 +25,15 @@ class ModelProfileService:
         self.connection_service = connection_service or ModelProfileConnectionService()
 
     def list_profiles(self, user_id: str) -> list[ModelProfileResponse]:
+        from app.services.vilab_cloud_service import VILabCloudService
+
+        cloud = VILabCloudService().status(user_id)
+        if cloud["mode"] == "cloud":
+            return [ModelProfileResponse(
+                id="vilab-cloud", name="VILab · " + (cloud["llm_model"] or "待选择云端模型"),
+                provider="openai-compatible", model_name=cloud["llm_model"], base_url=settings.vilab_server_url,
+                api_key_hint="", is_default=True, is_active=True,
+            )]
         return self.repository.list_profiles(user_id)
 
     def create_profile(self, user_id: str, payload: ModelProfileCreateRequest) -> ModelProfileResponse:
@@ -32,6 +41,10 @@ class ModelProfileService:
 
     def update_profile(self, user_id: str, profile_id: str, payload: ModelProfileUpdateRequest) -> ModelProfileResponse:
         return self.repository.update_profile(user_id, profile_id, payload)
+
+    def reveal_api_key(self, user_id: str, profile_id: str) -> str:
+        record = self.repository.get_profile_record(user_id, profile_id)
+        return self.repository.decrypt_api_key(record.api_key_encrypted)
 
     def delete_profile(self, user_id: str, profile_id: str) -> None:
         current = self.repository.delete_profile(user_id, profile_id)

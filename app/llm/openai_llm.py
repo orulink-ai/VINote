@@ -9,8 +9,11 @@ import httpx
 from openai import OpenAI
 
 from app.config import settings
+from app.services.tracing_service import (generation_name, record_model_parameters,
+                                          record_usage, traced_generation)
 from app.llm.anthropic_compat import post_anthropic_compatible
 from app.llm.base import LLMSummarizer, SummaryProgressCallback
+from app.llm.meeting_review import build_meeting_review_prompts
 from app.llm.prompts import (
     build_chunk_system_prompt,
     build_chunk_user_prompt,
@@ -26,8 +29,29 @@ logger = logging.getLogger(__name__)
 
 
 class _BasePromptLLM(LLMSummarizer):
+    def _complete_stage(self, *, stage, metadata=None, **prompts):
+        del metadata
+        with generation_name(stage):
+            return self._complete(**prompts)
+
     def _complete(self, *, system_prompt: str, user_prompt: str) -> str:
         raise NotImplementedError
+
+    def _complete_review(self, *, system_prompt: str, user_prompt: str) -> str:
+        return self._complete(system_prompt=system_prompt, user_prompt=user_prompt)
+
+    def _review_meeting_note(self, *, source, draft, extras, output_language,
+                             intermediate=False, source_is_reviewed_notes=False):
+        review_name = "LLM｜核对会议分段" if intermediate else "LLM｜核对最终会议纪要"
+        with generation_name(review_name):
+            result = self._complete_review(**build_meeting_review_prompts(
+                source=source, draft=draft, extras=extras,
+                output_language=output_language, intermediate=intermediate,
+                source_is_reviewed_notes=source_is_reviewed_notes,
+            ))
+        if not result or not result.strip():
+            raise RuntimeError("会议纪要事实复核未返回内容，请重试。")
+        return result.strip()
 
     @staticmethod
     def _format_time(seconds: float) -> str:
@@ -38,7 +62,18 @@ class _BasePromptLLM(LLMSummarizer):
         return f"{minutes:02d}:{secs:02d}"
 
     def _build_segment_text(self, segments: List[TranscriptSegment]) -> str:
-        return "\n".join(f"{self._format_time(seg.start)} - {seg.text}" for seg in segments)
+        rendered = []
+        for seg in segments:
+            rendered.append(
+                f"{self._format_time(seg.start)}–{self._format_time(seg.end)} - "
+                f"{('[' + (seg.speaker_label or seg.speaker_id) + '] ') if seg.speaker_id else ''}{seg.text}")
+            if seg.speaker_evidence:
+                rendered.append("独立说话人时间轴（录音偏移，编号非实名）：")
+                rendered.extend(f"{turn['start']:.2f}–{turn['end']:.2f} 秒：{turn['speaker_id']}"
+                                for turn in seg.speaker_evidence)
+            if seg.timestamp_estimated:
+                rendered.append("转写仅有分段时间；逐句时间与说话人归属不能确证。上述编号仅表示该时间窗内有人发声，不对应任何具体句子；本段观点和承诺统一用‘有人提出/讨论提到’，不得标为某个 speaker 编号。")
+        return "\n".join(rendered)
 
     def _build_user_prompt(
         self,
@@ -58,7 +93,7 @@ class _BasePromptLLM(LLMSummarizer):
 
     @staticmethod
     def _estimate_segment_size(segment: TranscriptSegment) -> int:
-        return len(segment.text) + 16
+        return len(segment.text) + 80 + sum(len(str(turn)) for turn in segment.speaker_evidence)
 
     def _chunk_segments(self, segments: List[TranscriptSegment]) -> list[list[TranscriptSegment]]:
         if not segments:
@@ -93,13 +128,6 @@ class _BasePromptLLM(LLMSummarizer):
 
         return chunks
 
-    def _should_use_hierarchical_mode(self, segments: List[TranscriptSegment]) -> bool:
-        total_chars = sum(self._estimate_segment_size(segment) for segment in segments)
-        return (
-            len(segments) > max(1, int(settings.summary_default_max_segments))
-            or total_chars > max(2000, int(settings.summary_default_max_chars))
-        )
-
     def _summarize_one_shot(
         self,
         *,
@@ -108,11 +136,21 @@ class _BasePromptLLM(LLMSummarizer):
         style: str,
         extras: str | None,
         output_language: str,
+        progress_callback: SummaryProgressCallback | None = None,
     ) -> str:
         user_prompt = self._build_user_prompt(title, segments, style, extras, output_language)
-        return self._complete(
+        draft = self._complete_stage(
+            stage="LLM｜生成会议纪要" if style == "meeting" else "LLM｜生成笔记",
             system_prompt=build_system_prompt(output_language),
             user_prompt=user_prompt,
+        )
+        if style != "meeting":
+            return draft
+        if progress_callback:
+            progress_callback("正在对照转写核对会议结论与行动事项…")
+        return self._review_meeting_note(
+            source=self._build_segment_text(segments), draft=draft,
+            extras=extras, output_language=output_language,
         )
 
     def _summarize_hierarchical(
@@ -133,6 +171,7 @@ class _BasePromptLLM(LLMSummarizer):
                 style=style,
                 extras=extras,
                 output_language=output_language,
+                progress_callback=progress_callback,
             )
 
         chunk_notes: list[str] = []
@@ -142,7 +181,9 @@ class _BasePromptLLM(LLMSummarizer):
                 progress_callback(f"Generating structured chunk notes {index}/{total_chunks}...")
 
             chunk_notes.append(
-                self._complete(
+                self._complete_stage(
+                    stage=f"LLM｜分块总结 {index}/{total_chunks}",
+                    metadata={"chunk_index": index, "chunk_total": total_chunks},
                     system_prompt=build_chunk_system_prompt(output_language),
                     user_prompt=build_chunk_user_prompt(
                         title=title,
@@ -155,6 +196,13 @@ class _BasePromptLLM(LLMSummarizer):
                     ),
                 )
             )
+            if style == "meeting":
+                if progress_callback:
+                    progress_callback(f"正在核对会议分段 {index}/{total_chunks}…")
+                chunk_notes[-1] = self._review_meeting_note(
+                    source=self._build_segment_text(chunk), draft=chunk_notes[-1],
+                    extras=extras, output_language=output_language, intermediate=True,
+                )
 
         if progress_callback:
             progress_callback("Combining chunk notes into the final note...")
@@ -163,7 +211,8 @@ class _BasePromptLLM(LLMSummarizer):
             f"## Chunk Draft {index}\n{chunk_note.strip()}"
             for index, chunk_note in enumerate(chunk_notes, start=1)
         )
-        return self._complete(
+        draft = self._complete_stage(
+            stage="LLM｜合并分块总结",
             system_prompt=build_merge_system_prompt(output_language),
             user_prompt=build_merge_user_prompt(
                 title=title,
@@ -172,6 +221,14 @@ class _BasePromptLLM(LLMSummarizer):
                 extras=extras,
                 output_language=output_language,
             ),
+        )
+        if style != "meeting":
+            return draft
+        if progress_callback:
+            progress_callback("正在核对合并后的会议纪要…")
+        return self._review_meeting_note(
+            source=chunk_notes_text, draft=draft, extras=extras,
+            output_language=output_language, source_is_reviewed_notes=True,
         )
 
     def summarize(
@@ -185,16 +242,10 @@ class _BasePromptLLM(LLMSummarizer):
         progress_callback: SummaryProgressCallback | None = None,
     ) -> str:
         mode = normalize_summary_mode(summary_mode)
-        if mode == "oneshot":
-            return self._summarize_one_shot(
-                title=title,
-                segments=segments,
-                style=style,
-                extras=extras,
-                output_language=output_language,
-            )
-
-        if mode == "accurate" or self._should_use_hierarchical_mode(segments):
+        # Default and explicit oneshot always submit the complete source.
+        # Only explicit legacy accurate requests opt into chunk/merge. Provider
+        # context errors propagate; they never authorize splitting or replay.
+        if mode == "accurate":
             return self._summarize_hierarchical(
                 title=title,
                 segments=segments,
@@ -210,6 +261,7 @@ class _BasePromptLLM(LLMSummarizer):
             style=style,
             extras=extras,
             output_language=output_language,
+            progress_callback=progress_callback,
         )
 
 
@@ -226,7 +278,9 @@ class OpenAILLM(_BasePromptLLM):
         self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=300.0)
         logger.info("[LLM] init openai-compatible model=%s base_url=%s", model, base_url)
 
+    @traced_generation
     def _complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        record_model_parameters({"temperature": self.temperature})
         response = self.client.chat.completions.create(
             model=self.model,
             messages=[
@@ -235,6 +289,7 @@ class OpenAILLM(_BasePromptLLM):
             ],
             temperature=self.temperature,
         )
+        record_usage(getattr(response, "usage", None))
         return (response.choices[0].message.content or "").strip()
 
 
@@ -261,7 +316,9 @@ class AnthropicLLM(_BasePromptLLM):
             return f"{self.base_url}/messages"
         return f"{self.base_url}/v1/messages"
 
+    @traced_generation
     def _complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        record_model_parameters({"temperature": self.temperature, "max_tokens": 8192})
         response = post_anthropic_compatible(
             url=self._messages_url(),
             api_key=self.api_key,
@@ -275,6 +332,7 @@ class AnthropicLLM(_BasePromptLLM):
             timeout=300.0,
         )
         payload = response.json()
+        record_usage(payload.get("usage"))
         for block in payload.get("content", []):
             if isinstance(block, dict) and block.get("type") == "text":
                 return (block.get("text") or "").strip()
@@ -309,7 +367,9 @@ class AzureOpenAILLM(_BasePromptLLM):
             f"?api-version={settings.azure_openai_api_version}"
         )
 
+    @traced_generation
     def _complete(self, *, system_prompt: str, user_prompt: str) -> str:
+        record_model_parameters({"temperature": self.temperature, "max_tokens": 8192})
         response = httpx.post(
             self._chat_url(),
             headers={"Content-Type": "application/json", "api-key": self.api_key},
@@ -325,4 +385,5 @@ class AzureOpenAILLM(_BasePromptLLM):
         )
         response.raise_for_status()
         payload = response.json()
+        record_usage(payload.get("usage"))
         return (payload["choices"][0]["message"]["content"] or "").strip()

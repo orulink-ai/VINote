@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 
 from app.models.audio import AudioDownloadResult
@@ -27,14 +28,22 @@ class FakeDownloader:
 
 
 class FakeTranscriptionService:
-    def __init__(self):
-        self.calls: list[str] = []
+    def __init__(self, *, require_existing_audio: bool = False):
+        self.calls: list[dict] = []
+        self.require_existing_audio = require_existing_audio
 
     def get_audio_duration(self, file_path: str) -> float:
         return 42.0
 
-    def transcribe(self, *, audio_path, load_cached, save_transcript, update_status=None):
-        self.calls.append(audio_path)
+    def transcribe(self, *, audio_path, load_cached, save_transcript, update_status=None, user_id=None, stt_profile_id=None, chunk_cache_dir=None):
+        if self.require_existing_audio and not Path(audio_path).exists():
+            raise FileNotFoundError(audio_path)
+        self.calls.append({
+            "audio_path": audio_path,
+            "user_id": user_id,
+            "stt_profile_id": stt_profile_id,
+            "chunk_cache_dir": chunk_cache_dir,
+        })
         cached = load_cached()
         if cached:
             return cached
@@ -119,8 +128,142 @@ class FakeScreenshotService:
 
 
 class NoteServiceTest(unittest.TestCase):
+    def setUp(self):
+        mode = patch("app.services.vilab_cloud_service.VILabCloudService.status",
+                     return_value={"mode": "local"})
+        mode.start()
+        self.addCleanup(mode.stop)
+
+    def test_summary_failure_preserves_audio_progress_original_and_retry_stage(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "original.wav"
+            source.write_bytes(b"synthetic original bytes")
+            artifacts = TaskArtifactService(Path(root) / "output")
+            transcriber = FakeTranscriptionService()
+            llm = FakeLLMService()
+            service = NoteService(transcription_service=transcriber, llm_service=llm,
+                                  artifact_service=artifacts)
+            original_transcribe = transcriber.transcribe
+
+            def completed_audio(**kwargs):
+                kwargs["update_status"]("transcribing", "one chunk completed", progress=1,
+                                        processed_seconds=42, total_seconds=42, eta_seconds=0)
+                return original_transcribe(**kwargs)
+
+            def failed_summary(**kwargs):
+                status = artifacts.get_status("summary-fail")
+                self.assertEqual(status["stage"], "summarizing")
+                self.assertEqual(status["processed_seconds"], 42)
+                self.assertNotIn("progress", status)
+                self.assertNotIn("eta_seconds", status)
+                raise RuntimeError("synthetic upstream 503")
+
+            with patch.object(transcriber, "transcribe", side_effect=completed_audio), \
+                    patch.object(llm.summarizer, "summarize", side_effect=failed_summary):
+                with self.assertRaisesRegex(RuntimeError, "503"):
+                    service.generate_from_file(str(source), "summary-fail", title="Synthetic")
+            status = artifacts.get_status("summary-fail")
+            self.assertEqual(status["failed_stage"], "summarizing")
+            self.assertTrue(status["retryable"])
+            self.assertEqual(status["processed_seconds"], 42)
+            task = artifacts.find_task_dir("summary-fail")
+            self.assertEqual(transcriber.calls[0]["chunk_cache_dir"], task / "transcription_chunks")
+            saved_source = Path(artifacts.load_audio_meta(task).file_path)
+            self.assertEqual(saved_source.read_bytes(), b"synthetic original bytes")
+            self.assertEqual(source.read_bytes(), b"synthetic original bytes")
+            self.assertIsNotNone(artifacts.load_transcript(task))
+            self.assertIsNone(artifacts.get_result("summary-fail"))
+
+    def test_result_is_saved_before_success_and_stages_are_observable(self):
+        with tempfile.TemporaryDirectory() as root:
+            source = Path(root) / "original.wav"
+            source.write_bytes(b"synthetic audio")
+            artifacts = TaskArtifactService(Path(root) / "output")
+            service = NoteService(transcription_service=FakeTranscriptionService(),
+                                  llm_service=FakeLLMService(), artifact_service=artifacts)
+            original_update = artifacts.update_status
+            stages = []
+
+            def inspect_status(directory, status, message="", **details):
+                original_update(directory, status, message, **details)
+                stages.append(artifacts.get_status("phase-test")["stage"])
+                if status == "success":
+                    self.assertIsNotNone(artifacts.get_result("phase-test"))
+
+            with patch.object(artifacts, "update_status", side_effect=inspect_status):
+                service.generate_from_file(str(source), "phase-test", title="Synthetic")
+            self.assertEqual(stages, ["preparing", "transcribing", "transcript_ready", "summarizing",
+                                      "enriching_media", "saving_result", "success"])
+
+    def test_uploaded_meeting_video_retains_original_without_visual_generation(self):
+        with tempfile.TemporaryDirectory() as root:
+            artifacts = TaskArtifactService(Path(root))
+            folder = artifacts.create_task_dir("screen-test")
+            video = folder / "media" / "source_video.webm"
+            video.parent.mkdir()
+            video.write_bytes(b"original recording")
+            artifacts.record_source_media(folder, video, media_kind="video")
+            screenshots = FakeScreenshotService()
+            service = NoteService(downloader=FakeDownloader(str(video)),
+                                  transcription_service=FakeTranscriptionService(),
+                                  llm_service=FakeLLMService(), artifact_service=artifacts,
+                                  screenshot_service=screenshots)
+            summarize = service.llm_service.summarizer.summarize
+
+            def check_summary_stage(**kwargs):
+                self.assertEqual(artifacts.get_status("screen-test")["stage"], "summarizing")
+                return summarize(**kwargs)
+
+            with patch.object(service.llm_service.summarizer, "summarize", side_effect=check_summary_stage), patch.object(screenshots, "prepare_local_video", side_effect=AssertionError("Must not download")), patch("app.services.meeting_video_analysis_service.MeetingVideoAnalysisService.analyze", return_value="视觉证据：进度表") as vision:
+                result = service.generate_from_file(str(video), "screen-test", title="Screen meeting")
+            # Visualization generation was cancelled. Reusing retained media
+            # must not silently spend another model call on visual analysis.
+            vision.assert_not_called()
+            assert "![Screenshot" not in result.markdown
+            assert "[[Screenshot:" not in result.markdown
+            assert screenshots.calls == []
+            assert artifacts.resolve_source_media(Path(result.output_dir)).read_bytes() == b"original recording"
+            assert not list(Path(result.output_dir).glob("media/source_audio.*"))
+
+    def test_failure_after_rename_is_visible_to_polling(self):
+        with tempfile.TemporaryDirectory() as root:
+            artifacts = TaskArtifactService(Path(root))
+            service = NoteService(downloader=FakeDownloader("audio.mp3"),
+                                  llm_service=FakeLLMService(), artifact_service=artifacts)
+            original_save = artifacts.save_audio_meta
+            def fail_after_rename(directory, meta):
+                if directory.name != "task-fail":
+                    raise OSError("metadata write failed")
+                return original_save(directory, meta)
+            with patch.object(artifacts, "save_audio_meta", side_effect=fail_after_rename):
+                with self.assertRaises(OSError):
+                    service.generate("https://example.com/video", "task-fail")
+            self.assertEqual(artifacts.get_status("task-fail")["status"], "failed")
+
+    def test_unselected_cloud_models_fail_before_download(self):
+        with tempfile.TemporaryDirectory() as root:
+            downloader = FakeDownloader("audio.mp3")
+            artifacts = TaskArtifactService(Path(root))
+            service = NoteService(downloader=downloader, llm_service=FakeLLMService(),
+                                  artifact_service=artifacts)
+            with patch("app.services.vilab_cloud_service.VILabCloudService.status", return_value={
+                "mode": "cloud", "configured": True, "asr_model": "", "llm_model": ""
+            }), patch("app.services.vilab_cloud_service.VILabCloudService.defaults", return_value={
+                "asr_model": "", "llm_model": ""
+            }):
+                with self.assertRaises(ValueError):
+                    service.generate("https://example.com/video", "task-cloud", user_id="user")
+            self.assertEqual(downloader.download_calls, [])
+            self.assertEqual(artifacts.get_status("task-cloud")["status"], "failed")
+
     def test_generate_uses_split_services_and_persists_artifacts(self):
-        with tempfile.TemporaryDirectory() as temp_dir:
+        # The orchestration test injects fake model services; model binding is covered separately.
+        frozen = {"version": 1, "owner": "user-1", "mode": "local", "server_url": "",
+                  "asr_model": "", "llm_model": "", "local_llm_fingerprint": "0" * 64,
+                  "local_stt_fingerprint": "0" * 64}
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "app.services.task_model_source.capture_source", return_value=frozen,
+        ):
             audio_file = Path(temp_dir) / "audio.mp3"
             audio_file.write_text("fake audio", encoding="utf-8")
 
@@ -144,10 +287,14 @@ class NoteServiceTest(unittest.TestCase):
                 style="detailed",
                 summary_mode="accurate",
                 output_language="en",
+                user_id="user-1",
+                stt_profile_id="stt-profile-1",
             )
 
             self.assertEqual(len(downloader.download_calls), 1)
             self.assertEqual(len(transcription_service.calls), 1)
+            self.assertEqual(transcription_service.calls[0]["stt_profile_id"], "stt-profile-1")
+            self.assertEqual(transcription_service.calls[0]["user_id"], "user-1")
             self.assertEqual(len(llm_service.calls), 1)
             self.assertEqual(llm_service.summarizer.calls[0]["output_language"], "en")
             self.assertEqual(llm_service.summarizer.calls[0]["summary_mode"], "accurate")
@@ -163,6 +310,35 @@ class NoteServiceTest(unittest.TestCase):
             self.assertEqual(saved_result["title"], "Demo Note")
             self.assertEqual(saved_result["summary_mode"], "accurate")
             self.assertTrue(Path(saved_result["output_path"]).exists())
+
+    def test_generate_from_uploaded_task_media_rebases_audio_path_after_finalize(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            artifact_service = TaskArtifactService(Path(temp_dir) / "output")
+            task_dir = artifact_service.create_task_dir("upload-task")
+            media_dir = task_dir / "media"
+            media_dir.mkdir(parents=True, exist_ok=True)
+            audio_file = media_dir / "source_audio.wav"
+            audio_file.write_text("fake audio", encoding="utf-8")
+
+            transcription_service = FakeTranscriptionService(require_existing_audio=True)
+            service = NoteService(
+                transcription_service=transcription_service,
+                llm_service=FakeLLMService(),
+                artifact_service=artifact_service,
+            )
+
+            result = service.generate_from_file(
+                file_path=str(audio_file),
+                task_id="upload-task",
+                title="Uploaded Audio",
+            )
+
+            self.assertEqual(len(transcription_service.calls), 1)
+            transcribed_path = Path(transcription_service.calls[0]["audio_path"])
+            self.assertTrue(transcribed_path.exists())
+            self.assertIn("Uploaded Audio", str(transcribed_path))
+            self.assertEqual(transcribed_path.name, "source_audio.wav")
+            self.assertEqual(result.audio_meta.file_path, str(transcribed_path))
 
 
 if __name__ == "__main__":

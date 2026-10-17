@@ -1,0 +1,13 @@
+[[permission]]
+identifier = "meeting-recorder"
+description = "Allow VINote meeting windows to manage microphone access and recorder windows."
+commands.allow = [
+  "open_external_url",
+  "request_microphone_access",
+  "open_recorder_window",
+  "close_recorder_window",
+  "set_recorder_active",
+  "show_main_window",
+  "set_recorder_window_layout",
+  "set_recorder_window_size",
+]

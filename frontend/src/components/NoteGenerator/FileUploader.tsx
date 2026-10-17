@@ -1,162 +1,32 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useId, useRef, useState, type Ref } from 'react'
 import { FileAudio, Link as LinkIcon, Upload, X } from 'lucide-react'
-import clsx from 'clsx'
+import { Button } from '@/components/ui/button'
+import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { cn } from '@/lib/utils'
 import { useI18n } from '../../lib/i18n'
-
-interface FileUploaderProps {
-  onVideoUrlChange: (url: string) => void
-  onFileSelect: (file: File | null) => void
-  videoUrl: string
-  fileUploadEnabled?: boolean
-}
-
-export function FileUploader({
-  onVideoUrlChange,
-  onFileSelect,
-  videoUrl,
-  fileUploadEnabled = true,
-}: FileUploaderProps) {
-  const { copy } = useI18n()
-  const [mode, setMode] = useState<'url' | 'file'>('url')
-  const [dragActive, setDragActive] = useState(false)
-  const [selectedFile, setSelectedFile] = useState<File | null>(null)
-
-  useEffect(() => {
-    if (!fileUploadEnabled && mode === 'file') {
-      setMode('url')
-    }
-  }, [fileUploadEnabled, mode])
-
-  const handleDrag = useCallback((event: React.DragEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-    if (event.type === 'dragenter' || event.type === 'dragover') {
-      setDragActive(true)
-    } else if (event.type === 'dragleave') {
-      setDragActive(false)
-    }
-  }, [])
-
-  const handleDrop = useCallback((event: React.DragEvent) => {
-    event.preventDefault()
-    event.stopPropagation()
-    setDragActive(false)
-
-    const files = event.dataTransfer.files
-    if (files && files[0]) {
-      setSelectedFile(files[0])
-      onFileSelect(files[0])
-    }
-  }, [onFileSelect])
-
-  const handleFileChange = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files
-    if (files && files[0]) {
-      setSelectedFile(files[0])
-      onFileSelect(files[0])
-    }
+export type UploadMode = 'url' | 'file' | 'transcript' | 'document'
+interface Props { onVideoUrlChange: (url: string) => void; onFileSelect: (file: File | null) => void; onModeChange: (mode: UploadMode) => void; videoUrl: string; fileUploadEnabled?: boolean; initialMode?: UploadMode; urlEnabled?: boolean; meetingOnly?: boolean; file?: File | null; urlError?: string; urlInputRef?: Ref<HTMLInputElement> }
+export function FileUploader({ onVideoUrlChange, onFileSelect, onModeChange, videoUrl, fileUploadEnabled = true, initialMode = 'url', urlEnabled = true, meetingOnly = false, file, urlError = '', urlInputRef }: Props) {
+  const { copy } = useI18n(); const [mode, setMode] = useState<UploadMode>(initialMode); const [dragActive, setDragActive] = useState(false); const [selectedFile, setSelectedFile] = useState<File | null>(file || null); const inputRef = useRef<HTMLInputElement>(null)
+  const [error, setError] = useState('')
+  const fieldId = useId()
+  const urlId = `${fieldId}-url`, urlHintId = `${fieldId}-url-hint`, fileId = `${fieldId}-file`, urlErrorId = `${fieldId}-url-error`
+  const setModeSafe = (next: UploadMode) => { if (!fileUploadEnabled && next !== 'url') return; if (selectedFile) { setSelectedFile(null); onFileSelect(null) } setError(''); setMode(next); onModeChange(next) }
+  useEffect(() => { if (!fileUploadEnabled && mode !== 'url') setModeSafe('url') }, [fileUploadEnabled, mode])
+  useEffect(() => { setMode(initialMode) }, [initialMode])
+  useEffect(() => { if (file !== undefined) setSelectedFile(file) }, [file])
+  const choose = (file: File) => {
+    if (meetingOnly && (/\.(pdf|docx|doc|md)$/i.test(file.name) || !(/^(audio|video)\//i.test(file.type) || /\.(mp3|wav|m4a|aac|amr|flac|ogg|opus|mp4|mov|mkv|webm|avi|txt|srt|vtt|json)$/i.test(file.name)))) { setError('会议只支持录音、录屏、视频或已有逐字稿。PDF、Word 和网页请在笔记中整理。'); onFileSelect(null); return }
+    if (!file.size || !(/^(audio|video)\//i.test(file.type) || /\.(mp3|wav|m4a|aac|amr|flac|ogg|opus|mp4|mov|mkv|webm|avi|pdf|docx|txt|srt|vtt|json|md)$/i.test(file.name))) { setError('请选择非空音视频、PDF、Word DOCX、字幕或文字文件。原文件不会被修改。'); return }
+    setError('')
+    const next: UploadMode = /\.(pdf|docx)$/i.test(file.name) ? 'document' : /\.(txt|srt|vtt|json|md)$/i.test(file.name) ? 'transcript' : 'file'; setError(''); setMode(next); onModeChange(next); setSelectedFile(file); onFileSelect(file)
   }
-
-  return (
-    <div className="space-y-4">
-      <div className="flex gap-2">
-        <button
-          onClick={() => setMode('url')}
-          className={clsx(
-            'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-            mode === 'url'
-              ? 'bg-primary-light dark:bg-primary-dark text-white'
-              : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-          )}
-        >
-          <LinkIcon className="w-4 h-4" />
-          {copy.fileUploader.videoUrl}
-        </button>
-        {fileUploadEnabled ? (
-          <button
-            onClick={() => setMode('file')}
-            className={clsx(
-              'flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors',
-              mode === 'file'
-                ? 'bg-primary-light dark:bg-primary-dark text-white'
-                : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-            )}
-          >
-            <FileAudio className="w-4 h-4" />
-            {copy.fileUploader.localFile}
-          </button>
-        ) : null}
-      </div>
-
-      {mode === 'url' ? (
-        <div className="space-y-2">
-          <input
-            type="text"
-            value={videoUrl}
-            onChange={(event) => onVideoUrlChange(event.target.value)}
-            placeholder={copy.fileUploader.videoPlaceholder}
-            className="w-full px-4 py-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-[#191919] focus:ring-2 focus:ring-primary-light dark:focus:ring-primary-dark focus:border-transparent outline-none transition-all"
-          />
-          {!fileUploadEnabled ? (
-            <p className="text-sm text-gray-500 dark:text-gray-400">
-              {copy.fileUploader.browserModeHint}
-            </p>
-          ) : null}
-        </div>
-      ) : (
-        <div
-          onDragEnter={handleDrag}
-          onDragLeave={handleDrag}
-          onDragOver={handleDrag}
-          onDrop={handleDrop}
-          className={clsx(
-            'border-2 border-dashed rounded-xl p-8 text-center transition-colors',
-            dragActive
-              ? 'border-primary-light dark:border-primary-dark bg-primary-light/5 dark:bg-primary-dark/5'
-              : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600',
-            selectedFile ? 'py-4' : ''
-          )}
-        >
-          {selectedFile ? (
-            <div className="flex items-center justify-center gap-3">
-              <FileAudio className="w-8 h-8 text-primary-light dark:text-primary-dark" />
-              <span className="font-medium">{selectedFile.name}</span>
-              <button
-                onClick={() => {
-                  setSelectedFile(null)
-                  onFileSelect(null)
-                }}
-                className="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-          ) : (
-            <>
-              <Upload className="w-12 h-12 mx-auto mb-4 text-gray-400" />
-              <p className="text-gray-600 dark:text-gray-400 mb-2">
-                {copy.fileUploader.dragHint}
-              </p>
-              <p className="text-sm text-gray-400">
-                {copy.fileUploader.formats}
-              </p>
-              <input
-                type="file"
-                accept="audio/*"
-                onChange={handleFileChange}
-                className="hidden"
-                id="file-upload"
-              />
-              <label
-                htmlFor="file-upload"
-                className="inline-block mt-4 px-4 py-2 bg-primary-light dark:bg-primary-dark text-white rounded-lg cursor-pointer hover:opacity-90 transition-opacity"
-              >
-                {copy.fileUploader.selectFile}
-              </label>
-            </>
-          )}
-        </div>
-      )}
-    </div>
-  )
+  const handleDrag = useCallback((event: React.DragEvent) => { event.preventDefault(); event.stopPropagation(); setDragActive(['dragenter', 'dragover'].includes(event.type)) }, [])
+  return <div className="grid gap-4">{error && <p role="alert" className="text-sm text-destructive">{error}</p>}<Tabs value={mode === 'url' ? 'url' : 'file'} onValueChange={value => setModeSafe(value as UploadMode)}><TabsList className="line-tabs">{urlEnabled ? <TabsTrigger value="url" className="gap-2"><LinkIcon className="size-4" />{copy.fileUploader.videoUrl}</TabsTrigger> : null}{fileUploadEnabled ? <TabsTrigger value="file" className="gap-2"><FileAudio className="size-4" />{copy.fileUploader.localFile || '文件'}</TabsTrigger> : null}</TabsList></Tabs>
+    {mode === 'url' ? <Field data-invalid={!!urlError || undefined} className="animate-in gap-2 fade-in slide-in-from-bottom-2 duration-300"><FieldLabel htmlFor={urlId}>网页或视频链接</FieldLabel><Input ref={urlInputRef} id={urlId} aria-invalid={!!urlError || undefined} aria-describedby={urlError ? `${urlHintId} ${urlErrorId}` : urlHintId} className="h-11 rounded-md px-4" value={videoUrl} onChange={event => onVideoUrlChange(event.target.value)} placeholder={copy.fileUploader.videoPlaceholder} /><FieldDescription id={urlHintId}>{!fileUploadEnabled ? copy.fileUploader.browserModeHint : '支持普通网页、B 站等公开视频、PDF 和 DOCX 文档链接。需要登录的来源请导出文件再导入。'}</FieldDescription>{urlError && <p id={urlErrorId} role="alert" className="text-sm text-destructive">{urlError}</p>}</Field> : <div onDragEnter={handleDrag} onDragLeave={handleDrag} onDragOver={handleDrag} onDrop={event => { handleDrag(event); const file = event.dataTransfer.files?.[0]; if (file) choose(file) }} className={cn('grid min-h-28 animate-in place-items-center rounded-md border border-dashed p-4 text-center fade-in slide-in-from-bottom-2 duration-300 transition-all', dragActive && 'border-foreground bg-muted/60')}>
+      {selectedFile ? <div className="flex w-full max-w-xl items-center gap-3 rounded-md bg-muted/40 p-4"><div className="grid size-10 shrink-0 place-items-center rounded-lg bg-background "><FileAudio className="size-4" /></div><div className="min-w-0 flex-1 text-left"><p className="truncate text-sm font-medium">{selectedFile.name}</p><p className="mt-1 text-xs text-muted-foreground">{selectedFile.size < 1024 ? `${selectedFile.size} B` : selectedFile.size < 1024 * 1024 ? `${(selectedFile.size / 1024).toFixed(1)} KB` : `${(selectedFile.size / 1024 / 1024).toFixed(1)} MB`}</p></div><Button aria-label="移除所选文件" variant="ghost" size="icon" onClick={() => { setSelectedFile(null); onFileSelect(null) }}><X /></Button></div> : <div className="grid justify-items-center gap-2"><div className="grid size-10 place-items-center rounded-md bg-foreground text-background"><Upload className="size-4" /></div><div><FieldLabel htmlFor={fileId} className="text-sm font-medium">{meetingOnly ? '选择或拖入会议音视频或逐字稿' : '选择或拖入音视频、PDF、Word 和文字文件'}</FieldLabel><p className="mt-1 text-xs text-muted-foreground">{meetingOnly ? '音频、视频、TXT、SRT、VTT、JSON' : '音频、视频、PDF、Word DOCX、TXT、Markdown、SRT、VTT、JSON'}</p></div><Input id={fileId} ref={inputRef} type="file" accept={meetingOnly ? 'audio/*,video/*,.mp3,.wav,.m4a,.flac,.ogg,.mp4,.mov,.mkv,.webm,.avi,.txt,.srt,.vtt,.json' : 'audio/*,video/*,.mp3,.wav,.m4a,.flac,.ogg,.mp4,.mov,.mkv,.webm,.avi,.txt,.srt,.vtt,.json,.md,.pdf,.docx'} onChange={event => { const file = event.target.files?.[0]; if (file) choose(file); event.target.value = '' }} className="hidden" /><Button type="button" variant="outline" size="sm" className="px-5" onClick={() => inputRef.current?.click()}>{copy.fileUploader.selectFile}</Button></div>}
+    </div>}
+  </div>
 }

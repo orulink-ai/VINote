@@ -57,6 +57,17 @@ class LLMService:
         api_key: str | None,
         base_url: str | None,
     ) -> LLMSummarizer:
+        if user_id:
+            from app.services.vilab_cloud_service import VILabCloudService
+            from app.llm.vilab_llm import VILabLLM
+
+            cloud = VILabCloudService().status(user_id)
+            if cloud["mode"] == "cloud" and cloud["llm_model"]:
+                return VILabLLM(user_id, cloud["llm_model"])
+            if cloud["mode"] == "cloud":
+                raise ValueError("云端模式尚未选择笔记模型，请在设置中选择，或切换到本地模式")
+            if model_profile_id == "vilab-cloud":
+                model_profile_id = None
         config = self.resolve_config(
             user_id=user_id,
             model_profile_id=model_profile_id,
@@ -64,4 +75,6 @@ class LLMService:
             api_key=api_key,
             base_url=base_url,
         )
+        from app.services.task_model_source import verify_local_config
+        verify_local_config(user_id, "llm", config)
         return self.build_summarizer(config)

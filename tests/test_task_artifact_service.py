@@ -1,5 +1,9 @@
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
+from unittest.mock import patch
+import json
 from pathlib import Path
 
 from app.models.audio import AudioDownloadResult
@@ -9,6 +13,205 @@ from app.services.task_artifact_service import TaskArtifactService
 
 
 class TaskArtifactServiceTest(unittest.TestCase):
+    def test_independent_stream_and_speaker_measurements_survive_parallel_callbacks(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = TaskArtifactService(Path(directory))
+            task = service.create_task_dir("independent-analysis")
+            service.update_status(task, "transcribing", received_seconds=40,
+                                  processed_seconds=0, total_seconds=80)
+            service.update_status(task, "transcribing", stage="diarizing",
+                                  speaker_detection_progress=.5)
+            service.update_status(task, "transcribing", received_seconds=60)
+            status = service.get_status("independent-analysis")
+            self.assertEqual(status["received_seconds"], 60)
+            self.assertEqual(status["processed_seconds"], 0)
+            self.assertEqual(status["speaker_detection_progress"], .5)
+            service.update_status(task, "failed", "network")
+            self.assertEqual(service.get_status("independent-analysis")["received_seconds"], 60)
+            service.update_status(task, "uploaded", attempt=2)
+            self.assertNotIn("received_seconds", service.get_status("independent-analysis"))
+
+    def test_audio_completion_survives_parallel_updates_and_failure(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = TaskArtifactService(Path(directory))
+            task = service.create_task_dir("audio-progress")
+            service.update_status(task, "transcribing", progress=.5,
+                                  processed_seconds=30, total_seconds=60, eta_seconds=10)
+            service.update_status(task, "transcribing", stage="diarizing")
+            status = service.get_status("audio-progress")
+            self.assertEqual(status["processed_seconds"], 30)
+            self.assertNotIn("progress", status)
+            self.assertNotIn("eta_seconds", status)
+            service.update_status(task, "failed", "upstream failed", failed_stage="transcribing")
+            service.update_status(task, "transcribing", stage="aligning")
+            status = service.get_status("audio-progress")
+            self.assertEqual(status["status"], "failed")
+            self.assertEqual(status["failed_stage"], "transcribing")
+            self.assertEqual(status["processed_seconds"], 30)
+            self.assertTrue(status["retryable"])
+            service.update_status(task, "uploaded", attempt=2)
+            self.assertNotIn("processed_seconds", service.get_status("audio-progress"))
+            self.assertEqual(service.get_status("audio-progress")["attempt"], 2)
+
+    def test_nonfinite_progress_is_not_persisted(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = TaskArtifactService(Path(directory))
+            task = service.create_task_dir("unknown-duration")
+            service.update_status(task, "transcribing", progress=float("nan"),
+                                  processed_seconds=float("inf"), total_seconds=float("nan"),
+                                  eta_seconds=float("inf"))
+            status = service.get_status("unknown-duration")
+            for key in ("progress", "processed_seconds", "total_seconds", "eta_seconds"):
+                self.assertNotIn(key, status)
+
+    def test_audio_finished_does_not_claim_task_or_summary_percentage(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = TaskArtifactService(Path(directory))
+            task = service.create_task_dir("summary-progress")
+            service.update_status(task, "transcribing", progress=1,
+                                  processed_seconds=60, total_seconds=60, eta_seconds=0)
+            for stage in ("saving_transcript", "summarizing", "saving_result", "success"):
+                service.update_status(task, "success" if stage == "success" else "summarizing", stage=stage)
+                status = service.get_status("summary-progress")
+                self.assertEqual(status["processed_seconds"], 60)
+                self.assertEqual(status["total_seconds"], 60)
+                self.assertEqual(status["stage"], stage)
+                self.assertNotIn("progress", status)
+                self.assertNotIn("eta_seconds", status)
+
+
+    def test_failure_preserves_stage_and_retry_attempt(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = TaskArtifactService(Path(directory))
+            task = service.create_task_dir("retry")
+            service.update_status(task, "uploaded", attempt=2)
+            service.update_status(task, "transcribing", stage="diarizing")
+            service.update_status(task, "failed", "local model failed")
+            status = service.get_status("retry")
+            self.assertEqual(status["failed_stage"], "diarizing")
+            self.assertEqual(status["attempt"], 2)
+            self.assertTrue(status["retryable"])
+
+    def test_progress_is_cleared_when_stage_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = TaskArtifactService(Path(directory))
+            task = service.create_task_dir("progress")
+            service.update_status(task, "transcribing", progress=.5,
+                                  processed_seconds=30, total_seconds=60, eta_seconds=10)
+            status = service.get_status("progress")
+            self.assertEqual(status["progress"], .5)
+            self.assertEqual(status["eta_seconds"], 10)
+            service.update_status(task, "summarizing")
+            self.assertNotIn("eta_seconds", service.get_status("progress"))
+
+    def test_interrupted_worker_becomes_retryable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = TaskArtifactService(Path(directory))
+            task = service.create_task_dir("interrupted")
+            service.write_json(task / "status.json", {
+                "status": "transcribing", "stage": "transcribing", "worker_id": "old",
+                "processed_seconds": 30, "total_seconds": 60, "progress": .5, "eta_seconds": 10})
+            status = service.get_status("interrupted")
+            self.assertEqual(status["status"], "failed")
+            self.assertEqual(status["failed_stage"], "transcribing")
+            self.assertTrue(status["retryable"])
+            self.assertEqual(status["processed_seconds"], 30)
+            self.assertNotIn("progress", status)
+            self.assertNotIn("eta_seconds", status)
+
+    def test_status_replace_retries_transient_windows_permission_error(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = TaskArtifactService(Path(temp_dir))
+            task_dir = service.create_task_dir("task-retry")
+
+            with (
+                patch(
+                    "app.services.task_artifact_service.os.replace",
+                    side_effect=[PermissionError("busy"), None],
+                ) as replace,
+                patch("app.services.task_artifact_service.time.sleep") as sleep,
+            ):
+                service.update_status(task_dir, "transcribing", "Transcribing audio...")
+
+            self.assertEqual(replace.call_count, 2)
+            sleep.assert_called_once_with(0.01)
+            self.assertFalse(list(task_dir.glob(".status.json.*.tmp")))
+
+    def test_status_polling_and_updates_do_not_race(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = TaskArtifactService(Path(temp_dir))
+            task_dir = service.create_task_dir("task-concurrent")
+            service.update_status(task_dir, "preparing")
+            start = threading.Event()
+
+            def write_statuses() -> None:
+                start.wait()
+                for index in range(100):
+                    service.update_status(task_dir, "transcribing", str(index))
+
+            def read_statuses() -> None:
+                start.wait()
+                for _ in range(200):
+                    payload = service.get_status("task-concurrent")
+                    self.assertIn(payload["status"], {"preparing", "transcribing"})
+
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                futures = [executor.submit(write_statuses)]
+                futures.extend(executor.submit(read_statuses) for _ in range(4))
+                start.set()
+                for future in futures:
+                    future.result()
+
+            self.assertEqual(service.get_status("task-concurrent")["message"], "99")
+            self.assertFalse(list(task_dir.glob(".status.json.*.tmp")))
+
+    def test_status_polling_does_not_race_with_task_directory_finalization(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = TaskArtifactService(Path(temp_dir))
+            task_dir = service.create_task_dir("task-finalize")
+            service.update_status(task_dir, "preparing")
+            start = threading.Event()
+
+            def finalize() -> Path:
+                start.wait()
+                return service.finalize_task_dir(task_dir, "会议记录", "task-finalize")
+
+            def poll() -> None:
+                start.wait()
+                for _ in range(100):
+                    self.assertEqual(service.get_status("task-finalize")["status"], "preparing")
+
+            with ThreadPoolExecutor(max_workers=5) as executor:
+                final_future = executor.submit(finalize)
+                poll_futures = [executor.submit(poll) for _ in range(4)]
+                start.set()
+                final_dir = final_future.result()
+                for future in poll_futures:
+                    future.result()
+
+            self.assertEqual(service.find_task_dir("task-finalize"), final_dir)
+
+    def test_truncated_title_is_windows_safe_and_mapping_survives(self):
+        with tempfile.TemporaryDirectory() as root:
+            service = TaskArtifactService(Path(root))
+            original = service.create_task_dir("task-space")
+            service.update_status(original, "downloading")
+            final = service.finalize_task_dir(original, "x" * 49 + " more", "task-space")
+            self.assertFalse(final.name.endswith((" ", ".")))
+            self.assertEqual(service.find_task_dir("task-space"), final)
+            self.assertEqual(service.sanitize_filename("..."), "note")
+
+    def test_mapping_write_failure_does_not_move_task(self):
+        with tempfile.TemporaryDirectory() as root:
+            service = TaskArtifactService(Path(root))
+            original = service.create_task_dir("task-error")
+            service.update_status(original, "downloading")
+            with patch.object(service, "write_text", side_effect=OSError("disk error")):
+                with self.assertRaises(OSError):
+                    service.finalize_task_dir(original, "Title", "task-error")
+            self.assertTrue(original.exists())
+            self.assertEqual(service.find_task_dir("task-error"), original)
+
     def test_status_and_result_round_trip(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             service = TaskArtifactService(Path(temp_dir))
@@ -20,6 +223,7 @@ class TaskArtifactServiceTest(unittest.TestCase):
                 language="zh",
                 full_text="hello world",
                 segments=[TranscriptSegment(start=0.0, end=1.0, text="hello world")],
+                metadata={"provider": "local"},
             )
             audio_meta = AudioDownloadResult(
                 file_path="demo.mp3",
@@ -44,6 +248,7 @@ class TaskArtifactServiceTest(unittest.TestCase):
             loaded_transcript = service.load_transcript(final_dir)
             self.assertIsNotNone(loaded_transcript)
             self.assertEqual(loaded_transcript.full_text, "hello world")
+            self.assertEqual(loaded_transcript.metadata, {"provider": "local"})
 
             status_payload = service.get_status("task-123")
             result_payload = service.get_result("task-123")
@@ -66,6 +271,35 @@ class TaskArtifactServiceTest(unittest.TestCase):
             self.assertTrue(staged.exists())
             self.assertEqual(staged.parent.name, "media")
             self.assertEqual(staged.read_bytes(), b"video")
+
+    def test_source_media_manifest_preserves_exact_bytes_and_rejects_escape(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            service = TaskArtifactService(Path(temp_dir) / "output")
+            task_dir = service.create_task_dir("task-source")
+            source_file = Path(temp_dir) / "meeting.webm"
+            original_bytes = b"\x1aE\xdf\xa3original-recorder-bytes"
+            source_file.write_bytes(original_bytes)
+
+            staged = service.stage_source_media(task_dir, str(source_file), media_kind="audio")
+            manifest = json.loads((task_dir / "source_media.json").read_text(encoding="utf-8"))
+
+            self.assertEqual(staged.read_bytes(), original_bytes)
+            self.assertEqual(manifest["relative_path"], "media/source_audio.webm")
+            self.assertEqual(manifest["media_kind"], "audio")
+            self.assertEqual(manifest["size_bytes"], len(original_bytes))
+            self.assertEqual(service.resolve_source_media(task_dir), staged.resolve())
+
+            staged.write_bytes(b"tampered")
+            self.assertIsNone(service.resolve_source_media(task_dir))
+            staged.write_bytes(original_bytes)
+
+            escaped = Path(temp_dir) / "outside.webm"
+            escaped.write_bytes(b"outside")
+            (task_dir / "source_media.json").write_text(
+                json.dumps({"relative_path": "../../outside.webm"}),
+                encoding="utf-8",
+            )
+            self.assertIsNone(service.resolve_source_media(task_dir))
 
 
 if __name__ == "__main__":

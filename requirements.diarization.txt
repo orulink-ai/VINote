@@ -1,0 +1,3 @@
+# CPU speaker segmentation and embeddings; models installed by setup_diarization.py.
+sherpa-onnx==1.13.8
+numpy>=1.26,<3

@@ -9,6 +9,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.db import Base
+from app.db_models import TeamDB, TeamMemberDB
 from app.models.note_library import NoteCreateRequest, PublicSharedNoteResponse
 from app.services.note_repository import NoteRepository
 from app.services.share_service import render_shared_note_html
@@ -81,6 +82,30 @@ class NoteShareRepositoryTest(unittest.TestCase):
             self.assertIsNotNone(disabled)
             self.assertFalse(disabled.share_enabled)
             self.assertIsNone(public_note)
+
+    def test_team_member_can_share_team_note(self):
+        with patch("app.services.note_repository.session_scope", self._session_scope):
+            with self._session_scope() as db:
+                db.add(TeamDB(id="team-1", name="Core", owner_id="user-1"))
+                db.add_all(
+                    [
+                        TeamMemberDB(team_id="team-1", user_id="user-1", role="owner"),
+                        TeamMemberDB(team_id="team-1", user_id="user-2", role="member"),
+                    ]
+                )
+
+            note = self.repository.create_note(
+                "user-1",
+                NoteCreateRequest(title="Shared team note", content="body", scope="team", team_id="team-1"),
+            )
+
+            share = self.repository.enable_share("user-2", note.id)
+            public_note = self.repository.get_shared_note(share.share_token)
+
+            self.assertIsNotNone(share)
+            self.assertTrue(share.share_enabled)
+            self.assertIsNotNone(public_note)
+            self.assertEqual(public_note.title, "Shared team note")
 
 
 class ShareHtmlRenderingTest(unittest.TestCase):

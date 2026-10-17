@@ -2,24 +2,55 @@
 Core note generation pipeline orchestration.
 """
 import logging
+import json
+import math
+import re
 import os
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
 from app.config import settings
+from app.services.task_model_source import freeze_generation_models
+from app.services.tracing_service import (content_summary, observation, traced,
+                                          update_current, update_trace_input)
 from app.downloaders.base import Downloader
 from app.downloaders.ytdlp_downloader import YtdlpDownloader
 from app.llm.prompts import normalize_output_language, normalize_summary_mode
 from app.models.audio import AudioDownloadResult
 from app.models.note import NoteResult
+from app.models.transcript import TranscriptResult, TranscriptSegment
 from app.services.llm_service import LLMService
 from app.services.note_media_service import NoteMediaService
 from app.services.screenshot_service import ScreenshotService
 from app.services.task_artifact_service import TaskArtifactService
-from app.services.transcription_service import TranscriptionService, create_transcriber
+from app.services.transcription_service import TranscriptionService
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(slots=True)
+class PipelineContext:
+    task_id: str
+    task_dir: Path
+    audio_meta: AudioDownloadResult
+    style: str
+    summary_mode: str
+    extras: str | None
+    output_language: str | None
+    model_profile_id: str | None
+    stt_profile_id: str | None
+    model_name: str | None
+    api_key: str | None
+    base_url: str | None
+    user_id: str | None
+    source_video_url: str | None
+    task_start_time: float
+    step_timings: dict[str, float]
+    diarize: bool = False
+    speaker_count: int | None = None
+    preloaded_transcript: TranscriptResult | None = None
 
 
 class NoteService:
@@ -33,16 +64,11 @@ class NoteService:
         media_service: NoteMediaService | None = None,
     ):
         self.downloader: Downloader = downloader or YtdlpDownloader()
-        self.transcription_service = transcription_service or TranscriptionService(create_transcriber())
+        self.transcription_service = transcription_service or TranscriptionService()
         self.llm_service = llm_service or LLMService()
         self.artifact_service = artifact_service or TaskArtifactService()
         self.screenshot_service = screenshot_service or ScreenshotService(self.downloader)
         self.media_service = media_service or NoteMediaService()
-        transcriber_name = getattr(
-            getattr(self.transcription_service, "transcriber", None),
-            "__class__",
-            self.transcription_service.__class__,
-        ).__name__
         llm_config = self.llm_service.resolve_config(
             user_id=None,
             model_profile_id=None,
@@ -52,10 +78,12 @@ class NoteService:
         )
         logger.info(
             "[NoteService] init transcriber=%s llm=%s",
-            transcriber_name,
+            settings.transcriber_type,
             llm_config.model_name,
         )
 
+    @traced("笔记生成全链路", root=True, as_type="chain")
+    @freeze_generation_models
     def generate(
         self,
         video_url: str,
@@ -66,22 +94,32 @@ class NoteService:
         extras: Optional[str] = None,
         output_language: str | None = None,
         model_profile_id: Optional[str] = None,
+        stt_profile_id: Optional[str] = None,
         model_name: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         user_id: Optional[str] = None,
+        diarize: bool = False,
+        speaker_count: int | None = None,
     ) -> NoteResult:
         del platform
 
         task_start_time = time.time()
         task_dir = self.artifact_service.create_task_dir(task_id)
+        if user_id:
+            (task_dir / "recording_owner").write_text(user_id, encoding="utf-8")
         step_timings: dict[str, float] = {}
 
         try:
+            from app.services.vilab_cloud_service import VILabCloudService
+
+            VILabCloudService().validate_ready(user_id, needs_stt=True)
             step_start = time.time()
             self.artifact_service.update_status(task_dir, "downloading", "Downloading audio...")
             audio_meta = self._download_audio(video_url=video_url, task_dir=task_dir)
             step_timings["download"] = time.time() - step_start
+            update_trace_input(title=audio_meta.title, duration_seconds=audio_meta.duration,
+                               platform=audio_meta.platform)
 
             return self._run_pipeline(
                 task_id=task_id,
@@ -92,20 +130,28 @@ class NoteService:
                 extras=extras,
                 output_language=output_language,
                 model_profile_id=model_profile_id,
+                stt_profile_id=stt_profile_id,
                 model_name=model_name,
                 api_key=api_key,
                 base_url=base_url,
+                preloaded_transcript=None,
                 user_id=user_id,
                 source_video_url=video_url,
                 task_start_time=task_start_time,
                 step_timings=step_timings,
+                diarize=diarize,
+                speaker_count=speaker_count,
             )
         except Exception as exc:
             logger.error("[Pipeline] task=%s failed: %s", task_id, exc, exc_info=True)
-            if task_dir.exists():
-                self.artifact_service.update_status(task_dir, "failed", str(exc))
+            failed_dir = self.artifact_service.find_task_dir(task_id) or task_dir
+            if failed_dir.exists():
+                from app.services.task_failure import failure_details
+                self.artifact_service.update_status(failed_dir, "failed", str(exc), **failure_details(exc))
             raise
 
+    @traced("笔记生成全链路", root=True, as_type="chain")
+    @freeze_generation_models
     def generate_from_file(
         self,
         file_path: str,
@@ -116,24 +162,37 @@ class NoteService:
         extras: Optional[str] = None,
         output_language: str | None = None,
         model_profile_id: Optional[str] = None,
+        stt_profile_id: Optional[str] = None,
         model_name: Optional[str] = None,
         api_key: Optional[str] = None,
         base_url: Optional[str] = None,
         user_id: Optional[str] = None,
+        diarize: bool = False,
+        speaker_count: int | None = None,
     ) -> NoteResult:
         task_start_time = time.time()
         if not os.path.exists(file_path):
             raise FileNotFoundError(f"Audio file does not exist: {file_path}")
 
         task_dir = self.artifact_service.create_task_dir(task_id)
+        if user_id:
+            (task_dir / "recording_owner").write_text(user_id, encoding="utf-8")
         step_timings: dict[str, float] = {}
 
         try:
+            if diarize:
+                from app.services.speaker_diarization_service import SpeakerDiarizationService
+                SpeakerDiarizationService.require_ready()
+            from app.services.vilab_cloud_service import VILabCloudService
+
+            VILabCloudService().validate_ready(user_id, needs_stt=True)
             step_start = time.time()
             self.artifact_service.update_status(task_dir, "preparing", "Preparing local audio file...")
             audio_meta = self._build_local_audio_meta(file_path=file_path, task_id=task_id, title=title)
             self.artifact_service.save_audio_meta(task_dir, audio_meta)
             step_timings["prepare"] = time.time() - step_start
+            update_trace_input(title=audio_meta.title, duration_seconds=audio_meta.duration,
+                               file_size_bytes=Path(file_path).stat().st_size)
 
             return self._run_pipeline(
                 task_id=task_id,
@@ -144,20 +203,91 @@ class NoteService:
                 extras=extras,
                 output_language=output_language,
                 model_profile_id=model_profile_id,
+                stt_profile_id=stt_profile_id,
                 model_name=model_name,
                 api_key=api_key,
                 base_url=base_url,
                 user_id=user_id,
                 source_video_url=None,
+                diarize=diarize,
+                speaker_count=speaker_count,
                 task_start_time=task_start_time,
+                preloaded_transcript=None,
                 step_timings=step_timings,
             )
         except Exception as exc:
             logger.error("[Pipeline] local task=%s failed: %s", task_id, exc, exc_info=True)
-            if task_dir.exists():
-                self.artifact_service.update_status(task_dir, "failed", str(exc))
+            failed_dir = self.artifact_service.find_task_dir(task_id) or task_dir
+            if failed_dir.exists():
+                from app.services.task_failure import failure_details
+                self.artifact_service.update_status(failed_dir, "failed", str(exc), **failure_details(exc))
             raise
 
+    @traced("笔记生成全链路", root=True, as_type="chain")
+    @freeze_generation_models
+    def generate_from_transcript(
+        self,
+        transcript: TranscriptResult,
+        task_id: str,
+        title: str | None = None,
+        style: str = "meeting",
+        summary_mode: str = "default",
+        extras: Optional[str] = None,
+        output_language: str | None = None,
+        model_profile_id: Optional[str] = None,
+        stt_profile_id: Optional[str] = None,
+        model_name: str | None = None,
+        api_key: str | None = None,
+        base_url: str | None = None,
+        user_id: Optional[str] = None,
+    ) -> NoteResult:
+        task_start_time = time.time()
+        task_dir = self.artifact_service.create_task_dir(task_id)
+        if user_id:
+            (task_dir / "recording_owner").write_text(user_id, encoding="utf-8")
+        step_timings: dict[str, float] = {}
+
+        try:
+            from app.services.vilab_cloud_service import VILabCloudService
+
+            VILabCloudService().validate_ready(user_id, needs_stt=False)
+            step_start = time.time()
+            self.artifact_service.update_status(task_dir, "preparing", "Preparing uploaded transcript...")
+            audio_meta = self._build_transcript_audio_meta(transcript=transcript, task_id=task_id, title=title)
+            self.artifact_service.save_audio_meta(task_dir, audio_meta)
+            step_timings["prepare"] = time.time() - step_start
+            update_trace_input(title=audio_meta.title, duration_seconds=audio_meta.duration,
+                               transcript=content_summary(transcript.full_text),
+                               transcript_segments=len(transcript.segments), stt_skipped=True)
+
+            return self._run_pipeline(
+                task_id=task_id,
+                task_dir=task_dir,
+                audio_meta=audio_meta,
+                style=style,
+                summary_mode=summary_mode,
+                extras=extras,
+                output_language=output_language,
+                model_profile_id=model_profile_id,
+                stt_profile_id=stt_profile_id,
+                model_name=model_name,
+                api_key=api_key,
+                base_url=base_url,
+                user_id=user_id,
+                source_video_url=None,
+                preloaded_transcript=transcript,
+                task_start_time=task_start_time,
+                step_timings=step_timings,
+            )
+        except Exception as exc:
+            logger.error("[Pipeline] transcript task=%s failed: %s", task_id, exc, exc_info=True)
+            failed_dir = self.artifact_service.find_task_dir(task_id) or task_dir
+            if failed_dir.exists():
+                from app.services.task_failure import failure_details
+                self.artifact_service.update_status(failed_dir, "failed", str(exc), **failure_details(exc))
+            raise
+
+    @traced("下载源媒体")
     def _download_audio(self, *, video_url: str, task_dir: Path) -> AudioDownloadResult:
         cached_audio = self.artifact_service.load_audio_meta(task_dir)
         if cached_audio:
@@ -168,6 +298,7 @@ class NoteService:
         self.artifact_service.save_audio_meta(task_dir, audio_meta)
         return audio_meta
 
+    @traced("准备本地媒体")
     def _build_local_audio_meta(self, *, file_path: str, task_id: str, title: str | None) -> AudioDownloadResult:
         audio_title = title or os.path.splitext(os.path.basename(file_path))[0]
         return AudioDownloadResult(
@@ -180,6 +311,29 @@ class NoteService:
             raw_info={},
         )
 
+    @traced("准备上传字幕")
+    def _build_transcript_audio_meta(
+        self,
+        *,
+        transcript: TranscriptResult,
+        task_id: str,
+        title: str | None,
+    ) -> AudioDownloadResult:
+        transcript_title = title or "Uploaded transcript"
+        return AudioDownloadResult(
+            file_path="",
+            title=transcript_title,
+            duration=max(
+                0.0,
+                max((segment.end for segment in transcript.segments), default=0.0),
+            ),
+            video_id=task_id,
+            platform="transcript",
+            cover_url=None,
+            raw_info={},
+        )
+
+
     def _run_pipeline(
         self,
         *,
@@ -191,105 +345,269 @@ class NoteService:
         extras: str | None,
         output_language: str | None,
         model_profile_id: str | None,
+        stt_profile_id: str | None,
         model_name: str | None,
         api_key: str | None,
         base_url: str | None,
+        preloaded_transcript: TranscriptResult | None = None,
         user_id: str | None,
         source_video_url: str | None,
         task_start_time: float,
         step_timings: dict[str, float],
+        diarize: bool = False,
+        speaker_count: int | None = None,
     ) -> NoteResult:
         resolved_output_language = normalize_output_language(output_language)
         resolved_summary_mode = normalize_summary_mode(summary_mode)
         final_dir = self.artifact_service.finalize_task_dir(task_dir, audio_meta.title, task_id)
+        self._rebase_audio_meta_path_after_finalize(audio_meta, original_task_dir=task_dir, final_dir=final_dir)
+        self.artifact_service.save_audio_meta(final_dir, audio_meta)
+        context = PipelineContext(
+            task_id=task_id,
+            task_dir=final_dir,
+            audio_meta=audio_meta,
+            style=style,
+            summary_mode=resolved_summary_mode,
+            extras=extras,
+            output_language=resolved_output_language,
+            model_profile_id=model_profile_id,
+            stt_profile_id=stt_profile_id,
+            model_name=model_name,
+            api_key=api_key,
+            base_url=base_url,
+            user_id=user_id,
+            preloaded_transcript=preloaded_transcript,
+            diarize=diarize,
+            speaker_count=speaker_count,
+            source_video_url=source_video_url,
+            task_start_time=task_start_time,
+            step_timings=step_timings,
+        )
 
         try:
-            step_start = time.time()
-            self.artifact_service.update_status(final_dir, "transcribing", "Transcribing audio...")
-            transcript = self.transcription_service.transcribe(
-                audio_path=audio_meta.file_path,
-                load_cached=lambda: self.artifact_service.load_transcript(final_dir),
-                save_transcript=lambda result: self.artifact_service.save_transcript(final_dir, result),
-                update_status=lambda status, message: self.artifact_service.update_status(final_dir, status, message),
-            )
-            step_timings["transcribe"] = time.time() - step_start
+            from app.services.vilab_cloud_service import VILabCloudService
 
-            step_start = time.time()
-            self.artifact_service.update_status(final_dir, "summarizing", "Generating note...")
-            llm = self.llm_service.create_summarizer(
-                user_id=user_id,
-                model_profile_id=model_profile_id,
-                model_name=model_name,
-                api_key=api_key,
-                base_url=base_url,
-            )
-            markdown = llm.summarize(
-                title=audio_meta.title,
-                segments=transcript.segments,
-                style=style,
-                summary_mode=resolved_summary_mode,
-                extras=extras,
-                output_language=resolved_output_language,
-                progress_callback=lambda message: self.artifact_service.update_status(
-                    final_dir,
-                    "summarizing",
-                    message,
-                ),
-            )
-            step_timings["summarize"] = time.time() - step_start
+            with VILabCloudService().task_snapshot(user_id):
+                transcript = self._transcribe_audio(context)
+                markdown = self._summarize_audio(context, transcript)
+            markdown = self._enrich_markdown_with_media(context, transcript, markdown)
+            result = self._build_result(context, transcript, markdown)
 
-            local_audio_path = self.artifact_service.stage_media_file(
-                final_dir,
-                audio_meta.file_path,
-                target_stem="source_audio",
-            )
-            media_url = f"/api/task/{task_id}/artifacts/media/{local_audio_path.name}"
-            local_video_path = None
-
-            if source_video_url:
-                prepared_video = self.screenshot_service.prepare_local_video(
-                    video_url=source_video_url,
-                    task_dir=final_dir,
-                    task_id=task_id,
-                )
-                if prepared_video:
-                    local_video_path, media_url = prepared_video
-
-                markdown = self.media_service.enrich_markdown(
-                    markdown=markdown,
-                    transcript_segments=transcript.segments,
-                    video_url=media_url,
-                    output_language=resolved_output_language,
-                )
-                step_start = time.time()
-                self.artifact_service.update_status(final_dir, "screenshots", "Processing screenshots...")
-                markdown = self.screenshot_service.inject_screenshots(
-                    video_url=source_video_url,
-                    markdown=markdown,
-                    task_dir=final_dir,
-                    task_id=task_id,
-                    media_url=media_url,
-                    local_video_path=local_video_path,
-                )
-                step_timings["screenshots"] = time.time() - step_start
-
-            self.artifact_service.save_markdown(final_dir, markdown)
-            result = NoteResult(
-                markdown=markdown,
-                transcript=transcript,
-                audio_meta=audio_meta,
-                summary_mode=resolved_summary_mode,
-                output_dir=str(final_dir),
-            )
-            self.artifact_service.save_result(final_dir, result)
-
-            step_timings["total"] = time.time() - task_start_time
-            self.artifact_service.update_status(final_dir, "success", "Note generated successfully")
+            with observation(
+                "保存结果",
+                input={"task_id": context.task_id, "markdown_characters": len(markdown)},
+            ) as span:
+                self.artifact_service.update_status(
+                    final_dir, "summarizing", "正在保存生成结果…", stage="saving_result")
+                self.artifact_service.save_markdown(final_dir, markdown)
+                self.artifact_service.save_result(final_dir, result)
+                self.artifact_service.update_status(final_dir, "success", "Note generated successfully")
+                if span is not None:
+                    span.update(output={"status": "success", "task_id": context.task_id})
+            update_current(metadata={"stage_duration_ms": {
+                key: round(value * 1000) for key, value in context.step_timings.items()
+            }})
             logger.info("[Pipeline] task=%s completed timings=%s", task_id, step_timings)
             return result
         except Exception as exc:
-            self.artifact_service.update_status(final_dir, "failed", str(exc))
+            from app.services.task_failure import failure_details
+            self.artifact_service.update_status(final_dir, "failed", str(exc), **failure_details(exc))
             raise
+
+    @staticmethod
+    def _rebase_audio_meta_path_after_finalize(
+        audio_meta: AudioDownloadResult,
+        *,
+        original_task_dir: Path,
+        final_dir: Path,
+    ) -> None:
+        if not audio_meta.file_path:
+            return
+
+        source_path = Path(audio_meta.file_path)
+        try:
+            relative_path = source_path.resolve().relative_to(original_task_dir.resolve())
+        except ValueError:
+            return
+
+        audio_meta.file_path = str(final_dir / relative_path)
+
+    @traced("语音转写", as_type="chain")
+    def _transcribe_audio(self, context: PipelineContext):
+        from app.services.asr_execution_binding import require_task_execution
+        require_task_execution(context.user_id, context.task_id, context.task_dir, context.audio_meta.file_path)
+        if context.preloaded_transcript is not None:
+            update_current(
+                input={"source": "uploaded_transcript", "stt_skipped": True},
+                metadata={"source": "uploaded_transcript", "stt_skipped": True},
+                output={"text": content_summary(context.preloaded_transcript.full_text),
+                        "segment_count": len(context.preloaded_transcript.segments)},
+            )
+            self.artifact_service.update_status(context.task_dir, "transcribing", "Using uploaded transcript...")
+            self.artifact_service.save_transcript(context.task_dir, context.preloaded_transcript)
+            context.step_timings["transcribe"] = 0.0
+            return context.preloaded_transcript
+
+        step_start = time.time()
+        update_current(input={"audio_duration_seconds": context.audio_meta.duration,
+                              "diarization": context.diarize,
+                              "speaker_count": context.speaker_count or "auto"})
+        self.artifact_service.update_status(context.task_dir, "transcribing", "Transcribing audio...")
+        transcript = self.transcription_service.transcribe(
+            audio_path=context.audio_meta.file_path,
+            load_cached=lambda: self.artifact_service.load_transcript(context.task_dir),
+            save_transcript=lambda result: self.artifact_service.save_transcript(context.task_dir, result),
+            update_status=lambda status, message, **details: self.artifact_service.update_status(
+                context.task_dir,
+                status,
+                message,
+                **details,
+            ),
+            user_id=context.user_id,
+            stt_profile_id=context.stt_profile_id,
+            chunk_cache_dir=context.task_dir / "transcription_chunks",
+            **({"diarize": True, "speaker_count": context.speaker_count} if context.diarize else {}),
+        )
+        duration = context.audio_meta.duration
+        completed_audio = duration if math.isfinite(duration) and duration > 0 else None
+        self.artifact_service.update_status(
+            context.task_dir, "transcribing", "完整转写已保存，准备生成正文…", stage="transcript_ready",
+            processed_seconds=completed_audio, total_seconds=completed_audio,
+        )
+        context.step_timings["transcribe"] = time.time() - step_start
+        update_current(
+            output={"text": content_summary(transcript.full_text),
+                    "language": transcript.language,
+                    "segment_count": len(transcript.segments),
+                    "metadata": transcript.metadata},
+            metadata={"segment_count": len(transcript.segments),
+                      "latency_ms": round(context.step_timings["transcribe"] * 1000)},
+        )
+        return transcript
+
+    @traced("生成总结", as_type="chain")
+    def _summarize_audio(self, context: PipelineContext, transcript):
+        step_start = time.time()
+        self.artifact_service.update_status(context.task_dir, "summarizing", "Generating note...")
+        llm = self.llm_service.create_summarizer(
+            user_id=context.user_id,
+            model_profile_id=context.model_profile_id,
+            model_name=context.model_name,
+            api_key=context.api_key,
+            base_url=context.base_url,
+        )
+        summary_extras = context.extras
+        # Meeting visualization generation was cancelled. Preserve historical
+        # media, but do not run a new visual-analysis/illustration pipeline.
+        if context.style == "meeting" and transcript.metadata.get("unrecognized_segments"):
+            coverage = json.dumps(transcript.metadata["unrecognized_segments"], ensure_ascii=False)
+            summary_extras = "\n\n".join(filter(None, [summary_extras,
+                "【识别覆盖缺口，时间为录音偏移秒数】" + coverage +
+                "\n这些区间未识别出文字，不代表确定静音；不得推断缺失发言、决定或行动。只依据已有转写和独立视觉证据总结。"
+            ]))
+        summary_segments = transcript.segments
+        if context.style == "meeting" and transcript.metadata.get("asr_evidence"):
+            # Supply independent evidence rather than estimated sentence attribution.
+            raw = transcript.metadata["asr_evidence"]
+            turns = transcript.metadata.get("speaker_evidence", [])
+            summary_segments = [TranscriptSegment(**segment) for segment in raw["segments"]] or [
+                TranscriptSegment(0, context.audio_meta.duration, raw["full_text"])]
+            for segment in summary_segments:
+                segment.timestamp_estimated = raw.get("metadata", {}).get("timestamp_granularity") != "segment"
+                segment.speaker_evidence = [turn for turn in turns
+                                           if turn["end"] > segment.start and turn["start"] < segment.end]
+        markdown = llm.summarize(
+            title=context.audio_meta.title,
+            segments=summary_segments,
+            style=context.style,
+            summary_mode=context.summary_mode,
+            extras=summary_extras,
+            output_language=context.output_language,
+            progress_callback=lambda message: self.artifact_service.update_status(
+                context.task_dir,
+                "summarizing",
+                message,
+            ),
+        )
+        context.step_timings["summarize"] = time.time() - step_start
+        update_current(
+            input={"title": context.audio_meta.title, "summary_mode": context.summary_mode,
+                   "style": context.style, "transcript": content_summary(transcript.full_text)},
+            output={"note": content_summary(markdown)},
+            metadata={"latency_ms": round(context.step_timings["summarize"] * 1000)},
+        )
+        return markdown
+
+    @traced("提取关键帧")
+    def _enrich_markdown_with_media(self, context: PipelineContext, transcript, markdown: str) -> str:
+        self.artifact_service.update_status(
+            context.task_dir, "summarizing", "正在整理正文与媒体引用…", stage="enriching_media")
+        if context.style == "meeting" or transcript.metadata.get("source_kind") == "document":
+            return re.sub(r"\[\[Screenshot:\d{1,3}:\d{2}\]\]", "", markdown)
+        update_current(input={"duration_seconds": context.audio_meta.duration})
+        media_url = ""
+        if self.artifact_service.resolve_source_media(context.task_dir) or (context.audio_meta.file_path and os.path.exists(context.audio_meta.file_path)):
+            local_audio_file = self.artifact_service.resolve_source_media(context.task_dir) or self.artifact_service.stage_media_file(
+                context.task_dir,
+                context.audio_meta.file_path,
+                target_stem="source_audio",
+            )
+            media_url = f"/api/task/{context.task_id}/artifacts/media/{local_audio_file.name}"
+        local_video_path = None
+
+        if context.source_video_url:
+            prepared_video = self.screenshot_service.prepare_local_video(
+                video_url=context.source_video_url,
+                task_dir=context.task_dir,
+                task_id=context.task_id,
+            )
+            if prepared_video:
+                local_video_path, media_url = prepared_video
+        else:
+            manifest_path = context.task_dir / "source_media.json"
+            try:
+                manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                manifest = {}
+            if manifest.get("media_kind") == "video":
+                local_video_path = self.artifact_service.resolve_source_media(context.task_dir)
+                if local_video_path:
+                    media_url = f"/api/task/{context.task_id}/artifacts/media/{local_video_path.name}"
+            if not local_video_path:
+                update_current(output={"status": "skipped", "reason": "audio_only"})
+                return re.sub(r"\[\[Screenshot:\d{1,3}:\d{2}\]\]", "", markdown)
+
+        markdown = self.media_service.enrich_markdown(
+            markdown=markdown,
+            transcript_segments=transcript.segments,
+            video_url=media_url,
+            output_language=context.output_language,
+        )
+
+        step_start = time.time()
+        self.artifact_service.update_status(context.task_dir, "screenshots", "Processing screenshots...")
+        markdown = self.screenshot_service.inject_screenshots(
+            video_url=context.source_video_url or "",
+            markdown=markdown,
+            task_dir=context.task_dir,
+            task_id=context.task_id,
+            media_url=media_url,
+            local_video_path=local_video_path,
+        )
+        context.step_timings["screenshots"] = time.time() - step_start
+        update_current(output={"status": "success", "note": content_summary(markdown)},
+                       metadata={"latency_ms": round(context.step_timings["screenshots"] * 1000)})
+        return markdown
+
+    def _build_result(self, context: PipelineContext, transcript, markdown: str) -> NoteResult:
+        context.step_timings["total"] = time.time() - context.task_start_time
+        return NoteResult(
+            markdown=markdown,
+            transcript=transcript,
+            audio_meta=context.audio_meta,
+            summary_mode=context.summary_mode,
+            output_dir=str(context.task_dir),
+        )
 
     def get_status(self, task_id: str) -> dict:
         return self.artifact_service.get_status(task_id)

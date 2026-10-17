@@ -49,7 +49,7 @@ class SummaryModeStrategyTest(unittest.TestCase):
         self.assertTrue(any("chunk notes" in item for item in progress))
         self.assertTrue(any("Combining chunk notes" in item for item in progress))
 
-    def test_default_mode_switches_to_hierarchical_for_long_input(self):
+    def test_default_mode_keeps_full_input_in_one_generation(self):
         llm = RecordingLLM()
         segments = [
             TranscriptSegment(start=float(index), end=float(index + 1), text="y" * 5000)
@@ -63,7 +63,9 @@ class SummaryModeStrategyTest(unittest.TestCase):
             output_language="en",
         )
 
-        self.assertGreaterEqual(len(llm.calls), 3)
+        self.assertEqual(len(llm.calls), 1)
+        for segment in segments:
+            self.assertIn(segment.text, llm.calls[0]['user_prompt'])
 
 
 if __name__ == "__main__":
