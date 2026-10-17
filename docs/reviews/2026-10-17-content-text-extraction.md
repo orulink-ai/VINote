@@ -26,3 +26,13 @@ cloud ASGI 的 ContentCredentialMiddleware 明确保护两个新路径，使用�
 相关回归还包括既有文档解析、DNS固定连接与云端generation离线测试。源码及离线通过不证明公网部署或App端已经改走指定VILab；本次不部署、不构建、不变更版本、不调用ASR/LLM。共享服务的实际部署和App两通道路由验收由后续工作完成。
 
 本地命令：`.venv/Scripts/python.exe -m pytest tests/test_content_extraction.py tests/test_document_sources.py tests/test_document_source_network.py tests/test_cloud_content_runtime.py -q --disable-warnings --maxfail=1`，101项全部通过。提交前fetch确认origin/dev仍为15e1d1c；功能分支正常提交并向dev开PR，CI审查通过后由用户合并，部署必须使用合并提交，不能直接改服务器或部署未合入分支。
+
+## 后续修正：提取请求内存并发边界
+
+最初实现排除了 generation writing，但在读取 multipart 全部文件后才排入 AnyIO 线程池，线程池限额不能约束已经驻留的上传体。本修正基于已合并dev提交2a3d945，只在提取router增加独立的每进程单槽：鉴权后、读取JSON/body/form前非阻塞取得；URL和file共享该槽，占满立即429并返回Retry-After，不等待、不读取body、不开始提取或创建任何generation回执。
+
+槽覆盖请求解析、文件读取、线程池排队及同步解析和响应结束，在finally释放。请求取消也等待已排队/运行的解析线程真正完成，不能留下仍持有文件bytes的worker同时放行下一请求。JSON/表单/超限/解析失败及意外worker异常均释放。没有把提取重新归入generation writing，也不改变身份验证、caps或模型策略。
+
+此上限约束**每进程同时保留并处理的提取请求数为1**，仍沿用单请求20MiB文件、600000字符等限制；不是宣称进程总RSS小于20MiB。多worker/多副本各有独立槽，容量规划须计入进程数量。
+
+新增9项离线反例/回归：使用真实cloud ASGI并发请求和阻塞worker，两个接口的后续请求都429、receive调用为0；正常完成及取消期间均保持单槽，worker结束后下一请求可进入；五种失败路径验证释放。模型/ASR/任务/回执失败守卫与无身份映射检查继续生效。相同4个文件回归现为110项全部通过，未真实联网、推理或构建。提交走新功能分支与dev PR，合并后才可按最终合并SHA统一部署，本修正尚未部署。

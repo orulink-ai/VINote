@@ -2,6 +2,8 @@
 import hashlib
 import io
 import socket
+import asyncio
+import threading
 from zipfile import ZipFile
 
 import httpx
@@ -233,3 +235,105 @@ def test_device_route_auth_and_shared_response_contract(monkeypatch):
     app.dependency_overrides[get_generation_user] = lambda: AuthenticatedUser(user_id='fixture-owner')
     assert_payload(client.post('/api/content-service/extract-file', files={'file': ('a.txt', b'body')}), 'body', 'transcript')
     client.close()
+
+
+@pytest.mark.parametrize('first_path', ['extract-url', 'extract-file'])
+@pytest.mark.parametrize('cancel_first', [False, True])
+def test_extraction_slot_bounds_workers_and_rejects_before_body_receive(runtime, monkeypatch, first_path, cancel_first):
+    entered, finish = threading.Event(), threading.Event()
+    calls = []
+    reads = {}
+
+    def held(*args):
+        calls.append(args)
+        entered.set()
+        if not finish.wait(5):
+            raise RuntimeError('test worker release timed out')
+        return extraction.result('Saved', 'body', 'transcript')
+
+    monkeypatch.setattr(extraction, 'extract_url', held)
+    monkeypatch.setattr(extraction, 'extract_file', held)
+
+    async def invoke(path, label):
+        reads[label] = 0
+        multipart = path.endswith('extract-file')
+        body = (b'--fixture\r\nContent-Disposition: form-data; name="file"; filename="a.txt"\r\n'
+                b'Content-Type: text/plain\r\n\r\nbody\r\n--fixture--\r\n') if multipart else b'{"url":"https://example.com"}'
+        content_type = b'multipart/form-data; boundary=fixture' if multipart else b'application/json'
+        messages = []
+        scope = {'type': 'http', 'asgi': {'version': '3.0'}, 'http_version': '1.1',
+                 'method': 'POST', 'scheme': 'http', 'path': '/api/content-service/' + path,
+                 'raw_path': ('/api/content-service/' + path).encode(), 'query_string': b'',
+                 'root_path': '', 'client': ('127.0.0.1', 1), 'server': ('testserver', 80),
+                 'headers': [(b'authorization', b'Bearer alice-token'), (b'content-type', content_type)]}
+
+        async def receive():
+            reads[label] += 1
+            return {'type': 'http.request', 'body': body, 'more_body': False}
+
+        async def send(message):
+            messages.append(message)
+
+        await runtime.app(scope, receive, send)
+        return next(message for message in messages if message['type'] == 'http.response.start')
+
+    async def scenario():
+        first = asyncio.create_task(invoke(first_path, 'first'))
+        try:
+            assert await asyncio.to_thread(entered.wait, 3)
+            if cancel_first:
+                first.cancel()
+                await asyncio.sleep(0)
+                await asyncio.sleep(0)
+            # Saturate with both forms, not a thread-pool limiter acquired after upload.
+            replies = await asyncio.wait_for(asyncio.gather(
+                invoke('extract-file', 'queued-file'), invoke('extract-url', 'queued-url')), 2)
+            assert [reply['status'] for reply in replies] == [429, 429]
+            assert reads['queued-file'] == reads['queued-url'] == 0
+            assert len(calls) == 1 and not first.done()
+            for reply in replies:
+                assert (b'retry-after', b'1') in reply['headers']
+        finally:
+            finish.set()
+            if cancel_first:
+                with pytest.raises(asyncio.CancelledError):
+                    await first
+            else:
+                assert (await first)['status'] == 200
+        # Finally releases on success, so the next request is admitted.
+        assert (await invoke('extract-file', 'next'))['status'] == 200
+        assert reads['next'] > 0 and len(calls) == 2
+
+    asyncio.run(scenario())
+    assert runtime.provider_calls == [] and list(runtime.root.iterdir()) == []
+    from app.services.cloud_content_identity import ContentIdentityDB
+    with db.session_scope() as session:
+        assert session.scalar(select(func.count()).select_from(ContentIdentityDB)) == 0
+
+
+@pytest.mark.parametrize('failure', ['invalid-json', 'invalid-form', 'oversize', 'parser', 'worker'])
+def test_extraction_slot_released_after_failure(runtime, monkeypatch, failure):
+    if failure == 'invalid-json':
+        response = runtime.client.post('/api/content-service/extract-url', headers=headers(), content=b'{')
+        assert response.status_code == 422
+    elif failure == 'invalid-form':
+        response = runtime.client.post('/api/content-service/extract-file', headers=headers(), data={'extra': 'field'}, files={'file': ('a.txt', b'body')})
+        assert response.status_code == 400
+    elif failure == 'oversize':
+        response = runtime.client.post('/api/content-service/extract-file', headers={**headers(), 'Content-Length': str(extraction.MAX_BYTES + 65537)})
+        assert response.status_code == 413
+    else:
+        original = extraction.extract_file
+
+        def fail(*args):
+            raise ValueError('bad parser') if failure == 'parser' else RuntimeError('unexpected worker failure')
+
+        monkeypatch.setattr(extraction, 'extract_file', fail)
+        if failure == 'parser':
+            assert runtime.client.post('/api/content-service/extract-file', headers=headers(), files={'file': ('a.txt', b'body')}).status_code == 422
+        else:
+            with pytest.raises(RuntimeError, match='unexpected worker'):
+                runtime.client.post('/api/content-service/extract-file', headers=headers(), files={'file': ('a.txt', b'body')})
+        monkeypatch.setattr(extraction, 'extract_file', original)
+    assert_payload(runtime.client.post('/api/content-service/extract-file', headers=headers(),
+                   files={'file': ('a.txt', b'body')}), 'body', 'transcript')
