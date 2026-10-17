@@ -238,7 +238,7 @@ Desktop packaging: scripts/desktop_backend.py initializes per-install secrets an
 
 Fresh-checkout startup: yarn dev runs bootstrap-dev.mjs to install frontend dependencies, create .venv and install requirements, and create .env with unique local secrets and config/desktop-public.json account defaults. Existing .env is preserved. --setup-only performs initialization without opening a window. Node 22+, Python, Rust/platform compilers and FFmpeg are system prerequisites.
 
-Cloud shared runtime startup creates registered VINote tables and revokes PUBLIC/anon/authenticated direct access with RLS in one PostgreSQL transaction. `workspace_bootstrap.py` initializes a private content-image bucket using server credentials; existing public buckets fail startup. Configure once and start with `deploy/workspace/compose.yml`; never claim deployment or cloud migration from a local/mock regression.
+Historical shared runtime startup creates registered VINote tables and revokes PUBLIC/anon/authenticated direct access with RLS in one PostgreSQL transaction. `workspace_bootstrap.py` initializes a private content-image bucket using server credentials; existing public buckets fail startup. The cancelled synchronization deployment files under `deploy/workspace/` are historical material, not current setup instructions. Current explicitly enabled content processing uses `deploy/content/` and `docs/cloud-content-runtime.md`; do not restore cross-device synchronization or infer deployment from local/mock checks.
 
 ## Meeting recording and speaker diarization
 
