@@ -1,5 +1,7 @@
 """Authenticated, ephemeral text extraction for clients' selected model service."""
 import json
+import threading
+import asyncio
 
 import anyio
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -10,6 +12,34 @@ from app.services.generation_auth_service import get_generation_user
 from app.services import text_extraction_service as extraction
 
 router = APIRouter(tags=['content-extraction'])
+# One retained upload/parser result per process, independent from generation.
+_extraction_slot = threading.BoundedSemaphore(1)
+
+
+async def extraction_slot(user=Depends(get_generation_user)):
+    if not _extraction_slot.acquire(blocking=False):
+        raise HTTPException(429, '内容提取正在处理另一项请求，请稍后重试；未读取或提交此来源',
+                            headers={'Retry-After': '1', 'Cache-Control': 'no-store'})
+    try:
+        yield
+    finally:
+        _extraction_slot.release()
+
+
+async def run_extraction(operation):
+    # asyncio cancellation must not release the request's memory permit while
+    # a thread still retains the uploaded bytes. Never abandon a queued worker.
+    work = asyncio.create_task(anyio.to_thread.run_sync(operation))
+    try:
+        return await asyncio.shield(work)
+    finally:
+        while not work.done():
+            try:
+                await asyncio.shield(work)
+            except asyncio.CancelledError:
+                continue
+            except Exception:
+                break
 
 
 class ExtractUrl(BaseModel):
@@ -40,7 +70,7 @@ def bound_body(request, maximum):
 
 
 @router.post('/content-service/extract-url')
-async def extract_url(request: Request, response: Response, user=Depends(get_generation_user)):
+async def extract_url(request: Request, response: Response, slot=Depends(extraction_slot)):
     response.headers['Cache-Control'] = 'no-store'
     bound_body(request, 32768)
     try:
@@ -48,13 +78,13 @@ async def extract_url(request: Request, response: Response, user=Depends(get_gen
     except (ValueError, ValidationError):
         raise HTTPException(422, '仅接受一个有效公开网页或文档链接，不接受模型配置') from None
     try:
-        return await anyio.to_thread.run_sync(lambda: extraction.extract_url(payload.url))
+        return await run_extraction(lambda: extraction.extract_url(payload.url))
     except (ValueError, RecursionError):
         raise HTTPException(422, '无法提取此来源：仅支持公开网页/PDF/DOCX，视频请在设备读取；请检查链接、访问权限和大小') from None
 
 
 @router.post('/content-service/extract-file')
-async def extract_file(request: Request, response: Response, user=Depends(get_generation_user)):
+async def extract_file(request: Request, response: Response, slot=Depends(extraction_slot)):
     response.headers['Cache-Control'] = 'no-store'
     bound_body(request, extraction.MAX_BYTES + 65536)
     async with request.form(max_files=1, max_fields=0) as form:
@@ -69,6 +99,6 @@ async def extract_file(request: Request, response: Response, user=Depends(get_ge
         if len(data) > extraction.MAX_BYTES:
             raise HTTPException(413, '来源文件超过20 MiB')
         try:
-            return await anyio.to_thread.run_sync(lambda: extraction.extract_file(upload.filename, data))
+            return await run_extraction(lambda: extraction.extract_file(upload.filename, data))
         except (ValueError, RecursionError):
             raise HTTPException(422, '文件无法提取，请检查格式和正文长度；仅支持PDF/DOCX及UTF-8文字或字幕') from None
