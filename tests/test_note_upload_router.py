@@ -65,7 +65,10 @@ class GenerateFromUploadRouterTest(unittest.TestCase):
 
     def test_repeated_meeting_upload_reuses_task_after_lost_response(self):
         self.app.dependency_overrides[note.get_optional_current_user] = lambda: SimpleNamespace(user_id="owner")
-        with patch.object(note, "_note_service", SimpleNamespace(artifact_service=self.artifact_service)), patch.object(note, "_run_task_from_file") as run:
+        frozen = {"version": 1, "owner": "owner", "mode": "local", "server_url": "",
+                  "asr_model": "", "llm_model": "", "local_llm_fingerprint": "0" * 64,
+                  "local_stt_fingerprint": "0" * 64}
+        with patch("app.services.task_model_source.capture_source", return_value=frozen), patch.object(note, "_note_service", SimpleNamespace(artifact_service=self.artifact_service)), patch.object(note, "_run_task_from_file") as run:
             arguments = dict(data={"source_type": "audio", "workflow": "meeting", "meeting_session_id": "recording-123"},
                              files={"file": ("recording.wav", b"audio", "audio/wav")})
             first = self.client.post("/api/generate_from_upload", **arguments)

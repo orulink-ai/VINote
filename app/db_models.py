@@ -11,6 +11,71 @@ def utc_now():
     return datetime.now(timezone.utc)
 
 
+class FeishuApplicationDB(Base):
+    __tablename__ = "feishu_applications"
+    owner: Mapped[str] = mapped_column(String(128), primary_key=True)
+    credentials: Mapped[str] = mapped_column(Text)
+
+
+class SourceRequestDB(Base):
+    """Durable source submission receipt, unique across workers per account."""
+    __tablename__ = "source_request_receipts"
+
+    owner: Mapped[str] = mapped_column(String(128), primary_key=True)
+    operation_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+    task_id: Mapped[str] = mapped_column(String(64), index=True)
+    state: Mapped[str] = mapped_column(String(16), default="reserved")
+    receipt_json: Mapped[str] = mapped_column(Text, default="{}")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class FeishuConnectionDB(Base):
+    __tablename__ = "feishu_connections"
+    owner: Mapped[str] = mapped_column(String(128), primary_key=True)
+    open_id: Mapped[str] = mapped_column(String(100), default="")
+    name: Mapped[str] = mapped_column(String(200), default="")
+    tokens: Mapped[str] = mapped_column(Text, default="")
+    preferences: Mapped[str] = mapped_column(Text, default='{}')
+    expired: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class NoteVersionDB(Base):
+    __tablename__ = "note_versions"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    note_id: Mapped[str] = mapped_column(String(36), index=True)
+    title: Mapped[str] = mapped_column(String(500))
+    content: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class FeishuOAuthDB(Base):
+    __tablename__ = "feishu_oauth_states"
+    digest: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner: Mapped[str] = mapped_column(String(128))
+    expires: Mapped[str] = mapped_column(String(32))
+
+
+class FeishuDeliveryDB(Base):
+    __tablename__ = "feishu_deliveries"
+    __table_args__ = (UniqueConstraint("owner", "note_key", "revision", name="uq_feishu_delivery"),)
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    owner: Mapped[str] = mapped_column(String(128), index=True)
+    note_key: Mapped[str] = mapped_column(String(160))
+    revision: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(500))
+    content: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(32), default="queued")
+    document_id: Mapped[str] = mapped_column(String(100), default="")
+    document_url: Mapped[str] = mapped_column(String(500), default="")
+    written_blocks: Mapped[str] = mapped_column(String(20), default="0")
+    recipients: Mapped[str] = mapped_column(Text, default="{}")
+    error: Mapped[str] = mapped_column(Text, default="")
+    lease_until: Mapped[str] = mapped_column(String(32), default="0")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class UserDB(Base):
     __tablename__ = "users"
 

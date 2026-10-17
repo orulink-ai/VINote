@@ -16,6 +16,9 @@ export interface TaskStatusResponse {
   stage?: string
   progress?: number
   processed_seconds?: number
+  received_seconds?: number
+  speaker_detection_progress?: number
+  speaker_analysis_ready?: boolean
   total_seconds?: number
   eta_seconds?: number
   updated_at?: string

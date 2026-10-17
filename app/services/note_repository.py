@@ -22,6 +22,11 @@ class NoteRepository:
     _SPEAKER_ID_RE = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
 
     @staticmethod
+    def _utc_timestamp(value: datetime | None) -> datetime | None:
+        # SQLite drops timezone information from our UTC database columns.
+        return value.replace(tzinfo=timezone.utc) if value and value.tzinfo is None else value
+
+    @staticmethod
     def _to_response(record: NoteDB, *, team_name: str | None = None) -> NoteRecordResponse:
         return NoteRecordResponse(
             id=record.id,
@@ -35,8 +40,8 @@ class NoteRepository:
             scope=record.scope,
             team_id=record.team_id,
             team_name=team_name,
-            created_at=record.created_at,
-            updated_at=record.updated_at,
+            created_at=NoteRepository._utc_timestamp(record.created_at),
+            updated_at=NoteRepository._utc_timestamp(record.updated_at),
         )
 
     @staticmethod
@@ -46,7 +51,7 @@ class NoteRepository:
             title=record.title,
             share_enabled=record.share_enabled,
             share_token=record.share_token,
-            share_created_at=record.share_created_at,
+            share_created_at=NoteRepository._utc_timestamp(record.share_created_at),
         )
 
     @staticmethod
@@ -150,6 +155,9 @@ class NoteRepository:
             record = self._get_accessible_record(db, user_id=user_id, note_id=note_id)
             if not record:
                 return None
+            if payload.content is not None and payload.content != record.content:
+                from app.db_models import NoteVersionDB
+                db.add(NoteVersionDB(note_id=record.id, title=record.title, content=record.content))
             if payload.title is not None:
                 record.title = payload.title.strip()
             if payload.content is not None:
@@ -220,9 +228,19 @@ class NoteRepository:
 
     def delete_note(self, user_id: str, note_id: str) -> bool:
         with session_scope() as db:
+            source = self._get_accessible_record(db, user_id=user_id, note_id=note_id)
+            if not source:
+                return False
+            db.expunge(source)
+        from app.services.local_file_service import LocalFileService
+        LocalFileService().retain_note_original(user_id, source)
+        with session_scope() as db:
             record = self._get_accessible_record(db, user_id=user_id, note_id=note_id)
             if not record:
                 return False
+            from sqlalchemy import delete
+            from app.db_models import NoteVersionDB
+            db.execute(delete(NoteVersionDB).where(NoteVersionDB.note_id == note_id))
             db.delete(record)
             return True
 
@@ -267,9 +285,9 @@ class NoteRepository:
                 content=record.content,
                 video_url=record.video_url,
                 source_type=record.source_type,
-                created_at=record.created_at,
-                updated_at=record.updated_at,
-                share_created_at=record.share_created_at,
+                created_at=self._utc_timestamp(record.created_at),
+                updated_at=self._utc_timestamp(record.updated_at),
+                share_created_at=self._utc_timestamp(record.share_created_at),
             )
 
     @staticmethod

@@ -153,7 +153,7 @@ function buildMeetingDraftContent({
     `- 当前状态：${statusText}`,
     `- 录音时长：${formatElapsedTime(durationSeconds)}`,
     `- 创建时间：${startedAt.toLocaleString()}`,
-    audioUrl ? `- 原始音频：[打开录音](${audioUrl})` : '- 原始音频：已保留，等待任务记录同步。',
+    audioUrl ? `- 原始音频：[打开录音](${audioUrl})` : '- 原始音频：已保留，可在文件库查看。',
     errorMessage ? `- 错误原因：${errorMessage}` : '',
     '',
     audioUrl ? `<audio controls src="${audioUrl}"></audio>` : '',
@@ -574,13 +574,37 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     }
   }
 
+  const continueSavedRecording = async (recording: PendingMeeting, audioBlob?: Blob) => {
+    const owner = useAuthStore.getState().user?.id
+    if (!owner || recording.ownerId !== owner) throw new Error('请使用录制所属账号继续处理。')
+    const pending = await getPendingMeeting(recording.id)
+    if (useAuthStore.getState().user?.id !== owner) return
+    if (!pending || pending.id !== recording.id || pending.ownerId !== owner || pending.recordingStatus !== 'saved') throw new Error('无法核验已保存的原录制，请返回原录制详情。')
+    const captureActive = () => ['requesting', 'recording', 'paused', 'stopping'].includes(useMeetingRecorderStore.getState().phase)
+    const openConfirmation = async () => {
+      const route = `/meetings?recordingConfirm=${encodeURIComponent(pending.id)}`
+      if (captureActive()) { if (isRecorderWindow) await showMainWindow(route); else navigate(route); return }
+      recorder.reset()
+      resetSession()
+      await closeSavedRecordingSurface(route)
+    }
+    if (pending.generationConfirmationRequired || (!pending.taskId && !pending.generationOperation)) {
+      await openConfirmation()
+      return
+    }
+    if (!captureActive()) { recorder.reset(); resetSession() }
+    await processSavedMeeting(pending, language, audioBlob)
+    if (useAuthStore.getState().user?.id !== owner) return
+    const result = await getPendingMeeting(pending.id)
+    if (useAuthStore.getState().user?.id !== owner) return
+    if (result?.ownerId === owner && result.generationConfirmationRequired) await openConfirmation()
+  }
+
   const generateFromRecording = async (audioBlob: Blob) => {
     const id = recordingIdRef.current || useMeetingRecorderStore.getState().recordingId
     const pending = id ? await getPendingMeeting(id) : null
     if (!pending) throw new Error('找不到已保存的录制，请先重试保存。')
-    recorder.reset()
-    resetSession()
-    await processSavedMeeting(pending, language, audioBlob)
+    await continueSavedRecording(pending, audioBlob)
   }
   useEffect(() => {
     if (isRecorderWindow) return
@@ -597,8 +621,10 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
     }
     const restore = (event: Event) => {
       const pending = (event as CustomEvent<PendingMeeting>).detail
-      if (pending.ownerId !== user?.id) return
-      void processSavedMeeting(pending, language)
+      if (!pending?.id || pending.ownerId !== user?.id) return
+      void continueSavedRecording(pending).catch(error => {
+        if (useAuthStore.getState().user?.id === pending.ownerId) failStage(stageFromError(error), formatRecorderFailure(error, recorderCopy))
+      })
     }
     window.addEventListener(START_MEETING_EVENT, startMeeting)
     window.addEventListener('vinote-restore-meeting', restore)
@@ -713,9 +739,7 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
       if (!isRecorderWindow && recordingIdRef.current) {
         const pending = await getPendingMeeting(recordingIdRef.current)
         if (!pending) throw new Error('无法读取已保存的录制记录。')
-        recorder.reset()
-        resetSession()
-        void processSavedMeeting(pending, language, audio)
+        await continueSavedRecording(pending, audio)
         return
       }
 
@@ -800,6 +824,11 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
   const controlsRef = useRef<(action: MeetingControlAction) => void>(() => undefined)
   controlsRef.current = action => {
     const state = useMeetingRecorderStore.getState()
+    if (action === 'cancel-start' && state.phase === 'requesting') {
+      recorder.reset()
+      resetSession()
+      setUseInlineDesktopRecorder(false)
+    }
     if (action === 'sync') void publishMeetingState({ phase: state.phase, elapsedSeconds: state.elapsedSeconds, noteId: state.noteId, error: state.error })
     if (action === 'pause') handlePause()
     if (action === 'resume') handleResume()
@@ -876,10 +905,10 @@ export function MeetingRecorderDock({ autoStart = false }: MeetingRecorderDockPr
         <AlertDialogContent className="max-h-[calc(100dvh-48px)] w-[calc(100%-32px)] overflow-y-auto">
           <AlertDialogHeader>
             <AlertDialogTitle>{language === 'zh-CN' ? '结束并保存录制？' : 'End and save recording?'}</AlertDialogTitle>
-            <AlertDialogDescription>{language === 'zh-CN' ? '结束后先保存到本机，再选择是否生成会议纪要。' : 'Save locally, then replay or generate meeting notes.'}</AlertDialogDescription>
+            <AlertDialogDescription>{language === 'zh-CN' ? '结束后先保存录制，再选择是否生成会议纪要。' : 'Save the recording, then replay or generate meeting notes.'}</AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter className="gap-3">
-            <AlertDialogCancel className="min-h-11">{language === 'zh-CN' ? '继续录制' : 'Keep recording'}</AlertDialogCancel>
+            <AlertDialogCancel className="min-h-11">{language === 'zh-CN' ? '暂不结束' : 'Not now'}</AlertDialogCancel>
             <AlertDialogAction className="min-h-11" onClick={() => void handleStop()}>{language === 'zh-CN' ? '结束并保存' : 'End and save'}</AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

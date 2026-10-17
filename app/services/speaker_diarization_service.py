@@ -8,10 +8,15 @@ only duration-aligned and is reported as estimated evidence.
 from __future__ import annotations
 
 import importlib.util
+import hashlib
+import json
+import os
+from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
+from dataclasses import asdict
 import math
 import re
 import tempfile
-import threading
 import wave
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,7 +27,6 @@ from app.models.transcript import NoSpeechDetectedError, TranscriptResult, Trans
 from app.services.tracing_service import observation, traced, update_current
 from app.services.audio_preprocessing_service import prepare_meeting_audio
 
-_INFERENCE_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -181,11 +185,10 @@ class SpeakerDiarizationService:
     @traced("说话人识别与逐字稿对齐", as_type="chain")
     def transcribe(
         self, *, audio_path: str, transcribe: Callable[..., TranscriptResult],
-        speaker_count: int | None = None, update_status=None,
+        speaker_count: int | None = None, update_status=None, evidence_dir: Path | None = None,
     ) -> TranscriptResult:
         self.require_ready()
         import numpy as np
-        import sherpa_onnx
 
         if speaker_count is not None and not 1 <= speaker_count <= 20:
             raise ValueError("Speaker count must be between 1 and 20")
@@ -218,79 +221,86 @@ class SpeakerDiarizationService:
                 raise ValueError("录制中没有可分析的音频。")
             # Keep large decoded recordings backed by disk, including on Windows.
             samples = np.memmap(pcm_path, dtype="float32", mode="r")
+            pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="meeting-asr")
             try:
-                config = sherpa_onnx.OfflineSpeakerDiarizationConfig(
-                    segmentation=sherpa_onnx.OfflineSpeakerSegmentationModelConfig(
-                        pyannote=sherpa_onnx.OfflineSpeakerSegmentationPyannoteModelConfig(
-                            model=str(segmentation)), num_threads=2,
-                    ),
-                    embedding=sherpa_onnx.SpeakerEmbeddingExtractorConfig(model=str(embedding), num_threads=2),
-                    clustering=sherpa_onnx.FastClusteringConfig(
-                        num_clusters=speaker_count or -1, threshold=settings.diarization_cluster_threshold),
-                    min_duration_on=0.3, min_duration_off=0.5,
-                )
-                if not config.validate():
-                    raise ValueError("说话人模型配置无效，请重新运行安装脚本。")
-                with observation(
-                    "说话人检测",
-                    input={"provider": "sherpa-onnx", "model": segmentation.name,
-                           "audio_duration_seconds": len(samples) / 16000},
-                    metadata={"model": segmentation.name},
-                ) as detection_span:
-                    with _INFERENCE_LOCK:
-                        engine = sherpa_onnx.OfflineSpeakerDiarization(config)
-                        last_progress = -1
-
-                        def report_progress(done, total):
-                            nonlocal last_progress
-                            progress = int(done * 100 / max(total, 1)) // 5 * 5
-                            if update_status and progress != last_progress:
-                                update_status("transcribing", f"正在区分说话人：{progress}%", stage="diarizing")
-                                last_progress = progress
-                            return 0
-
-                        detected = engine.process(samples, callback=report_progress).sort_by_start_time()
-                    if detection_span is not None:
-                        detection_span.update(output={"detected_segments": len(detected)})
                 duration = len(samples) / 16000
-                turns = build_speaker_turns(detected, duration)
-                if not turns:
-                    raise ValueError("未检测到有效发言，请检查录音声音。")
-                clustering = {'method': 'fixed-speaker-count', 'requested_count': speaker_count}
-                if speaker_count is None:
-                    from app.services.speaker_clustering_service import refine_speaker_turns
-                    if update_status:
-                        update_status("transcribing", "正在核对完整发言的声音特征并自动判断人数…", stage="diarizing")
-                    with observation(
-                        "说话人聚类",
-                        input={"model": embedding.name, "turn_count": len(turns),
-                               "cluster_threshold": settings.diarization_cluster_threshold,
-                               "speaker_count": "auto"},
-                        metadata={"model": embedding.name},
-                    ) as clustering_span:
-                        with _INFERENCE_LOCK:
-                            turns, clustering = refine_speaker_turns(turns, samples, embedding)
-                        if clustering_span is not None:
-                            clustering_span.update(output={"turn_count": len(turns),
-                                                           "clustering": clustering})
-                if update_status:
-                    update_status("transcribing", "正在转写完整录音（保留会议上下文）…")
                 full_audio_path = Path(folder) / "meeting.wav"
-                audio = (np.clip(samples, -1, 1) * 32767).astype("<i2")
                 with wave.open(str(full_audio_path), "wb") as output:
                     output.setnchannels(1)
                     output.setsampwidth(2)
                     output.setframerate(16000)
-                    output.writeframes(audio.tobytes())
-                try:
-                    transcript = transcribe(
-                        str(full_audio_path),
-                        audio_duration_seconds=round(duration, 3),
-                        diarization_turn_count=len(turns),
+                    for offset in range(0, len(samples), 16000 * 30):
+                        audio = (np.clip(samples[offset:offset + 16000 * 30], -1, 1) * 32767).astype("<i2")
+                        output.writeframes(audio.tobytes())
+                    del audio
+                def recognize():
+                    result = transcribe(
+                        str(full_audio_path), audio_duration_seconds=round(duration, 3),
                         transcription_scope="complete_recording",
+                        diarization_parallel=True,
                     )
+                    if evidence_dir:
+                        evidence_dir.mkdir(parents=True, exist_ok=True)
+                        self._save_evidence(evidence_dir / "asr_evidence.json", asdict(result))
+                    return result
+                recognition = pool.submit(copy_context().run, recognize)
+                if update_status:
+                    update_status("transcribing", "转写与说话人分析正在同时进行…", stage="parallel_analysis")
+                signature = self._source_signature(audio_path, segmentation, embedding, speaker_count)
+                cached = None
+                if evidence_dir:
+                    try:
+                        cached = json.loads((evidence_dir / "speaker_evidence.json").read_text(encoding="utf-8"))
+                        if cached.get("signature") != signature or cached.get("duration") != duration:
+                            cached = None
+                    except (OSError, ValueError, TypeError):
+                        cached = None
+                if cached:
+                    try:
+                        turns = [SpeakerTurn(**turn) for turn in cached["turns"]]
+                        if not turns or any(not math.isfinite(t.start) or not math.isfinite(t.end) or t.start < 0 or t.end <= t.start or t.end > duration for t in turns):
+                            cached = None
+                        clustering = cached["clustering"] if cached else {}
+                    except (KeyError, TypeError, ValueError):
+                        cached = None
+                if not cached:
+                    from app.services.speaker_worker import run_speaker_worker
+
+                    def worker_progress(stage, fraction):
+                        if update_status:
+                            if stage == "refinement":
+                                update_status("transcribing", "正在核对完整发言的声音特征并自动判断人数…", stage="diarizing")
+                            else:
+                                percent = int(fraction * 100) // 5 * 5
+                                update_status("transcribing", f"正在检测发言区间：{percent}%", stage="diarizing",
+                                              speaker_detection_progress=fraction)
+
+                    with observation(
+                        "说话人检测与聚类",
+                        input={"provider": "sherpa-onnx", "model": segmentation.name,
+                               "audio_duration_seconds": duration, "isolated_process": True},
+                        metadata={"model": segmentation.name},
+                    ) as detection_span:
+                        turns, clustering = run_speaker_worker(
+                            pcm_path, segmentation, embedding, speaker_count,
+                            settings.diarization_cluster_threshold, progress=worker_progress)
+                        if detection_span is not None:
+                            detection_span.update(output={"turn_count": len(turns), "clustering": clustering})
+                    if signature != self._source_signature(audio_path, segmentation, embedding, speaker_count):
+                        raise ValueError("录音或模型在分析期间发生变化，未保存过期分析结果")
+                if evidence_dir and not cached:
+                    evidence_dir.mkdir(parents=True, exist_ok=True)
+                    self._save_evidence(evidence_dir / "speaker_evidence.json", {
+                        "provider": "sherpa-onnx", "timeline": "recording_offset_seconds",
+                        "duration": duration, "clustering": clustering, "signature": signature,
+                        "turns": [asdict(turn) for turn in turns],
+                    })
+                try:
+                    if update_status:
+                        update_status("transcribing", "说话人分析已完成，正在完成完整录音转写…", stage="transcribing", speaker_analysis_ready=True)
+                    transcript = recognition.result()
                 except NoSpeechDetectedError:
-                    raise ValueError("说话人分离完成，但完整录音转写未返回有效文本。") from None
+                    raise ValueError("说话人分析完成，但完整录音转写未返回有效文本；已完成分析保留。") from None
                 if update_status:
                     update_status("transcribing", "正在对齐逐字稿…", stage="aligning")
                 with observation("逐字稿对齐", as_type="span"):
@@ -300,7 +310,9 @@ class SpeakerDiarizationService:
                 result = TranscriptResult(
                     language=transcript.language, full_text=transcript.full_text,
                     segments=result_segments,
-                    metadata={"speaker_diarization": True, "diarization_provider": "sherpa-onnx",
+                    metadata={"speaker_diarization": True, "analysis_parallel": True,
+                              "asr_evidence": asdict(transcript),
+                              "speaker_evidence": [asdict(turn) for turn in turns], "diarization_provider": "sherpa-onnx",
                               "speaker_count": len({turn.speaker_id for turn in turns} - {"speaker_overlap", "speaker_unknown"}),
                               "clustering": clustering,
                               "timestamp_granularity": transcript.metadata.get("timestamp_granularity", "file"),
@@ -327,4 +339,22 @@ class SpeakerDiarizationService:
                 return result
             finally:
                 # Release the memory map before TemporaryDirectory removes it on Windows.
+                pool.shutdown(wait=True)
                 samples._mmap.close()
+
+    @staticmethod
+    def _source_signature(audio_path, segmentation, embedding, speaker_count):
+        digest = hashlib.sha256()
+        with open(audio_path, "rb") as source:
+            while block := source.read(1024 * 1024):
+                digest.update(block)
+        return {"version": 1, "source_sha256": digest.hexdigest(),
+                "models": [[p.stat().st_size, p.stat().st_mtime_ns] for p in (segmentation, embedding)],
+                "threshold": settings.diarization_cluster_threshold, "speaker_count": speaker_count,
+                "clustering_revision": 2}
+
+    @staticmethod
+    def _save_evidence(path: Path, value: dict) -> None:
+        temporary = path.with_suffix(path.suffix + ".tmp")
+        temporary.write_text(json.dumps(value, ensure_ascii=False, indent=2), encoding="utf-8")
+        os.replace(temporary, path)

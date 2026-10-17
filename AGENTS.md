@@ -1,5 +1,41 @@
 # Repository Guidelines
 
+## Branch and submodule contract (2026-10-17)
+
+- Desktop/backend changes start from the latest fetched `origin/dev`, use a `codex/` feature branch and target `dev` in pull requests. Do not target the historical `main` branch for this product workflow.
+- `VINote-app` is an independent Git submodule repository. App feature branches start from its latest fetched `origin/main` and target its `main`; desktop branch names do not select App branches.
+- Commit and merge App changes in the App repository first, then update the parent repository's gitlink to the reviewed App commit. `.gitmodules` tracks App `main`; ordinary submodule checkout still uses the exact committed gitlink, not a floating remote tip.
+- Preserve dirty runtime checkouts. Never reset or switch them merely to make a branch graph look tidy. Use the reviewed clean delivery checkout for branch preparation; open the App repository separately when inspecting its branch graph.
+
+## Current product direction (2026-10-12)
+
+Cross-device meeting/note synchronization has been cancelled by the user. Desktop and App must save, edit, trash, restore, version, export and share the content available on the current device without a workspace pull/push, background retry or sync status gate. Do not surface repeated "local" labels in ordinary content views; explain file location only in file management and when playback or reprocessing needs the original. Historical workspace code/API and receipts may remain for safe recovery, but no new client operation may dispatch to them. Keep account sign-in, deliberate Feishu publication and confirmed MCP calls independent from synchronization. Preserve original audio/video and frozen publication/tool receipts. The older shared-content notes below describe historical implementation, not the active client contract.
+
+2026-10-12 interaction review: MeetingWorkbench's related-note count is a count of content objects, not generated versions. Keep each object and retained recording reachable in separate disclosure sections. FileLibrary deletion confirmation temporarily replaces the selected file Sheet; cancellation preserves the same file/query/source and restores focus. Changed accounts or routes must not restore or delete the old selection. A concurrently missing original is unavailable, not proof that its saved notes were deleted.
+
+## Latest reviewed workflow contracts (2026-10-12)
+
+- 2026-10-17 explicit model pair: new URL/upload requests may provide `asr_model` and `model_name` together for catalog-validated freezing of the current cloud task only; local mode rejects the pair, global preferences and existing snapshots remain unchanged, and legacy `model_name` alone retains its behavior.
+- 2026-10-17 public video intake: cloud content exposes Bilibili only via `video_url_platforms`, strict HTTPS source validation and per-hop DNS-pinned API/CDN downloads. No generic yt-dlp/curl/network FFmpeg is exposed; no credentials leave the content/model service. Read-only POST `/api/content-service/video-source` creates no operation and invokes no model. Downloads precede ASR/LLM; preserve canonical BV/part identity and signed URLs remain ephemeral. HTTP 412 is a source-access failure, not proof of video deletion or model failure. Download-only acceptance is not end-to-end inference acceptance.
+- Desktop Bilibili intake downloads the source audio on-device through `bilibili_source_service`, binds the retained original to its owner/task with canonical BV/part identity, and never fetches remote video for screenshots.
+- New media URL workers freeze models before persisting a sanitized typed `media_url` request/workflow, then register the retained original before ASR; historical missing requests are not inferred or migrated. Single-note responses may project `media_kind` from a validated owner/UUID-bound original; `source_type` remains intake provenance. Media detail omitted by list responses must be refreshed before choosing playback controls.
+
+
+- 2026-10-14 candidate independent generation: authenticated GET `/api/task/{task_id}/new-generation-context` reads the original cloud model/source context; explicitly confirmed POST `/api/task/{task_id}/new-generation` creates a distinct durable owner-scoped operation/task. Only a newly reserved operation queues once; reserved/accepted recovery is GET-only. It inherits the original model snapshot without current defaults, references the canonical retained original without copying media, and protects referenced originals from deletion. Interrupted new jobs remain unknown/non-retryable; no automatic restart or old `/retry` dispatch is allowed. Desktop `?task=<id>` opens an exact read-only task without replacing the global intake receipt or saving/generating; new operations use separate per-operation records. Local/unexposed snapshots fail closed. These are source/offline-test contracts, not proof of deployment or provider/device acceptance.
+
+- 2026-10-16 independent ASR execution: only the first durable `NewGenerationService.run_once` claim can bind an accepted owner/task/fingerprint DB receipt to a revocable ContextVar lease. Disk JSON and arbitrary new IDs never authorize a namespace. Owner/task/canonical original/hash/frozen Origin and concrete ASR/LLM snapshot are rechecked; `copy_context` carries the lease into parallel ASR, and `finally` revokes/resets it. Checkpoints live under the child task's `transcription_chunks/vilab_stream`; the same operation's unknown/inflight cannot switch namespaces or replay. The old global checkpoint may seed only a contiguous integer-sample confirmed prefix with identical owner/Origin/model/normalized WAV identity, never its plan/inflight. Its OS lock is held through the new execution; legacy sentinels, lock contention, corrupt or uncommitted donor records block submission rather than restart at zero. Seed is fsynced before planning/sending remaining audio, and saved prefix progress is reported immediately through the existing callback. Old evidence bytes/markers remain intact; only the existing lock backing file may be created. No API/schema changes. Offline evidence and counterexamples: `docs/reviews/2026-10-16-independent-asr-namespace.md`; actual provider acceptance remains unverified. Ordinary UI does not expose namespace/seed/lock terminology.
+
+- 2026-10-14 retained upload originals: `task_original_service.py` owns the account/task/workflow-bound `source_original.json` index, referencing existing media without copying it. Explicit owner, workflow, canonical task mapping and contained media are required for historical discovery. `/api/files` includes these originals before a saved content object exists; Meetings shows them in a separate “会议资料” section. Task-owned originals have query/preview/export actions, not blind generation or deletion. Structured unconfirmed ASR outcomes remain non-retryable through status reads and recovery routes; this safety rule does not establish successful transcription or add a provider-result lookup API.
+
+- Complete-child cache exception: after its own execution stamp, normalized WAV identity, absence of inflight/legacy sentinel and strict full confirmed coverage are verified, an independent operation reads its complete child cache without locking/reading the donor or fetching token/catalog/ASR. Donor safety gates still apply to seeding and partial-child remaining submissions.
+
+- User-approved navigation is Meeting & Notes (Meeting / Notes), File Library, Plugins, Settings and avatar Account; historical classifications below must not restore duplicate entry points. Notes keeps explicit link/file intake and a lightweight writing action. Cached background errors belong to the browsing status area; a failed first read is not an empty library.
+- Content tools operate on a frozen saved body/version. Version/source browsing and originals management remain distinct; history labels use actual kind/revision, never inferred V1 or deduplication by title/time. Translation is an outbound MCP task supporting zh/en, with real service/tool grant/model and one explicit execution confirmation; management appears on demand, unknown runs are queried rather than replayed.
+- Contextual return routes are validated and preserve actual list query/project/archive state. Source task recovery carries original owner, generation Origin and operation/task identity; it may not replace a newer input slot or start another submission on navigation.
+- Settings sections return to their overview before a validated external source. Loading and loaded pages share this hierarchy; an overview without a valid source does not invent a return link. Validate query and state parents independently, and do not rebind an already resolved parent inside PageReturn.
+- Feishu publication freezes source, destination, recipient identity and operation before POST. `feishu_publish_receipts` and `feishu_write_batches` persist account-scoped original receipts/write outcomes. Exact GET `/api/feishu/deliveries/by-id/{job_id}` and `/api/feishu/deliveries/by-operation/{operation_id}` require authentication; status reports `publish_receipt_protocol=1`. Unknown writes and legacy absent receipts must not be automatically replayed or substituted with the latest job. The shared service stores encrypted credentials; originals remain on their source device.
+- Record source/code/test/actual-device evidence separately in `docs/reviews/2026-10-12-actual-ui-verification.md`. A healthy deployment or passing component tests does not establish complete product acceptance or recipient reading permissions.
+
 ## Architecture Overview
  VINote is a full-stack video-to-note workspace with three moving parts:
 
@@ -8,6 +44,14 @@
 - Database/Auth: Postgres-backed storage plus FastAPI-issued JWT auth stored in an HttpOnly cookie.
 
 The backend can also run as a lightweight MCP server through `mcp_server.py`.
+
+### 2026-10-11 shared content and tools
+
+- `/api/workspace` stores account-scoped text, all saved versions, immutable transcript/speaker evidence revisions and sync operations. Originals are not accepted by this API. `workspace_service.py` owns compare-and-swap revisions and tombstones; `workspace_generation.py` generates new text versions without re-uploading media. Only acknowledged writes display synced. Conflicts preserve drafts; failed generation preserves previous content.
+- Workspace and `/api/mcp-connections` use the verified identity from `feishu.principal`; Cookie clients may proxy to the configured shared integration service. Mobile Bearer expiry must remain HTTP 401 to permit its bounded refresh; provider outages are not authentication failures.
+- MCP outbound tools use HTTPS Streamable HTTP, account-isolated encrypted credentials, explicit tool grants, bound per-call confirmation and durable execution records. Unknown remote results must not be automatically replayed. This is separate from VINote's existing inbound `/mcp` server.
+- Latest confirmed navigation: desktop Meetings & Notes (Meetings / Notes), File Library, Plugins, bottom Settings and Account. App has Meetings & Notes / File Library / Plugins tabs, with Account and Settings through the avatar. Projects/archive are workspace filters; tasks use a global status entry. Feishu is a built-in connector under Plugins. Preserve historical data and compatible deep links.
+- Shared content deployment uses VINOTE_WORKSPACE_URL separately from VINOTE_INTEGRATION_URL, PostgreSQL and private Supabase Storage content attachments. VINOTE_WORKSPACE_CLOUD requires verified Supabase Bearer identity and rejects SQLite fallback; cloud runtime does not expose device-original or Cookie auth APIs. See docs/shared-workspace.md. Local /api/files retains originals without starting generation; deletion preserves text and versions.
 
 ## Project Structure
 - `app/`
@@ -49,7 +93,7 @@ The backend can also run as a lightweight MCP server through `mcp_server.py`.
 1. Frontend signs users in against FastAPI auth endpoints and browser requests carry the HttpOnly auth cookie to `/api/*`.
 2. `NoteService` creates a task directory under `output/`, downloads remote media, stages an uploaded local file, or prepares an uploaded transcript, and updates `status.json`.
 3. `TranscriptionService` loads the selected transcriber, optionally chunks long audio, and saves `transcript.json` when the task input is media.
-4. `LLMService` resolves the active model configuration and generates Markdown from transcript segments using the requested summary mode (`default`, `accurate`, or `oneshot`). Transcript uploads skip the STT step and enter summarization directly.
+4. `LLMService` resolves the active model configuration and generates Markdown from transcript segments. `default` and `oneshot` submit the complete source once; meeting drafts then receive the existing whole-source fact review. Only explicit legacy `accurate` opts into chunk/merge. Provider context errors preserve source and fail without automatic splitting, model changes or replay. Transcript uploads skip STT and enter summarization directly.
 5. `TranscriptionService` resolves the active STT configuration in this order: request `stt_profile_id` > signed-in user's default STT profile > `.env` `TRANSCRIBER_*` defaults.
 6. `NoteMediaService` enriches the generated Markdown with section-level timestamp jump links and screenshot markers, then `ScreenshotService` downloads the full video and injects extracted frames.
 7. `TaskArtifactService` writes `note.md`, `result.json`, `status.json`, and the `.task_id` mapping.
@@ -101,8 +145,8 @@ Important backend variables:
 - `TRANSCRIBER_TYPE=faster-whisper` also requires `requirements.local-transcribers.txt` to be installed.
 - `GROQ_API_KEY`: required when using `groq`.
 - `WHISPER_*`, `FASTER_WHISPER_COMPUTE_TYPE`, `SENSEVOICE_*`: provider-specific transcription settings.
-- `SUMMARY_DEFAULT_MAX_CHARS`, `SUMMARY_DEFAULT_MAX_SEGMENTS`: thresholds that decide when `default` mode upgrades from one-shot to hierarchical summarization.
-- `SUMMARY_CHUNK_MAX_CHARS`, `SUMMARY_CHUNK_MAX_SEGMENTS`, `SUMMARY_CHUNK_OVERLAP_SEGMENTS`: chunk sizing controls for hierarchical summarization.
+- `SUMMARY_DEFAULT_MAX_CHARS`, `SUMMARY_DEFAULT_MAX_SEGMENTS`: retained legacy configuration fields; they no longer split or change the `default` strategy.
+- `SUMMARY_CHUNK_MAX_CHARS`, `SUMMARY_CHUNK_MAX_SEGMENTS`, `SUMMARY_CHUNK_OVERLAP_SEGMENTS`: chunk sizing controls only for explicitly requested legacy `accurate` summarization.
 - `YTDLP_REQUEST_SLEEP_SECONDS`, `YTDLP_DOWNLOAD_SLEEP_SECONDS`, `YTDLP_MAX_DOWNLOAD_SLEEP_SECONDS`: anonymous YouTube request pacing controls used to reduce rate-limit and bot challenges without requiring account cookies.
 - `APP_JWT_SECRET`, `AUTH_COOKIE_*`: backend-issued session cookie settings.
 - `DATABASE_URL`: required database connection string.
@@ -175,7 +219,7 @@ Update `README.md`, this `AGENTS.md`, or both whenever you change:
 ## Notes for Agents
 - Cloud generation validates model selections before downloading/preparing input. Task directory titles are trimmed after truncation for Windows compatibility; `.task_id` is written before renaming so subsequent failures remain discoverable. The generator treats `not_found` as a terminal error.
 - The current frontend supports local audio/video uploads and direct transcript uploads from the browser.
-- The note generator UI exposes LLM and STT service selection, but no summary-strategy selector. Meeting minutes and note organization always submit `default`; the backend automatically chooses one-shot or hierarchical processing by transcript length. Legacy API strategy values remain supported.
+- The note generator UI exposes LLM and STT service selection, but no summary-strategy selector. Meeting minutes and note organization submit `default`: the backend sends the complete source in one draft call, then applies whole-source fact review for meetings, regardless of fixed char/segment thresholds. Explicit legacy `accurate` remains compatible without a UI entry. Context errors are surfaced through existing service error handling, never automatic splitting, model changes or replay. No model-name context-limit branch is allowed.
 - Share links are public read-only links backed by `notes.share_token` and can be disabled from the note editor.
 - Saved notes are now explicitly scoped as either personal notes or team notes. Team notes require `scope="team"` plus a valid `team_id`, and any signed-in team member can open them through the normal note APIs.
 - If documentation and code disagree, trust the code, then fix the documentation in the same change.
@@ -194,7 +238,21 @@ Desktop packaging: scripts/desktop_backend.py initializes per-install secrets an
 
 Fresh-checkout startup: yarn dev runs bootstrap-dev.mjs to install frontend dependencies, create .venv and install requirements, and create .env with unique local secrets and config/desktop-public.json account defaults. Existing .env is preserved. --setup-only performs initialization without opening a window. Node 22+, Python, Rust/platform compilers and FFmpeg are system prerequisites.
 
+Cloud shared runtime startup creates registered VINote tables and revokes PUBLIC/anon/authenticated direct access with RLS in one PostgreSQL transaction. `workspace_bootstrap.py` initializes a private content-image bucket using server credentials; existing public buckets fail startup. Configure once and start with `deploy/workspace/compose.yml`; never claim deployment or cloud migration from a local/mock regression.
+
 ## Meeting recording and speaker diarization
+
+- 2026-10-16 Feishu recipient access: only new explicitly confirmed requests may send `recipient_access_policy="grant_view_and_notify"`; status advertises `recipient_access_protocol=1`. Freeze policy in the request fingerprint, revision and delivery snapshot; absent policy keeps historical contact check-only behavior. Selected contacts/groups receive only `view`, never downgrade existing access, and grant dispatch is journaled before the provider call. Legacy group grants use the same ambiguity journal without adding contact consent. `permission_unknown` blocks normal retry/resume. Explicit POST `/api/feishu/deliveries/{job_id}/verify-permissions` reads original provider ACLs and updates internal evidence only: no document/ACL/message writes and no worker scheduling. Positive evidence returns the recipient to pending for an explicit later notification retry; absent/failed evidence never re-grants. Body/message unknown remain protected. This is a VINote integration deployment, independent from VILab; mock/contract tests are not recipient delivery acceptance.
+
+- 2026-10-16 user-approved adaptive request planning: segmentation is allowed, but model names must never select fixed request seconds. Recorded-audio policy comes from the selected model's `capabilities.recordedAudio` service budget, not an inferred provider duration limit. Prefer acoustic pauses within the PCM byte budget, retain exact contiguous sample boundaries and final-only checkpoints, preserve unknown inflight requests without replay, and never change the selected model automatically. Missing/invalid policy is a service configuration/update problem, not proof that the model cannot transcribe long recordings. See `docs/plans/2026-10-16-adaptive-asr.md`; source/offline evidence does not establish deployment or device acceptance.
+
+- 2026-10-15 App credential refresh is serialized across independent same-identity request contexts. A queued caller reuses a preceding rotation only while its own identity, Origin and cancellation guards remain valid; MCP/Feishu request leases stay strict. Parallel meeting fact extraction must not rotate the same refresh token concurrently or misreport normal rotation as an account switch. Complete v5 ASR coverage and saved summary parts remain reusable on explicit recovery without model changes or another ASR submission. Actual App Aliyun 22m57s evidence is in `docs/reviews/2026-10-15-asr-terminal-22m-acceptance.md`; Doubao remains unaccepted.
+
+- 2026-10-15 ASR wait/replay contract: desktop `asr_stream_service.py` and App `asrStream.ts` keep separate bounded upload and finalization windows derived from the selected audio interval. Only a confirmed LAST send/enqueue may start the finalization window once; partials and late/unconfirmed LAST cannot renew it. This covers the current default provider finish budget, not arbitrary administrator overrides. Once desktop binary audio has been attempted, transport ambiguity is `unknown_result` and cannot automatically replay; explicit provider codes remain intact but do not authorize audio replay. See `docs/asr-stream-timeouts.md`. Offline and rejection-only device checks are not real-provider acceptance.
+
+- Generation persists account-bound `model_source_snapshot.json` before the media request and restores it on retry; changed preferences never replace a frozen task's concrete models/Origin. Authenticated `GET /api/task/{task_id}/model-confirmation` only reads failed-task recovery context. Legacy cloud tasks without a snapshot require an explicit NoteGenerator Sheet confirmation, then POST the same task retry with `{confirmed:true,mode:"cloud",server_url,asr_model,llm_model}`. Existing snapshots cannot be replaced; unknown confirmation outcomes are queried, not automatically replayed. Legacy local tasks without snapshots remain blocked pending a new confirmed operation.
+
+- Mobile `recordingService.ts` accepts a preparation AbortSignal. Cancellation waits for the original native request and releases late capture before becoming idle. Failed release or native Stop retains the active guard and foreground service, exposes an unconfirmed state, and requires explicit Stop retry. A confirmed stop with a failed file save reuses the same pending record without calling native Stop again. The root mini bar labels preparation, cancellation, recording, pause, uncertain release and saving separately; busy is not synonymous with saving.
 
 - Desktop custom recorder commands are explicitly allowed by `frontend/src-tauri/permissions/meeting-recorder.toml` and the default capability, scoped to the main/recorder windows and local backend Origin. Native WebView regression must check command errors as well as media playback.
 
@@ -210,9 +268,10 @@ Fresh-checkout startup: yarn dev runs bootstrap-dev.mjs to install frontend depe
 - Capture acquisition is cancellable. Screen selection waits for the user without a fixed timeout; microphone acquisition has a 20-second timeout. Cancel/reset/unmount releases acquired sources and stops late permission results. Runtime recorder errors release tracks and update the dock; stopping releases devices before async file finalization. Pausing retains capture for resuming; stopping/discarding releases it.
 - Source development writes capture-stage events and original exceptions through Vite's local WebSocket to `data/desktop-capture.log` (bounded to approximately 1 MiB). These diagnostics exclude device IDs, device labels and media content; they are disabled in production builds. Backend logs do not contain WebView capture failures.
 - `speaker_diarization_service.py` runs whole-recording local sherpa-onnx Pyannote/3D-Speaker clustering independently from cloud STT covering the entire recording (chunked when necessary). Provider timestamps are aligned by interval overlap; whole-file-only text is aligned in sequence by detected speaking duration and marked estimated. IDs are local to the recording; overlap labels indicate uncertain attribution, not separated overlapping audio.
+- `speaker_worker.py` isolates sherpa detection and embedding refinement in one disposable spawned process per backend, using disk-backed PCM and bounded nonblocking progress IPC. The parent validates results and source/model identity before atomically saving speaker evidence; cached evidence is reused without rewriting. Windows Job Objects and Linux parent-death signals prevent inference workers surviving backend replacement. Packaged spawn uses the existing `multiprocessing.freeze_support()` entry; actual packaged execution still needs release verification. `scripts/check_speaker_worker_heartbeat.py` measures real inference responsiveness without printing speech or credentials.
 - Media generation routes accept `diarize` and optional `speaker_count` (1–20); authenticated `GET /api/meeting-capabilities` returns `diarization.available`. Source development installs optional `requirements.diarization.txt` and models via `scripts/setup_diarization.py`; `DIARIZATION_MODEL_DIR` defaults to `data/models/diarization`. Desktop packaging stages these models.
 - Uploaded video reuses its source file for screenshot extraction. Audio-only notes remove screenshot placeholders. Meeting video notes use `meeting_video`; audio uses `meeting_recording`.
-- `scripts/check_meeting_generation.py --live` uses real cloud services through in-process desktop API routes and saves a personal test note. This is not a native capture/UI test. Explicit transient STT HTTP 502/503/504 and transport/timeouts retry at most twice; authentication and unknown errors fail immediately. VILab transcription requests are capped at 60 seconds including overlap (approximately 1.92 MB PCM WAV), identically for LAN and public servers, including when optional generic chunking is disabled. Successful chunks are cached for retry; explicit no-speech sections are retained as unrecognized intervals. This bound is not a guarantee against upstream outages.
+- `scripts/check_meeting_generation.py --live` uses real cloud services through in-process desktop API routes and saves a personal test note; it is not native UI evidence. VILab ASR now uses paced VLA2 PCM WebSocket frames on desktop and App, with no model-name-based 12/60-second caps. Only explicit service `audio_duration_exceeded` with a valid declared limit changes the remaining interval layout; network errors never infer duration limits or switch models. Completed final intervals are cached by source/model/account. Partial `audioMs` may reflect submitted audio position rather than confirmed recognition coverage; label received progress as audio submitted for recognition, and only saved final intervals as durable. Explicit safe service error categories preserve the session UUID; only known transient failures retry the same model, and unknown final outcomes never auto-replay. The receive deadline is `duration * 1.5 + 90` seconds, independent of model duration capability. Desktop heartbeat failure cannot cut off provider finalization (`ping_timeout=None`); the receive deadline still bounds stalls. Recording itself performs no ASR; after stopping, ASR and independent speaker analysis run concurrently, both finish before LLM summary. Automatic meeting visualizations are cancelled. Actual public Aliyun framed tests covered 120 and 340 seconds; complete user recordings and other models remain separate acceptance work.
 
 ## Langfuse observability
 
@@ -223,6 +282,16 @@ Source-run HTTP tests may register task IDs and short labels in ignored `data/de
 Meeting setup automatically enables speaker diarization with automatic speaker count; do not expose diarization/count controls in the meeting UI. Users rename speakers in the transcript. Cloud ModelSourcePanel lists deployed ASR/LLM choices, persists selections per user and applies them to the next task. VILabCloudService.defaults resolves saved selections over service defaults, falling back only to a validated available service default when a saved selection is unavailable; explicit select() requests still reject invalid models; running task snapshots remain unchanged.
 
 ## Recording history and media lifecycle
+
+### Final navigation contract (2026-10-11)
+
+The user's latest approved structure supersedes historical navigation below: Meetings & Notes (Meetings / Notes), Files (All / Audio recordings / Screen recordings / Imported videos / Other files), Plugins (Feishu / MCP tools), Settings, and account via avatar. File types are page filters, not a long sidebar tree; projects/archive/trash belong inside content. Feishu authorization/defaults live in Plugins; version-specific publishing lives in content detail. Do not add a second Plugin Management entry routing to the same MCP page. See `docs/plans/2026-10-11-workspace-v3/navigation-final.md` for responsibilities, contextual returns, and unimplemented account/privacy capabilities.
+
+### Workspace navigation and containers (2026-10-11)
+
+The current desktop navigation is Meetings & Notes (Meetings / Notes), File Library and Plugins, with Settings and Account at the bottom. Meetings owns recording and meeting history; Notes owns writing, link/file intake and generated text. File Library owns current-device originals, without duplicating note bodies. Projects and archive are content filters; processing records are contextual recovery reached from status, not a primary sidebar item. Storage & Sync belongs only to Settings. `Projects.tsx` derives views from actual note project metadata; it does not create duplicate notes or pretend favorites are persisted. `Connections.tsx` owns the Feishu/MCP catalog; their detail pages return there unless given a validated contextual parent.
+
+`lib/navigation.ts` validates contextual parent routes and preserves project/archive queries. Content rows open detail directly. `WorkspaceNote.tsx` owns the source/version Sheet and closes it before another task Dialog. Shared modal layers are task 50, selection 55, confirmation 60, tooltip 70; confirmations use AlertDialog. `RetainedOriginals.tsx` sequentially verifies recording metadata without preloading media and lists only available retained files. MainLayout owns the sole main landmark and lazy-page loading without unmounting navigation. Do not restore the duplicated content preview or completed-minutes list in the originals page.
 
 Meeting capture uses the selected microphone as its required audio source. Screen recording requests video only, and the screen picker chooses only the recorded window or display. Persisted legacy options may still contain a system-audio flag, but capture ignores it so Windows/WebView system-audio failures never block recording. Display capture support depends on the runtime and screen picker.
 
@@ -253,6 +322,12 @@ LAN/public source desktop identities remain `app.vinote.desktop.test.dev` / `app
 
 分段转写显示已完成音频时长、比例及基于实际分段耗时估算的剩余转写时间；整段请求没有中间结果时不虚构进度。所有进度采集仅在录制结束后运行。
 
+### 完整录音证据与交付恢复（2026-10-10）
+
+- VILab 的成功响应明确包含空字符串 `text` 且无有效 segments 时记为未识别区间；缺失字段、非字符串或矛盾响应仍报错。`NoteService` 将这些区间与“不得推断缺失发言”的说明传给总结模型。未识别不等于已确认静音。
+- 详情独立重试逐字稿/媒体/飞书状态；飞书状态尚未读取成功时不可新建交付。异步请求按当前纪要序号校验，操作期间暂停状态轮询，失败保留输入与已成功阶段。
+- 原生 Android 说话人运行时与持续发言特征修正在 App 仓库维护；声音编号、聚类分数与分组数均不保证参会身份准确。私人实测录音/产物仅保存在忽略目录。
+
 本地历史持久化任务 ID、草稿 ID、失败阶段和进度。POST /api/task/{task_id}/retry 校验录制所有者与媒体后复用任务和有效产物。旧进程中断任务显示可重试。保存笔记后保留本地原始媒体直到用户明确删除。
 
 MeetingCaptureWorkspace renders capture preview and controls. User end actions send request-stop; MeetingRecorderDock confirms in the main window, never in the native controller. The internal stop action remains available for source-ended/save flows. Recording uses no realtime ASR. Audio-meter failures are fail-open and must never stop media capture.
@@ -281,7 +356,7 @@ Transient SSE transport failures retry once with a fresh collector and the origi
 Saved audio/video notes open in rendered preview mode; Markdown source is shown only when the user chooses Edit or Split. The note route fills the remaining app height with independent content scrolling, keeping its toolbar and media player visible. Key moments open in a Sheet on demand instead of permanently consuming note width. Local video uses a normal-aspect side panel on wide windows (stacked on narrow windows), with an expanded workspace view that keeps the same video element and playback position. Audio retains its bottom playback bar. Key-moment cards wrap long text and contain complete thumbnails without expanding the rail.
 
 
-Release version alignment: source, web, backend API and production desktop share base version 0.3.2; test bundles append -test. scripts/project-version.mjs enforces the manifests and lock files before source startup and packaging. Canonical LAN/public origins remain unchanged. Publish desktop assets only after frozen-runtime and tracing smoke checks, with the artifact manifest and SHA-256 tied to the merged release commit.
+Release version alignment: source, web, backend API and production desktop share base version 0.4.0; test bundles append -test. scripts/project-version.mjs enforces the manifests and lock files before source startup and packaging. Canonical LAN/public origins remain unchanged. Publish desktop assets only after frozen-runtime and tracing smoke checks, with the artifact manifest and SHA-256 tied to the merged release commit.
 
 Cloud model selectors show every server-configured catalog entry, including unavailable entries with a disabled status label, discard the previous catalog before refreshing, and disable selection when retrieval fails. Removed saved IDs are not injected into the option list; the UI explains the existing validated service-default fallback. Server availability flags remain authoritative and must reflect actual deployment configuration.
 
@@ -300,3 +375,71 @@ Cloud model selectors show every server-configured catalog entry, including unav
 <!-- agent-dev-journal:end -->
 
 账户项目切换后，已启用云端认证的部署只接受映射到当前 VINOTE_SUPABASE_URL 的本地会话；旧项目 Cookie 要求重新登录，不迁移旧账号数据。未配置云端认证时保留本地登录。
+
+## 会议工作台与飞书交付（2026-10-10）
+
+`/` 和 `/meetings` 为记录工作台，旧动态页位于 `/activity`；`/settings/feishu` 为飞书授权与通知设置。`app/services/feishu_service.py` 管理 OAuth 加密令牌、同公司租户校验、群阅读权限及逐步交付；`app/routers/feishu.py` 单独校验云账号 Bearer，并支持桌面转发到 `VINOTE_INTEGRATION_URL`。不得在客户端或包内保存 FEISHU_APP_SECRET。原生文档默认个人云文档，其他位置尚未开放。自动交付不改变录音与生成状态，重试保留文档和成功对象；创建结果不确定时先关联同名空白文档，禁止盲目重复创建。新表由 init_db 创建，变量、权限和 API 见 `docs/feishu-integration.md`。
+
+详情的 `/api/notes/{id}/versions` 与 `/ask` 沿用笔记权限；note_versions 保存编辑前正文。手机使用账号隔离本地历史与飞书提交队列。应用图标源统一为 VINote-app/assets/branding/vinote-app-icon.png；图标变更须同步 Tauri 图标、网页 favicon/sidebar 和 App 原生资源。
+
+
+### 独立并行分析与交互恢复（2026-10-10）
+
+`speaker_diarization_service.py` 同时执行完整 ASR 和本机分析，各自落盘 `asr_evidence.json` / `speaker_evidence.json`；声音检查点按源文件 SHA-256、模型及参数校验，ASR 沿用有效分块缓存。失败不得删除成功分支。临时 PCM 使用磁盘映射，WAV 写入分块且 ASR 完成前不清理共享缓存；检测结束释放原生模型再做聚类，避免等待云服务时持续占用模型内存。
+
+会议 LLM 使用原始 ASR 分段及独立发声区间两份材料，不使用估算逐句对齐当作确定证据。分段时间不确证句子归属，独立时间轴的 speaker 编号不得用于确定某个观点或承诺的发言人；事实审核同样遵守这一优先规则。详情明确提示估算，对重叠和未知声音禁用改名。桌面飞书设置草稿按账号保存在 sessionStorage，失败/导航后可恢复；异步旧账号返回不得覆盖新账号。删除原录音仅成功后解绑对应播放器，失败保留播放与重试。
+
+开发时保持一份 Tauri/Vite/Uvicorn 和一份手机 Metro；实际长录音核对顺序执行，构建/测试单工作进程。App Metro 的 maxWorkers=2 在下一次启动生效，不能为宣称配置生效而中断用户要求保留的当前热更新。
+
+自动声音分组修正规则 revision=2：最多 128 个代表和 128 个补充窗口，每窗不超过八秒；一个有效组至少两段代表发言、累计特征时长六秒。孤立短声音为未知，重叠保留，拒绝组中心参与竞争以防误归。该版本纳入声音源签名，旧产物不冒充新规则结果；ASR 成功缓存继续独立保留。组数和 silhouette 均不能当作真实身份准确性。
+
+工作台的本地历史/纪要读取错误在列表显示独立重试；空筛选有清除入口。飞书群读取失败不冒充账号状态读取失败，授权核验不得覆盖未保存通知设置。会议对话成功 HTTP 的空白回答仍按失败处理，保留输入并提供重试。
+
+## 工作台界面与录音预览
+
+`docs/ui-design.md` 记录两端页面结构与视觉约束。桌面 `MeetingWorkbench` 使用记录行与 `LocalRecordingPreview`，不再使用旧 `LocalRecordingCard`/`NoteGrid`。`RecordingWaveform` 调用鉴权 `GET /api/notes/{note_id}/waveform`，沿用原媒体权限/删除标记检查；`recording_waveform_service.py` 单并发、8kHz 聚合96点、FFmpeg60秒超时，缓存仅在源文件指纹及格式版本一致时复用。波形失败不影响回听或导出。`FeishuDocumentFooter` 只读已有交付状态，关闭交付弹窗后重新读取。
+
+四个源码入口通过 `scripts/backend-dev.py` 的 Uvicorn supervisor 每秒轮询 app、main.py、mcp_server.py；不递归监听整个仓库或媒体/模型目录。Windows继续经过隐藏信号隔离控制台，工作目录及数据库配置不变。SourceTaskProgress 仅活动/失败读取时2秒轮询，全部终态后30秒；不属于生产功能。
+
+### 账户与内容入口改造（2026-10-11）
+
+桌面默认进入 /meetings；当前产品主导航将会议、笔记分为独立一级入口，另有文件库、插件，底部设置与账号。App 默认进入会议，底栏分别显示会议、笔记、文件库、插件。会议导入只接受音视频和逐字稿，网页、PDF、Word 与普通文档从笔记进入。存储与同步归设置；处理记录是任务恢复页，不再占一级导航。独立 MeetingAssistant 页面删除，/assistant 兼容跳转到内容页，对话仍在详情。ContentIntake 唯一装配内容来源选择，/write 保存文字笔记；待确认保存使用既有 durable workspace operation，不重新创建副本。旧顶部搜索栏样式删除，不恢复重复标题与操作。
+
+authStore 区分 checking/authenticated/offline-known/expired/signed-out；连接失败不能清除已核验身份，冷启动未核验时提供重试而不开放缓存。退出与切换立即重置内容、工作空间、团队、LLM/STT 内存状态；读取请求通过代次丢弃旧返回。本机退出仍不撤销其他设备。资料迁移、服务端设备撤销和注销尚未实现，不得显示假成功。App 回前台先核验原账号，再恢复同步与交付；登录过期时先保护尚未保存录音。
+
+MicrophoneCheck 仅做实时输入测量，不保存或上传测试声音。10 秒自动停止，取消、隐藏页面、关闭面板和切换设备均释放音轨及 AudioContext，迟到的授权结果也释放。音量测试期间禁止同时开始会议；原音保存/生成流程保持既有规则。
+
+
+## 页面返回与导入结果恢复（2026-10-11）
+
+笔记列表提供“写笔记”及两项清晰来源入口：“粘贴链接”和“导入文件”；录制与会议文件导入仍归会议。`sourceInput.ts` / App `noteIntake.ts` 解析公开视频分享链接。`document_source_service.py` / `source_note_job.py` 处理普通公开网页、PDF、DOCX；文档上限 20 MB、PDF 200 页，登录页、扫描件、加密文件及旧版 DOC 给出可操作错误。文档不进入 STT 或伪造音视频时间戳。App `NoteIntakeScreen` 按账号持久保存来源与任务回执，返回重入查询原任务；结果保存失败不能再次 POST，未知提交不得自动重发。App 笔记音频入口使用 `importLocalFile({ keepAudioInFiles: true })`，不创建会议录音记录；原录制导入默认行为保持兼容。
+
+`generation_auth_service.py` 仅供 note 生成／状态／任务媒体路由使用：接受原有本地会话，或通过 Supabase 验证的已确认、非匿名 Bearer，必须匹配已有 `CloudAccountDB` issuer/subject 后映射本地用户。禁止仅按邮箱关联、新建映射或保存客户端令牌；未绑定返回 403、认证失效返回 401、提供方故障保留原错误。新 URL／文字任务写入录制所有者标记，沿用任务产物访问校验。此适配不代表正式共享部署的媒体生成服务已经接通。
+
+导入页面按账号和 note/meeting 流程把已接收 task_id 回执保存在 localStorage。页面重入查询原任务；结果保存失败保留回执并恢复保存，不重新提交生成。处理记录提供恢复入口。该回执不是跨浏览器/跨端任务存储；收到 task_id 前的未知提交由独立来源请求回执机制核验，未接通该机制的调用不得自动重发。详情页通过显式 returnTo 保留内容列表/录制/处理来源；原文件页返回所属内容详情。App 外观、模型、连接、数据与同步为独立账号子页，返回保留真实来源。
+
+本轮导航重新规划提案在 docs/plans/2026-10-11-workspace-v3/navigation-containers-replan.md；用户已退回现有侧边栏，提案中的项目与收藏尚不等于已落地功能。不要把旧截图和当前代码外观直接作为最终设计规范。
+
+## 第一方翻译 MCP 与内容操作（2026-10-12）
+
+`first_party_translation_service.py` owns the first-party Chinese/English adapter and account/run-scoped receipts. `POST /api/mcp-connections/first-party/translation {}` provisions an account-owned managed connection; `/api/mcp-first-party/translation` implements HTTPS Streamable HTTP initialize/notifications/tools/list/tools/call. `GET /api/mcp-connections/first-party/translation/receipts/{run_id}` reads the original result without replay. The server requires `VILAB_SERVER_URL` for the existing VINote cloud model Origin; current validated cloud JWT is used only in request memory. Never accept managed URL/auth spoofing or persist this JWT as a connection credential. Discovery and explicit tool grant precede bound per-call confirmation. Provider calls are bounded to 90 seconds with zero automatic retries; the bridge is bounded to 120 seconds. Unknown outcomes are read back, not replayed. Incomplete/refused/truncated output cannot be saved as a completed translation. Generic inbound `/mcp` remains independent.
+
+Desktop NoteEditor is a reading page with one object heading and at most two primary actions; title inputs appear only while editing. Secondary actions are grouped in one content-operation disclosure. App NoteDetailScreen owns the content operation, version and text-generation sheets; close the preceding sheet before opening another. FileLibrary preserves category/search context when entering selected-file intake; selecting a file does not submit generation. Existing unresolved source receipts are protected, and preparation failures provide retry plus a usable return. Ordinary document pages must not label content or templates as meeting minutes.
+
+`GET /api/mcp-connections/first-party/translation/models` returns the current verified owner's available LLM catalog and validated optional default. Both clients require an explicit model choice when the default is absent; never choose the first catalog item or replace an unavailable choice silently. `vinote_translate_text` binds the selected optional `model` alongside text and `target_language` to the preview and confirmed request. Changed tool definitions require discovery and explicit grants again; old receipts remain readable without replay or rewriting their arguments.
+
+App retains independent `NotesView` snapshots for Meetings, Notes and each project in the authenticated root. Detail returns restore search/filter/project; sign-out clears these view snapshots and pending navigation context. Translation saving fixes the original account namespace and checks it before and after asynchronous reads/writes; a later account with the same note ID must never receive the previous account's result. These checks do not establish acceptance of all offline/conflict or account-switch flows.
+
+Top-level App headers consume `MainAccountActionContext`, keeping the avatar beside the page title; subpages keep Back instead. The root no longer creates an empty account-only row. Notes list reads use one account-bound local/workspace snapshot, coalesce background notifications, and retain this account's already-read rows on return; only acknowledged cloud operations establish synced status. Compact source cards remain explicit, stack on narrow/high-font-scale screens, and never submit on selection.
+
+Desktop source lookup from a workspace detail uses `/files?note=<verified-local-note-id>` and a validated detail return context. File Library filters only actual owner-scoped `note_id` / recording associations; file selection uses an existing row's file ID, never the note ID or a title guess. Missing associations are reported as not found on this device, not deleted. The original source lookup must not open a legacy duplicate note body. Legacy document uploads which only retained extracted text cannot reconstruct the original PDF/Word; current document intake registers a real local original before submitting generation.
+
+Local `/api/files` now records a purpose (`meeting` or `note`) independently from format; upload accepts multipart `purpose`, and owner-only `PATCH /api/files/{id}` reclassifies an original without moving/deleting it. Existing rows infer purpose only from linked content; unlinked originals remain in a review group until the user classifies them. File Library groups by purpose first and format second. Links have no device-original file and belong only to Notes intake. Deleting an original does not delete a meeting or note.
+File Library format filters are All / Audio / Video / Document; a screen recording is a Video subtype identified by a source badge, never a sibling format filter beside Video.
+
+Source-only FileLibrary views hide global import/search/type controls and show only verified associated originals. Recovery links select the actual retained recording ID; absent IDs show an honest unavailable state rather than another recording. Server file timestamps from SQLite are UTC even when the offset is omitted; `serverTimestamp` normalizes that channel only, never user-supplied meeting wall-clock times.
+
+App original-recording details omit library-wide import/navigation actions. Externally opened details return to their source; list-selected details return to the recording list first, for header and hardware Back alike. Local original reads resolve independently of cloud minutes reads, so a notes outage cannot hide playback/export. Unknown minutes status blocks new generation until readback/retry succeeds; missing originals, failed reads and empty libraries remain distinct. Settings preserve validated source/query/hash through subsection and overview returns; self-referential or external parents use the safe notes fallback.
+
+### Device-local per-item workspace policy (2026-10-12)
+New App content is local-only unless explicitly enabled. Existing acknowledged authorized content retains its policy; mappings/cache alone are not authorization. Canonical workspace keys stay unchanged, and device policy is not a global cloud deletion. GET /api/workspace/operations/{operation_id}?note_key=... returns the original owner-scoped committed revision only, without replay/latest content. /status advertises item_sync_policy=1, operation_receipts=1 and explicit_import=1 with policy_scope=device-local. POST /import-local requires {keys:[...],sync_authorized:true}; omitted/empty selection never imports all content. No new DB table or main.py registration is required: receipts use the existing registered workspace_operations table. This source contract is not evidence of deployment.

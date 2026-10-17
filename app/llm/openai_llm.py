@@ -62,11 +62,18 @@ class _BasePromptLLM(LLMSummarizer):
         return f"{minutes:02d}:{secs:02d}"
 
     def _build_segment_text(self, segments: List[TranscriptSegment]) -> str:
-        return "\n".join(
-            f"{self._format_time(seg.start)}–{self._format_time(seg.end)} - "
-            f"{('[' + (seg.speaker_label or seg.speaker_id) + '] ') if seg.speaker_id else ''}{seg.text}"
-            for seg in segments
-        )
+        rendered = []
+        for seg in segments:
+            rendered.append(
+                f"{self._format_time(seg.start)}–{self._format_time(seg.end)} - "
+                f"{('[' + (seg.speaker_label or seg.speaker_id) + '] ') if seg.speaker_id else ''}{seg.text}")
+            if seg.speaker_evidence:
+                rendered.append("独立说话人时间轴（录音偏移，编号非实名）：")
+                rendered.extend(f"{turn['start']:.2f}–{turn['end']:.2f} 秒：{turn['speaker_id']}"
+                                for turn in seg.speaker_evidence)
+            if seg.timestamp_estimated:
+                rendered.append("转写仅有分段时间；逐句时间与说话人归属不能确证。上述编号仅表示该时间窗内有人发声，不对应任何具体句子；本段观点和承诺统一用‘有人提出/讨论提到’，不得标为某个 speaker 编号。")
+        return "\n".join(rendered)
 
     def _build_user_prompt(
         self,
@@ -86,7 +93,7 @@ class _BasePromptLLM(LLMSummarizer):
 
     @staticmethod
     def _estimate_segment_size(segment: TranscriptSegment) -> int:
-        return len(segment.text) + 16
+        return len(segment.text) + 80 + sum(len(str(turn)) for turn in segment.speaker_evidence)
 
     def _chunk_segments(self, segments: List[TranscriptSegment]) -> list[list[TranscriptSegment]]:
         if not segments:
@@ -120,13 +127,6 @@ class _BasePromptLLM(LLMSummarizer):
             chunks.append(current)
 
         return chunks
-
-    def _should_use_hierarchical_mode(self, segments: List[TranscriptSegment]) -> bool:
-        total_chars = sum(self._estimate_segment_size(segment) for segment in segments)
-        return (
-            len(segments) > max(1, int(settings.summary_default_max_segments))
-            or total_chars > max(2000, int(settings.summary_default_max_chars))
-        )
 
     def _summarize_one_shot(
         self,
@@ -242,17 +242,10 @@ class _BasePromptLLM(LLMSummarizer):
         progress_callback: SummaryProgressCallback | None = None,
     ) -> str:
         mode = normalize_summary_mode(summary_mode)
-        if mode == "oneshot":
-            return self._summarize_one_shot(
-                title=title,
-                segments=segments,
-                style=style,
-                extras=extras,
-                output_language=output_language,
-                progress_callback=progress_callback,
-            )
-
-        if mode == "accurate" or self._should_use_hierarchical_mode(segments):
+        # Default and explicit oneshot always submit the complete source.
+        # Only explicit legacy accurate requests opt into chunk/merge. Provider
+        # context errors propagate; they never authorize splitting or replay.
+        if mode == "accurate":
             return self._summarize_hierarchical(
                 title=title,
                 segments=segments,

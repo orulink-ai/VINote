@@ -37,8 +37,8 @@ export function ProcessingModelPicker() {
 
   return <div className="grid gap-5">
     <div className="grid gap-4">
-      <div className="rounded-2xl border bg-card p-4">
-        <div className="mb-4 flex items-center gap-3"><span className="grid size-9 place-items-center rounded-xl bg-muted"><Radio className="size-4" /></span><div><Label htmlFor="task-stt-profile">{zh ? '语音转写' : 'Speech recognition'}</Label><p className="mt-0.5 text-xs text-muted-foreground">{zh ? '用于生成逐字稿' : 'Creates the transcript'}</p></div></div>
+      <div className="border-b py-4">
+        <div className="mb-4 flex items-center gap-3"><span className="grid size-9 place-items-center rounded-md bg-muted"><Radio className="size-4" /></span><div><Label htmlFor="task-stt-profile">{zh ? '语音转写' : 'Speech recognition'}</Label><p className="mt-0.5 text-xs text-muted-foreground">{zh ? '用于生成逐字稿' : 'Creates the transcript'}</p></div></div>
         <Select value={selectedSTTProfileId || SYSTEM_DEFAULT} onValueChange={value => selectSTTProfile(value === SYSTEM_DEFAULT ? '' : value)}>
           <SelectTrigger id="task-stt-profile" className="h-11"><SelectValue /></SelectTrigger>
           <SelectContent><SelectItem value={SYSTEM_DEFAULT}>{zh ? '跟随后端默认' : 'Backend default'}</SelectItem>{speechModels.map(profile => <SelectItem key={profile.id} value={profile.id}>{profile.name}{profile.isDefault ? (zh ? ' · 默认' : ' · Default') : ''}</SelectItem>)}</SelectContent>
@@ -46,8 +46,8 @@ export function ProcessingModelPicker() {
         <p className="mt-3 truncate text-xs text-muted-foreground">{selectedSpeech ? (selectedSpeech.modelName || selectedSpeech.provider) : (zh ? '使用系统当前默认配置' : 'Uses the current system default')}</p>
       </div>
 
-      <div className="rounded-2xl border bg-card p-4">
-        <div className="mb-4 flex items-center gap-3"><span className="grid size-9 place-items-center rounded-xl bg-muted"><Bot className="size-4" /></span><div><Label htmlFor="task-llm-profile">{zh ? '内容总结' : 'Summary'}</Label><p className="mt-0.5 text-xs text-muted-foreground">{zh ? '用于生成会议纪要' : 'Creates meeting notes'}</p></div></div>
+      <div className="border-b py-4">
+        <div className="mb-4 flex items-center gap-3"><span className="grid size-9 place-items-center rounded-md bg-muted"><Bot className="size-4" /></span><div><Label htmlFor="task-llm-profile">{zh ? '内容总结' : 'Summary'}</Label><p className="mt-0.5 text-xs text-muted-foreground">{zh ? '用于生成会议纪要' : 'Creates meeting notes'}</p></div></div>
         <Select value={selectedModelProfileId || SYSTEM_DEFAULT} onValueChange={value => selectModelProfile(value === SYSTEM_DEFAULT ? '' : value)}>
           <SelectTrigger id="task-llm-profile" className="h-11"><SelectValue /></SelectTrigger>
           <SelectContent><SelectItem value={SYSTEM_DEFAULT}>{zh ? '跟随后端默认' : 'Backend default'}</SelectItem>{models.map(profile => <SelectItem key={profile.id} value={profile.id}>{profile.name}{profile.isDefault ? (zh ? ' · 默认' : ' · Default') : ''}</SelectItem>)}</SelectContent>
@@ -56,6 +56,6 @@ export function ProcessingModelPicker() {
       </div>
     </div>
 
-    <div className="flex items-center justify-between gap-4 rounded-2xl bg-muted/45 px-4 py-3"><p className="text-xs leading-5 text-muted-foreground">{zh ? '这里仅选择本次任务使用的配置。新增、测试和密钥管理在设置中完成。' : 'Choose task profiles here. Create and manage them in Settings.'}</p><Button type="button" variant="ghost" className="shrink-0" onClick={() => navigate('/settings?tab=models')}><span>{zh ? '管理配置' : 'Manage'}</span><ArrowUpRight className="size-4" /></Button></div>
+    <div className="flex items-center justify-between gap-4 border-t py-3"><p className="text-xs leading-5 text-muted-foreground">{zh ? '这里仅选择本次任务使用的配置。新增、测试和密钥管理在设置中完成。' : 'Choose task profiles here. Create and manage them in Settings.'}</p><Button type="button" variant="ghost" className="shrink-0" onClick={() => navigate('/settings?tab=models')}><span>{zh ? '管理配置' : 'Manage'}</span><ArrowUpRight className="size-4" /></Button></div>
   </div>
 }

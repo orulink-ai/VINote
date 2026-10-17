@@ -31,9 +31,12 @@ export function SourceTaskProgress() {
   }, [userId, error, renderedStatus])
   useEffect(() => {
     if (!import.meta.env.DEV || !userId) return
+    observedActive.current.clear()
+    setTasks([])
     let disposed = false
     let timer: ReturnType<typeof setTimeout>
     const poll = async () => {
+      let delay = 2000
       try {
         const response = await fetch('/__vinote/dev-tasks', { cache: 'no-store' })
         if (!response.ok) throw new Error('Task registration unavailable')
@@ -41,6 +44,7 @@ export function SourceTaskProgress() {
         const results = await Promise.allSettled(registrations.map(async ({ taskId, label }) =>
           ({ ...await apiJson<TaskProgress>(`/api/task/${taskId}`), label })))
         if (disposed) return
+        if (results.every(result => result.status === 'fulfilled' && isTerminal(result.value.status))) delay = 30000
         setTasks(results.flatMap(result => {
           if (result.status !== 'fulfilled') return []
           const task = result.value
@@ -49,7 +53,7 @@ export function SourceTaskProgress() {
         }))
         setError(results.some(result => result.status === 'rejected'))
       } catch { if (!disposed) setError(true) }
-      if (!disposed) timer = setTimeout(() => { void poll() }, 2000)
+      if (!disposed) timer = setTimeout(() => { void poll() }, delay)
     }
     void poll()
     return () => { disposed = true; clearTimeout(timer) }

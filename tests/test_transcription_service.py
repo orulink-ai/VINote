@@ -34,7 +34,64 @@ class FakeTranscriber:
 
 
 class TranscriptionServiceTest(unittest.TestCase):
-    def test_cloud_bounds_cover_three_hours_even_when_chunking_disabled(self):
+    def test_short_request_boundary_has_no_zero_length_final_core(self):
+        service = TranscriptionService()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.wav"
+            source.write_bytes(b"audio")
+            for duration in (30.0, 30.0001, 30.0008, 30.023, 30.9):
+                chunks = service._build_chunk_specs(
+                    audio_path=str(source), duration=duration,
+                    temp_dir=Path(directory), request_duration_limit=12,
+                )
+                self.assertEqual(len(chunks), 3)
+                self.assertTrue(all(chunk.trim_end > chunk.trim_start for chunk in chunks))
+                self.assertEqual([chunk.total for chunk in chunks], [3, 3, 3])
+                self.assertAlmostEqual(chunks[-1].trim_end, round(duration, 3), places=3)
+                self.assertGreaterEqual(chunks[-1].chunk_end, chunks[-1].trim_end)
+            longer = service._build_chunk_specs(
+                audio_path=str(source), duration=31.01,
+                temp_dir=Path(directory), request_duration_limit=12,
+            )
+            self.assertEqual(len(longer), 4)
+            self.assertEqual(longer[-1].trim_start, 30)
+
+    def test_failed_chunk_retains_real_progress_and_retry_reuses_cache(self):
+        from app.services.task_artifact_service import TaskArtifactService
+        service = TranscriptionService()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            artifacts = TaskArtifactService(root / "output")
+            task = artifacts.create_task_dir("chunk-retry")
+            chunks = [ChunkSpec(1, 2, root / "one.wav", 0, 35, 0, 30),
+                      ChunkSpec(2, 2, root / "two.wav", 25, 60, 30, 60)]
+            for chunk in chunks:
+                chunk.file_path.write_bytes(str(chunk.index).encode())
+            args = dict(audio_path="unused.wav", duration=60, transcriber=FakeTranscriber("test"),
+                        chunk_cache_dir=task / "transcription_chunks", cache_identity="model-a",
+                        update_status=lambda status, message, **details: artifacts.update_status(
+                            task, status, message, **details))
+            result = TranscriptResult("en", "speech", [])
+            with patch.object(service, "_build_chunk_specs", return_value=chunks), \
+                    patch.object(service, "_extract_chunk"):
+                with patch.object(service, "_transcribe_chunk", side_effect=[result, RuntimeError("502")]):
+                    with self.assertRaisesRegex(RuntimeError, "502"):
+                        service._transcribe_in_chunks(**args)
+                status = artifacts.get_status("chunk-retry")
+                self.assertEqual(status["status"], "failed")
+                self.assertEqual(status["failed_stage"], "transcribing")
+                self.assertEqual(status["processed_seconds"], 30)
+                self.assertEqual(status["total_seconds"], 60)
+                artifacts.update_status(task, "uploaded", attempt=2)
+                with patch.object(service, "_transcribe_chunk", return_value=result) as call:
+                    service._transcribe_in_chunks(**args)
+                self.assertEqual(call.call_count, 1)
+                status = artifacts.get_status("chunk-retry")
+                self.assertEqual(status["processed_seconds"], 60)
+                self.assertIn("2/2", status["message"])
+                self.assertNotIn("eta_seconds", status)
+
+    def test_explicit_custom_request_bound_covers_three_hours_when_generic_chunking_disabled(self):
         from app.config import settings
         from app.transcribers.vilab_transcriber import VILabTranscriber
         service = TranscriptionService()
@@ -45,7 +102,7 @@ class TranscriptionServiceTest(unittest.TestCase):
                 with patch.object(settings, "transcription_chunking_enabled", enabled):
                     chunks = service._build_chunk_specs(
                         audio_path=str(source), duration=10800, temp_dir=Path(directory),
-                        request_duration_limit=VILabTranscriber.max_request_duration_seconds)
+                        request_duration_limit=60)
                 self.assertGreater(len(chunks), 1)
                 self.assertEqual(chunks[0].trim_start, 0)
                 self.assertEqual(chunks[-1].trim_end, 10800)
@@ -54,16 +111,85 @@ class TranscriptionServiceTest(unittest.TestCase):
                 for previous, current in zip(chunks, chunks[1:]):
                     self.assertEqual(previous.trim_end, current.trim_start)
 
-    def test_cloud_limit_is_applied_by_actual_orchestrator(self):
+    def test_streaming_orchestrator_does_not_apply_generic_chunk_limits(self):
         from app.transcribers.vilab_transcriber import VILabTranscriber
         service = TranscriptionService()
         with patch.object(service, "_build_chunk_specs", return_value=[]) as specs, \
-                patch.object(service, "_transcribe_chunk", return_value=TranscriptResult(None, "ok", [])):
+                patch.object(service, "_transcribe_chunk", return_value=TranscriptResult(None, "ok", [])) as recognize:
             service._transcribe_in_chunks(audio_path="test.wav", duration=60,
                                          transcriber=VILabTranscriber("http://localhost", "test"))
-            self.assertEqual(specs.call_args.kwargs["request_duration_limit"], 60)
+            specs.assert_not_called()
+            self.assertEqual(recognize.call_args.args[1], "test.wav")
 
-    def test_short_cloud_chunks_cover_boundaries_with_overlap(self):
+    def test_aliyun_model_name_never_selects_a_request_duration(self):
+        from app.transcribers.vilab_transcriber import VILabTranscriber
+        adapter = VILabTranscriber("https://api.orulink.ai", "unused", "asr:6:aliyun:22:paraformer-realtime-v2")
+        self.assertIsNone(adapter.max_request_duration_seconds)
+        service = TranscriptionService()
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "audio.wav"
+            source.write_bytes(b"placeholder")
+            with patch.object(service, "_build_chunk_specs") as chunks, patch.object(
+                service, "_transcribe_chunk", return_value=TranscriptResult(None, "完整正文", [])) as recognize:
+                service._transcribe_in_chunks(audio_path=str(source), duration=65, transcriber=adapter)
+            chunks.assert_not_called()
+            self.assertEqual(recognize.call_count, 1)
+
+    def test_all_cloud_models_keep_whole_recording_and_ignore_generic_duration_caps(self):
+        from app.config import settings
+        from app.transcribers.vilab_transcriber import VILabTranscriber
+        service = TranscriptionService()
+        models = ("asr:6:aliyun:22:paraformer-realtime-v2", "asr:14:volcengine-asr:8:bigmodel", "asr:future:unknown")
+        for model in models:
+            for duration in (12, 20, 10800):
+                adapter = VILabTranscriber("https://example.test", "unused", model)
+                with self.subTest(model=model, duration=duration), patch.object(
+                    settings, "transcription_chunking_enabled", True
+                ), patch.object(service, "_build_chunk_specs") as chunks, patch.object(
+                    service, "_transcribe_chunk", return_value=TranscriptResult(None, "完整正文", [])
+                ) as recognize:
+                    result = service._transcribe_in_chunks(audio_path="source.webm", duration=duration, transcriber=adapter)
+                    chunks.assert_not_called()
+                    self.assertEqual(recognize.call_count, 1)
+                    self.assertEqual(recognize.call_args.args[1], "source.webm")
+                    self.assertEqual(result.full_text, "完整正文")
+
+    def test_selected_model_survives_merge_cache_and_trace(self):
+        service = TranscriptionService()
+        primary = "aliyun"
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            chunks = [ChunkSpec(1, 2, root / "one.wav", 0, 11, 0, 10),
+                      ChunkSpec(2, 2, root / "two.wav", 9, 20, 10, 20)]
+            for chunk in chunks:
+                chunk.file_path.write_bytes(str(chunk.index).encode())
+            first = TranscriptResult("zh", "第一段", [], metadata={"model": primary,
+                "requested_model": primary, "asr_attempts": [{"model": primary, "status": "success"}]})
+            second = TranscriptResult("zh", "第二段", [], metadata={"model": primary,
+                "requested_model": primary, "asr_attempts": [
+                    {"model": primary, "status": "failed", "reason": "network"},
+                    {"model": primary, "status": "success"}]})
+            arguments = dict(audio_path="unused.wav", duration=20, transcriber=FakeTranscriber("unused"),
+                             chunk_cache_dir=root / "cache", cache_identity="selected-primary")
+            with patch.object(service, "_build_chunk_specs", return_value=chunks), patch.object(
+                service, "_extract_chunk"
+            ), patch.object(service, "_transcribe_chunk", side_effect=[first, second]) as call:
+                merged = service._transcribe_in_chunks(**arguments)
+                cached = service._transcribe_in_chunks(**arguments)
+            self.assertEqual(call.call_count, 2)
+            self.assertEqual(merged.metadata["models"], [primary])
+            self.assertEqual(merged.metadata["model"], primary)
+            self.assertEqual(merged.metadata["asr_attempts"][-1]["chunk_index"], 2)
+            self.assertEqual(cached.metadata, merged.metadata)
+            adapter = FakeTranscriber("unused")
+            adapter.model = primary
+            with patch.object(adapter, "transcribe", return_value=second), patch(
+                "app.services.transcription_service.update_current"
+            ) as update:
+                service._transcribe_chunk(adapter, str(chunks[1].file_path), chunks[1])
+            self.assertEqual(update.call_args.kwargs["model"], primary)
+
+    def test_explicit_custom_chunks_cover_boundaries_with_overlap(self):
         from app.config import settings
         from app.transcribers.vilab_transcriber import VILabTranscriber
         service = TranscriptionService()
@@ -77,7 +203,7 @@ class TranscriptionServiceTest(unittest.TestCase):
                             patch.object(settings, "transcription_chunk_overlap_seconds", 120):
                         chunks = service._build_chunk_specs(
                             audio_path=str(source), duration=duration, temp_dir=Path(directory),
-                            request_duration_limit=transcriber.max_request_duration_seconds)
+                            request_duration_limit=60)
                         if duration == 60:
                             self.assertEqual(chunks, [])
                             continue

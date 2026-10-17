@@ -75,4 +75,6 @@ class LLMService:
             api_key=api_key,
             base_url=base_url,
         )
+        from app.services.task_model_source import verify_local_config
+        verify_local_config(user_id, "llm", config)
         return self.build_summarizer(config)

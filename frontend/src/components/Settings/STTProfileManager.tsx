@@ -244,7 +244,7 @@ export function STTProfileManager() {
   return (
     <section className="py-2">
       <div className="grid gap-6 lg:grid-cols-[minmax(280px,0.8fr)_minmax(420px,1.2fr)]">
-        <div className="min-w-0 rounded-2xl border bg-card p-5">
+        <div className="min-w-0 border-t py-5">
           <div className="flex flex-col gap-4 border-b pb-5 sm:flex-row sm:items-start sm:justify-between">
             <div>
               <div className="flex items-center gap-3">
@@ -272,7 +272,7 @@ export function STTProfileManager() {
                 <div
                   key={profile.id}
                   data-profile-id={profile.id}
-                  className={clsx('rounded-xl border p-4 transition-colors hover:bg-muted/35', editingId === profile.id && 'border-foreground/30 bg-muted/45')}
+                  className={clsx('rounded-md border p-4 transition-colors hover:bg-muted/35', editingId === profile.id && 'border-foreground/30 bg-muted/45')}
                 >
                   <div className="grid gap-4">
                     <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
@@ -322,7 +322,7 @@ export function STTProfileManager() {
         </div>
 
         <aside className="lg:sticky lg:top-8 lg:self-start">
-          <section className="grid gap-5 rounded-2xl border bg-card p-5 shadow-sm sm:p-6">
+          <section className="grid gap-5 border-t py-5">
           <div className="flex items-start justify-between gap-4">
             <div>
               <div className="flex items-center gap-2">

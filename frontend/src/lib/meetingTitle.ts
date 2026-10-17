@@ -19,3 +19,11 @@ export function formatMeetingTitle(startedAt: Date | string, subject = '', local
     : `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`
   return `${time}｜${subject.trim() || (zh ? '待生成纪要' : 'Notes pending')}`.slice(0, 255)
 }
+
+/** The date is supplied by capture/import, never inferred from media duration. */
+export function formatContentTitle(createdAt: Date | string, markdown: string, fallback = '', locale = 'zh-CN') {
+  const subject = meetingSubject(markdown) || fallback
+    .replace(/^\d{4}[-/]\d{2}[-/]\d{2}(?:\s+\d{2}:\d{2})?\s*[｜|·-]\s*/, '')
+    .replace(/\.[a-z0-9]{2,5}$/i, '').trim() || (locale.startsWith('zh') ? '内容摘要' : 'Content summary');
+  return formatMeetingTitle(createdAt, subject, locale);
+}

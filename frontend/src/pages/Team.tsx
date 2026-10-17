@@ -1,245 +1,47 @@
 import { useEffect, useMemo, useState } from 'react'
-import { Building2, Check, Plus, Trash2, UserPlus, Users } from 'lucide-react'
-import { Badge } from '../components/ui/badge'
+import { PageReturn } from '@/components/Layout/PageReturn'
+import { Check, ChevronRight, Plus, Trash2, Users } from 'lucide-react'
 import { Button } from '../components/ui/button'
 import { Input } from '../components/ui/input'
 import { Alert, AlertDescription } from '../components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '../components/ui/alert-dialog'
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '../components/ui/empty'
 import { Skeleton } from '../components/ui/skeleton'
 import { useI18n } from '../lib/i18n'
-import { getWorkspaceLabel, useTeamStore } from '../stores/teamStore'
+import { useTeamStore } from '../stores/teamStore'
 
 export function Team() {
   const { locale } = useI18n()
-  const isZh = locale.startsWith('zh')
-  const {
-    teams,
-    currentWorkspace,
-    loading,
-    error,
-    loadTeams,
-    createTeam,
-    addMember,
-    removeMember,
-    deleteTeam,
-    selectPersonalWorkspace,
-    selectTeamWorkspace,
-  } = useTeamStore()
+  const zh = locale.startsWith('zh')
+  const { teams, currentWorkspace, loading, error, loadTeams, createTeam, addMember, removeMember, deleteTeam, selectPersonalWorkspace, selectTeamWorkspace } = useTeamStore()
   const [teamName, setTeamName] = useState('')
   const [memberEmail, setMemberEmail] = useState('')
   const [submitting, setSubmitting] = useState(false)
-
-  useEffect(() => {
-    void loadTeams()
-  }, [loadTeams])
-
-  const activeTeam = useMemo(() => {
-    if (currentWorkspace.scope !== 'team') {
-      return teams[0] ?? null
-    }
-    return teams.find((team) => team.id === currentWorkspace.teamId) ?? null
-  }, [currentWorkspace, teams])
-
-  const workspaceLabel = getWorkspaceLabel(currentWorkspace, teams, isZh ? '个人空间' : 'Personal workspace')
-
-  const handleCreateTeam = async () => {
-    if (!teamName.trim()) {
-      return
-    }
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [creating, setCreating] = useState(false)
+  useEffect(() => { void loadTeams() }, [loadTeams])
+  const activeTeam = useMemo(() => currentWorkspace.scope === 'team' ? teams.find(team => team.id === currentWorkspace.teamId) ?? null : null, [currentWorkspace, teams])
+  const canManage = activeTeam?.currentUserRole === 'owner' || activeTeam?.currentUserRole === 'admin'
+  const runAction = async (action: () => Promise<unknown>) => {
     setSubmitting(true)
-    await createTeam(teamName)
-    setTeamName('')
-    setSubmitting(false)
+    setActionError(null)
+    try { await action() } catch (failure) { setActionError(failure instanceof Error ? failure.message : (zh ? '操作未完成，请重试。' : 'Could not complete this action. Try again.')) } finally { setSubmitting(false) }
   }
-
-  const handleAddMember = async () => {
-    if (!activeTeam || !memberEmail.trim()) {
-      return
-    }
-    setSubmitting(true)
-    const updated = await addMember(activeTeam.id, memberEmail)
-    if (updated) {
-      setMemberEmail('')
-    }
-    setSubmitting(false)
-  }
-
-  const handleRemoveMember = async (memberId: string) => {
-    if (!activeTeam) {
-      return
-    }
-    setSubmitting(true)
-    await removeMember(activeTeam.id, memberId)
-    setSubmitting(false)
-  }
-
-  const handleDeleteTeam = async () => {
-    if (!activeTeam) return
-    setSubmitting(true)
-    await deleteTeam(activeTeam.id)
-    setSubmitting(false)
-  }
-
-  return (
-    <div className="mx-auto grid max-w-[1180px] gap-7 px-6 py-8 lg:px-8">
-      <section className="motion-rise">
-        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-          <div className="grid gap-2">
-            <Badge variant="secondary"><Building2 />{isZh ? '团队空间' : 'Team workspace'}</Badge>
-            <h2 className="text-3xl font-semibold tracking-[-0.03em]">{isZh ? '团队与成员' : 'Teams and members'}</h2>
-            <p className="max-w-2xl text-sm leading-6 text-muted-foreground">
-              {isZh
-                ? `当前工作区：${workspaceLabel}。团队笔记只会出现在对应团队的工作区里，个人笔记仍保留在个人空间。`
-                : `Current workspace: ${workspaceLabel}. Team notes stay inside their team workspace, while personal notes remain in your personal workspace.`}
-            </p>
-          </div>
-
-          <div className="flex flex-wrap gap-2 rounded-xl border bg-card p-1 shadow-sm">
-            <Button
-              type="button"
-              onClick={() => selectPersonalWorkspace()}
-              variant={currentWorkspace.scope === 'personal' ? 'default' : 'outline'}
-            >
-              {currentWorkspace.scope === 'personal' && <Check className="h-4 w-4" />}{isZh ? '个人空间' : 'Personal workspace'}
-            </Button>
-            {activeTeam ? (
-              <Button
-                type="button"
-                onClick={() => selectTeamWorkspace(activeTeam.id)}
-                variant={currentWorkspace.scope === 'team' && currentWorkspace.teamId === activeTeam.id ? 'default' : 'outline'}
-              >
-                {isZh ? '切到当前团队' : 'Use selected team'}
-              </Button>
-            ) : null}
-          </div>
-        </div>
-      </section>
-
-      <section className="motion-rise grid gap-5 xl:grid-cols-[300px_minmax(0,1fr)]" style={{ animationDelay: '70ms' }}>
-        <div className="grid content-start gap-4">
-          <section className="interactive-card grid gap-4 rounded-2xl border bg-card p-5 shadow-sm">
-            <header><h3 className="flex items-center gap-2 font-semibold"><Plus className="size-4" />{isZh ? '新建共享空间' : 'Create a shared space'}</h3><p className="mt-1 text-sm leading-6 text-muted-foreground">{isZh ? '为一个项目或小组创建独立空间。' : 'Create a dedicated space for a project or group.'}</p></header>
-            <div className="grid gap-3">
-              <Input
-                value={teamName}
-                onChange={(event) => setTeamName(event.target.value)}
-                className="h-11"
-                placeholder={isZh ? '空间名称' : 'Space name'}
-              />
-              <Button
-                type="button"
-                onClick={() => void handleCreateTeam()}
-                disabled={!teamName.trim() || submitting}
-                className="w-full rounded-xl"
-              >
-                {submitting ? (isZh ? '处理中...' : 'Working...') : (isZh ? '创建并切换' : 'Create and switch')}
-              </Button>
-            </div>
-          </section>
-
-          <section className="rounded-2xl border bg-card p-3 shadow-sm">
-            <h3 className="px-2 pb-3 pt-1 text-xs font-medium uppercase tracking-[0.12em] text-muted-foreground">{isZh ? '你的空间' : 'Your spaces'}</h3>
-            <div className="grid gap-2">
-              {loading ? <><Skeleton className="h-16" /><Skeleton className="h-16" /></> : null}
-              {teams.map((team) => (
-                <Button
-                  key={team.id}
-                  type="button"
-                  onClick={() => selectTeamWorkspace(team.id)}
-                  variant={currentWorkspace.scope === 'team' && currentWorkspace.teamId === team.id ? 'secondary' : 'ghost'}
-                  className="h-auto w-full justify-between rounded-xl border-0 px-3 py-3 text-left"
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="font-medium">{team.name}</div>
-                      <div className="mt-1 text-xs font-normal text-muted-foreground">
-                        {team.memberCount} {isZh ? '位成员' : team.memberCount === 1 ? 'member' : 'members'}
-                      </div>
-                    </div>
-                    <span className="size-2 rounded-full bg-foreground/25" />
-                  </div>
-                </Button>
-              ))}
-              {!loading && teams.length === 0 ? (
-                <Empty><EmptyHeader><EmptyMedia variant="icon"><Users /></EmptyMedia><EmptyTitle>{isZh ? '还没有团队' : 'No teams yet'}</EmptyTitle><EmptyDescription>{isZh ? '创建团队后即可共享笔记。' : 'Create one to start saving shared notes.'}</EmptyDescription></EmptyHeader></Empty>
-              ) : null}
-            </div>
-          </section>
-        </div>
-
-        <section className="min-h-[480px] overflow-hidden rounded-2xl border bg-card shadow-sm">
-          <div className="flex flex-wrap items-start justify-between gap-4 border-b px-6 py-5">
-            <div><h3 className="flex items-center gap-2 text-lg font-semibold"><UserPlus className="size-5" />{activeTeam ? activeTeam.name : (isZh ? '成员与共享' : 'Members and sharing')}</h3>{activeTeam ? <p className="mt-1 text-sm text-muted-foreground">{activeTeam.memberCount} {isZh ? '位成员可访问此空间' : 'members can access this space'}</p> : null}</div>
-            {activeTeam?.currentUserRole === 'owner' ? (
-              <AlertDialog>
-                <AlertDialogTrigger asChild><Button variant="ghost" size="sm" className="text-destructive hover:bg-destructive/10 hover:text-destructive"><Trash2 />{isZh ? '删除团队' : 'Delete team'}</Button></AlertDialogTrigger>
-                <AlertDialogContent>
-                  <AlertDialogHeader>
-                    <AlertDialogTitle>{isZh ? `删除“${activeTeam.name}”？` : `Delete “${activeTeam.name}”?`}</AlertDialogTitle>
-                    <AlertDialogDescription>{isZh ? '团队空间和成员关系会被删除。团队里的笔记不会丢失，会回到各自创建者的个人空间。此操作无法撤销。' : 'The team space and memberships will be deleted. Team notes are preserved in each creator’s personal workspace. This action cannot be undone.'}</AlertDialogDescription>
-                  </AlertDialogHeader>
-                  <AlertDialogFooter><AlertDialogCancel>{isZh ? '取消' : 'Cancel'}</AlertDialogCancel><AlertDialogAction onClick={() => void handleDeleteTeam()} disabled={submitting} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">{isZh ? '确认删除团队' : 'Delete team'}</AlertDialogAction></AlertDialogFooter>
-                </AlertDialogContent>
-              </AlertDialog>
-            ) : null}
-          </div>
-          {activeTeam ? (
-            <>
-              <p className="px-6 pt-5 text-sm leading-6 text-muted-foreground">
-                {isZh
-                  ? `当前选中团队：${activeTeam.name}。把已有账号通过邮箱加入团队后，他们就能看到该团队的团队笔记。`
-                  : `Selected team: ${activeTeam.name}. Add existing users by email so they can access notes saved inside this team workspace.`}
-              </p>
-
-              <div className="mx-6 mt-4 flex flex-col gap-3 rounded-xl bg-muted/35 p-3 md:flex-row">
-                <Input
-                  value={memberEmail}
-                  onChange={(event) => setMemberEmail(event.target.value)}
-                  placeholder={isZh ? '输入成员邮箱' : 'Enter member email'}
-                  className="h-10 flex-1 border-0 bg-background shadow-sm"
-                />
-                <Button
-                  type="button"
-                  onClick={() => void handleAddMember()}
-                  disabled={!memberEmail.trim() || submitting}
-                >
-                  {isZh ? '添加成员' : 'Add member'}
-                </Button>
-              </div>
-
-              <div className="mt-5 divide-y border-t">
-                {activeTeam.members.map((member) => (
-                  <div
-                    key={member.id}
-                    className="flex flex-col gap-3 px-6 py-4 transition-colors hover:bg-muted/20 md:flex-row md:items-center md:justify-between"
-                  >
-                    <div>
-                      <div className="font-medium">{member.email}</div>
-                      <div className="mt-1 text-xs text-muted-foreground">
-                        {member.role === 'owner' ? (isZh ? '拥有者' : 'Owner') : (isZh ? '成员' : 'Member')} · {new Date(member.joinedAt).toLocaleString(locale)}
-                      </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {member.role !== 'owner' ? (
-                        <AlertDialog><AlertDialogTrigger asChild><Button variant="destructive" size="sm" disabled={submitting}>{isZh ? '移除' : 'Remove'}</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{isZh ? '移除此成员？' : 'Remove this member?'}</AlertDialogTitle><AlertDialogDescription>{isZh ? '该成员将无法继续访问此团队中的共享笔记。' : 'They will lose access to notes in this team workspace.'}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{isZh ? '取消' : 'Cancel'}</AlertDialogCancel><AlertDialogAction onClick={() => void handleRemoveMember(member.id)}>{isZh ? '确认移除' : 'Remove'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
-                      ) : (
-                        <Badge variant="secondary">{isZh ? '拥有者' : 'Owner'}</Badge>
-                      )}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </>
-          ) : (
-            <Empty><EmptyHeader><EmptyMedia variant="icon"><UserPlus /></EmptyMedia><EmptyTitle>{isZh ? '选择一个团队' : 'Select a team'}</EmptyTitle><EmptyDescription>{isZh ? '选择现有团队或先创建一个团队。' : 'Choose an existing team or create one first.'}</EmptyDescription></EmptyHeader></Empty>
-          )}
-
-          {error ? (
-            <Alert variant="destructive" className="mt-4"><AlertDescription>{error}</AlertDescription></Alert>
-          ) : null}
-        </section>
-      </section>
-    </div>
-  )
+  return <div className="mx-auto w-full max-w-[720px] px-6 py-8 md:px-10">
+    <div className="mb-4"><PageReturn to="/settings?tab=spaces" label="返回空间与协作" /></div>
+    <header className="mb-7"><h1 className="text-2xl font-medium tracking-tight">{zh ? '空间与成员' : 'Spaces and members'}</h1><p className="mt-2 text-sm leading-6 text-muted-foreground">{zh ? '个人记录保存在个人工作区。团队空间用于共享笔记与会议资料。' : 'Keep personal recordings in your workspace and share notes in a team space.'}</p></header>
+    {(error || actionError) && <Alert variant="destructive" className="mb-5"><AlertDescription className="flex items-center justify-between gap-3"><span>{actionError || error}</span>{error && <Button size="sm" variant="outline" disabled={loading} onClick={() => void loadTeams()}>{zh ? '重新加载' : 'Reload'}</Button>}</AlertDescription></Alert>}
+    <section className="border-b pb-6">
+      <h2 className="mb-3 text-sm font-medium">{zh ? '工作区' : 'Workspaces'}</h2>
+      <button type="button" onClick={selectPersonalWorkspace} className="flex w-full items-center gap-3 rounded-md px-2 py-3 text-left hover:bg-muted/50"><span className="flex size-7 items-center justify-center rounded-full bg-muted text-xs">{zh ? '个' : 'P'}</span><span className="flex-1 text-sm">{zh ? '个人工作区' : 'Personal workspace'}</span>{currentWorkspace.scope === 'personal' ? <Check className="size-4" /> : <ChevronRight className="size-4 text-muted-foreground" />}</button>
+      {loading ? <Skeleton className="mt-2 h-12" /> : teams.map(team => <button type="button" key={team.id} onClick={() => selectTeamWorkspace(team.id)} className="flex w-full items-center gap-3 rounded-md px-2 py-3 text-left hover:bg-muted/50"><Users className="mx-1 size-5 text-muted-foreground" /><span className="flex-1"><span className="block text-sm">{team.name}</span><span className="text-xs text-muted-foreground">{team.memberCount} {zh ? '位成员' : 'members'}</span></span>{activeTeam?.id === team.id ? <Check className="size-4" /> : <ChevronRight className="size-4 text-muted-foreground" />}</button>)}
+      {!loading && !teams.length && <p className="px-2 py-3 text-xs leading-5 text-muted-foreground">{zh ? '尚未加入团队。新建一个空间后，可通过邮箱添加已有 VINote 账号。' : 'No team spaces yet. Create one and add existing VINote users by email.'}</p>}
+      {creating ? <form className="mt-4 flex gap-2" onSubmit={event => { event.preventDefault(); if (teamName.trim()) void runAction(async () => { const created = await createTeam(teamName.trim()); if (created) { setTeamName(''); setCreating(false) } }) }}><Input autoFocus aria-label={zh ? '空间名称' : 'Space name'} placeholder={zh ? '空间名称' : 'Space name'} value={teamName} onChange={event => setTeamName(event.target.value)} disabled={submitting} /><Button disabled={!teamName.trim() || submitting}>{submitting ? (zh ? '创建中…' : 'Creating…') : (zh ? '创建' : 'Create')}</Button><Button type="button" variant="ghost" disabled={submitting} onClick={() => setCreating(false)}>{zh ? '取消' : 'Cancel'}</Button></form> : <Button variant="outline" size="sm" className="mt-3" onClick={() => setCreating(true)}><Plus className="size-4" />{zh ? '新建团队空间' : 'New team space'}</Button>}
+    </section>
+    {activeTeam && <section className="border-b py-6">
+      <header className="mb-4"><h2 className="text-sm font-medium">{activeTeam.name} · {zh ? '成员' : 'Members'}</h2><p className="mt-1 text-xs leading-5 text-muted-foreground">{zh ? '成员可访问保存在这个团队空间的笔记。' : 'Members can access notes saved in this team space.'}</p></header>
+      {canManage && <form className="mb-4 flex gap-2" onSubmit={event => { event.preventDefault(); if (memberEmail.trim()) void runAction(async () => { const updated = await addMember(activeTeam.id, memberEmail.trim()); if (updated) setMemberEmail('') }) }}><Input type="email" aria-label={zh ? '成员邮箱' : 'Member email'} placeholder={zh ? '输入已有账号的邮箱' : 'Existing user email'} value={memberEmail} onChange={event => setMemberEmail(event.target.value)} disabled={submitting} /><Button disabled={!memberEmail.trim() || submitting}>{zh ? '添加成员' : 'Add member'}</Button></form>}
+      <div className="divide-y">{activeTeam.members.map(member => <div key={member.id} className="flex items-center gap-3 py-3"><span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-muted text-xs">{member.email[0]?.toUpperCase()}</span><div className="min-w-0 flex-1"><p className="truncate text-sm">{member.email}</p><p className="mt-1 text-xs text-muted-foreground">{member.role === 'owner' ? (zh ? '拥有者' : 'Owner') : (zh ? '成员' : 'Member')}</p></div>{canManage && member.role !== 'owner' && <AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="sm" disabled={submitting}>{zh ? '移除' : 'Remove'}</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{zh ? '移除此成员？' : 'Remove this member?'}</AlertDialogTitle><AlertDialogDescription>{zh ? '该成员将无法继续访问此团队中的共享笔记。' : 'They will lose access to notes in this team space.'}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{zh ? '取消' : 'Cancel'}</AlertDialogCancel><AlertDialogAction onClick={() => void runAction(() => removeMember(activeTeam.id, member.id))}>{zh ? '确认移除' : 'Remove'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>}</div>)}</div>
+      {activeTeam.currentUserRole === 'owner' && <div className="mt-5 border-t pt-4"><AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="sm" disabled={submitting} className="text-destructive"><Trash2 className="size-4" />{zh ? '删除团队空间' : 'Delete team space'}</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{zh ? `删除“${activeTeam.name}”？` : `Delete “${activeTeam.name}”?`}</AlertDialogTitle><AlertDialogDescription>{zh ? '团队空间和成员关系会被删除。团队里的笔记会回到各自创建者的个人空间。此操作无法撤销。' : 'The space and memberships will be deleted. Notes return to their creators’ personal workspaces. This cannot be undone.'}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{zh ? '取消' : 'Cancel'}</AlertDialogCancel><AlertDialogAction disabled={submitting} className="bg-destructive text-destructive-foreground" onClick={() => void runAction(() => deleteTeam(activeTeam.id))}>{zh ? '确认删除团队' : 'Delete team'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog></div>}
+    </section>}
+  </div>
 }

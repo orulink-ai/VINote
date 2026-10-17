@@ -19,6 +19,8 @@ class TranscriptSegment:
     cleaned_text: Optional[str] = None
     speaker_id: Optional[str] = None
     speaker_label: Optional[str] = None
+    speaker_evidence: list[dict] = field(default_factory=list)
+    timestamp_estimated: bool = False
 
 
 @dataclass

@@ -32,4 +32,3 @@ class TeamCreateRequest(BaseModel):
 class TeamMemberCreateRequest(BaseModel):
     email: str = Field(min_length=3, max_length=255)
     role: Literal["admin", "member"] = "member"
-

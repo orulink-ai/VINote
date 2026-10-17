@@ -80,6 +80,14 @@ export function generateRecordingId() {
   return `rec-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
 }
 
+export interface MeetingGenerationSelection {
+  mode: 'cloud' | 'local'
+  asr: string
+  llm: string
+  asrLabel: string
+  llmLabel: string
+}
+
 export interface PendingMeeting {
   id: string
   ownerId: string
@@ -90,13 +98,21 @@ export interface PendingMeeting {
   fileName?: string
   elapsedSeconds: number
   recordingStatus: 'saved' | 'save_failed'
-  processingStatus: 'idle' | 'queued' | 'preparing_media' | 'transcribing' | 'diarizing' | 'aligning' | 'analyzing_video' | 'generating' | 'saving_result' | 'completed' | 'failed'
+  processingStatus: 'idle' | 'queued' | 'preparing_media' | 'transcribing' | 'diarizing' | 'parallel_analysis' | 'aligning' | 'analyzing_video' | 'generating' | 'saving_result' | 'completed' | 'failed'
   taskId?: string
+  generationOperation?: {
+    id: string
+    selection: MeetingGenerationSelection
+    outputLanguage: string
+    previousTaskId?: string
+  }
+  generationConfirmationRequired?: boolean
   noteId?: string
   failedStage?: string
   processingError?: string
   processingUpdatedAt?: string
   retryCount?: number
+  feishuPending?: boolean
   draftNoteId?: string
   titleEdited?: boolean
   progress?: number

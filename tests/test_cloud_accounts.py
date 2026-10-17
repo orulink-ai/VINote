@@ -112,9 +112,12 @@ def test_refresh_rotates_and_is_not_repeated(cloud, monkeypatch):
         service.access_token("local-a")
 
 
-def test_cloud_uses_user_token_not_shared_key(monkeypatch):
+def test_cloud_uses_user_token_not_shared_key(cloud, monkeypatch):
     from app.services.vilab_cloud_service import VILabCloudService
     import httpx
+    from app.services import vilab_cloud_service
+    _, sessions = cloud
+    monkeypatch.setattr(vilab_cloud_service, "session_scope", sessions)
     monkeypatch.setattr(module.settings, "cloud_auth_url", "https://vinote.supabase.co")
     monkeypatch.setattr(module.settings, "vilab_server_url", "http://127.0.0.1:9878")
     monkeypatch.setattr(module.CloudAccountService, "access_token", lambda self, user: "personal-" + user)

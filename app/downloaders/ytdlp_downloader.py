@@ -12,12 +12,14 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 from urllib.parse import parse_qs, urlencode, urlparse
+from uuid import uuid4
 
 import yt_dlp
 
 from app.config import settings
 from app.downloaders.base import Downloader
 from app.models.audio import AudioDownloadResult
+from app.services import bilibili_source_service
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +64,10 @@ class YtdlpDownloader(Downloader):
         parsed = urlparse(video_url)
         host = parsed.hostname or ""
         for platform, domains in self.PLATFORM_PATTERNS.items():
+            if platform == "bilibili":
+                if host in bilibili_source_service.INPUT_HOSTS:
+                    return platform
+                continue
             if any(domain in host for domain in domains):
                 return platform
         return "unknown"
@@ -81,18 +87,27 @@ class YtdlpDownloader(Downloader):
         return None
 
     def download(self, video_url: str, output_dir: str) -> AudioDownloadResult:
-        os.makedirs(output_dir, exist_ok=True)
-
         platform = self.detect_platform(video_url)
-        logger.info("[Download] platform=%s url=%s", platform, video_url)
+        if platform == "bilibili":
+            # Validate before creating files, and never enter yt-dlp/curl on
+            # failure. M4A is the original audio track, not a lossy derivative.
+            normalized = bilibili_source_service.validate_input(video_url)
+            source = bilibili_source_service.resolve(normalized)
+            directory = Path(output_dir).resolve()
+            directory.mkdir(parents=True, exist_ok=True)
+            target = directory / f"{uuid4().hex}_bilibili_audio.m4a"
+            path = bilibili_source_service.download_audio(source, target)
+            return AudioDownloadResult(
+                file_path=str(path), title=source.title, duration=source.duration,
+                video_id=source.video_id, platform="bilibili", cover_url=None,
+                # Never serialize the source dataclass or signed CDN URL.
+                raw_info={"id": source.video_id, "webpage_url": source.canonical_url,
+                          "source_identity": source.source_identity},
+            )
 
-        try:
-            return self._download_with_ytdlp(video_url=video_url, output_dir=output_dir, platform=platform)
-        except Exception as exc:
-            if platform == "bilibili" and self._is_python_tls_eof_error(exc):
-                logger.warning("[Download] yt-dlp failed for Bilibili over Python TLS, falling back to curl: %s", exc)
-                return self._download_bilibili_audio_with_curl(video_url=video_url, output_dir=output_dir)
-            raise
+        os.makedirs(output_dir, exist_ok=True)
+        logger.info("[Download] platform=%s url=%s", platform, video_url)
+        return self._download_with_ytdlp(video_url=video_url, output_dir=output_dir, platform=platform)
 
     def download_video(self, video_url: str, output_dir: str) -> str:
         os.makedirs(output_dir, exist_ok=True)

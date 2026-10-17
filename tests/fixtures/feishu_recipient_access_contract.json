@@ -1,0 +1,31 @@
+{
+  "status": { "recipient_access_protocol": 1 },
+  "publish": {
+    "operation_id": "synthetic-operation",
+    "note_key": "synthetic-note",
+    "title": "synthetic title",
+    "content": "synthetic body",
+    "source_mode": "local_snapshot",
+    "notify_self": false,
+    "groups": [],
+    "recipient_access_policy": "grant_view_and_notify"
+  },
+  "unknown_delivery": {
+    "status": "failed",
+    "phase": "permission_unknown",
+    "error_code": "permission_unknown",
+    "recipient_access_policy": "grant_view_and_notify",
+    "recipients": {
+      "ou_b": {
+        "status": "permission_unknown",
+        "reading_permission": { "status": "unknown" }
+      }
+    }
+  },
+  "verify_action": {
+    "method": "POST",
+    "path": "/api/feishu/deliveries/{job_id}/verify-permissions",
+    "provider_business_methods": ["GET"],
+    "dispatch_worker": false
+  }
+}

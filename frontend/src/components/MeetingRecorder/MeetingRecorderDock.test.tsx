@@ -58,6 +58,8 @@ const sttProfileStoreMock = vi.hoisted(() => ({
     }),
   },
 }))
+vi.mock('../../lib/api', () => ({ apiJson: vi.fn(async (path: string) => path.endsWith('/models') ? [{ id: 'bound-asr', modelType: 'asr', runtimeStatus: 'available' }, { id: 'bound-llm', modelType: 'llm', runtimeStatus: 'available' }] : { configured: true, mode: 'cloud', asr_model: 'bound-asr', llm_model: 'bound-llm' }) }))
+vi.mock('../../lib/feishu', () => ({ publishToFeishu: vi.fn().mockResolvedValue(undefined) }))
 
 vi.mock('react-router-dom', async (importOriginal) => {
   const actual = await importOriginal<typeof import('react-router-dom')>()
@@ -172,6 +174,9 @@ async function restoreSavedRecording() {
   await waitFor(() => expect(useMeetingRecorderStore.getState().phase).toBe('idle'))
   vi.mocked(getRecordedAudio).mockResolvedValueOnce(new Blob(['audio'], { type: 'audio/webm' }))
   const pending = vi.mocked(savePendingMeeting).mock.calls.at(-1)![0]
+  // This helper represents a saved operation that was explicitly confirmed in
+  // LocalRecordingPreview; fresh unconfirmed entry is exercised separately.
+  pendingRows.set(pending.id, { ...pending, generationOperation: { id: 'confirmed-operation', selection: { mode: 'cloud', asr: 'bound-asr', llm: 'bound-llm', asrLabel: 'bound-asr', llmLabel: 'bound-llm' }, outputLanguage: 'zh-CN' } })
   act(() => { window.dispatchEvent(new CustomEvent('vinote-restore-meeting', { detail: pending })) })
 }
 
@@ -217,6 +222,71 @@ describe('MeetingRecorderDock', () => {
     expect(audioRecorderMock.start).not.toHaveBeenCalled()
   })
 
+  it('routes unconfirmed saved generation into the source confirmation entry without uploading', async () => {
+    renderDock()
+    await startMeeting()
+    await userEvent.click(screen.getByRole('button', { name: '停止' }))
+    await waitFor(() => expect(savePendingMeeting).toHaveBeenCalled())
+    const pending = vi.mocked(savePendingMeeting).mock.calls.at(-1)![0]
+    act(() => window.dispatchEvent(new CustomEvent('vinote-restore-meeting', { detail: pending })))
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith(`/meetings?recordingConfirm=${encodeURIComponent(pending.id)}`))
+    expect(meetingGenerationMock.submitMeetingRecording).not.toHaveBeenCalled()
+    expect(meetingGenerationMock.resumeMeetingTask).not.toHaveBeenCalled()
+  })
+
+  it('rechecks persisted owner instead of trusting a restore event payload', async () => {
+    renderDock()
+    const pending = { id: 'wrong-owner-recording', ownerId: 'user-1', recordingStatus: 'saved', processingStatus: 'idle' } as import('../../lib/audioStorage').PendingMeeting
+    pendingRows.set(pending.id, { ...pending, ownerId: 'other' })
+    act(() => window.dispatchEvent(new CustomEvent('vinote-restore-meeting', { detail: pending })))
+    await waitFor(() => expect(useMeetingRecorderStore.getState().phase).toBe('failed'))
+    expect(navigate).not.toHaveBeenCalled()
+    expect(meetingGenerationMock.submitMeetingRecording).not.toHaveBeenCalled()
+  })
+
+  it.each([false, true])('opens model confirmation for legacy stopped controls (native window: %s)', async native => {
+    desktopRecorderWindowMock.isTauriRuntime.mockReturnValue(native)
+    desktopRecorderWindowMock.isRecorderWindowRoute.mockReturnValue(native)
+    const pending = { id: 'legacy-saved', ownerId: 'user-1', workspace: { scope: 'personal' }, options: DEFAULT_CAPTURE_OPTIONS, recordingStatus: 'saved', processingStatus: 'idle' } as import('../../lib/audioStorage').PendingMeeting
+    pendingRows.set(pending.id, pending)
+    // Compatibility controls can retain an old in-memory save flag; the
+    // authoritative saved metadata must still route to confirmation.
+    useMeetingRecorderStore.setState({ phase: 'stopped', recordingId: pending.id, recordedAudio: new Blob(['audio']), localRecordingSaved: false, isPanelOpen: true })
+    renderDock()
+    await userEvent.click(screen.getByRole('button', { name: '生成会议纪要' }))
+    await waitFor(() => expect(native ? desktopRecorderWindowMock.showMainWindow : navigate).toHaveBeenCalledWith('/meetings?recordingConfirm=legacy-saved'))
+    expect(meetingGenerationMock.submitMeetingRecording).not.toHaveBeenCalled()
+  })
+
+  it('does not reset a different active capture when an old source needs confirmation', async () => {
+    renderDock()
+    await startMeeting()
+    const pending = { id: 'old-source', ownerId: 'user-1', recordingStatus: 'saved', processingStatus: 'failed', generationConfirmationRequired: true } as import('../../lib/audioStorage').PendingMeeting
+    pendingRows.set(pending.id, pending)
+    audioRecorderMock.reset.mockClear()
+    act(() => window.dispatchEvent(new CustomEvent('vinote-restore-meeting', { detail: pending })))
+    await waitFor(() => expect(navigate).toHaveBeenCalledWith('/meetings?recordingConfirm=old-source'))
+    expect(useMeetingRecorderStore.getState().phase).toBe('recording')
+    expect(audioRecorderMock.reset).not.toHaveBeenCalled()
+    expect(meetingGenerationMock.submitMeetingRecording).not.toHaveBeenCalled()
+  })
+
+  it.each(['recording', 'paused'] as const)('keeps %s unchanged when cancelling end-and-save confirmation', async phase => {
+    renderDock()
+    await startMeeting()
+    if (phase === 'paused') await userEvent.click(screen.getByRole('button', { name: '暂停' }))
+    act(() => window.dispatchEvent(new CustomEvent('vinote-meeting-controller-action', { detail: 'request-stop' })))
+    expect(await screen.findByRole('alertdialog', { name: '结束并保存录制？' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '继续录制' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '暂不结束' }))
+    expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
+    expect(useMeetingRecorderStore.getState().phase).toBe(phase)
+    expect(audioRecorderMock.resume).not.toHaveBeenCalled()
+    expect(audioRecorderMock.stop).not.toHaveBeenCalled()
+    expect(saveRecordedAudio).not.toHaveBeenCalled()
+    expect(meetingGenerationMock.submitMeetingRecording).not.toHaveBeenCalled()
+  })
+
   it('preserves a draft title edited by the user while generation runs', async () => {
     loadNoteMock.mockResolvedValue({ id: 'draft-1', title: '我的修订标题' })
     renderDock()
@@ -233,9 +303,12 @@ describe('MeetingRecorderDock', () => {
     await startMeeting()
     await userEvent.click(screen.getByRole('button', { name: '停止' }))
     await restoreSavedRecording()
-    await waitFor(() => expect([...pendingRows.values()][0].processingStatus).toBe('failed'))
+    await waitFor(() => expect(loadNoteMock).toHaveBeenCalled())
     expect(updateNoteMock).not.toHaveBeenCalled()
-    expect([...pendingRows.values()][0].processingError).toContain('账号已切换')
+    expect([...pendingRows.values()][0].ownerId).toBe('user-1')
+    expect([...pendingRows.values()][0].taskId).toBe('task-1')
+    expect([...pendingRows.values()][0].processingStatus).not.toBe('completed')
+    expect([...pendingRows.values()][0].processingError).toBeUndefined()
   })
 
   it('generates a time and summary subject title for an unnamed recording', async () => {

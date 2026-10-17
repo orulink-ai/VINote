@@ -53,18 +53,23 @@ const mergeProfile = (profiles: STTProfile[], updated: STTProfile) =>
     updated.isDefault && profile.id !== updated.id ? { ...profile, isDefault: false } : profile
   ))
 
+let profileRequest = 0;
+let supportRequest = 0;
 export const useSTTProfileStore = create<STTProfileState>((set, get) => ({
   ...emptyState,
   loadProfiles: async () => {
+    const request = ++profileRequest;
     set({ loading: true, error: '' })
     try {
       const profiles = await fetchSTTProfiles()
+      if (request !== profileRequest) return;
       set((state) => ({
         profiles,
         loading: false,
         selectedProfileId: syncDefaultSelection(profiles, state.selectedProfileId),
       }))
     } catch (error) {
+      if (request !== profileRequest) return;
       set({
         loading: false,
         error: error instanceof Error ? error.message : 'Failed to load STT profiles',
@@ -72,11 +77,14 @@ export const useSTTProfileStore = create<STTProfileState>((set, get) => ({
     }
   },
   loadLocalSupport: async () => {
+    const request = ++supportRequest;
     set({ localSupportLoading: true, error: '' })
     try {
       const localSupport = await fetchLocalSTTSupport()
+      if (request !== supportRequest) return;
       set({ localSupport, localSupportLoading: false })
     } catch (error) {
+      if (request !== supportRequest) return;
       set({
         localSupportLoading: false,
         error: error instanceof Error ? error.message : 'Failed to load local STT support status',
@@ -161,5 +169,5 @@ export const useSTTProfileStore = create<STTProfileState>((set, get) => ({
     }
   },
   selectProfile: (id) => set({ selectedProfileId: id }),
-  reset: () => set(emptyState),
+  reset: () => { ++profileRequest; ++supportRequest; set(emptyState) },
 }))

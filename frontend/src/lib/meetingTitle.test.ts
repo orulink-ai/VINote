@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatMeetingTitle, meetingSubject } from './meetingTitle'
+import { formatContentTitle, formatMeetingTitle, meetingSubject } from './meetingTitle'
 
 describe('meeting titles', () => {
   it('uses the supplied recording time, not the current generation time', () => {
@@ -15,5 +15,10 @@ describe('meeting titles', () => {
   it('never invents a subject or time when evidence is missing', () => {
     expect(meetingSubject('# 会议纪要\n\n## 行动事项')).toBe('')
     expect(formatMeetingTitle('bad-date', '讨论')).toBe('时间未知｜讨论')
+  })
+  it('uses the final LLM topic for imported notes and never duplicates a date prefix', () => {
+    const date = new Date(2026, 9, 12, 10, 30);
+    expect(formatContentTitle(date, '# 展会物料与项目协作安排', 'source.mp4')).toBe('2026-10-12 10:30｜展会物料与项目协作安排');
+    expect(formatContentTitle(date, '# 会议纪要', '2026-10-12 10:30｜项目周会')).toBe('2026-10-12 10:30｜项目周会');
   })
 })

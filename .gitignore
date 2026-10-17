@@ -56,3 +56,5 @@ output/
 # Local deployment config
 deploy/pi/local.env
 .desktop-build/
+# Server-only shared service configuration
+deploy/workspace/cloud.env

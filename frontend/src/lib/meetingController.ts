@@ -5,7 +5,7 @@ import type { MeetingRecorderExternalSnapshot } from '../stores/meetingRecorderS
 
 const STATE_EVENT = 'vinote-meeting-controller-state'
 const ACTION_EVENT = 'vinote-meeting-controller-action'
-export type MeetingControlAction = 'sync' | 'pause' | 'resume' | 'request-stop' | 'stop' | 'generate' | 'retry'
+export type MeetingControlAction = 'sync' | 'pause' | 'resume' | 'request-stop' | 'stop' | 'generate' | 'retry' | 'cancel-start'
 
 export function isMeetingController() {
   return new URLSearchParams(window.location.search).get('controller') === '1'

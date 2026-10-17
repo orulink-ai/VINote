@@ -13,6 +13,20 @@ from app.transcribers.vilab_transcriber import VILabTranscriber
 from app.llm.vilab_llm import VILabLLM
 
 
+@pytest.fixture
+def isolated_preferences(monkeypatch):
+    # Transport tests must not read the developer's configured database.
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from app.services import vilab_cloud_service
+
+    @contextmanager
+    def session():
+        yield SimpleNamespace(get=lambda model, user_id: None)
+
+    monkeypatch.setattr(vilab_cloud_service, "session_scope", session)
+
+
 def test_explicit_available_models_skip_broken_legacy_defaults(monkeypatch):
     service = VILabCloudService()
     choices = {"asr_model": "chosen-asr", "llm_model": "chosen-llm"}
@@ -27,7 +41,7 @@ def test_explicit_available_models_skip_broken_legacy_defaults(monkeypatch):
     assert service.defaults("user") == choices
 
 
-def test_cloud_identity_outage_has_specific_safe_message(monkeypatch):
+def test_cloud_identity_outage_has_specific_safe_message(monkeypatch, isolated_preferences):
     monkeypatch.setattr(settings, "cloud_auth_url", "")
     monkeypatch.setattr(settings, "vilab_server_url", "http://vilab.test")
     monkeypatch.setattr(httpx, "request", lambda *a, **k: httpx.Response(503, json={
@@ -63,7 +77,7 @@ def test_generation_requires_resolved_models(monkeypatch):
         service.validate_ready("user")
 
 
-def test_stt_native_contract_and_whole_file_timing(monkeypatch, tmp_path):
+def test_stt_legacy_http_contract_and_whole_file_timing(monkeypatch, tmp_path):
     path = tmp_path / "audio.wav"
     path.write_bytes(b"audio")
     def post(url, **kwargs):
@@ -74,20 +88,84 @@ def test_stt_native_contract_and_whole_file_timing(monkeypatch, tmp_path):
         return httpx.Response(200, json={"text": "会议内容", "language": "zh"})
     monkeypatch.setattr(httpx, "post", post)
     monkeypatch.setattr("app.transcribers.vilab_transcriber.subprocess.check_output", lambda *a, **k: "12.5")
-    result = VILabTranscriber("http://vilab.test", "test-key", "asr-model")._transcribe_normalized(str(path))
+    result = VILabTranscriber("http://vilab.test", "test-key", "asr-model")._transcribe_http(str(path))
     assert result.full_text == "会议内容"
     assert result.segments[0].end == 12.5
     assert result.metadata["timestamp_granularity"] == "file"
 
 
-def test_stt_error_does_not_echo_upstream_secret(monkeypatch, tmp_path):
+def test_stt_legacy_http_error_does_not_echo_upstream_secret(monkeypatch, tmp_path):
     path = tmp_path / "audio.wav"
     path.write_bytes(b"audio")
     monkeypatch.setattr("app.transcribers.vilab_transcriber.subprocess.check_output", lambda *a, **k: "12.5")
     monkeypatch.setattr(httpx, "post", lambda *a, **k: httpx.Response(401, text="secret-value"))
     with pytest.raises(RuntimeError, match="HTTP 401") as error:
-        VILabTranscriber("http://vilab.test", "secret-value")._transcribe_normalized(str(path))
+        VILabTranscriber("http://vilab.test", "secret-value")._transcribe_http(str(path))
     assert "secret-value" not in str(error.value)
+
+
+@pytest.fixture
+def recorded_audio(monkeypatch, tmp_path):
+    import wave
+
+    path = tmp_path / "audio.wav"
+    with wave.open(str(path), "wb") as audio:
+        audio.setparams((1, 2, 16000, 0, "NONE", "not compressed"))
+        audio.writeframes(b"\0\0" * 200000)
+    monkeypatch.setattr(settings, "data_dir", tmp_path / "checkpoints")
+    return path
+
+
+def mock_recorded_audio_catalog(monkeypatch, capabilities):
+    def get(url, **kwargs):
+        assert url == "http://vilab.test/v1/models"
+        assert kwargs["headers"] == {"Authorization": "Bearer test-key"}
+        return httpx.Response(200, request=httpx.Request("GET", url), json={"data": [{
+            "id": "asr-model", "modelType": "asr", "runtimeStatus": "available",
+            "capabilities": capabilities,
+        }]})
+
+    monkeypatch.setattr(httpx, "get", get)
+    monkeypatch.setattr(httpx, "post", lambda *a, **k: pytest.fail("normal ASR must use PCM streaming"))
+
+
+def test_stt_normalized_uses_catalog_budget_and_confirmed_session_timing(monkeypatch, recorded_audio):
+    from app.services import asr_stream_service
+
+    mock_recorded_audio_catalog(monkeypatch, {"recordedAudio": {
+        "protocol": 1, "supported": True, "strategy": "adaptive_pause",
+        "policySource": "service_budget", "maxSessionAudioBytes": 2 * 1024 * 1024,
+    }})
+    calls = []
+
+    def recognize(base_url, bearer, model, path, **kwargs):
+        calls.append(kwargs)
+        assert (base_url, bearer, model, path) == ("http://vilab.test", "test-key", "asr-model", str(recorded_audio))
+        assert (kwargs["start"], kwargs["end"]) == (0, 12.5)
+        return {"text": "会议内容", "language": "zh"}
+
+    monkeypatch.setattr(asr_stream_service, "recognize_pcm", recognize)
+    adapter = VILabTranscriber("http://vilab.test", "test-key", "asr-model")
+    result = adapter._transcribe_normalized(str(recorded_audio))
+    assert result.full_text == "会议内容"
+    assert result.segments[0].end == 12.5
+    assert result.segments[0].timestamp_estimated is True
+    assert result.metadata["timestamp_granularity"] == "session"
+    assert result.metadata["transport"] == "websocket"
+    assert adapter._transcribe_normalized(str(recorded_audio)).full_text == "会议内容"
+    assert len(calls) == 1  # Confirmed cache reuse cannot submit the audio again.
+
+
+@pytest.mark.parametrize("capabilities", [None, {"recordedAudio": {"protocol": 1, "supported": True}}])
+def test_stt_missing_or_invalid_service_budget_never_submits_audio(monkeypatch, recorded_audio, capabilities):
+    from app.services import asr_stream_service
+
+    mock_recorded_audio_catalog(monkeypatch, capabilities)
+    monkeypatch.setattr(asr_stream_service, "recognize_pcm", lambda *a, **k: pytest.fail("invalid policy must fail before audio"))
+    adapter = VILabTranscriber("http://vilab.test", "test-key", "asr-model")
+    with pytest.raises(ValueError, match="规则"):
+        adapter._transcribe_normalized(str(recorded_audio))
+    assert adapter.model == "asr-model"
 
 
 def test_llm_uses_vilab_chat_gateway_for_summarization(monkeypatch):
@@ -102,7 +180,7 @@ def test_llm_uses_vilab_chat_gateway_for_summarization(monkeypatch):
     assert VILabLLM("user-1", "server-llm")._complete(system_prompt="summarize", user_prompt="notes") == "# Summary"
 
 
-def test_cloud_auth_stays_on_backend(monkeypatch):
+def test_cloud_auth_stays_on_backend(monkeypatch, isolated_preferences):
     monkeypatch.setattr(settings, "cloud_auth_url", "")
     monkeypatch.setattr(settings, "vilab_server_url", "http://vilab.test")
     monkeypatch.setattr(settings, "vilab_api_key", "deployment-key")
@@ -204,7 +282,7 @@ def test_model_preferences_are_resolved_per_user(monkeypatch):
 
 
 @pytest.mark.parametrize("runtime_status", ["unavailable", "loading", ""])
-def test_saved_unavailable_selection_uses_available_default_but_explicit_selection_fails(monkeypatch, runtime_status):
+def test_saved_unavailable_selection_is_preserved_without_default_substitution(monkeypatch, runtime_status):
     service = VILabCloudService()
     monkeypatch.setattr(service, "status", lambda uid: {"llm_model": "chosen"})
     monkeypatch.setattr(service, "request", lambda *a, **k: {"llm_model": "default"})
@@ -212,6 +290,10 @@ def test_saved_unavailable_selection_uses_available_default_but_explicit_selecti
         {"id": "chosen", "modelType": "llm", "runtimeStatus": runtime_status},
         {"id": "default", "modelType": "llm", "runtimeStatus": "available"},
     ])
-    assert service.defaults("user-a")["llm_model"] == "default"
+    with pytest.raises(HTTPException, match="不可用") as error:
+        service.defaults("user-a")
+    assert error.value.status_code == 400
+    assert service.status("user-a")["llm_model"] == "chosen"
     with pytest.raises(HTTPException, match="不可用"):
         service.select("user-a", "cloud", "", "chosen")
+    assert service.status("user-a")["llm_model"] == "chosen"

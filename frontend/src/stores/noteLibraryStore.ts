@@ -9,6 +9,7 @@ type NoteRow = {
   content: string
   video_url: string | null
   source_type: string | null
+  media_kind?: 'audio' | 'video' | null
   generation_client?: string | null
   task_id: string | null
   status: string
@@ -25,6 +26,7 @@ export interface NoteRecord {
   content: string
   videoUrl?: string
   sourceType?: string
+  mediaKind?: 'audio' | 'video'
   generationClient?: string
   taskId?: string
   status: string
@@ -79,6 +81,7 @@ const mapRow = (row: NoteRow): NoteRecord => ({
   content: row.content ?? '',
   videoUrl: row.video_url ?? undefined,
   sourceType: row.source_type ?? undefined,
+  mediaKind: row.media_kind ?? undefined,
   generationClient: row.generation_client ?? undefined,
   taskId: row.task_id ?? undefined,
   status: row.status,
@@ -113,9 +116,12 @@ function resolveShareUrl(shareToken: string | undefined, shareEnabled: boolean) 
   return `${resolveBackendOrigin().replace(/\/$/, '')}/share/${shareToken}`
 }
 
+let accountEpoch = 0;
+let listRequest = 0;
 export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
   ...initialState,
   loadNotes: async (workspace) => {
+    const request = ++listRequest;
     set({ loading: true, error: '' })
 
     try {
@@ -125,8 +131,10 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
           ? `?scope=team&team_id=${encodeURIComponent(currentWorkspace.teamId)}`
           : '?scope=personal'
       const data = await apiJson<NoteRow[]>(`/api/notes${params}`)
+      if (request !== listRequest) return;
       set({ notes: data.map(mapRow), loading: false })
     } catch (error) {
+      if (request !== listRequest) return;
       console.error('Failed to load notes:', error)
       set({
         loading: false,
@@ -135,27 +143,35 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
     }
   },
   loadNoteById: async (id) => {
+    const epoch = accountEpoch;
     const existing = get().notes.find((note) => note.id === id)
-    if (existing) {
+    const needsMediaDetail = existing?.taskId && existing.mediaKind === undefined &&
+      ['video', 'audio', 'meeting_video', 'meeting_recording'].includes(existing.sourceType || '')
+    if (existing && !needsMediaDetail) {
       return existing
     }
 
     try {
       const data = await apiJson<NoteRow>(`/api/notes/${id}`)
+      if (epoch !== accountEpoch) return null;
       const note = mapRow(data)
       set((state) => ({
-        notes: state.notes.some((item) => item.id === note.id) ? state.notes : [note, ...state.notes],
+        notes: state.notes.some((item) => item.id === note.id)
+          ? state.notes.map(item => item.id === note.id ? note : item) : [note, ...state.notes],
       }))
       return note
     } catch (error) {
+      if (epoch !== accountEpoch) return null;
       console.error('Failed to load note:', error)
       set({
         error: error instanceof Error ? error.message : 'Failed to load note',
       })
-      return null
+      const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : 0
+      return existing && (!status || status >= 500) ? existing : null
     }
   },
   saveNote: async (title, content, videoUrl, taskId, workspace, sourceType, status = 'done') => {
+    const epoch = accountEpoch;
     try {
       const normalizedTitle = title.trim() || 'Untitled note'
       const currentWorkspace = workspace ?? { scope: 'personal' as const }
@@ -173,6 +189,7 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
           team_id: currentWorkspace.scope === 'team' ? currentWorkspace.teamId : null,
         }),
       })
+      if (epoch !== accountEpoch) return null;
       const note = mapRow(data)
       set((state) => ({
         notes: [note, ...state.notes.filter((item) => item.id !== note.id)],
@@ -180,6 +197,7 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
       }))
       return note
     } catch (error) {
+      if (epoch !== accountEpoch) return null;
       console.error('Failed to save note:', error)
       set({
         error: error instanceof Error ? error.message : 'Failed to save note',
@@ -188,6 +206,7 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
     }
   },
   updateNote: async (id, title, content, status) => {
+    const epoch = accountEpoch;
     try {
       const normalizedTitle = title.trim() || 'Untitled note'
       const data = await apiJson<NoteRow>(`/api/notes/${id}`, {
@@ -195,6 +214,7 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ title: normalizedTitle, content, status }),
       })
+      if (epoch !== accountEpoch) return null;
       const note = mapRow(data)
       set((state) => ({
         notes: state.notes.map((item) => (item.id === id ? note : item)),
@@ -202,6 +222,7 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
       }))
       return note
     } catch (error) {
+      if (epoch !== accountEpoch) return null;
       console.error('Failed to update note:', error)
       set({
         error: error instanceof Error ? error.message : 'Failed to update note',
@@ -210,14 +231,17 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
     }
   },
   deleteNote: async (id) => {
+    const epoch = accountEpoch;
     try {
       await apiJson<void>(`/api/notes/${id}`, { method: 'DELETE' })
+      if (epoch !== accountEpoch) return;
 
       set((state) => ({
         notes: state.notes.filter((item) => item.id !== id),
         error: '',
       }))
     } catch (error) {
+      if (epoch !== accountEpoch) throw error;
       console.error('Failed to delete note:', error)
       set({
         error: error instanceof Error ? error.message : 'Failed to delete note',
@@ -289,5 +313,5 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
       return null
     }
   },
-  reset: () => set(initialState),
+  reset: () => { ++accountEpoch; ++listRequest; set(initialState) },
 }))

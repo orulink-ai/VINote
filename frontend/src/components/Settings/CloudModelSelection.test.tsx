@@ -10,6 +10,14 @@ vi.mock('../../stores/appModeStore', () => ({ useAppModeStore: () => ({ config: 
 vi.mock('./ModelProfileManager', () => ({ ModelProfileManager: () => null }))
 vi.mock('./STTProfileManager', () => ({ STTProfileManager: () => null }))
 
+const speechService = {
+  id: 'speech', name: '会议语音服务', modelType: 'asr', runtimeStatus: 'available',
+  capabilities: { recordedAudio: {
+    protocol: 1, supported: true, strategy: 'adaptive_pause',
+    maxSessionAudioBytes: 2 * 1024 * 1024, policySource: 'service_budget',
+  } },
+}
+
 beforeEach(() => {
   vi.clearAllMocks()
   HTMLElement.prototype.scrollIntoView = vi.fn()
@@ -17,7 +25,7 @@ beforeEach(() => {
   HTMLElement.prototype.setPointerCapture = vi.fn()
   HTMLElement.prototype.releasePointerCapture = vi.fn()
   mocks.api.mockResolvedValue([
-    { id: 'speech', modelType: 'asr', runtimeStatus: 'available' },
+    speechService,
     { id: 'first', modelType: 'llm', runtimeStatus: 'available' },
     { id: 'second', modelType: 'llm', runtimeStatus: 'available' },
     { id: 'offline', modelType: 'llm', runtimeStatus: 'unavailable' },
@@ -45,4 +53,50 @@ it('shows catalog failures and allows a refresh', async () => {
   expect(screen.getByRole('combobox', { name: '内容总结 / 画面分析' })).toBeDisabled()
   await userEvent.click(screen.getByRole('button', { name: '刷新' }))
   await waitFor(() => expect(screen.getByRole('combobox', { name: '内容总结 / 画面分析' })).not.toBeDisabled())
+})
+
+it('never clears an unavailable speech selection when changing summary', async () => {
+  mocks.api.mockResolvedValue([
+    { ...speechService, runtimeStatus: 'not_available', availability: { status: 'auth_failed', retryAt: 1 } },
+    { id: 'first', modelType: 'llm', runtimeStatus: 'available' },
+    { id: 'second', modelType: 'llm', runtimeStatus: 'available' },
+  ])
+  render(<ModelSourcePanel compact />)
+  const summary = screen.getByRole('combobox', { name: '内容总结 / 画面分析' })
+  await waitFor(() => expect(summary).not.toBeDisabled())
+  expect(screen.getByRole('combobox', { name: '语音转写' })).toHaveTextContent('会议语音服务')
+  expect(screen.getByRole('combobox', { name: '语音转写' })).not.toHaveTextContent('speech')
+  expect(mocks.save).not.toHaveBeenCalled()
+  await userEvent.click(summary)
+  await userEvent.click(screen.getByRole('option', { name: 'second', exact: true }))
+  expect(mocks.save).toHaveBeenCalledWith('speech', 'second')
+})
+it('retains an expired transient model and shows retry eligibility without saving automatically', async () => {
+  mocks.api.mockResolvedValue([
+    { ...speechService, runtimeStatus: 'not_available', availability: { status: 'service_error', retryAt: Date.now() - 1 } },
+    { id: 'first', modelType: 'llm', runtimeStatus: 'available' },
+  ])
+  render(<ModelSourcePanel compact />)
+  expect(await screen.findByText(/原模型可重试/)).toBeInTheDocument()
+  expect(mocks.save).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('combobox', { name: '语音转写' }))
+  expect(screen.getByRole('option', { name: /会议语音服务.*可重试/ })).not.toHaveAttribute('aria-disabled', 'true')
+  expect(mocks.save).not.toHaveBeenCalled()
+})
+
+it('blocks speech selection without a service budget while preserving its ID when changing summary', async () => {
+  mocks.api.mockResolvedValue([
+    { id: 'speech', name: '会议语音服务', modelType: 'asr', runtimeStatus: 'available' },
+    { id: 'first', modelType: 'llm', runtimeStatus: 'available' },
+    { id: 'second', modelType: 'llm', runtimeStatus: 'available' },
+  ])
+  render(<ModelSourcePanel compact />)
+  await screen.findByText('服务需更新录音处理规则')
+  expect(mocks.save).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('combobox', { name: '语音转写' }))
+  expect(screen.getByRole('option', { name: /会议语音服务/ })).toHaveAttribute('aria-disabled', 'true')
+  await userEvent.keyboard('{Escape}')
+  await userEvent.click(screen.getByRole('combobox', { name: '内容总结 / 画面分析' }))
+  await userEvent.click(screen.getByRole('option', { name: 'second', exact: true }))
+  expect(mocks.save).toHaveBeenCalledWith('speech', 'second')
 })

@@ -14,6 +14,7 @@ from app.db_models import TeamDB, TeamMemberDB
 from app.models.auth import AuthenticatedUser
 from app.models.audio import AudioDownloadResult
 from app.models.note_library import NoteCreateRequest
+from app.models.local_file import LocalFileDB  # Register retention tables before the isolated create_all.
 from app.models.transcript import TranscriptResult, TranscriptSegment
 from app.routers import note_library
 from app.services.auth_service import get_current_user
@@ -79,6 +80,27 @@ class NoteLibraryRouterTest(unittest.TestCase):
             self.assertNotEqual(first.id, other.id)
             self.assertEqual(len(self.repository.list_notes("user-1")), 1)
 
+    def test_sqlite_note_responses_preserve_utc_timezone(self):
+        with patch("app.services.note_repository.session_scope", self._session_scope):
+            note = self.repository.create_note("user-1", NoteCreateRequest(title="会议"))
+            response = self.client.get(f"/api/notes/{note.id}")
+            self.assertEqual(response.status_code, 200)
+            self.assertTrue(response.json()["created_at"].endswith("Z"))
+            self.assertTrue(response.json()["updated_at"].endswith("Z"))
+
+    def test_edit_versions_preserve_original_and_require_note_access(self):
+        with patch("app.services.note_repository.session_scope", self._session_scope), patch("app.db.session_scope", self._session_scope):
+            note = self.repository.create_note("user-1", NoteCreateRequest(title="会议", content="原始纪要", status="done"))
+            self.assertEqual(self.client.patch(f"/api/notes/{note.id}", json={"content": "编辑后"}).status_code, 200)
+            response = self.client.get(f"/api/notes/{note.id}/versions")
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual([row["content"] for row in response.json()], ["原始纪要"])
+            self.client.patch(f"/api/notes/{note.id}", json={"content": "编辑后"})
+            self.assertEqual(len(self.client.get(f"/api/notes/{note.id}/versions").json()), 1)
+            self.app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(user_id="other")
+            self.assertEqual(self.client.get(f"/api/notes/{note.id}/versions").status_code, 404)
+            self.assertEqual(self.client.post(f"/api/notes/{note.id}/ask", json={"question": "会议决定是什么？"}).status_code, 404)
+
     def test_failed_processing_status_preserves_edited_draft(self):
         with patch("app.services.note_repository.session_scope", self._session_scope):
             note = self.repository.create_note("user-1", NoteCreateRequest(
@@ -97,6 +119,8 @@ class NoteLibraryRouterTest(unittest.TestCase):
         record_origin(folder, "desktop")
         with patch("app.services.note_repository.session_scope", self._session_scope), patch.object(
             note_library, "_artifact_service", self.artifact_service
+        ), patch("app.services.local_file_service.session_scope", self._session_scope), patch(
+            "app.services.local_file_service.TaskArtifactService", return_value=self.artifact_service
         ):
             payload = {"title": "会议", "task_id": "origin-task", "source_type": "meeting_recording"}
             response = self.client.post("/api/notes", json=payload, headers={"X-VINote-Client": "desktop"})

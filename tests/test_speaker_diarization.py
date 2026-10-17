@@ -110,3 +110,35 @@ def test_missing_speaker_turns_keep_timestamped_speech_unknown():
                                   {'timestamp_granularity': 'segment'})
     segments, _ = align_transcript_to_speaker_turns(transcript, [])
     assert segments[0].speaker_id == 'speaker_unknown'
+
+
+def test_stt_failure_after_cached_speakers_reports_transcription_and_keeps_evidence(tmp_path, monkeypatch):
+    import json
+    import sys
+    import numpy as np
+    from app.services.speaker_diarization_service import SpeakerDiarizationService
+
+    audio = tmp_path / 'source.wav'
+    audio.write_bytes(b'preserved original')
+    evidence = tmp_path / 'evidence'
+    evidence.mkdir()
+    speaker_path = evidence / 'speaker_evidence.json'
+    speaker_path.write_text(json.dumps({'signature': 'same-source', 'duration': 1,
+        'turns': [{'start': 0, 'end': 1, 'speaker_id': 'speaker_1'}], 'clustering': {}}))
+    monkeypatch.setitem(sys.modules, 'sherpa_onnx', SimpleNamespace())
+    monkeypatch.setattr(SpeakerDiarizationService, 'require_ready', lambda _: None)
+    monkeypatch.setattr(SpeakerDiarizationService, 'model_paths', lambda _: (tmp_path / 'seg.onnx', tmp_path / 'embed.onnx'))
+    monkeypatch.setattr(SpeakerDiarizationService, '_source_signature', lambda *args: 'same-source')
+    def prepare(source, destination):
+        np.zeros(16000, dtype='float32').tofile(destination)
+        return {'timeline_trimmed': False}
+    monkeypatch.setattr('app.services.speaker_diarization_service.prepare_meeting_audio', prepare)
+    stages = []
+    def stt(*args, **kwargs):
+        raise RuntimeError('upstream transcription failed')
+    with pytest.raises(RuntimeError, match='upstream transcription failed'):
+        SpeakerDiarizationService().transcribe(audio_path=str(audio), transcribe=stt,
+            evidence_dir=evidence, update_status=lambda *args, **kwargs: stages.append(kwargs['stage']))
+    assert stages[-1] == 'transcribing'
+    assert json.loads(speaker_path.read_text())['turns'][0]['speaker_id'] == 'speaker_1'
+    assert audio.read_bytes() == b'preserved original'

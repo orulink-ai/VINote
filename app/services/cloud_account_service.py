@@ -65,6 +65,12 @@ def _request(path, payload=None, token=None, method=None):
         }
         if response.status_code >= 500:
             raise HTTPException(502, "账号服务暂时不可用，请稍后重试。")
+        if path == "user" and token and (response.status_code == 401 or code in {
+            "bad_jwt", "jwt_expired", "session_not_found", "user_not_found",
+        }):
+            # Mobile refreshes only an authentication rejection. Preserve that
+            # distinction instead of turning an expired bearer into a generic 400.
+            raise HTTPException(401, "登录凭证已过期或失效，请刷新登录后重试。")
         raise HTTPException(401 if code in {"invalid_credentials", "otp_expired"} else 400,
                             messages.get(code, "账号请求未成功，请稍后重试或联系管理员。"))
     return response.json() if response.content else {}

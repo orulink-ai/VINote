@@ -111,12 +111,15 @@ export function getWorkspaceLabel(
   return teams.find((team) => team.id === workspace.teamId)?.name || fallbackPersonal
 }
 
+let teamsRequest = 0;
 export const useTeamStore = create<TeamState>((set) => ({
   ...initialState,
   loadTeams: async () => {
+    const request = ++teamsRequest;
     set({ loading: true, error: '' })
     try {
       const data = await apiJson<TeamRow[]>('/api/teams')
+      if (request !== teamsRequest) return;
       const teams = data.map(mapTeam)
       set((state) => ({
         teams,
@@ -126,6 +129,7 @@ export const useTeamStore = create<TeamState>((set) => ({
         error: '',
       }))
     } catch (error) {
+      if (request !== teamsRequest) return;
       set({
         loading: false,
         initialized: true,
@@ -213,5 +217,5 @@ export const useTeamStore = create<TeamState>((set) => ({
   selectTeamWorkspace: (teamId) => set((state) => ({
     currentWorkspace: ensureValidWorkspace(state.teams, { scope: 'team', teamId }),
   })),
-  reset: () => set(initialState),
+  reset: () => { ++teamsRequest; set(initialState) },
 }))

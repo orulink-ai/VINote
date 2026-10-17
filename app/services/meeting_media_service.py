@@ -28,6 +28,15 @@ class MeetingMediaService:
 
     def info(self, user_id, note_id):
         folder, can_delete = self._context(user_id, note_id)
+        if folder and can_delete:
+            from app.services.retained_task_source import assert_unreferenced
+            if (folder / 'source_reference.json').exists():
+                can_delete = False
+            else:
+                try:
+                    assert_unreferenced(TaskArtifactService(), folder)
+                except HTTPException:
+                    can_delete = False
         source = TaskArtifactService().resolve_source_media(folder) if folder else None
         deleted = bool(folder and (folder / 'recording_deleted').exists())
         available = bool(source and not deleted)
@@ -36,11 +45,20 @@ class MeetingMediaService:
                 'size_bytes': source.stat().st_size if available else 0}
 
     def delete(self, user_id, note_id):
+        from app.services.retained_task_source import SOURCE_LOCK
+        with SOURCE_LOCK:
+            return self._delete_unreferenced(user_id, note_id)
+
+    def _delete_unreferenced(self, user_id, note_id):
         folder, can_delete = self._context(user_id, note_id)
         if not can_delete:
             raise HTTPException(403, '无法验证录制归属或文件被其他纪要共用，不能删除')
         if not folder:
             return
+        from app.services.retained_task_source import assert_unreferenced
+        if (folder / "source_reference.json").exists():
+            raise HTTPException(409, "原文件被处理记录共用，请保留原文件。")
+        assert_unreferenced(TaskArtifactService(), folder)
         root = folder.resolve()
         media = root / 'media'
         if media.is_symlink():
@@ -56,3 +74,14 @@ class MeetingMediaService:
             (root / 'recording_deleted').write_text('deleted', encoding='utf-8')
         except OSError as exc:
             raise HTTPException(409, '录制文件正在使用或无法删除，请停止播放后重试') from exc
+
+    def waveform(self, user_id, note_id):
+        from app.services.recording_waveform_service import recording_waveform
+
+        folder, _ = self._context(user_id, note_id)
+        if not folder or (folder / 'recording_deleted').exists():
+            raise HTTPException(404, '原录音不可用')
+        source = TaskArtifactService().resolve_source_media(folder)
+        if not source:
+            raise HTTPException(404, '原录音不可用')
+        return recording_waveform(source, folder)

@@ -1,0 +1,7 @@
+# Apply only after reviewing the candidate image and checking active jobs.
+# Keep the existing integration Compose files, environment, volumes and ports.
+services:
+  workspace:
+    image: ${VINOTE_CONTENT_IMAGE:?Set the reviewed immutable content image digest}
+    environment:
+      VINOTE_CONTENT_CLOUD: "true"
