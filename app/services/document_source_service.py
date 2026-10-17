@@ -23,18 +23,31 @@ def is_document_url(url):
                 or Path(parsed.path).suffix.lower() in {".mp4", ".webm", ".m4a", ".mp3", ".mov", ".m3u8"})
 
 
-def public_url(url):
-    parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or not parsed.hostname or parsed.username or parsed.password:
+def _public_target(url):
+    # Validate HTTPX's normalized host, then use this exact DNS answer for TCP.
+    # A second resolution of the original hostname would allow DNS rebinding.
+    try:
+        parsed = httpx.URL(url)
+    except httpx.InvalidURL:
+        raise ValueError("请提供有效的 HTTP 或 HTTPS 公开链接") from None
+    host = parsed.raw_host.decode("ascii")
+    if parsed.scheme not in {"http", "https"} or not host or parsed.username or parsed.password:
         raise ValueError("请提供不含账号密码的 HTTP 或 HTTPS 公开链接")
+    if "%" in host:
+        raise ValueError("不支持本机、内网或保留地址，请使用公开网页")
     if parsed.port not in (None, 80, 443):
         raise ValueError("网页链接仅支持标准 HTTP/HTTPS 端口")
     try:
-        addresses = socket.getaddrinfo(parsed.hostname, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
+        addresses = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)
     except OSError:
         raise ValueError("找不到这个网站，请检查链接或网络后重试") from None
     if not addresses or any(not ipaddress.ip_address(item[4][0]).is_global for item in addresses):
         raise ValueError("不支持本机、内网或保留地址，请使用公开网页")
+    return parsed, parsed.copy_with(host=str(ipaddress.ip_address(addresses[0][4][0])))
+
+
+def public_url(url):
+    _public_target(url)
     return url
 
 
@@ -83,11 +96,16 @@ def document_text(filename, data):
 
 
 def webpage_text(url):
-    with httpx.Client(timeout=20, follow_redirects=False, trust_env=False) as client:
-        for _ in range(6):
-            public_url(url)
+    for _ in range(6):
+        original, target = _public_target(url)
+        # Isolate each hop: different domains may share the pinned IP, but must
+        # never share a preceding domain's TLS connection or IP-keyed cookies.
+        with httpx.Client(timeout=20, follow_redirects=False, trust_env=False) as client:
             try:
-                with client.stream("GET", url, headers={"User-Agent": "VINote/1.0 (document reader)"}) as response:
+                with client.stream("GET", target,
+                                   headers={"User-Agent": "VINote/1.0 (document reader)",
+                                            "Host": original.netloc.decode("ascii")},
+                                   extensions={"sni_hostname": original.raw_host.decode("ascii")}) as response:
                     if response.is_redirect:
                         url = urljoin(url, response.headers.get("location", ""))
                         continue

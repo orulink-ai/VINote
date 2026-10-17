@@ -42,7 +42,7 @@ def test_private_dns_and_redirect_are_blocked(monkeypatch):
 
 
 def test_article_reading_strips_navigation_and_scripts(monkeypatch):
-    monkeypatch.setattr(source, 'public_url', lambda url: url)
+    monkeypatch.setattr(source.socket, 'getaddrinfo', lambda *a, **k: [(2, 1, 6, '', ('8.8.8.8', 443))])
     transport = httpx.MockTransport(lambda req: httpx.Response(200, headers={'content-type': 'text/html'}, text='<title>资料</title><nav>不要总结菜单</nav><article><h1>实施计划</h1><p>' + '先提取正文，再生成总结，失败时保留来源并重试。' * 4 + '</p><script>run()</script></article>'))
     original = httpx.Client
     monkeypatch.setattr(source.httpx, 'Client', lambda **kw: original(transport=transport, **kw))
