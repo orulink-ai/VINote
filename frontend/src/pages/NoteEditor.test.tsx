@@ -177,16 +177,16 @@ describe("NoteEditor transcript evidence", () => {
     expect(screen.queryByLabelText("Meeting title")).not.toBeInTheDocument();
   });
 
-  it("keeps real synced versions and MCP translation separate from local history with contextual return", async () => {
+  it("keeps saved versions and MCP translation separate from version history with contextual return", async () => {
     useWorkspaceStore.setState({ mappings: { "note-1": { key: "real-shared-key", revision: 3, fingerprint: "saved" } } });
     renderEditor("/note/note-1?view=summary");
     await screen.findByText("Minutes only.");
     openContentActions();
-    expect(screen.getByText("Local history")).toBeInTheDocument();
+    expect(screen.getByText("Version history")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View saved versions" })).toHaveAttribute("href", "/workspace/real-shared-key");
     const translation = screen.getByRole("link", { name: "Full-text translation · MCP" });
     expect(translation).toHaveAttribute("href", "/settings/mcp?mode=translation&note=real-shared-key");
-    expect(screen.getByRole("button", { name: "Move to trash" })).toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Primary content actions" })).getByRole("button", { name: "Delete" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(screen.getByLabelText("Meeting title"), { target: { value: "Draft title" } });
     expect(translation).toHaveAttribute("aria-disabled", "true");

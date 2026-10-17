@@ -9,13 +9,27 @@ from app.models.transcript import NoSpeechDetectedError
 from app.services.vilab_cloud_service import VILabCloudService
 
 
+@pytest.fixture
+def isolated_preferences(monkeypatch):
+    # Transport tests must not read the developer's configured database.
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from app.services import vilab_cloud_service
+
+    @contextmanager
+    def session():
+        yield SimpleNamespace(get=lambda model, user_id: None)
+
+    monkeypatch.setattr(vilab_cloud_service, "session_scope", session)
+
+
 @pytest.mark.parametrize("message,exception", [
     ("Aliyun ASR returned an empty transcript.", NoSpeechDetectedError),
     ("Volcengine ASR returned an empty transcript.", NoSpeechDetectedError),
     ("Volcengine ASR disconnected before its final result", HTTPException),
     ("ASR upstream unavailable", HTTPException),
 ])
-def test_only_explicit_empty_recognition_is_distinguished(message, exception):
+def test_only_explicit_empty_recognition_is_distinguished(message, exception, isolated_preferences):
     response = httpx.Response(502, json={"error": {"message": message}})
     with patch.object(settings, "cloud_auth_url", ""), patch.object(
         settings, "vilab_server_url", "http://localhost"

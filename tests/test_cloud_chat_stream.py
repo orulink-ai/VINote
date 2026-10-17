@@ -10,6 +10,20 @@ from app.services.cloud_chat_stream import collect_chat_stream
 from app.services.vilab_cloud_service import VILabCloudService
 
 
+@pytest.fixture
+def isolated_preferences(monkeypatch):
+    # Transport tests must not read the developer's configured database.
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+    from app.services import vilab_cloud_service
+
+    @contextmanager
+    def session():
+        yield SimpleNamespace(get=lambda model, user_id: None)
+
+    monkeypatch.setattr(vilab_cloud_service, "session_scope", session)
+
+
 def response(events):
     return httpx.Response(200, text="".join(
         ": heartbeat\n\n" if event is None else "data: " + (event if isinstance(event, str) else json.dumps(event)) + "\n\n"
@@ -49,7 +63,7 @@ def test_deadline_is_enforced_even_while_receiving_heartbeats():
     assert error.value.status_code == 504
 
 
-def test_cloud_request_actually_uses_streaming_transport():
+def test_cloud_request_actually_uses_streaming_transport(isolated_preferences):
     seen = []
     def handler(request):
         seen.append(request)
@@ -70,7 +84,7 @@ class BrokenStream(httpx.SyncByteStream):
         raise httpx.RemoteProtocolError("secret endpoint and credential")
 
 
-def test_interrupted_stream_never_replays_inference_or_retains_partial_content(caplog):
+def test_interrupted_stream_never_replays_inference_or_retains_partial_content(caplog, isolated_preferences):
     seen = []
 
     def handler(request):
@@ -94,7 +108,7 @@ def test_interrupted_stream_never_replays_inference_or_retains_partial_content(c
 
 
 @pytest.mark.parametrize("status,events", [(401, []), (403, []), (500, []), (200, [delta("partial")])])
-def test_stream_http_and_completion_errors_are_not_transport_retried(status, events):
+def test_stream_http_and_completion_errors_are_not_transport_retried(status, events, isolated_preferences):
     seen = []
 
     def handler(request):

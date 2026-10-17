@@ -14,6 +14,7 @@ from app.db_models import TeamDB, TeamMemberDB
 from app.models.auth import AuthenticatedUser
 from app.models.audio import AudioDownloadResult
 from app.models.note_library import NoteCreateRequest
+from app.models.local_file import LocalFileDB  # Register retention tables before the isolated create_all.
 from app.models.transcript import TranscriptResult, TranscriptSegment
 from app.routers import note_library
 from app.services.auth_service import get_current_user
@@ -118,6 +119,8 @@ class NoteLibraryRouterTest(unittest.TestCase):
         record_origin(folder, "desktop")
         with patch("app.services.note_repository.session_scope", self._session_scope), patch.object(
             note_library, "_artifact_service", self.artifact_service
+        ), patch("app.services.local_file_service.session_scope", self._session_scope), patch(
+            "app.services.local_file_service.TaskArtifactService", return_value=self.artifact_service
         ):
             payload = {"title": "会议", "task_id": "origin-task", "source_type": "meeting_recording"}
             response = self.client.post("/api/notes", json=payload, headers={"X-VINote-Client": "desktop"})

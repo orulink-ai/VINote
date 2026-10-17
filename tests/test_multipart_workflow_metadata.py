@@ -56,6 +56,9 @@ def environment(tmp_path, monkeypatch):
     run = Mock()
     note._run_task_from_file = run
     note.desktop_trace = lambda context: nullcontext()
+    from app.services.speaker_diarization_service import SpeakerDiarizationService
+    ready = Mock()
+    monkeypatch.setattr(SpeakerDiarizationService, "require_ready", ready)
     # Still compute actual trace context from staged route/header/form values.
     monkeypatch.setattr(note.settings, "app_release_channel", "development", raising=False)
     app = FastAPI()
@@ -65,7 +68,7 @@ def environment(tmp_path, monkeypatch):
     app.dependency_overrides[note.get_current_user] = lambda: owner
     with TestClient(app) as client:
         yield SimpleNamespace(note=note, artifacts=artifacts, client=client, run=run, generate=generate,
-                              owner=owner, output=tmp_path / "output")
+                              owner=owner, output=tmp_path / "output", ready=ready)
 
 
 @pytest.mark.parametrize("workflow,expected", [("meeting", "meeting"), ("note_organization", "note_organization"), ("invalid", "note_organization")])
@@ -91,6 +94,8 @@ def test_async_upload_persists_selected_workflow(environment, monkeypatch, sourc
     assert saved["request"]["workflow"] == expected
     assert saved["request"]["style"] == "meeting"
     assert env.run.call_args.kwargs["req"].workflow == expected
+    assert env.run.call_args.kwargs["req"].diarize is desktop
+    assert env.ready.call_count == int(desktop)
     if desktop:
         assert saved["trace"]["workflow"] == expected
     else:

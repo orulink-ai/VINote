@@ -14,6 +14,11 @@ def test_asr_runs_during_diarization_and_saved_speakers_survive_asr_retry(tmp_pa
     started, detecting = threading.Event(), threading.Event()
     source = tmp_path / 'original.wav'
     source.write_bytes(b'unchanged original')
+    # The worker is mocked, but evidence signatures still inspect model files.
+    # Keep those inputs isolated instead of depending on installed machine models.
+    models = (tmp_path / 'segmentation.onnx', tmp_path / 'embedding.onnx')
+    for model in models:
+        model.write_bytes(b'synthetic-model-signature')
     evidence = tmp_path / 'evidence'
     attempts = 0
 
@@ -38,6 +43,7 @@ def test_asr_runs_during_diarization_and_saved_speakers_survive_asr_retry(tmp_pa
         return {'timeline_trimmed': False}
 
     with patch.object(SpeakerDiarizationService, 'require_ready'), \
+            patch.object(SpeakerDiarizationService, 'model_paths', return_value=models), \
             patch('app.services.speaker_diarization_service.prepare_meeting_audio', side_effect=prepare), \
             patch('app.services.speaker_worker.run_speaker_worker', side_effect=detect) as worker:
         service = SpeakerDiarizationService()

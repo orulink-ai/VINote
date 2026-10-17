@@ -70,7 +70,7 @@ it('shows all configured models including unavailable ones without resurrecting 
   vi.mocked(apiJson).mockResolvedValue([
     { id: 'deployed', modelType: 'llm', runtimeStatus: 'available' },
     { id: 'configured-no-key', modelType: 'llm', runtimeStatus: 'missing_api_key' },
-    { id: 'disabled-asr', modelType: 'asr', runtimeStatus: 'disabled' },
+    { id: 'disabled-asr', name: '已停用语音服务', modelType: 'asr', runtimeStatus: 'disabled' },
   ])
   useAppModeStore.setState({ config: { configured: true, mode: 'cloud', asr_model: '', llm_model: 'removed-model' } })
   render(<ModelSourcePanel compact />)
@@ -78,10 +78,13 @@ it('shows all configured models including unavailable ones without resurrecting 
   await userEvent.click(screen.getAllByRole('combobox')[1])
   expect(await screen.findByRole('option', { name: 'deployed' })).toBeInTheDocument()
   expect(screen.getByRole('option', { name: /configured-no-key/ })).toHaveAttribute('aria-disabled', 'true')
-  expect(screen.getByRole('option', { name: /removed-model.*原选择暂不可用/ })).toHaveAttribute('aria-disabled', 'true')
+  expect(screen.getByRole('option', { name: '原选择暂不可用' })).toHaveAttribute('aria-disabled', 'true')
+  expect(screen.queryByText(/removed-model/)).not.toBeInTheDocument()
+  expect(useAppModeStore.getState().config?.llm_model).toBe('removed-model')
   await userEvent.keyboard('{Escape}')
   await userEvent.click(screen.getAllByRole('combobox')[0])
-  expect(screen.getByRole('option', { name: /disabled-asr/ })).toHaveAttribute('aria-disabled', 'true')
+  expect(screen.getByRole('option', { name: /已停用语音服务/ })).toHaveAttribute('aria-disabled', 'true')
+  expect(vi.mocked(apiJson).mock.calls.every(([, init]) => !init?.method)).toBe(true)
 })
 
 it('refresh replaces the catalog and a failed refresh does not retain old models', async () => {
@@ -92,13 +95,17 @@ it('refresh replaces the catalog and a failed refresh does not retain old models
   vi.mocked(apiJson).mockResolvedValueOnce([{ id: 'new-model', modelType: 'llm', runtimeStatus: 'available' }])
   await userEvent.click(screen.getByRole('button', { name: '刷新' }))
   await screen.findByText(/原选择已不可用/)
-  expect(screen.getByText(/old-model.*原选择暂不可用/)).toBeInTheDocument()
+  expect(screen.getAllByRole('combobox')[1]).toHaveTextContent('原选择暂不可用')
+  expect(screen.queryByText('old-model')).not.toBeInTheDocument()
+  expect(useAppModeStore.getState().config?.llm_model).toBe('old-model')
   await userEvent.click(screen.getAllByRole('combobox')[1])
   expect(await screen.findByRole('option', { name: 'new-model' })).toBeInTheDocument()
   await userEvent.keyboard('{Escape}')
   vi.mocked(apiJson).mockRejectedValueOnce(new Error('catalog offline'))
   await userEvent.click(screen.getByRole('button', { name: '刷新' }))
   await screen.findByText('catalog offline')
-  expect(screen.getAllByRole('combobox')[1]).toHaveTextContent('old-model'); expect(screen.queryByText('new-model')).not.toBeInTheDocument()
+  expect(screen.getAllByRole('combobox')[1]).toHaveTextContent('原选择暂不可用'); expect(screen.queryByText('new-model')).not.toBeInTheDocument()
   expect(screen.getAllByRole('combobox')[1]).toBeDisabled()
+  expect(useAppModeStore.getState().config?.llm_model).toBe('old-model')
+  expect(vi.mocked(apiJson).mock.calls.every(([, init]) => !init?.method)).toBe(true)
 })
