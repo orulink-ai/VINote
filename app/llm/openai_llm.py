@@ -14,6 +14,7 @@ from app.services.tracing_service import (generation_name, record_model_paramete
 from app.llm.anthropic_compat import post_anthropic_compatible
 from app.llm.base import LLMSummarizer, SummaryProgressCallback
 from app.llm.meeting_review import build_meeting_review_prompts
+from app.llm.video_material import bind_video_material, video_user_content, anthropic_user_content
 from app.llm.prompts import (
     build_chunk_system_prompt,
     build_chunk_user_prompt,
@@ -240,6 +241,26 @@ class _BasePromptLLM(LLMSummarizer):
         extras: str | None = None,
         output_language: str = "zh-CN",
         progress_callback: SummaryProgressCallback | None = None,
+        video_evidence=None,
+    ) -> str:
+        if video_evidence is not None and normalize_summary_mode(summary_mode) == 'accurate':
+            raise ValueError('视频证据需要完整来源总结，请明确选择 default 或 oneshot')
+        capabilities = getattr(self, '_video_capabilities', {})
+        if getattr(self, '_video_capability_model', None) != getattr(self, 'model', None):
+            capabilities = {}  # Verification never transfers to another model.
+        with bind_video_material(video_evidence, capabilities):
+            return self._summarize(title, segments, style, summary_mode, extras,
+                                   output_language, progress_callback)
+
+    def _summarize(
+        self,
+        title: str,
+        segments: List[TranscriptSegment],
+        style: str = "detailed",
+        summary_mode: str = "default",
+        extras: str | None = None,
+        output_language: str = "zh-CN",
+        progress_callback: SummaryProgressCallback | None = None,
     ) -> str:
         mode = normalize_summary_mode(summary_mode)
         # Default and explicit oneshot always submit the complete source.
@@ -275,7 +296,7 @@ class OpenAILLM(_BasePromptLLM):
     ):
         self.model = model
         self.temperature = temperature
-        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=300.0)
+        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=300.0, max_retries=0)
         logger.info("[LLM] init openai-compatible model=%s base_url=%s", model, base_url)
 
     @traced_generation
@@ -285,7 +306,7 @@ class OpenAILLM(_BasePromptLLM):
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": video_user_content(user_prompt)},
             ],
             temperature=self.temperature,
         )
@@ -326,7 +347,7 @@ class AnthropicLLM(_BasePromptLLM):
                 "model": self.model,
                 "max_tokens": 8192,
                 "system": system_prompt,
-                "messages": [{"role": "user", "content": [{"type": "text", "text": user_prompt}]}],
+                "messages": [{"role": "user", "content": anthropic_user_content(user_prompt)}],
                 "temperature": self.temperature,
             },
             timeout=300.0,
@@ -376,7 +397,7 @@ class AzureOpenAILLM(_BasePromptLLM):
             json={
                 "messages": [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
+                    {"role": "user", "content": video_user_content(user_prompt)},
                 ],
                 "max_tokens": 8192,
                 "temperature": self.temperature,

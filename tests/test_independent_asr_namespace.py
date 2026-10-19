@@ -22,6 +22,10 @@ from tests.test_adaptive_asr_policy import write_wav
 
 _REAL_STATUS = VILabCloudService.status
 
+_EMPTY_PROOF = {'protocol': 1, 'outcome': 'provider_terminal_empty', 'provider': 'aliyun',
+                'terminalConfirmed': True, 'inputComplete': True,
+                'contentComplete': False, 'silenceConfirmed': False}
+
 
 @pytest.fixture
 def tmp_path(tmp_path_factory):
@@ -506,3 +510,78 @@ def test_real_note_pipeline_uses_seed_and_submits_only_remaining_audio(audio_cas
     assert [call.kwargs['start'] for call in c.recognize.call_args_list] == [1]
     assert all(call.args[2] == 'original-asr' for call in c.recognize.call_args_list)
     assert (donor / 'recognition.json').read_bytes() == before
+
+
+def test_seed_preserves_only_validated_empty_terminal_proof_and_never_replays(audio_case):
+    c = audio_case
+    c.parts[0].update(text='', recognition_outcome='provider_terminal_empty',
+        terminal_evidence={**_EMPTY_PROOF, 'untrusted_extra': 'discard synthetic private field'})
+    c.artifacts.write_json(c.donor / 'recognition.json', c.old)
+    before = (c.donor / 'recognition.json').read_bytes()
+    def execute(*_):
+        result = c.adapter._transcribe_stream(str(c.wav))
+        assert c.adapter._transcribe_stream(str(c.wav)).full_text == result.full_text
+        return result
+    result, child = run(c, execute)
+    saved = json.loads(next(child.glob('transcription_chunks/vilab_stream/recognition.json')).read_text())
+    assert saved['completed'][0]['terminal_evidence'] == _EMPTY_PROOF
+    assert saved['completed'][0]['recognition_outcome'] == 'provider_terminal_empty'
+    assert saved['seed']['confirmed_end_frame'] == 16000
+    assert result.metadata['unrecognized_segments'] == [
+        {'start': 0, 'end': 1, 'reason': 'provider_terminal_empty'}]
+    assert c.recognize.call_count == 1 and c.recognize.call_args.kwargs['start'] == 1
+    assert (c.donor / 'recognition.json').read_bytes() == before
+
+
+@pytest.mark.parametrize('change', ['protocol_bool', 'protocol_version', 'input_incomplete',
+    'unconfirmed', 'content_complete', 'silence', 'provider', 'missing_proof',
+    'missing_outcome', 'unknown_outcome', 'nonempty_text', 'segments'])
+def test_invalid_typed_empty_donor_blocks_seed_without_any_submission(audio_case, change):
+    from app.transcribers.vilab_transcriber import _CheckpointEvidenceUnavailable
+    c = audio_case
+    part = c.parts[0]
+    part.update(text='', recognition_outcome='provider_terminal_empty', terminal_evidence=dict(_EMPTY_PROOF))
+    proof = part['terminal_evidence']
+    if change == 'protocol_bool': proof['protocol'] = True
+    elif change == 'protocol_version': proof['protocol'] = 2
+    elif change == 'input_incomplete': proof['inputComplete'] = False
+    elif change == 'unconfirmed': proof['terminalConfirmed'] = 1
+    elif change == 'content_complete': proof['contentComplete'] = True
+    elif change == 'silence': proof['silenceConfirmed'] = True
+    elif change == 'provider': proof['provider'] = 'https://invalid-provider'
+    elif change == 'missing_proof': del part['terminal_evidence']
+    elif change == 'missing_outcome': del part['recognition_outcome']
+    elif change == 'unknown_outcome': part['recognition_outcome'] = 'unknown_result'
+    elif change == 'nonempty_text': part['text'] = 'cannot call this empty'
+    elif change == 'segments': part['segments'] = [{'start': 0, 'end': 1, 'text': 'speech'}]
+    c.artifacts.write_json(c.donor / 'recognition.json', c.old)
+    before = (c.donor / 'recognition.json').read_bytes()
+    with pytest.raises(_CheckpointEvidenceUnavailable):
+        run(c, lambda *_: c.adapter._transcribe_stream(str(c.wav)))
+    c.token.assert_not_called(); c.policy.assert_not_called(); c.recognize.assert_not_called()
+    assert (c.donor / 'recognition.json').read_bytes() == before
+
+
+def test_complete_child_revalidates_typed_empty_proof_before_cache_reuse(audio_case):
+    c = audio_case
+    c.parts[0].update(text='', recognition_outcome='provider_terminal_empty', terminal_evidence=dict(_EMPTY_PROOF))
+    c.artifacts.write_json(c.donor / 'recognition.json', c.old)
+    def execute(*_):
+        c.adapter._transcribe_stream(str(c.wav))
+        path = current_execution().chunks / 'vilab_stream' / 'recognition.json'
+        saved = json.loads(path.read_text())
+        saved['completed'][0]['terminal_evidence']['inputComplete'] = False
+        c.artifacts.write_json(path, saved)
+        before = path.read_bytes()
+        c.token.reset_mock(); c.policy.reset_mock(); c.recognize.reset_mock()
+        with pytest.raises(ValueError): c.adapter._transcribe_stream(str(c.wav))
+        c.token.assert_not_called(); c.policy.assert_not_called(); c.recognize.assert_not_called()
+        assert path.read_bytes() == before
+    run(c, execute)
+
+
+def test_legacy_empty_prefix_does_not_invent_a_typed_terminal_receipt():
+    from app.transcribers.vilab_transcriber import _confirmed_prefix
+    old = {'completed': [{'start': 0, 'end': 1, 'text': '', 'segments': []}]}
+    result = _confirmed_prefix(old, 16000)
+    assert 'recognition_outcome' not in result[0] and 'terminal_evidence' not in result[0]

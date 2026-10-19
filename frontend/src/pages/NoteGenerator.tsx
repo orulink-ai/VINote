@@ -30,7 +30,7 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTr
 
 type FrozenNewContext = { protocol: number; parent_task_id: string; workflow: string; context_revision: string; source: { title: string; version: string }; frozen_models: { mode: string; origin: string; asr_model: string; llm_model: string }; can_confirm_new_operation: boolean }
 type TaskResponse = { task_id: string; source_type?: string; operation_id?: string; state?: 'reserved' | 'accepted' }
-type ImportReceipt = { id?: string; operationId?: string; createdAt?: string; submissionState?: 'registering' | 'unknown' | 'reserved' | 'accepted'; workspace: WorkspaceSelection; sourceUrl?: string; sourceType?: string; sourceTitle?: string; mode?: UploadMode; meeting: boolean; localFileId?: string; independentGeneration?: boolean; parentTaskId?: string; frozenContext?: FrozenNewContext }
+type ImportReceipt = { id?: string; operationId?: string; createdAt?: string; submissionState?: 'registering' | 'unknown' | 'reserved' | 'accepted'; workspace: WorkspaceSelection; sourceUrl?: string; sourceType?: string; sourceTitle?: string; mode?: UploadMode; meeting: boolean; localFileId?: string; independentGeneration?: boolean; summaryOnly?: boolean; summaryNoteId?: string; origin?: string; parentTaskId?: string; frozenContext?: FrozenNewContext }
 type TaskStatusResponse = {
   task_id?: string
   error_code?: string
@@ -77,7 +77,8 @@ export function NoteGenerator() {
   const operationParam = searchParams.get('operation') || ''
   const taskParam = searchParams.get('task') || ''
   const readOnlyTask = !!taskParam
-  const routeBinding = JSON.stringify([location.key, location.pathname, location.search, location.hash, operationParam, taskParam, isMeeting, parent])
+  const serviceOrigin = useAppModeStore(state => state.config?.server_url)
+  const routeBinding = JSON.stringify([serviceOrigin, location.key, location.pathname, location.search, location.hash, operationParam, taskParam, isMeeting, parent])
   const routeIdentity = useRef(routeBinding)
   routeIdentity.current = routeBinding
   const [taskRetryable, setTaskRetryable] = useState(false)
@@ -152,6 +153,7 @@ export function NoteGenerator() {
       try {
         const key = operationParam && /^[A-Za-z0-9_-]{1,160}$/.test(operationParam) ? `vinote:source-receipt:${owner}:${operationParam}` : receiptKey
         const saved = JSON.parse(localStorage.getItem(key) || 'null') as ImportReceipt | null
+        if (saved?.summaryOnly && (saved.origin !== serviceOrigin || useAppModeStore.getState().config?.mode !== 'cloud')) throw new Error('原总结服务已变化，只能在原服务核验操作回执')
         if (operationParam && (!saved || saved.operationId !== operationParam)) throw new Error('缺少原操作回执')
         if ((saved?.id || saved?.operationId) && saved?.workspace && saved.meeting === isMeeting) {
           setReceipt(saved); setTaskId(saved.id || '')
@@ -159,7 +161,7 @@ export function NoteGenerator() {
           if (saved.operationId && saved.submissionState !== 'accepted') {
             setStatus('failed'); void recoverSubmission(saved)
           } else if (saved.id) {
-            pollTaskStatus(saved.id, saved.workspace, saved.sourceUrl, saved.sourceType, saved.operationId, saved.createdAt)
+            pollTaskStatus(saved.id, saved.workspace, saved.sourceUrl, saved.sourceType, saved.operationId, saved.summaryOnly ? undefined : saved.createdAt)
           }
         }
       } catch { setRecoveryUnavailable(true); setStatus('failed'); setError('无法读取本机任务回执，请勿重复提交，先检查处理记录。') }
@@ -194,7 +196,7 @@ export function NoteGenerator() {
     pollingTask.current = id
     const epoch = recoveryEpoch.current
     const route = routeIdentity.current
-    const active = () => mounted.current && routeIdentity.current === route && recoveryEpoch.current === epoch && pollingTask.current === id && owner === useAuthStore.getState().user?.id
+    const active = () => serviceOrigin === useAppModeStore.getState().config?.server_url && mounted.current && routeIdentity.current === route && recoveryEpoch.current === epoch && pollingTask.current === id && owner === useAuthStore.getState().user?.id
     let inFlight = false
     let firstRead = true
     setReadingTask(true); setTaskRetryable(false); setVerifiedTask(null); setTaskMessage('')
@@ -245,7 +247,15 @@ export function NoteGenerator() {
             const active = JSON.parse(localStorage.getItem(receiptKey) || 'null') as ImportReceipt | null
             if (active?.id === id) localStorage.removeItem(receiptKey)
             // The per-operation record remains until saving has been acknowledged.
-            if (operationId) localStorage.removeItem(`vinote:source-receipt:${owner}:${operationId}`)
+            if (operationId) {
+              const operationKey = `vinote:source-receipt:${owner}:${operationId}`
+              const completed = JSON.parse(localStorage.getItem(operationKey) || 'null') as ImportReceipt | null
+              if (completed?.summaryOnly && completed.summaryNoteId && completed.parentTaskId) {
+                const pointer = `vinote:summary-operation:${owner}:${completed.origin || ''}:${completed.summaryNoteId}:${completed.parentTaskId}`
+                if (localStorage.getItem(pointer) === operationId) localStorage.removeItem(pointer)
+              }
+              localStorage.removeItem(operationKey)
+            }
             else if (active?.id === id && active.operationId) localStorage.removeItem(`vinote:source-receipt:${owner}:${active.operationId}`)
             setReceipt(null)
           setReceiptProtected(true)
@@ -265,6 +275,8 @@ export function NoteGenerator() {
           setError(data.status === 'not_found'
             ? '任务记录不存在或已丢失。原回执已保留，请核验原提交，不重复生成。'
             : data.message || 'Generation failed')
+        } else if (data.stage === 'analyzing_video' || data.status === 'analyzing_video') {
+          setCurrentStep('analyzing_video')
         } else if (data.status === 'preparing') {
           setCurrentStep('preparing'); setProgress(15)
         } else if (data.status === 'transcribing') {
@@ -311,13 +323,13 @@ export function NoteGenerator() {
     }
     if (!value.id) throw new Error('尚未收到任务编号，原提交保留')
     setStatus('processing'); setCurrentStep('preparing'); setProgress(15)
-    pollTaskStatus(value.id, value.workspace, value.sourceUrl, value.sourceType, value.operationId, value.createdAt)
+    pollTaskStatus(value.id, value.workspace, value.sourceUrl, value.sourceType, value.operationId, value.summaryOnly ? undefined : value.createdAt)
   }
   const recoverSubmission = async (value: ImportReceipt) => {
     if (!owner || readOnlyTask || !value.operationId || recoveryLock.current || (operationParam && operationParam !== value.operationId)) return
     const request = { token: Symbol('receipt-read'), owner, epoch: recoveryEpoch.current, operationId: value.operationId, route: routeIdentity.current }
     recoveryLock.current = request
-    const active = () => mounted.current && request.owner === useAuthStore.getState().user?.id
+    const active = () => (!value.summaryOnly || value.origin === useAppModeStore.getState().config?.server_url) && mounted.current && request.owner === useAuthStore.getState().user?.id
       && recoveryEpoch.current === request.epoch && routeIdentity.current === request.route
       && recoveryLock.current?.token === request.token && recoveryLock.current.operationId === request.operationId
     setTaskMessage('正在核验上次提交…')
@@ -468,14 +480,14 @@ export function NoteGenerator() {
     const epoch = recoveryEpoch.current
     submissionLock.current = true
     try {
-      if (!readOnlyTask && taskRetryable) {
+      if (!readOnlyTask && !receipt.summaryOnly && taskRetryable) {
         const latest = await apiJson<TaskStatusResponse>(`/api/task/${receipt.id}`)
         if (!mounted.current || epoch !== recoveryEpoch.current || owner !== useAuthStore.getState().user?.id) return
         if (['failed', 'error'].includes(latest.status) && latest.retryable && !['unknown_result', 'unknown_error', 'asr_incomplete_result'].includes(latest.error_code || '')) await apiJson(`/api/task/${receipt.id}/retry`, { method: 'POST' })
       }
       if (!mounted.current || epoch !== recoveryEpoch.current || owner !== useAuthStore.getState().user?.id) return
       setTaskRetryable(false); setStatus('processing')
-      pollTaskStatus(receipt.id, receipt.workspace, receipt.sourceUrl, receipt.sourceType, receipt.operationId, receipt.createdAt)
+      pollTaskStatus(receipt.id, receipt.workspace, receipt.sourceUrl, receipt.sourceType, receipt.operationId, receipt.summaryOnly ? undefined : receipt.createdAt)
     } catch (cause) {
       if (mounted.current && epoch === recoveryEpoch.current && owner === useAuthStore.getState().user?.id) {
         setError((cause as Error).message)
@@ -532,7 +544,7 @@ export function NoteGenerator() {
   }
 
   const handleEditInput = () => {
-    if (readOnlyTask || recoveryUnavailable || receipt && (!taskRetryable || receipt.submissionState !== 'accepted')) return;
+    if (readOnlyTask || receipt?.summaryOnly || recoveryUnavailable || receipt && (!taskRetryable || receipt.submissionState !== 'accepted')) return;
     if (receiptKey && receipt) localStorage.removeItem(receiptKey);
     setReceipt(null);
     setTaskRetryable(false);
@@ -574,7 +586,7 @@ export function NoteGenerator() {
         : ['video', 'meeting_video'].includes(receipt?.sourceType || '') ? '视频文件' : ['audio', 'meeting_recording'].includes(receipt?.sourceType || '') ? '音频文件'
           : receipt?.mode === 'file' ? '导入文件' : '来源类型待核验'
   const originalWorkspace = readOnlyTask ? '当前只查看处理记录' : receipt ? getWorkspaceLabel(receipt.workspace, teams, language === 'zh-CN' ? '个人空间' : 'Personal workspace') : '保存位置尚未核验'
-  const recoveryView = taskRecoveryView(receipt, verifiedTask, taskRetryable)
+  const recoveryView = taskRecoveryView(receipt, verifiedTask, !receipt?.summaryOnly && taskRetryable)
   const originalState = readOnlyTask && !verifiedTask ? '原任务状态待核验' : verifiedTask?.status === 'success' ? '原任务已完成' : recoveryView.kind === 'failed_unknown' ? '任务已接收，此次转写未完成'
     : recoveryView.kind === 'failed_terminal' ? '任务已接收，此次处理未完成'
     : receipt?.submissionState === 'accepted' ? '服务已接收任务'
@@ -652,7 +664,7 @@ export function NoteGenerator() {
     {readingTask ? <section role="status" aria-live="polite" aria-busy="true" className="rounded-xl border p-6">
       {readOnlyTask ? <h2 className="text-lg font-medium text-balance">正在读取处理进度</h2> : <h1 className="text-lg font-medium text-balance">正在读取处理进度</h1>}
       <p className="mt-2 text-sm text-muted-foreground text-pretty">正在查询原任务，读取后显示实际阶段和处理结果。</p>
-    </section> : running ? <GenerateProgress status={status} progress={progress} processedSeconds={transcriptionMeasure?.processed} totalSeconds={transcriptionMeasure?.total ?? analysisMeasure.total} receivedSeconds={analysisMeasure.received} speakerDetectionProgress={analysisMeasure.detection} speakersReady={analysisMeasure.speakersReady} currentStep={currentStep} error={sourceRecoveryCopy(error)} message={sourceRecoveryCopy(taskMessage)} meeting={isMeeting} audioOnlySource={receipt?.sourceType === 'audio' || isBilibiliSourceUrl(receipt?.sourceUrl || videoUrl)} documentSource={receipt?.sourceType === 'file' || uploadMode === 'document'} /> : <>
+    </section> : running ? <GenerateProgress videoSource={['video', 'meeting_video'].includes(receipt?.sourceType || '')} status={status} progress={progress} processedSeconds={transcriptionMeasure?.processed} totalSeconds={transcriptionMeasure?.total ?? analysisMeasure.total} receivedSeconds={analysisMeasure.received} speakerDetectionProgress={analysisMeasure.detection} speakersReady={analysisMeasure.speakersReady} currentStep={currentStep} error={sourceRecoveryCopy(error)} message={sourceRecoveryCopy(taskMessage)} meeting={isMeeting} audioOnlySource={receipt?.sourceType === 'audio' || isBilibiliSourceUrl(receipt?.sourceUrl || videoUrl)} documentSource={receipt?.sourceType === 'file' || uploadMode === 'document'} /> : <>
       {!restoringSource && <section className="border-b py-3">
         <div className="mb-3 flex items-start justify-between gap-4"><div className="flex items-start gap-3"><div><h2 className="text-lg font-semibold">{isMeeting ? '选择会议文件' : '选择笔记来源'}</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">{isMeeting ? '支持音频、视频和已有逐字稿。' : '粘贴网页或视频链接，或上传 PDF、Word、音视频和文字文件。PDF、Word 上限 20 MB，PDF 上限 200 页。'}</p></div></div></div>
         <fieldset disabled={!!receipt || recoveryUnavailable}><FileUploader videoUrl={videoUrl} urlError={visibleSourceError} urlInputRef={sourceInput} onVideoUrlChange={value => { if (!receipt) { setVideoUrl(value); setSourceError('') } }} onFileSelect={value => { if (!receipt) setSelectedFile(value) }} onModeChange={value => { if (!receipt) { setUploadMode(value); setSourceError('') } }} fileUploadEnabled initialMode={uploadMode} file={selectedFile} urlEnabled={!isMeeting} meetingOnly={isMeeting} /></fieldset>

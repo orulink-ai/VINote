@@ -25,6 +25,7 @@ interface GenerateProgressProps {
   documentSource?: boolean;
   meeting?: boolean;
   audioOnlySource?: boolean;
+  videoSource?: boolean;
 }
 
 export function GenerateProgress({
@@ -39,8 +40,10 @@ export function GenerateProgress({
   documentSource = false,
   meeting = false,
   audioOnlySource = false,
+  videoSource = false,
 }: GenerateProgressProps) {
   const { copy } = useI18n();
+  const videoStep = videoSource || currentStep === 'analyzing_video' ? [{ key: 'analyzing_video', label: '核对共享画面与发言' }] : [];
   const steps = documentSource ? [
     { key: "preparing", label: "读取来源正文" },
     { key: "summarizing", label: "生成总结笔记" },
@@ -48,12 +51,14 @@ export function GenerateProgress({
   ] : meeting ? [
     { key: 'preparing', label: '准备会议文件' },
     { key: 'transcribing', label: '转写与说话人分析' },
+    ...videoStep,
     { key: 'summarizing', label: '生成并核对会议纪要' },
     { key: 'saving', label: '保存会议纪要' },
   ] : [
     { key: "uploading", label: copy.progress.prepareRequest },
     { key: "downloading", label: copy.progress.downloadAudio },
     { key: "transcribing", label: copy.progress.transcribeAudio },
+    ...videoStep,
     { key: "summarizing", label: copy.progress.generateNote },
     ...(!audioOnlySource ? [{
       key: "screenshots",
@@ -101,12 +106,13 @@ export function GenerateProgress({
       style={value !== undefined ? { width: `${value}%` } : undefined} />
   </div>;
   const stageTitle = status === 'success' ? copy.progress.completed : status === 'failed' ? copy.progress.failed
-    : meeting ? '正在生成会议纪要' : analysis ? '语音转写' : stepLabels[phase] || copy.progress.preparing;
+    : phase === 'analyzing_video' ? '核对共享画面与发言' : meeting ? '正在生成会议纪要' : analysis ? '语音转写' : stepLabels[phase] || copy.progress.preparing;
   const statusCopy = analysis
     ? savedTranscript && speakersReady ? (meeting ? '音频分析已完成，接下来生成纪要。' : '转写已完成，接下来生成笔记。')
       : receivedMeasured && receivedSeconds! >= totalSeconds! && !savedTranscript ? '音频已提交，正在等待最终逐字稿。'
       : meeting ? '转写和说话人分析完成后，将生成纪要；返回后可继续查看。'
       : '转写完成后，将生成笔记；返回后可继续查看。'
+    : phase === 'analyzing_video' ? '正在核对共享画面与发言，完成后继续生成纪要。逐字稿已就绪不代表纪要已完成。'
     : phase === 'saving' ? '正在保存生成内容，请稍候。'
     : phase === 'summarizing' ? meeting ? '正在整理并核对会议纪要。' : '正在整理笔记。'
     : '正在准备来源，完成后继续处理。';
@@ -127,7 +133,7 @@ export function GenerateProgress({
     <section className="border">
       <header className="flex flex-wrap items-center justify-between gap-3 border-b p-5">
         <h2 className="flex items-center gap-2 text-balance text-base font-semibold">
-          {running && !(meeting && analysis) && <ProcessingWave label={meeting ? '正在生成会议纪要' : '正在生成笔记'} />}
+          {running && !(meeting && analysis) && (phase === 'analyzing_video' ? <span aria-hidden="true"><ProcessingWave label={stageTitle} /></span> : <ProcessingWave label={meeting ? '正在生成会议纪要' : '正在生成笔记'} />)}
           {stageTitle}
         </h2>
         <Badge variant={status === 'failed' ? 'destructive' : 'secondary'}>{status === 'success' ? '已完成' : status === 'failed' ? '已停止' : `第 ${activeStep} / ${steps.length} 步`}</Badge>

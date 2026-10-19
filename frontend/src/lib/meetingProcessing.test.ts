@@ -74,6 +74,19 @@ it('restores an existing task without reading newer global model configuration',
   expect(record.generationOperation?.selection).toEqual(selection)
 })
 
+it('persists the real failed stage from non-retryable task readback without retry, upload or model execution', async () => {
+  record = { ...record, taskId: 'original-task', processingStatus: 'failed', failedStage: 'transcribing', generationOperation: { id: 'operation', selection, outputLanguage: 'zh' } }
+  const actual = await vi.importActual<typeof import('./meetingGeneration')>('./meetingGeneration')
+  mocks.resume.mockImplementation(actual.resumeMeetingTask)
+  mocks.api.mockResolvedValue({ status: 'failed', failed_stage: 'transcribing', retryable: false, message: '转写结果尚未确认，原文件已保留。' })
+  await processSavedMeeting(record, 'zh')
+  expect(record).toMatchObject({ taskId: 'original-task', failedStage: 'transcribing', processingStatus: 'failed', processingError: '转写结果尚未确认，原文件已保留。' })
+  expect(mocks.api.mock.calls).toEqual([['/api/task/original-task']])
+  expect(mocks.submit).not.toHaveBeenCalled()
+  expect(mocks.complete).not.toHaveBeenCalled()
+  expect(record.generationOperation?.selection).toEqual(selection)
+})
+
 it('retains an expired task and requires a separate confirmed operation', async () => {
   record = { ...record, taskId: 'expired-task', processingStatus: 'failed', generationOperation: { id: 'operation', selection, outputLanguage: 'zh' } }
   mocks.resume.mockRejectedValue(new MissingMeetingTaskError())

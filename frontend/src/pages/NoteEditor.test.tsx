@@ -16,9 +16,10 @@ const noteStoreMock = vi.hoisted(() => ({
 
 const apiMock = vi.hoisted(() => ({
   apiJson: vi.fn(),
+  apiFetch: vi.fn(),
 }));
 
-vi.mock("../lib/api", () => ({ apiJson: apiMock.apiJson }));
+vi.mock("../lib/api", () => ({ apiJson: apiMock.apiJson, apiFetch: apiMock.apiFetch }));
 vi.mock("../stores/languageStore", () => ({
   useLanguageStore: () => ({
     language: "en",
@@ -101,11 +102,14 @@ describe("NoteEditor transcript evidence", () => {
       configurable: true,
       value: vi.fn().mockResolvedValue(undefined),
     });
+    Object.defineProperty(window.HTMLMediaElement.prototype, 'load', { configurable: true, value: vi.fn() });
+    apiMock.apiFetch.mockResolvedValue(new Response(null, { status: 206 }));
     Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
       value: vi.fn(),
     });
     apiMock.apiJson.mockImplementation((path: string, init?: RequestInit) => {
+      if (path.endsWith('/recording')) return Promise.resolve({ available: true, deleted: false, can_delete: false, filename: 'sample.webm', size_bytes: 1000 });
       if (path.endsWith("/speakers") && init?.method === "PATCH") {
         return Promise.resolve({ aliases: { speaker_01: "Susan Wang" } });
       }
@@ -349,6 +353,7 @@ describe("NoteEditor transcript evidence", () => {
   it("retries only the failed transcript load and keeps the summary and shared player", async () => {
     let failed = false;
     apiMock.apiJson.mockImplementation((path: string) => {
+      if (path.endsWith('/recording')) return Promise.resolve({ available: true, deleted: false, can_delete: false, filename: 'sample.webm', size_bytes: 1000 });
       if (path.endsWith("/transcript") && !failed) {
         failed = true;
         return Promise.reject(new Error("offline"));
@@ -510,12 +515,67 @@ describe("NoteEditor transcript evidence", () => {
     renderEditor("/note/note-1?view=transcript");
     const turn = await screen.findByText("We agreed to activate Sortformer.");
     const audio = screen.getByTestId("source-audio") as HTMLAudioElement;
+    expect(audio).toHaveAttribute('src', '/api/notes/note-1/media');
     expect(screen.queryByTestId("source-video")).not.toBeInTheDocument();
     expect(screen.queryByText("从笔记跳回录制现场")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open source" })).toHaveAttribute("href", "https://www.bilibili.com/video/BV1234567890/");
     expect(apiMock.apiJson.mock.calls.some(([path]) => String(path).endsWith('/recording'))).toBe(false);
     fireEvent.click(turn);
     expect(audio.currentTime).toBe(62);
+  });
+
+  it('exposes the exact processing task as a read-only entrance while preserving detail return context', async () => {
+    renderEditor('/note/note-1?view=transcript&returnTo=%2Fnotes%3Fq%3Dreview');
+    await screen.findByText('We agreed to activate Sortformer.');
+    openContentActions();
+    const link = screen.getByRole('link', { name: 'View processing task' });
+    const target = new URL(link.getAttribute('href')!, 'https://example.invalid');
+    expect(target.searchParams.get('task')).toBe('task-1');
+    expect(target.searchParams.get('meeting')).toBe('1');
+    expect(target.searchParams.get('returnTo')).toContain('/note/note-1?');
+    expect(target.searchParams.get('returnTo')).toContain('view=transcript');
+    expect(apiMock.apiJson.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+  });
+
+  it('uses the playback derivative for video only and reloads the same element at its retained position/rate', async () => {
+    noteStoreMock.loadNoteById.mockResolvedValue({ id: 'note-1', title: 'Video', content: '# Review', sourceType: 'video', mediaKind: 'video', taskId: 'task-1', status: 'done', scope: 'personal', createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-01T00:00:00Z' });
+    renderEditor();
+    const video = await screen.findByTestId('source-video') as HTMLVideoElement;
+    expect(video.getAttribute('src')).toBe('/api/notes/note-1/media?playback=true');
+    video.currentTime = 93;
+    video.playbackRate = 1.5;
+    fireEvent.timeUpdate(video);
+    apiMock.apiFetch.mockResolvedValueOnce(new Response(null, { status: 503, headers: { 'Retry-After': '2' } }));
+    fireEvent.error(video);
+    expect(await screen.findByRole('button', { name: 'Reload video' })).toBeEnabled();
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/deleted|removed|not found/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Reload video' }));
+    expect(screen.getByTestId('source-video')).toBe(video);
+    expect(video.load).toHaveBeenCalled();
+    video.currentTime = 0;
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBe(93);
+    expect(video.playbackRate).toBe(1.5);
+    fireEvent.canPlay(video);
+    expect(screen.queryByRole('button', { name: 'Reload video' })).toBeNull();
+    expect(noteStoreMock.loadNoteById).toHaveBeenCalledTimes(1);
+    expect(apiMock.apiFetch).toHaveBeenCalledWith('/api/notes/note-1/media?playback=true', expect.objectContaining({ headers: { Range: 'bytes=0-0' } }));
+  });
+
+  it.each([404, 500, 401])('distinguishes media HTTP %s without replacing the note or restarting generation', async status => {
+    apiMock.apiFetch.mockResolvedValueOnce(new Response(null, { status }));
+    renderEditor();
+    const audio = await screen.findByTestId('source-audio');
+    fireEvent.error(audio);
+    const reload = await screen.findByRole('button', { name: 'Reload audio' });
+    expect(reload).toBeEnabled();
+    const message = reload.closest('[role="alert"]')!.textContent;
+    if (status === 404) expect(message).toMatch(/unavailable/i);
+    else expect(message).not.toMatch(/removed|deleted|missing|not found/i);
+    if (status === 401) expect(message).toMatch(/sign in|permission/i);
+    expect(await screen.findByText('Minutes only.')).toBeVisible();
+    expect(screen.getByTestId('source-audio')).toBe(audio);
+    expect(apiMock.apiJson.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
   });
 
   it("keeps one shared local video player available from the transcript view", async () => {

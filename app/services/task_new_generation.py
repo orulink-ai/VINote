@@ -83,6 +83,16 @@ class NewGenerationService:
                 self.artifacts.write_json(child / 'source_reference.json', {
                     'version': 1, 'owner': owner, 'parent_task_id': parent,
                     'source_version': confirmation.source_version})
+                # The speaker service rechecks source/model signature and exact
+                # duration; retaining this hint never authorizes ASR execution.
+                speaker = folder / 'speaker_evidence.json'
+                if speaker.is_file() and not speaker.is_symlink():
+                    try:
+                        cached_speaker = _read_json(speaker)
+                    except HTTPException:
+                        cached_speaker = None
+                    if cached_speaker is not None:
+                        self.artifacts.write_json(child / 'speaker_evidence.json', cached_speaker)
                 self.artifacts.write_json(child / SNAPSHOT_FILE, snapshot)
                 self.artifacts.write_json(child / 'source_media.json', _read_json(folder / 'source_media.json'))
                 # Only documented generation fields survive. Path and temporary

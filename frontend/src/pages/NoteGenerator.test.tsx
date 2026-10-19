@@ -1,3 +1,4 @@
+import { useAppModeStore } from '../stores/appModeStore'
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -869,4 +870,97 @@ it('structured unknown result never posts retry even if legacy retryable is true
     expect(JSON.parse(localStorage.getItem('vinote:import-receipt:import-owner:note')!)).toEqual(receipt);
   });
 
+})
+
+
+describe('summary-only operation recovery', () => {
+  beforeEach(() => {
+    vi.clearAllMocks(); apiMock.apiJson.mockReset(); localStorage.clear(); sessionStorage.clear()
+    useNoteGenerationStore.getState().reset()
+    useAuthStore.setState({ user: { id: 'import-owner', email: 'import@example.invalid' } })
+    libraryMock.notes = []; libraryMock.saveNote.mockReset()
+  })
+  afterEach(() => { cleanup(); localStorage.clear(); useAppModeStore.getState().reset() })
+  const config = { configured: true, mode: 'cloud' as const, llm_model: 'exact-choice', asr_model: 'unused', server_url: 'https://summary.invalid' }
+  function receipt(origin = config.server_url) {
+    queryMock.value = 'meeting=1&operation=summary-op'
+    localStorage.setItem('vinote:source-receipt:import-owner:summary-op', JSON.stringify({ operationId: 'summary-op', summaryOnly: true, independentGeneration: true, origin, meeting: true, workspace: { scope: 'personal' }, submissionState: 'unknown' }))
+    useAppModeStore.setState({ config })
+  }
+  it('queries the exact source receipt and child task without resubmission', async () => {
+    receipt()
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path === '/api/source-requests/summary-op' ? { operation_id: 'summary-op', task_id: 'summary-child', state: 'accepted' } : { task_id: 'summary-child', status: 'failed', message: 'summary pending review', retryable: false }))
+    renderGenerator()
+    await screen.findByText('summary pending review')
+    expect(apiMock.apiJson).toHaveBeenCalledWith('/api/source-requests/summary-op')
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+  it('refuses recovery on a different model service Origin', async () => {
+    receipt('https://original.invalid')
+    renderGenerator()
+    await screen.findByText(/无法读取本机任务回执/)
+    expect(apiMock.apiJson).not.toHaveBeenCalled()
+  })
+  it('keeps summary child recovery query-only even if a status claims retryable', async () => {
+    receipt()
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path.includes('source-requests') ? { operation_id: 'summary-op', task_id: 'summary-child', state: 'accepted' } : { task_id: 'summary-child', status: 'failed', message: 'summary stopped', retryable: true }))
+    renderGenerator(); await screen.findByText('summary stopped')
+    await userEvent.click(screen.getByRole('button', { name: '查看原任务状态' }))
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+  it('saves the original 15:41 source clock with the LLM topic rather than the 19:35 operation time', async () => {
+    receipt()
+    const key = 'vinote:source-receipt:import-owner:summary-op'
+    localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), createdAt: '2026-10-19T19:35:00+08:00' }))
+    libraryMock.saveNote.mockResolvedValue({ id: 'saved-title' })
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path.includes('source-requests') ? { operation_id: 'summary-op', task_id: 'summary-child', state: 'accepted' } : { task_id: 'summary-child', status: 'success', result: { task_id: 'summary-child', title: '2026-10-19 15:41 | Synthetic source topic', markdown: '# Synthetic LLM topic' } }))
+    renderGenerator()
+    await waitFor(() => expect(libraryMock.saveNote).toHaveBeenCalled())
+    expect(libraryMock.saveNote.mock.calls[0][0]).toBe('2026-10-19 15:41｜Synthetic LLM topic')
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+  it('does not substitute summary-operation creation time when a source timestamp is absent', async () => {
+    receipt()
+    const key = 'vinote:source-receipt:import-owner:summary-op'
+    localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), createdAt: '2026-10-19T19:35:00+08:00' }))
+    libraryMock.saveNote.mockResolvedValue({ id: 'saved-title' })
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path.includes('source-requests') ? { operation_id: 'summary-op', task_id: 'summary-child', state: 'accepted' } : { task_id: 'summary-child', status: 'success', result: { task_id: 'summary-child', title: 'Synthetic source topic', markdown: '# Synthetic LLM topic' } }))
+    renderGenerator()
+    await waitFor(() => expect(libraryMock.saveNote).toHaveBeenCalled())
+    expect(libraryMock.saveNote.mock.calls[0][0]).toBe('Time unknown｜Synthetic LLM topic')
+  })
+  it('clears the original-detail pending pointer only after saving the new summary is acknowledged', async () => {
+    receipt()
+    const key = 'vinote:source-receipt:import-owner:summary-op'
+    localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), summaryNoteId: 'note', parentTaskId: 'parent' }))
+    const pointer = `vinote:summary-operation:import-owner:${config.server_url}:note:parent`
+    localStorage.setItem(pointer, 'summary-op')
+    libraryMock.saveNote.mockResolvedValue({ id: 'saved-child' })
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path.includes('source-requests') ? { operation_id: 'summary-op', task_id: 'summary-child', state: 'accepted' } : { task_id: 'summary-child', status: 'success', result: { task_id: 'summary-child', title: 'Synthetic summary', markdown: 'Synthetic body' } }))
+    renderGenerator()
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/note/saved-child', expect.anything()))
+    expect(localStorage.getItem(pointer)).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+
+})
+
+
+describe('meeting shared-video verification stage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks(); apiMock.apiJson.mockReset(); localStorage.clear(); sessionStorage.clear()
+    useNoteGenerationStore.getState().reset(); useAuthStore.setState({ user: { id: 'import-owner', email: 'import@example.invalid' } })
+    queryMock.value = 'meeting=1&task=video-task'
+    apiMock.apiJson.mockResolvedValue({ task_id: 'video-task', status: 'transcribing', stage: 'analyzing_video', processed_seconds: 900, total_seconds: 900, speaker_analysis_ready: true })
+  })
+  afterEach(() => { cleanup(); localStorage.clear(); queryMock.value = '' })
+  it('honors analyzing_video substage ahead of a retained transcribing status and only reads the task', async () => {
+    renderGenerator()
+    await screen.findByRole('heading', { name: '核对共享画面与发言' })
+    expect(useNoteGenerationStore.getState().currentStep).toBe('analyzing_video')
+    expect(useNoteGenerationStore.getState().status).toBe('processing')
+    expect(screen.getByRole('listitem', { name: '保存会议纪要：待开始' })).toBeVisible()
+    expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow')
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
 })

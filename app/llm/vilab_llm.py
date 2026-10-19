@@ -1,30 +1,20 @@
 import hashlib
 
 from app.llm.openai_llm import _BasePromptLLM
-from app.config import settings
 from app.services.tracing_service import traced_generation, record_usage, record_model_parameters, update_current, content_summary
 from app.services.vilab_cloud_service import VILabCloudService
+from app.llm.video_material import video_user_content
 
 
 class VILabLLM(_BasePromptLLM):
     def __init__(self, user_id: str, model: str):
         self.user_id = user_id
         self.model = model
-        self._meeting_reviewer = None
 
     def _complete_review(self, *, system_prompt: str, user_prompt: str) -> str:
-        if self._meeting_reviewer is None:
-            preferred = settings.meeting_review_model
-            model = self.model
-            if preferred and preferred != model:
-                available = VILabCloudService().models(self.user_id)
-                if any(item["id"] == preferred and item["modelType"] == "llm"
-                       and item["runtimeStatus"] == "available" for item in available):
-                    model = preferred
-            self._meeting_reviewer = VILabLLM(self.user_id, model)
-        return self._meeting_reviewer._complete(
-            system_prompt=system_prompt, user_prompt=user_prompt,
-        )
+        # The user-selected, frozen model owns both generation and fact review.
+        # A legacy reviewer preference never authorizes a different model.
+        return self._complete(system_prompt=system_prompt, user_prompt=user_prompt)
 
     @traced_generation
     def _complete(self, *, system_prompt: str, user_prompt: str) -> str:
@@ -40,7 +30,7 @@ class VILabLLM(_BasePromptLLM):
             "model": self.model, "stream": True,
             "stream_options": {"include_usage": True},
             "messages": [{"role": "system", "content": system_prompt},
-                         {"role": "user", "content": user_prompt}],
+                         {"role": "user", "content": video_user_content(user_prompt)}],
         })
         record_usage(data.get("usage"))
         choices = data.get("choices") or []

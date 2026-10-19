@@ -141,3 +141,24 @@ it('restores warm-return expansion and search for the same owner without carryin
   expect(screen.getByText('关联纪要（2条）').closest('details')).not.toHaveAttribute('open')
   expect(screen.queryByText('first', { exact: true })).not.toBeInTheDocument()
 })
+
+
+it('renders a retained-media placeholder with default done as needing attention when its exact task failed', () => {
+  const row = note('placeholder', { title: 'Synthetic retained capture', content: '原始媒体已保存，正在进行会后处理。', status: 'done', taskId: 'failed-task' })
+  render(<MeetingWorkbench notes={[row]} recordings={[]} taskStates={{ 'failed-task': 'failed' }} loading={false} onOpenNote={vi.fn()} onDeleted={vi.fn()} />)
+  expect(screen.getByRole('button', { name: 'Synthetic retained capture · 需处理' })).toBeInTheDocument()
+  expect(screen.queryByText('· 纪要已完成')).toBeNull()
+})
+it('does not infer state from a waiting title and does not treat pending or failed note records as completed', () => {
+  const rows = [note('pending', { title: 'A normal subject', taskId: undefined, status: 'pending' }), note('failed', { title: 'Another subject', taskId: undefined, status: 'failed' }), note('done', { title: '待生成纪要', taskId: undefined, status: 'done' })]
+  mount(rows)
+  expect(screen.getByRole('button', { name: 'A normal subject · 状态未核验' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: 'Another subject · 需处理' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '待生成纪要 · 已完成' })).toBeInTheDocument()
+})
+it('keeps unverified and unsaved successful task results distinct from completed saved minutes', () => {
+  render(<MeetingWorkbench notes={[note('unknown', { taskId: 'unknown' }), note('pending', { taskId: 'success', status: 'pending' })]} recordings={[]} taskStates={{ unknown: 'unverified', success: 'complete' }} loading={false} onOpenNote={vi.fn()} onDeleted={vi.fn()} />)
+  expect(screen.getByRole('button', { name: '同名纪要 · 状态未核验' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '同名纪要 · 纪要待保存' })).toBeInTheDocument()
+  expect(screen.queryByText('· 纪要已完成')).toBeNull()
+})

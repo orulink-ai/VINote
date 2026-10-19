@@ -1,3 +1,4 @@
+import { useMeetingTaskStates } from '@/hooks/useMeetingTaskStates';
 import { ImportedMeetingSources } from '@/components/MeetingRecorder/ImportedMeetingSources';
 import { TextReveal } from "@/components/ui/motion";
 import { isMeetingProcessing } from "../lib/meetingProcessing";
@@ -112,6 +113,8 @@ export function Meetings() {
     (note) =>
       ["meeting_recording", "meeting_video"].includes(note.sourceType || ""),
   );
+
+  const meetingTaskStates = useMeetingTaskStates(meetingNotes, JSON.stringify([location.key, location.pathname, location.search, currentWorkspace]));
 
   useEffect(() => {
     void loadNotes(currentWorkspace);
@@ -428,6 +431,7 @@ export function Meetings() {
       )}
       {!isCapturing && (
         <MeetingWorkbench
+          taskStates={meetingTaskStates}
           key={userId + JSON.stringify(currentWorkspace)}
           recordings={workspacePending}
           notes={meetingNotes}

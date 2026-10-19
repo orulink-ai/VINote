@@ -121,7 +121,7 @@ def get_note(note_id: str, user: AuthenticatedUser = Depends(get_current_user)):
 
 
 @router.get("/notes/{note_id}/media", include_in_schema=False)
-def get_note_media(note_id: str, user: AuthenticatedUser = Depends(get_current_user)):
+def get_note_media(note_id: str, user: AuthenticatedUser = Depends(get_current_user), playback: bool = False):
     note = _repository.get_note(user.user_id, note_id)
     if not note or not note.task_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
@@ -135,6 +135,11 @@ def get_note_media(note_id: str, user: AuthenticatedUser = Depends(get_current_u
         media_type = mimetypes.guess_type(declared_source.name)[0] or "application/octet-stream"
         if declared_source.suffix.lower() == ".webm" and note.source_type in {"audio", "meeting_recording"}:
             media_type = "audio/webm"
+        if playback:
+            from app.services.media_playback_service import playback_file
+            preview = playback_file(declared_source)
+            return FileResponse(preview, media_type=media_type,
+                                headers={"Cache-Control": "private, no-store"})
         return FileResponse(path=declared_source, media_type=media_type, filename=declared_source.name)
 
     if (task_dir / "source_reference.json").exists():
@@ -159,6 +164,10 @@ def get_note_media(note_id: str, user: AuthenticatedUser = Depends(get_current_u
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Media not found")
 
     media_type = mimetypes.guess_type(media_path.name)[0] or "application/octet-stream"
+    if playback:
+        from app.services.media_playback_service import playback_file
+        return FileResponse(playback_file(media_path), media_type=media_type,
+                            headers={"Cache-Control": "private, no-store"})
     return FileResponse(path=media_path, media_type=media_type, filename=media_path.name)
 
 

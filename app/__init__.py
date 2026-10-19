@@ -74,6 +74,10 @@ def create_app() -> FastAPI:
     from app.routers import files
     app.include_router(files.router, prefix="/api")
     app.include_router(note.router, prefix="/api")
+    from app.routers.meeting_summary_regeneration import create_summary_regeneration_router
+    app.include_router(create_summary_regeneration_router(
+        note_service=note._note_service,
+        active=lambda task_id: task_id in note._ACTIVE_FILE_TASKS), prefix='/api')
     app.include_router(note_library.router, prefix="/api")
     app.include_router(share.private_router, prefix="/api")
     app.include_router(preferences.router, prefix="/api")

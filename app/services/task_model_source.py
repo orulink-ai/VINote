@@ -210,6 +210,14 @@ def freeze_generation_models(function):
                 return function(*args, **kwargs)
         except Exception as error:
             failed = service.artifact_service.find_task_dir(values["task_id"]) or folder
-            service.artifact_service.update_status(failed, "failed", getattr(error, "detail", str(error)), retryable=True)
+            # A lower pipeline already persisted the exact failure and replay
+            # policy. This outer source guard must never overwrite it as retryable.
+            previous = service.artifact_service.get_status(values['task_id'])
+            if previous.get('status') not in {'failed', 'error'}:
+                from app.services.task_failure import failure_details
+                details = failure_details(error)
+                details.setdefault('retryable', False)
+                service.artifact_service.update_status(failed, "failed",
+                    getattr(error, "detail", str(error)), **details)
             raise
     return wrapped

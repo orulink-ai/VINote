@@ -32,6 +32,7 @@ def test_chat_rejections_use_protocol_and_safe_projection(stream, status, error,
             patch('app.services.vilab_cloud_service.httpx.stream', side_effect=client.stream), \
             patch('app.services.vilab_cloud_service.httpx.request', side_effect=client.request):
         settings.vilab_server_url = 'https://unused.test'
+        settings.content_cloud_runtime = False
         settings.cloud_auth_url = ''
         settings.vilab_api_key = 'header-secret'
         with pytest.raises(HTTPException) as caught:

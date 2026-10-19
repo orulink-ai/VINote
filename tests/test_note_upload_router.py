@@ -149,23 +149,27 @@ class GenerateFromUploadRouterTest(unittest.TestCase):
         self.assertTrue(req.diarize)
         self.assertIsNone(req.speaker_count)
 
-    def test_desktop_video_url_always_uses_automatic_diarization(self):
-        with patch.object(note, "_run_task") as run_task:
-            response = self.client.post(
-                "/api/generate",
-                headers={"X-VINote-Client": " Desktop "},
-                json={
-                    "video_url": "https://example.test/video",
-                    "workflow": "note_organization",
-                    "diarize": False,
-                    "speaker_count": 8,
-                },
-            )
+    def test_desktop_video_url_uses_automatic_diarization_only_for_meetings(self):
+        # Header provenance alone does not turn a notes request into a meeting.
+        for workflow in ("meeting", "note_organization"):
+            with self.subTest(workflow=workflow), \
+                    patch.object(note, "_note_service", SimpleNamespace(artifact_service=self.artifact_service)), \
+                    patch.object(note, "_run_task") as run_task:
+                response = self.client.post(
+                    "/api/generate",
+                    headers={"X-VINote-Client": " Desktop "},
+                    json={
+                        "video_url": "https://example.test/video",
+                        "workflow": workflow,
+                        "diarize": False,
+                        "speaker_count": 8,
+                    },
+                )
 
-        self.assertEqual(response.status_code, 200)
-        req = run_task.call_args.kwargs["req"]
-        self.assertTrue(req.diarize)
-        self.assertIsNone(req.speaker_count)
+                self.assertEqual(response.status_code, 200)
+                req = run_task.call_args.kwargs["req"]
+                self.assertEqual(req.diarize, workflow == "meeting")
+                self.assertEqual(req.speaker_count, None if workflow == "meeting" else 8)
 
     def test_json_transcript_keeps_speaker_text_variants_and_provenance(self):
         transcript = note._build_transcript_from_json(

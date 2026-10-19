@@ -16,7 +16,7 @@ import { downloadRecording } from '../../lib/recordingDownload'
 import { useI18n } from '../../lib/i18n'
 
 interface LocalRecordingPreviewProps { recording: PendingMeeting; onDeleted: () => void; onOpenNote?: (noteId: string) => void; confirmOnOpen?: boolean; onRecordingUpdated?: (recording: PendingMeeting) => void }
-const stageCopy: Record<PendingMeeting['processingStatus'], string> = { idle: '尚未生成纪要', queued: '等待处理', preparing_media: '准备和校验媒体', transcribing: '云端转写完整音频', diarizing: '区分说话人', parallel_analysis: '转写与说话人分析同时进行', aligning: '对齐逐字稿', analyzing_video: '分析代表画面', generating: '生成并校验纪要', saving_result: '保存结果', completed: '纪要已完成', failed: '处理失败' }
+const stageCopy: Record<PendingMeeting['processingStatus'], string> = { idle: '尚未生成纪要', queued: '等待处理', preparing_media: '准备和校验媒体', transcribing: '云端转写完整音频', diarizing: '区分说话人', parallel_analysis: '转写与说话人分析同时进行', aligning: '对齐逐字稿', analyzing_video: '核对共享画面与发言', generating: '生成并校验纪要', saving_result: '保存结果', completed: '纪要已完成', failed: '处理失败' }
 
 export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confirmOnOpen = false, onRecordingUpdated }: LocalRecordingPreviewProps) {
   const { locale } = useI18n(); const zh = locale.startsWith('zh')

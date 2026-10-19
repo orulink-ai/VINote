@@ -59,6 +59,12 @@ export class MissingMeetingTaskError extends MeetingGenerationError {
   constructor() { super('uploading', '服务端任务不存在，将使用保留的原始录制重新提交。') }
 }
 
+function meetingTaskFailure(status: TaskStatusResponse, fallback: MeetingGenerationError['stage'] = 'transcribing') {
+  const known = ['preparing_media', 'transcribing', 'parallel_analysis', 'diarizing', 'aligning', 'analyzing_video', 'summarizing', 'saving']
+  const failed = status.failed_stage
+  return new MeetingGenerationError(known.includes(failed || '') ? failed as MeetingGenerationError['stage'] : fallback, status.message || 'Meeting generation failed')
+}
+
 export function createMeetingRecordingTitle(date = new Date(), locale = 'zh-CN') {
   return formatMeetingTitle(date, '', locale)
 }
@@ -126,9 +132,7 @@ export async function waitForMeetingTaskCompletion({
     onProgress?.(status)
     if (status.status === 'success') return status
     if (status.status === 'failed' || status.status === 'not_found') {
-      const failed = status.failed_stage
-      const known = ['preparing_media', 'transcribing', 'parallel_analysis', 'diarizing', 'aligning', 'analyzing_video', 'summarizing', 'saving']
-      throw new MeetingGenerationError(known.includes(failed || '') ? failed as typeof lastRunningStage : lastRunningStage, status.message || 'Meeting generation failed')
+      throw meetingTaskFailure(status, lastRunningStage)
     }
     const stage = status.stage || status.status
     if (stage === 'preparing' || stage === 'preparing_media' || stage === 'uploaded') {
@@ -240,6 +244,15 @@ export async function fetchMeetingAudioBlob(taskId: string): Promise<Blob> {
 export async function resumeMeetingTask(taskId: string): Promise<TaskResponse> {
   const status = await fetchTaskStatus(taskId)
   if (status.status === 'not_found') throw new MissingMeetingTaskError()
-  if (status.status === 'failed') return apiJson<TaskResponse>('/api/task/' + taskId + '/retry', { method: 'POST' })
+  if (status.status === 'failed') {
+    const failure = meetingTaskFailure(status)
+    if (status.retryable === false) throw failure
+    // Missing retryable retains the legacy explicit-retry contract; the server remains authoritative.
+    try {
+      return await apiJson<TaskResponse>('/api/task/' + taskId + '/retry', { method: 'POST' })
+    } catch (error) {
+      throw new MeetingGenerationError(failure.stage, error instanceof Error ? error.message : failure.message)
+    }
+  }
   return { task_id: taskId }
 }

@@ -705,7 +705,7 @@ def retry_media_task(task_id: str, background_tasks: BackgroundTasks, user=Depen
 
 
 @router.get("/task/{task_id}/artifacts/{asset_path:path}", include_in_schema=False)
-def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | None = Depends(get_optional_current_user)):
+def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | None = Depends(get_optional_current_user), playback: bool = False):
     _require_recording_access(task_id, user)
     task_dir = _note_service.artifact_service.find_task_dir(task_id)
     if not task_dir:
@@ -718,6 +718,9 @@ def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | N
     if (task_dir / "source_reference.json").exists() and normalized_parts[0] == "media":
         source = _note_service.artifact_service.resolve_source_media(task_dir)
         if source and asset_path == "media/" + source.name:
+            if playback:
+                from app.services.media_playback_service import playback_file
+                return FileResponse(playback_file(source), headers={"Cache-Control": "private, no-store"})
             return FileResponse(source)
         raise HTTPException(404, "Artifact not found")
 
@@ -728,6 +731,9 @@ def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | N
     if not requested_path.exists() or not requested_path.is_file():
         raise HTTPException(status_code=404, detail="Artifact not found")
 
+    if playback and normalized_parts[0] == "media":
+        from app.services.media_playback_service import playback_file
+        return FileResponse(playback_file(requested_path), headers={"Cache-Control": "private, no-store"})
     return FileResponse(Path(requested_path))
 
 

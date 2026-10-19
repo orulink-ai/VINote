@@ -71,6 +71,7 @@ def test_cloud_request_actually_uses_streaming_transport(isolated_preferences):
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with patch("app.services.vilab_cloud_service.settings") as settings, patch("app.services.vilab_cloud_service.httpx.stream", side_effect=client.stream):
             settings.vilab_server_url = "https://example.test"
+            settings.content_cloud_runtime = False
             settings.cloud_auth_url = ""
             settings.vilab_api_key = "test-key"
             result = VILabCloudService().request("user", "POST", "/openai/v1/chat/completions", json={"stream": True})
@@ -96,6 +97,7 @@ def test_interrupted_stream_never_replays_inference_or_retains_partial_content(c
             patch("app.services.vilab_cloud_service.httpx.stream", side_effect=client.stream), \
             patch("app.services.vilab_cloud_service.time.sleep"):
         settings.vilab_server_url = "https://example.test"
+        settings.content_cloud_runtime = False
         settings.cloud_auth_url = ""
         settings.vilab_api_key = "test-key"
         with pytest.raises(HTTPException) as error:
@@ -119,6 +121,7 @@ def test_stream_http_and_completion_errors_are_not_transport_retried(status, eve
             patch("app.services.vilab_cloud_service.settings") as settings, \
             patch("app.services.vilab_cloud_service.httpx.stream", side_effect=client.stream):
         settings.vilab_server_url = "https://example.test"
+        settings.content_cloud_runtime = False
         settings.cloud_auth_url = ""
         settings.vilab_api_key = "test-key"
         with pytest.raises(HTTPException):

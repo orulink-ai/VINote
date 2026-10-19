@@ -45,9 +45,11 @@ class PromptBuilderTest(unittest.TestCase):
             output_language="en",
         )
 
-        self.assertIn("## AI 总结", chinese_prompt)
+        self.assertNotIn("## AI 总结", chinese_prompt)
+        self.assertIn("根据实际内容选择", chinese_prompt)
         self.assertIn("额外要求：保留术语", chinese_prompt)
-        self.assertIn("## AI Summary", english_prompt)
+        self.assertNotIn("## AI Summary", english_prompt)
+        self.assertIn("actual content", english_prompt)
         self.assertIn("Additional requirements: Keep terms", english_prompt)
 
     def test_chunk_and_merge_prompts_include_processing_context(self):

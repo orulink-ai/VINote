@@ -22,3 +22,16 @@ describe('meeting titles', () => {
     expect(formatContentTitle(date, '# 会议纪要', '2026-10-12 10:30｜项目周会')).toBe('2026-10-12 10:30｜项目周会');
   })
 })
+
+
+it('preserves validated source 15:41 from the server result when regeneration starts at 19:35', () => {
+  const generated = new Date(2026, 9, 19, 19, 35)
+  expect(formatContentTitle(generated, '# Synthetic LLM topic', '2026-10-19 15:41 | Previous source label')).toBe('2026-10-19 15:41｜Synthetic LLM topic')
+  expect(formatContentTitle(generated, '# Synthetic LLM topic', '2026-10-19 15:41｜Previous source label')).toBe('2026-10-19 15:41｜Synthetic LLM topic')
+})
+it('rejects impossible source date or clock prefixes rather than treating their digits as source-time evidence', () => {
+  const supplied = new Date(2026, 9, 19, 19, 35)
+  for (const title of ['2026-02-30 15:41｜Bad date', '2026-10-19 25:41｜Bad clock']) {
+    expect(formatContentTitle(supplied, '# Topic', title)).toBe('2026-10-19 19:35｜Topic')
+  }
+})

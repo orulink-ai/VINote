@@ -42,6 +42,18 @@ def _save_checkpoint(path, checkpoint):
             os.close(directory)
 
 
+def _empty_terminal_fields(part):
+    """Preserve only revalidated typed facts, never trust arbitrary cache labels."""
+    from app.services.asr_stream_service import validated_empty_terminal_evidence
+    if 'recognition_outcome' not in part and 'terminal_evidence' not in part:
+        return {}  # Historical finals remain historical, without invented proof.
+    proof = validated_empty_terminal_evidence(part.get('terminal_evidence'))
+    if (part.get('recognition_outcome') != 'provider_terminal_empty' or proof is None
+            or part.get('text') != '' or part.get('segments', []) != []):
+        raise ValueError('已保存的空终态证据无法核验，未提交音频')
+    return {'recognition_outcome': 'provider_terminal_empty', 'terminal_evidence': proof}
+
+
 def _confirmed_prefix(donor, total_frames):
     """Strict, bounded donor projection; never copy request/plan/unknown state."""
     if not isinstance(donor, dict) or not isinstance(donor.get('completed'), list):
@@ -79,7 +91,7 @@ def _confirmed_prefix(donor, total_frames):
         if ''.join(''.join(s['text'].split()) for s in segments) != ''.join(part['text'].split()):
             segments = []
         parts.append({'start': first / 16000, 'end': end / 16000, 'text': part['text'],
-                      'language': language, 'segments': segments})
+                      'language': language, 'segments': segments, **_empty_terminal_fields(part)})
         cursor = end
     inflight = donor.get('inflight')
     if inflight is not None:
@@ -334,6 +346,7 @@ class VILabTranscriber(Transcriber):
                     or not previous < part["end"] <= duration or not isinstance(part.get("text"), str)):
                 raise ValueError("已保存的转写进度不完整，原录音保留，未继续提交")
             previous = part["end"]
+            _empty_terminal_fields(part)
         start = parts[-1]["end"] if parts else 0
         if start and self.progress_callback:
             # This is saved confirmed coverage, never a new partial/final event.
@@ -416,7 +429,7 @@ class VILabTranscriber(Transcriber):
             if "".join("".join(s["text"].split()) for s in confirmed_segments) != "".join(payload["text"].split()):
                 confirmed_segments = []
             parts.append({"start": start, "end": end, "text": payload["text"], "language": payload.get("language"),
-                          "segments": confirmed_segments})
+                          "segments": confirmed_segments, **_empty_terminal_fields(payload)})
             checkpoint.pop("inflight", None)
             save()
             start = end
@@ -439,7 +452,9 @@ class VILabTranscriber(Transcriber):
                       "timestamp_granularity": "session" if all(s.timestamp_estimated for s in segments) else
                         "segment" if all(not s.timestamp_estimated for s in segments) else "mixed",
                       "session_count": len(parts),
-                      "unrecognized_segments": [{"start": p["start"], "end": p["end"]} for p in parts if not p["text"]]})
+                      "unrecognized_segments": [{"start": p["start"], "end": p["end"],
+                          "reason": p.get("recognition_outcome", "empty_recognition")}
+                          for p in parts if not p["text"]]})
 
     def _transcribe_http(self, file_path: str) -> TranscriptResult:
         # Streaming ASR may consume the upload at real-time speed.

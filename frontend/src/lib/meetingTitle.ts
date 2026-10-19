@@ -20,10 +20,21 @@ export function formatMeetingTitle(startedAt: Date | string, subject = '', local
   return `${time}｜${subject.trim() || (zh ? '待生成纪要' : 'Notes pending')}`.slice(0, 255)
 }
 
+/** A server result may carry the canonical recording clock; preserve it verbatim, without timezone conversion. */
+function resultSourceTime(title: string): string | undefined {
+  const match = /^(\d{4})-(\d{2})-(\d{2})[ \t]+(\d{2}):(\d{2})[ \t]*[｜|]/.exec(title.trim())
+  if (!match) return undefined
+  const [, year, month, day, hour, minute] = match
+  const value = new Date(Date.UTC(+year, +month - 1, +day, +hour, +minute))
+  if (value.getUTCFullYear() !== +year || value.getUTCMonth() !== +month - 1 || value.getUTCDate() !== +day || value.getUTCHours() !== +hour || value.getUTCMinutes() !== +minute) return undefined
+  return `${year}-${month}-${day} ${hour}:${minute}`
+}
+
 /** The date is supplied by capture/import, never inferred from media duration. */
 export function formatContentTitle(createdAt: Date | string, markdown: string, fallback = '', locale = 'zh-CN') {
   const subject = meetingSubject(markdown) || fallback
     .replace(/^\d{4}[-/]\d{2}[-/]\d{2}(?:\s+\d{2}:\d{2})?\s*[｜|·-]\s*/, '')
     .replace(/\.[a-z0-9]{2,5}$/i, '').trim() || (locale.startsWith('zh') ? '内容摘要' : 'Content summary');
-  return formatMeetingTitle(createdAt, subject, locale);
+  const sourceTime = resultSourceTime(fallback)
+  return sourceTime ? `${sourceTime}｜${subject}`.slice(0, 255) : formatMeetingTitle(createdAt, subject, locale);
 }

@@ -1,3 +1,4 @@
+import type { MeetingTaskStates } from '@/hooks/useMeetingTaskStates';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { useEffect, useState, type ReactNode } from "react";
 import { useViewState } from "@/hooks/useViewState";
@@ -92,7 +93,7 @@ function relatedViewIds(row: Row) {
   ];
 }
 /** A projection only: every content object and retained original stays reachable. */
-export function buildMeetingRows(recordings: PendingMeeting[], notes: NoteRecord[]): Row[] {
+export function buildMeetingRows(recordings: PendingMeeting[], notes: NoteRecord[], taskStates: MeetingTaskStates = {}): Row[] {
   const retainedNotes = [...new Map(notes.flatMap(note => [note, ...(note.localSources || [])])
     .map(note => [`${note.scope}:${note.teamId || ''}:${note.workspaceKey || ''}:${note.id}`, note] as const)).values()];
   const nodes = [
@@ -121,8 +122,14 @@ export function buildMeetingRows(recordings: PendingMeeting[], notes: NoteRecord
     const originals = group.flatMap(node => node.recording ? [node.recording] : []);
     const recording = originals.find(row => row.processingStatus !== 'completed') || originals[0];
     const note = content[0];
-    const state = recording ? recording.processingStatus === 'failed' ? '需处理'
-      : recording.processingStatus === 'idle' ? '未生成' : recording.processingStatus === 'completed' ? '已完成' : '处理中' : '已完成';
+    let state = recording ? recording.processingStatus === 'failed' ? '需处理'
+      : recording.processingStatus === 'idle' ? '未生成' : recording.processingStatus === 'completed' ? '已完成' : '处理中' : note.status === 'failed' || note.status === 'transcribing_failed' || note.status === 'generation_failed' ? '需处理' : note.status === 'done' ? '已完成' : '状态未核验';
+    const taskState = taskStates[recording?.taskId || note?.taskId || ''];
+    if (taskState === 'failed') state = '需处理';
+    else if (taskState === 'processing') state = '处理中';
+    else if (taskState === 'checking') state = '状态核验中';
+    else if (taskState === 'unverified') state = '状态未核验';
+    else if (taskState === 'complete') state = note?.status === 'done' && (!recording || recording.processingStatus === 'completed' || recording.noteId === note.id) ? '已完成' : '纪要待保存';
     return {
       key: recording ? `recording:${recording.id}` : `note:${note.id}`,
       title: recording?.options.title || note.title,
@@ -138,6 +145,7 @@ export function MeetingWorkbench({
   onOpenNote,
   onDeleted,
   actions,
+  taskStates = {},
   archived = false,
   onArchiveChange,
 }: {
@@ -147,6 +155,7 @@ export function MeetingWorkbench({
   onOpenNote: (id: string, edit?: boolean) => void;
   onDeleted: (id: string) => void;
   actions?: ReactNode;
+  taskStates?: MeetingTaskStates;
   archived?: boolean;
   onArchiveChange?: (archived: boolean) => void;
 }) {
@@ -161,13 +170,13 @@ export function MeetingWorkbench({
   const [expandedRows, setExpandedRows] = useViewState<string[]>("recordings-expanded", []);
   const expandedIds = Array.isArray(expandedRows) ? expandedRows : [];
   // Group stable identities before filtering: retained history is not a new row.
-  const rows = buildMeetingRows(recordings, notes)
+  const rows = buildMeetingRows(recordings, notes, taskStates)
     .filter(row => Boolean(row.note?.archived) === archived &&
       (!archived || ["meeting_recording", "meeting_video"].includes(row.note?.sourceType || '')))
     .map(row => archived && row.note ? {
       ...row, title: row.note.title,
       date: row.note.recordingStartedAt || row.note.createdAt,
-      recording: undefined, recordings: [], state: '已完成',
+      recording: undefined, recordings: [],
     } : row);
   const visible = rows.filter(
     (row) =>
@@ -178,7 +187,7 @@ export function MeetingWorkbench({
       )
         .toLowerCase()
         .includes(query.trim().toLowerCase()) &&
-      (archived || filter === "全部" || row.state === filter),
+      (archived || filter === "全部" || row.state === filter || filter === "需处理" && ["状态未核验", "纪要待保存"].includes(row.state)),
   );
   const selected = rows.find((row) => row.key === selectedKey && row.recording);
   const previewRecording = selected?.recordings.find(row => row.id === previewRecordingId) || selected?.recording;

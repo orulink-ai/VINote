@@ -19,11 +19,14 @@ Do not turn separately described channels or capabilities into an unresolved eit
 For example, 'download through A; B can also publish to a store' supports two capabilities, not 'final selection remains undecided'. This example is a rule, not a meeting fact.
 Remove contradictions, invented owners/deadlines/acceptance criteria, and open questions inferred solely from missing information.
 Remove corrupted names and incomplete phrases from factual prose. If an ambiguity affects an essential conclusion, briefly mark that point as requiring verification without inventing a resolution.
+Treat corrupted ASR as uncertain source text, never as an established remedy, technical term or decision. Use independently legible material in the same context to resolve a term; do not guess illegible screen words, materials, model names, quantities or prices from plausible lists. Remove unsupported reconstruction from the draft instead of laundering it through review. Preserve clear conditions and arrangements even when nearby fragments are corrupted.
 Keep supported proper names; terminology supplied as context may correct obvious homophones but cannot supply new business facts.
 Actual meeting times must come from explicit context. Paused media duration and recording offsets cannot establish wall-clock start/end times.
-Write a useful concise report: known meeting information, one paragraph of key outcomes, thematic discussion, and a short list of real actions. Omit empty sections and duplicate closing summaries.
+Review the complete supplied visual evidence as well as speech. Visible proposals or screen text do not prove spoken agreement, decisions, speaker identity or action ownership. A text-only request supplies extracted visual text only; never claim to have read images that were not supplied. Preserve material cross-source conflicts without inventing a resolution or silently replacing an earlier statement with a later screen value.
+Let the actual content determine headings, structure and length; impose no fixed sections, outcome counts, action tables or report template. Preserve useful rationale, examples, constraints, disagreements and changes of position across the whole source. Omit empty sections and duplicate summaries.
+Recognition gaps, empty transcript intervals, sampling limitations and processing diagnostics constrain reasoning internally; never turn them into recognition/coverage technical reports, meeting facts or invented open questions. Only a material factual ambiguity may receive a brief contextual verification note.
 Do not describe the editing process or write comments such as 'the draft should not say'. The result must read as the meeting report itself.
-Use only a few useful recording references in [MM:SS] format, without inventing timestamps."""
+Keep offsets internal unless the user explicitly requests recording references. In the default report remove repeated time citations and technical evidence commentary. Preserve substantive relationships in diagrams, the rationale for comparisons and supported follow-ups; do not reduce visual evidence to a list of labels."""
     if intermediate:
         rules += (
             "\nThis is an intermediate chunk. Preserve supported actors, decisions, "

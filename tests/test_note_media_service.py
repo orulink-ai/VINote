@@ -36,10 +36,22 @@ class NoteMediaServiceTest(unittest.TestCase):
         self.assertNotIn("# Demo [00:12]", enriched)
         self.assertNotIn("## Quick aside [", enriched)
         self.assertIn("## Section A [01:35](https://www.youtube.com/watch?v=demo123&t=95)", enriched)
-        self.assertIn("## Section B [03:00](https://www.youtube.com/watch?v=demo123&t=180)", enriched)
+        self.assertNotIn("## Section B [03:00]", enriched)
         self.assertIn("[[Screenshot:01:35]]", enriched)
-        self.assertIn("[[Screenshot:03:00]]", enriched)
+        self.assertNotIn("[[Screenshot:03:00]]", enriched)
         self.assertIn("[01:35](https://www.youtube.com/watch?v=demo123&t=95)", enriched)
+
+    def test_unreferenced_heading_order_does_not_establish_evidence_time(self):
+        enriched = self.service.enrich_markdown(markdown='# Topic\n## Later decision\nActual decision.',
+            transcript_segments=self.transcript, video_url=self.video_url, output_language='en')
+        self.assertNotIn('[[Screenshot:', enriched)
+        self.assertNotIn('&t=', enriched)
+
+    def test_long_recording_citation_does_not_lose_hours(self):
+        enriched = self.service.enrich_markdown(markdown='# Topic\n## Detail [125:12]\nVisible change.',
+            transcript_segments=[], video_url=self.video_url, output_language='en')
+        self.assertIn('t=7512', enriched)
+        self.assertIn('[[Screenshot:125:12]]', enriched)
 
 
 if __name__ == "__main__":

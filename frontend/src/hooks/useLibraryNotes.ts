@@ -127,7 +127,7 @@ export function useLibraryNotes() {
             tags: Array.isArray(metadata.tags)
               ? metadata.tags.filter((t): t is string => typeof t === "string")
               : [],
-            status: "done",
+            status: source?.status || "done",
             scope: "personal" as const,
             createdAt:
               typeof metadata.source_created_at === "string"

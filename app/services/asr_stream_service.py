@@ -28,7 +28,29 @@ _KNOWN_CODES = _TRANSIENT_CODES | {"asr_failed", "asr_incomplete_result",
     "asr_auth_failed", "asr_permission_denied", "asr_quota_exceeded",
     "asr_request_failed", "asr_connection_failed", "asr_provider_missing",
     "asr_deployment_unhealthy", "asr_model_load_failed",
-    "audio_duration_exceeded", "unknown_result", "unknown_error"}
+    "audio_duration_exceeded", "empty_result_unverified", "asr_empty_result",
+    "unknown_result", "unknown_error"}
+
+
+def validated_empty_terminal_evidence(proof):
+    """Validate/project typed facts; these alone never authorize a session/cache."""
+    if (not isinstance(proof, dict) or type(proof.get('protocol')) is not int
+            or proof.get('protocol') != 1 or proof.get('outcome') != 'provider_terminal_empty'
+            or proof.get('terminalConfirmed') is not True or proof.get('inputComplete') is not True
+            or proof.get('contentComplete') is not False or proof.get('silenceConfirmed') is not False
+            or not isinstance(proof.get('provider'), str)
+            or re.fullmatch(r'[a-z0-9_-]{1,64}', proof['provider']) is None):
+        return None
+    return {name: proof[name] for name in ('protocol', 'outcome', 'provider',
+            'terminalConfirmed', 'inputComplete', 'contentComplete', 'silenceConfirmed')}
+
+
+def confirmed_empty_terminal(event, session_id):
+    """Require the typed terminal for this session and locally complete input."""
+    if (event.get('code') != 'empty_result_unverified' or event.get('stage') != 'asr'
+            or session_id is None or safe_session_id(event.get('sessionId')) != session_id):
+        return None
+    return validated_empty_terminal_evidence(event.get('terminalEvidence'))
 
 
 def safe_session_id(value):
@@ -363,6 +385,13 @@ def recognize_pcm(origin, bearer, model, wav_path, *, start=0, end=None, progres
                     return {"text": text.strip(), "language": event.get("language"),
                             "segments": event.get("segments") or []}
                 elif kind in {"error", "session.error"}:
+                    proof = confirmed_empty_terminal(event, session_id)
+                    if (proof is not None and (sent_all.is_set() or sending_last.is_set())
+                            and sent_all.wait(timeout=3) and not sender_errors
+                            and deadline.remaining() > 0):
+                        return {"text": "", "segments": [],
+                                "recognition_outcome": "provider_terminal_empty",
+                                "terminal_evidence": proof}
                     limit = service_duration_limit(event)
                     if limit is not None:
                         raise ASRSessionLimit(limit)

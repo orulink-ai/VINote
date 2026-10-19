@@ -65,8 +65,8 @@ def test_hierarchical_meeting_reviews_chunks_before_merge_and_final_result():
     assert "verified two" in llm.calls[5]["user_prompt"]
 
 
-@pytest.mark.parametrize("available,expected", [(True, "reviewer"), (False, "primary")])
-def test_cloud_reviewer_uses_available_preference_without_changing_primary(available, expected):
+@pytest.mark.parametrize("available", [True, False])
+def test_cloud_reviewer_keeps_selected_model_even_when_other_preference_is_available(available):
     llm = VILabLLM("test-user", "primary")
     catalog = [{"id": "reviewer", "modelType": "llm",
                 "runtimeStatus": "available" if available else "unavailable"}]
@@ -81,6 +81,6 @@ def test_cloud_reviewer_uses_available_preference_without_changing_primary(avail
             patch.object(VILabLLM, "_complete", complete):
         assert llm._complete_review(system_prompt="system", user_prompt="evidence") == "reviewed"
         llm._complete_review(system_prompt="system", user_prompt="more evidence")
-    assert used == [expected, expected]
+    assert used == ['primary', 'primary']
     assert llm.model == "primary"
-    models.assert_called_once_with("test-user")
+    models.assert_not_called()
