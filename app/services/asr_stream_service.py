@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 _TRANSIENT_CODES = {"asr_timeout", "asr_stream_failed", "rate_limited",
                     "asr_rate_limited", "service_unavailable", "asr_unavailable"}
 _KNOWN_CODES = _TRANSIENT_CODES | {"asr_failed", "asr_incomplete_result",
+    "asr_empty_result", "empty_result_unverified",
     "asr_protocol_error", "asr_provider_error", "auth_failed", "permission_denied",
     "quota_exceeded", "asr_provider_disabled", "asr_model_not_found",
     "asr_auth_failed", "asr_permission_denied", "asr_quota_exceeded",
