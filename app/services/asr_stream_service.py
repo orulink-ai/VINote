@@ -7,6 +7,7 @@ import json
 import logging
 import math
 import re
+import ssl
 import struct
 import threading
 import time
@@ -14,7 +15,7 @@ import wave
 import httpx
 
 from websockets.sync.client import connect
-from websockets.exceptions import ConnectionClosed
+from websockets.exceptions import ConnectionClosed, ConnectionClosedError, ConnectionClosedOK
 from websockets.exceptions import InvalidStatus
 from fastapi import HTTPException
 
@@ -63,6 +64,21 @@ def safe_session_id(value):
 
 _TRANSPORT_EVENTS = {"client_deadline", "audio_send_failed", "connection_closed",
                      "session_ended", "service_error"}
+_TRANSPORT_EXCEPTION_TYPES = (
+    (InvalidStatus, 'InvalidStatus'),
+    (ConnectionClosedError, 'ConnectionClosedError'),
+    (ConnectionClosedOK, 'ConnectionClosedOK'),
+    (ConnectionClosed, 'ConnectionClosed'),
+    (ssl.SSLCertVerificationError, 'SSLCertVerificationError'),
+    (ssl.SSLEOFError, 'SSLEOFError'),
+    (ssl.SSLError, 'SSLError'),
+    (ConnectionResetError, 'ConnectionResetError'),
+    (ConnectionAbortedError, 'ConnectionAbortedError'),
+    (BrokenPipeError, 'BrokenPipeError'),
+    (TimeoutError, 'TimeoutError'),
+    (OSError, 'OSError'),
+)
+_TRANSPORT_EXCEPTION_CLASSES = {name for _, name in _TRANSPORT_EXCEPTION_TYPES} | {'OtherError'}
 # Bounded local observations, not server/provider acknowledgements.
 _TRANSPORT_NUMBER_LIMITS = {
     "local_send_bytes": 2 ** 40, "local_send_attempt_bytes": 2 ** 40,
@@ -92,11 +108,29 @@ def safe_transport_diagnostic(raw):
     close_code = safe_ws_close_code(raw.get("ws_close_code"))
     if close_code is not None:
         result["ws_close_code"] = close_code
+    exception_class = raw.get('transport_exception_class')
+    if isinstance(exception_class, str) and exception_class in _TRANSPORT_EXCEPTION_CLASSES:
+        result['transport_exception_class'] = exception_class
+    if isinstance(raw.get('ws_proxy_mode'), str) and raw['ws_proxy_mode'] == 'disabled':
+        result['ws_proxy_mode'] = 'disabled'
     for name, maximum in _TRANSPORT_NUMBER_LIMITS.items():
         value = raw.get(name)
         if type(value) is int and 0 <= value <= maximum:
             result[name] = value
     return result
+
+
+def _transport_exception_diagnostic(error):
+    # Connection policy only: this doesn't claim to bypass a system TUN/VPN.
+    result = {'ws_proxy_mode': 'disabled'}
+    if error is not None:
+        result['transport_exception_class'] = next((name for kind, name in _TRANSPORT_EXCEPTION_TYPES
+            if isinstance(error, kind)), 'OtherError')
+        if isinstance(error, ConnectionClosed):
+            code = safe_ws_close_code(getattr(getattr(error, 'rcvd', None), 'code', None))
+            if code is not None:
+                result['ws_close_code'] = code
+    return result  # Never inspect exception messages, close reasons or URLs.
 
 
 class _LocalTransportProgress:
@@ -170,15 +204,22 @@ def open_recognition(url, bearer):
     try:
         # The receive deadline below bounds a silent/stalled connection. Don't
         # let a shorter heartbeat timer cut off a provider finishing long audio.
-        return connect(url, additional_headers={"Authorization": "Bearer " + bearer}, open_timeout=15,
+        # websockets 15 otherwise reads environment AND Windows user proxies.
+        # Direct target connection; retain the library's verified default TLS.
+        return connect(url, proxy=None, additional_headers={"Authorization": "Bearer " + bearer}, open_timeout=15,
                        close_timeout=3, max_size=8 * 1024 * 1024, ping_timeout=None)
     except InvalidStatus as error:
         status = error.response.status_code
         if status in {401, 403}:
-            raise HTTPException(502, "云端服务未接受当前身份，请检查账号登录及服务端可信身份来源配置") from None
-        raise RuntimeError(f"VILab STT returned HTTP {status}") from None
+            failure = HTTPException(502, "云端服务未接受当前身份，请检查账号登录及服务端可信身份来源配置")
+        else:
+            failure = RuntimeError(f"VILab STT returned HTTP {status}")
+        failure.asr_transport_diagnostic = _transport_exception_diagnostic(error)
+        raise failure from None
     except (OSError, TimeoutError) as error:
-        raise httpx.ConnectError("转写连接暂时不可用") from error
+        failure = httpx.ConnectError("转写连接暂时不可用")
+        failure.asr_transport_diagnostic = _transport_exception_diagnostic(error)
+        raise failure from error
 
 
 def service_duration_limit(event):
@@ -327,19 +368,21 @@ def recognize_pcm(origin, bearer, model, wav_path, *, start=0, end=None, progres
                 stop.set()
 
         sender = None
-        def failure(code, stage=None, transport_event=None, close_code=None):
+        def failure(code, stage=None, transport_event=None, close_code=None, cause=None):
             attempted = stop_audio()
             error = ASRServiceError(code, session_id=session_id, stage=stage,
                                     sent_all=sent_all.is_set(),
-                                    transport=local_transport.snapshot(transport_event, close_code))
+                                    transport={**local_transport.snapshot(transport_event, close_code),
+                                               **_transport_exception_diagnostic(cause)})
             if attempted:
                 error.retry_reason = None
             logger.warning("ASR session failure diagnostic=%s", error.diagnostic)
             return error
 
-        def transport_error(error, event, close_code=None):
+        def transport_error(error, event, close_code=None, cause=None):
             # Preserve existing pre-audio exception/retry classification.
-            error.asr_transport_diagnostic = local_transport.snapshot(event, close_code)
+            error.asr_transport_diagnostic = {**local_transport.snapshot(event, close_code),
+                                             **_transport_exception_diagnostic(cause)}
             return error
 
         try:
@@ -349,9 +392,9 @@ def recognize_pcm(origin, bearer, model, wav_path, *, start=0, end=None, progres
                     break
                 if sender_errors:
                     if stop_audio():
-                        raise failure("unknown_result", "asr", sender_errors[0][1]) from None
+                        raise failure("unknown_result", "asr", sender_errors[0][1], cause=sender_errors[0][0]) from None
                     raise transport_error(httpx.RemoteProtocolError(
-                        "转写连接中断，已完成的识别结果保留"), sender_errors[0][1]) from sender_errors[0][0]
+                        "转写连接中断，已完成的识别结果保留"), sender_errors[0][1], cause=sender_errors[0][0]) from sender_errors[0][0]
                 try:
                     event = json.loads(ws.recv(timeout=min(1, remaining)))
                 except TimeoutError:
@@ -359,9 +402,9 @@ def recognize_pcm(origin, bearer, model, wav_path, *, start=0, end=None, progres
                 except (ConnectionClosed, OSError) as error:
                     close_code = safe_ws_close_code(getattr(getattr(error, "rcvd", None), "code", None))
                     if stop_audio():
-                        raise failure("unknown_result", "asr", "connection_closed", close_code) from None
+                        raise failure("unknown_result", "asr", "connection_closed", close_code, cause=error) from None
                     raise transport_error(httpx.RemoteProtocolError(
-                        "转写连接中断，未将临时文字当作完成结果"), "connection_closed", close_code) from error
+                        "转写连接中断，未将临时文字当作完成结果"), "connection_closed", close_code, cause=error) from error
                 if deadline.remaining() <= 0:
                     break
                 kind = event.get("type")
