@@ -1,4 +1,7 @@
 """Content-free failure classification for task recovery, never provider text."""
+from app.services.summary_failure import (
+    SummaryResultUnconfirmed, SUMMARY_UNCONFIRMED_CODE, SUMMARY_UNCONFIRMED_COPY,
+)
 from app.services.asr_stream_service import (
     ASRServiceError,
     _TRANSIENT_CODES,
@@ -57,6 +60,8 @@ def safe_asr_failure_context(value):
 
 
 def failure_details(error):
+    if isinstance(error, SummaryResultUnconfirmed):
+        return {'error_code': SUMMARY_UNCONFIRMED_CODE, 'retryable': False}
     if isinstance(error, ASRServiceError):
         code = error.code
         if error.sent_all and code in _TRANSIENT_CODES:
@@ -82,6 +87,9 @@ def failure_details(error):
 def recovery_status(status):
     result = dict(status)
     code = result.get("error_code")
+    if code == SUMMARY_UNCONFIRMED_CODE:
+        result.update(retryable=False, message=SUMMARY_UNCONFIRMED_COPY)
+        return result
     if code not in _KNOWN_CODES:
         code = None
     # Older artifacts discarded the typed failure. This exact generic ASR copy

@@ -11,6 +11,7 @@ from fastapi import HTTPException
 from app.config import settings
 from app.db import session_scope
 from app.db_models import VILabPreferenceDB
+from app.services.summary_failure import SummaryResultUnconfirmed
 
 _task_source: ContextVar[tuple[str, dict] | None] = ContextVar("vinote_task_model_source", default=None)
 logger = logging.getLogger(__name__)
@@ -18,6 +19,11 @@ logger = logging.getLogger(__name__)
 
 def _chat_failure(response):
     """Project a bounded error envelope; never expose/log arbitrary messages."""
+    if response.status_code == 524:
+        failure = SummaryResultUnconfirmed('http524')
+        failure.cloud_failure_context = {'category': 'summary_result_unconfirmed', 'http_status': 524}
+        logger.warning('Cloud chat result unconfirmed: %s', failure.cloud_failure_context)
+        return failure
     payload = {}
     try:
         raw = bytearray()
@@ -78,7 +84,7 @@ class VILabCloudService:
         received_headers = False
         try:
             with httpx.stream(method, (server_url or settings.vilab_server_url) + path,
-                              headers=headers, timeout=timeout, **kwargs) as response:
+                              headers=headers, timeout=timeout, trust_env=False, **kwargs) as response:
                 received_headers = True
                 if not response.is_success:
                     raise _chat_failure(response)
@@ -86,10 +92,8 @@ class VILabCloudService:
         except httpx.RequestError as error:
             logger.warning('Cloud chat transport failed: kind=%s attempt=1 headers=%s elapsed_seconds=%.1f',
                            type(error).__name__, received_headers, time.monotonic() - started)
-            detail = ('云端模型响应超时，结果尚未确认，未自动重试' if isinstance(error, httpx.TimeoutException)
-                      else '云端模型响应连接中断，结果尚未确认，未自动重试' if received_headers
-                      else '无法连接云端模型服务，结果尚未确认，未自动重试')
-            raise HTTPException(502, detail) from None
+            raise SummaryResultUnconfirmed(
+                'timeout' if isinstance(error, httpx.TimeoutException) else 'connection') from None
 
     def validate_ready(self, user_id, *, needs_stt=True):
         if not user_id:
@@ -171,9 +175,12 @@ class VILabCloudService:
             if path == "/openai/v1/chat/completions" and (kwargs.get("json") or {}).get("stream") is True:
                 return self._request_chat_stream(method, path, headers, timeout, kwargs, server_url=server_url)
             response = httpx.request(method, server_url + path,
-                                    headers=headers, timeout=timeout, **kwargs)
+                                    headers=headers, timeout=timeout, trust_env=False, **kwargs)
         except httpx.RequestError as error:
             logger.warning("Cloud request transport failed: kind=%s", type(error).__name__)
+            if path == '/openai/v1/chat/completions':
+                raise SummaryResultUnconfirmed(
+                    'timeout' if isinstance(error, httpx.TimeoutException) else 'connection') from None
             raise HTTPException(502, "无法连接云端模型服务，请稍后重试") from None
         if path == '/openai/v1/chat/completions' and not response.is_success:
             raise _chat_failure(response)

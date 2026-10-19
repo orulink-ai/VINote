@@ -679,6 +679,9 @@ def retry_media_task(task_id: str, background_tasks: BackgroundTasks, user=Depen
             return {"task_id": task_id, "status": status["status"]}
         from app.services.task_failure import recovery_status
         status = recovery_status(status)
+        if status.get('failed_stage') == 'summarizing':
+            raise HTTPException(409, {'code': status.get('error_code') or 'summary_retry_requires_confirmation',
+                'message': '总结阶段失败须明确确认新的独立总结操作，完整材料已保留。'})
         if status.get("retryable") is False:
             raise HTTPException(409, {"code": status.get("error_code") or "retry_not_confirmed",
                 "message": "原任务尚不能安全重试，请查询原结果；原文件已保留。"})
