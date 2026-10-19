@@ -56,6 +56,10 @@ MCP 工具管理使用 `/api/mcp-connections`，支持 HTTPS Streamable HTTP，�
 
 ### 桌面重新总结与播放恢复
 
+桌面 ASR WebSocket 显式关闭 websockets 的环境／Windows 用户代理自动发现，保留默认 TLS 证书与主机名校验；不修改系统代理，也不在失败后自动切换代理。系统 TUN/VPN 路由仍独立生效。故障诊断仅保留白名单异常类别、有效接收 close code 和 `ws_proxy_mode="disabled"`，不保存 reason 原文、URL 或凭证。
+
+模型 HTTP／SSE 与账号刷新同样显式直连，保留默认 TLS 校验。总结超时或未收到完整终态时保留材料并停止，不自动重发；历史总结失败也不能通过原任务重试绕过确认。即使尚未保存纪要，会议任务页也可明确选择「仅重新生成纪要」，复用完整逐字稿、说话人和视频资料；成功后独立保存，未知操作只查询原回执。
+
 已有完整转写的会议可明确确认「重新总结」，重新选择当前云端目录中的 LLM，创建独立结果，保留旧纪要、版本及原件；不会再次 ASR 或修改全局模型偏好。失败或成功的原任务均需通过账号、原件版本和完整转写核验；从子任务重新总结仍直接引用同一份原件，不复制媒体或形成引用链。
 
 - 鉴权 `GET /api/task/{task_id}/summary-context` 只读确认上下文，返回 `context_revision`、`source.version`、`transcript_version` 和 `canonical_task_id`。

@@ -2,10 +2,12 @@
 
 - 创建日期/时区：2026-10-19，Asia/Shanghai；作者：wugui（Git 配置）。时间目录为任务标识，不作为精确执行时间证据。
 - 分支：codex/meeting-context-recovery-20261019；基点 origin/dev b492a43。
-- 状态：进行中；本地修改，未提交/合入/部署。
+- 状态：功能分支交付中，PR #61 保持草稿；VILab-server 协议修复已正常合并及公网核验。两份真实链路完成，内容质量未通过，不发布安装包。
 - 需求：[范围与边界](../../../../docs/plans/2026-10-19-meeting-evidence-and-recovery.md)。
 
 ## 目标与边界
+
+最新验收见 [两份真实录屏结果](../../../../docs/reviews/2026-10-20-meeting-acceptance-results.md)：最新 A 81/100、B 71/100，保留此前 A 83/B 67 及所有原稿；覆盖改善但事实准确性回退，不能认定全面质量验收通过。实际 summary-only、保存、重开及末段播放已验证，无新增 ASR；准备阶段只读目录失败的候选不评分。后端全量 1797、前端全量 919，后续提示相关 100 与标题相关 111 回归、最终构建通过。下文阶段性记录保留原时间语义，以最新结果为准。
 
 修复空识别阻断、长视频播放、音视频证据组织、总结与详情恢复。保留原件、账号隔离和确认记录；不自动换模型，不盲目重试未知请求。两个真实录屏作为固定私有测试集，源文件及产物不提交 Git。
 
@@ -71,3 +73,10 @@
 - 后续新会话在约 4.5 秒收到上游 55000000：本地诊断最大写间隔 201ms、8 秒等包空档 0、写失败 0；与 EOF/长会话收尾无关。官方错误表定义为临时服务问题，尚不能确定提供方内部原因，也不能宣称调用链全部修好。
 - 失败未自动重试或更换模型，20:47 已确认材料和原件保留。B 尚无最终纪要及内容总分；不以不完整材料生成完整验收结果。
 - 真实页面另发现 bare `?task=` 缺少流程上下文时默认显示笔记。前端改为中性处理记录和任务页返回；已知会议入口保留 `meeting=1`，未知类型不猜分类或显示笔记六步流程。新增回归零 POST，关联 149 项与类型检查通过。
+
+### ASR WebSocket 显式关闭隐式代理（离线修复）
+
+- 当前固定 websockets 15 的 `proxy=True` 会在空代理环境下继续通过 urllib 读取 Windows 用户 Internet Settings；WinHTTP direct 不能排除该路径。仅 `open_recognition` 改为显式 `proxy=None`，保留默认 TLS、原心跳/deadline/分段/重试分类，不修改系统设置。
+- 新增 `test_asr_direct_transport.py`，使用真实 websockets connect 代码和离线 Windows registry/proxy trap，验证只连接目标、Authorization 仅交给目标握手、默认 TLS 验证开关保留，以及 TLS 失败无代理 fallback/第二次连接。
+- 新增白名单 `transport_exception_class`、`ws_proxy_mode="disabled"`，延续有效 received wire close code；异常类别/关闭码通过真实故障分类和临时 status.json 往返，reason/URL/凭证及任意类别被丢弃。该 marker 不表示绕过 TUN/VPN。
+- TDD：修改前 7 failed、6 passed，失败对应隐式代理路径和缺失新诊断字段；修复后 `python -B -m pytest -p no:cacheprovider tests/test_asr_direct_transport.py tests/test_asr_transport_diagnostics.py tests/test_asr_stream.py tests/test_asr_stream_budget.py tests/test_vilab_transcriber_retry.py -q --tb=short`，128 passed，4.99 秒。未修改其他测试源码；未跑云、未提交，实际长流效果仍待另行明确确认。

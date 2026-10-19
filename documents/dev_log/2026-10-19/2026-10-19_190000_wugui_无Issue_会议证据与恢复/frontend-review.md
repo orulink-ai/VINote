@@ -155,3 +155,23 @@ confirmed context 的分类优先于提交响应的泛化 source_type；已登�
 新增六组模拟确认→回执重开→进度→自动保存回归，覆盖视频/音频别名和伪文件名未知值，同时检查 15:41 原时间与只一次显式 POST；提交响应故意返回泛化 audio，验证其不覆盖冻结来源分类。
 4 文件/135 项关联测试通过，tsc --noEmit 通过。以上为离线 mock 合同验证，真实 UI v2 确认仍由主线程执行。
 未调用实际模型、未写 Python/后端、未重启进程；保留未提交 diff。
+
+
+## 追加：独立 operation 原件返回身份
+
+根因：pending.localFileId 复制旧 receipt 或回退 task:独立父，返回资料链接再优先信任该值，将独立处理记录误作原件。
+修复：冻结上下文保留 source.file_id；v2 要求它精确等于 task:已验证 canonical UUID，并且 context.parent_task_id 与该 operation.parentTaskId 相同；v1 同理绑定明确原 parent UUID。仅在字段实证一致时预选原件，不凭 canonical 数值自行创造 file_id。
+确认前保存正确 localFileId；重开旧 independent 回执时从原 frozenContext 重新绑定，忽略历史错存的父/子 localFileId。缺失、错配或无上下文时返回带原 returnTo 的文件库，不错误预选任意文件。
+新增旧回执三组 GET-only 回归（正确/缺失/错配）和明确确认前持久化实证测试；4 文件/142 项通过，tsc --noEmit 通过，前端 diff 检查通过。
+本轮仅 NoteGenerator.tsx、对应测试和本记录。没有新增 API 读取、没有读取真实会议资料、没有模型调用、没有后端写入或提交；重复失败文案留待后续，本轮未扩改。
+
+
+## 追加：未保存会议的仅重新总结入口与旧总结 retry 保护
+
+RegenerateMeetingSummary 支持可选 noteId，复用于 NoteGenerator 已核验的会议 failed/error task；任务入口明确“仅重新生成纪要/确认，仅重新总结”，复用已有完整转写与可用证据，不重跑 ASR。
+无 noteId 使用账号/Origin/task 绑定 summary-operation 指针，确认前持久化；未知/重复只进入既有 source-requests GET 恢复。成功沿用旧 saveNote 流程，保存获确认后统一清理 task 或历史 note 指针。
+组件绑定 owner、Origin、route/hash、task、workspace 与返回上下文；summary-context 409 阻断不完整 ASR，模型仍为当前明确云端选择，不添加自动回退。
+旧状态兼容：已核验 failed_stage=summarizing 即使 retryable=true，也不允许旧 retry 或完整新处理。将结构化 failed_stage 保存在 verifiedTask，初始判定、旧 retry 前 fresh GET 与按钮/handler 均设保护；不从 message/HTTP 文案推断。
+真实组件离线集成回归覆盖失败任务 prepare→confirm（唯一 regenerate-summary POST）→accepted/丢响应 GET恢复→自动保存及指针清理；另覆盖409、未知重复查询、账号ABA、路由迟到响应、旧unknown/typed总结错误及转写失败→新状态总结失败的竞态。
+最终4文件/149项关联测试、tsc --noEmit 与前端diff检查通过。原note入口及其成功清理兼容测试保留。
+产品源码仅 RegenerateMeetingSummary.tsx、NoteGenerator.tsx；另追加 NoteGenerator 测试和本记录。未写后端/Python、未调用真实模型/通知、未提交；本节完成后停止全部写入/测试，交主线程受控UI验收。
