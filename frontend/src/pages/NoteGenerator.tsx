@@ -52,9 +52,16 @@ type TaskStatusResponse = {
 
 export function NoteGenerator() {
   const [searchParams] = useSearchParams()
-  const isMeeting = searchParams.get('meeting') === '1'
   const location = useLocation()
-  const parent = resolvePageParent(location.state?.returnTo, isMeeting ? '/meetings' : '/notes')
+  const owner = useAuthStore(s => s.user?.id)
+  const taskParam = searchParams.get('task') || ''
+  const selection = (location.state as { readOnlyTask?: Partial<ImportReceipt> & { owner?: string } } | null)?.readOnlyTask
+  const knownSelection = !!owner && selection?.owner === owner && selection.id === taskParam && typeof selection.meeting === 'boolean'
+  const isMeeting = searchParams.get('meeting') === '1' || !!taskParam && knownSelection && selection?.meeting === true
+  // The current task GET does not expose workflow. Absence of a meeting flag is
+  // not evidence of note workflow; only the exact owner/task route context counts.
+  const unknownTaskWorkflow = !!taskParam && !isMeeting && !knownSelection
+  const parent = resolvePageParent(location.state?.returnTo, unknownTaskWorkflow ? '/tasks?tab=generation' : isMeeting ? '/meetings' : '/notes')
   const [videoUrl, setVideoUrl] = useState('')
   const [sourceError, setSourceError] = useState('')
   const sourceInput = useRef<HTMLInputElement>(null)
@@ -67,7 +74,6 @@ export function NoteGenerator() {
   const [transcriptionMeasure, setTranscriptionMeasure] = useState<{ processed: number; total: number } | null>(null)
   const [analysisMeasure, setAnalysisMeasure] = useState<{ received?: number; total?: number; detection?: number; speakersReady?: boolean }>({})
   const [taskId, setTaskId] = useState('')
-  const owner = useAuthStore(s => s.user?.id)
   const receiptKey = owner ? `vinote:import-receipt:${owner}:${isMeeting ? 'meeting' : 'note'}` : ''
   const [receipt, setReceipt] = useState<ImportReceipt | null>(null)
   const [receiptProtected, setReceiptProtected] = useState(true)
@@ -75,7 +81,6 @@ export function NoteGenerator() {
   const submissionLock = useRef(false)
   const recoveryLock = useRef<{ token: symbol; owner: string; epoch: number; operationId: string; route: string } | null>(null)
   const operationParam = searchParams.get('operation') || ''
-  const taskParam = searchParams.get('task') || ''
   const readOnlyTask = !!taskParam
   const serviceOrigin = useAppModeStore(state => state.config?.server_url)
   const routeBinding = JSON.stringify([serviceOrigin, location.key, location.pathname, location.search, location.hash, operationParam, taskParam, isMeeting, parent])
@@ -498,7 +503,7 @@ export function NoteGenerator() {
   }
 
   const openNewGeneration = async () => {
-    if (!receipt?.id || !owner || newLock.current || !verifiedTask || verifiedTask.taskId !== receipt.id || !['failed', 'error'].includes(verifiedTask.status)) return
+    if (unknownTaskWorkflow || !receipt?.id || !owner || newLock.current || !verifiedTask || verifiedTask.taskId !== receipt.id || !['failed', 'error'].includes(verifiedTask.status)) return
     const epoch = recoveryEpoch.current; const parentTask = receipt.id
     const active = () => mounted.current && epoch === recoveryEpoch.current && owner === useAuthStore.getState().user?.id
     newLock.current = true; setNewBusy(true)
@@ -587,7 +592,7 @@ export function NoteGenerator() {
           : receipt?.mode === 'file' ? '导入文件' : '来源类型待核验'
   const originalWorkspace = readOnlyTask ? '当前只查看处理记录' : receipt ? getWorkspaceLabel(receipt.workspace, teams, language === 'zh-CN' ? '个人空间' : 'Personal workspace') : '保存位置尚未核验'
   const recoveryView = taskRecoveryView(receipt, verifiedTask, !receipt?.summaryOnly && taskRetryable)
-  const originalState = readOnlyTask && !verifiedTask ? '原任务状态待核验' : verifiedTask?.status === 'success' ? '原任务已完成' : recoveryView.kind === 'failed_unknown' ? '任务已接收，此次转写未完成'
+  const originalState = readOnlyTask && !verifiedTask ? '原任务状态待核验' : verifiedTask?.status === 'success' ? '原任务已完成' : recoveryView.kind === 'failed_unknown' ? unknownTaskWorkflow ? '任务已接收，此次处理未完成' : '任务已接收，此次转写未完成'
     : recoveryView.kind === 'failed_terminal' ? '任务已接收，此次处理未完成'
     : receipt?.submissionState === 'accepted' ? '服务已接收任务'
     : receipt?.submissionState === 'reserved' ? '提交已登记，排队尚未确认'
@@ -610,7 +615,7 @@ export function NoteGenerator() {
   }
   const historyPath = `/tasks?tab=generation&returnTo=${encodeURIComponent(parent)}`
   const originalFile = receipt?.localFileId || (receipt?.id && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(receipt.id) ? `task:${receipt.id}` : undefined)
-  const materialsPath = `/files?${new URLSearchParams({ purpose: isMeeting ? "meeting" : "note", ...(originalFile ? { file: originalFile } : {}), returnTo: parent })}`
+  const materialsPath = `/files?${new URLSearchParams({ purpose: unknownTaskWorkflow ? "unknown" : isMeeting ? "meeting" : "note", ...(originalFile ? { file: originalFile } : {}), returnTo: parent })}`
 
   const generationSettings = <div className="grid gap-6">
     <div className="border-b pb-4"><Label>{copy.generator.saveTargetWorkspace}</Label><p className="mt-2 text-sm font-medium">{workspaceLabel}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{isMeeting ? copy.generator.saveTargetMeetingHint : copy.generator.saveTargetWorkspaceHint}</p></div>
@@ -642,7 +647,7 @@ export function NoteGenerator() {
     {status === 'uploading' && <Button variant="ghost" disabled>正在提交来源，完成后可返回上级</Button>}
     {(readOnlyTask || !running) && <>
     <header className="max-w-2xl">
-      <h1 className="text-2xl font-medium text-balance">{readOnlyTask ? (isMeeting ? '会议处理记录' : '笔记处理记录') : isMeeting ? '从已有录制生成会议纪要' : '链接或文件转笔记'}</h1>
+      <h1 className="text-2xl font-medium text-balance">{readOnlyTask ? (unknownTaskWorkflow ? '处理记录' : isMeeting ? '会议处理记录' : '笔记处理记录') : isMeeting ? '从已有录制生成会议纪要' : '链接或文件转笔记'}</h1>
       <p className="mt-2 text-[15px] leading-6 text-muted-foreground">{readOnlyTask ? '查看本次处理的进度、结果与来源。' : isMeeting ? '选择音频、视频或逐字稿。系统会完成转写、说话人整理和纪要生成。' : '选择来源并确认保存位置。完成后直接进入编辑器继续修改和分享。'}</p>
     </header>
 
@@ -664,6 +669,10 @@ export function NoteGenerator() {
     {readingTask ? <section role="status" aria-live="polite" aria-busy="true" className="rounded-xl border p-6">
       {readOnlyTask ? <h2 className="text-lg font-medium text-balance">正在读取处理进度</h2> : <h1 className="text-lg font-medium text-balance">正在读取处理进度</h1>}
       <p className="mt-2 text-sm text-muted-foreground text-pretty">正在查询原任务，读取后显示实际阶段和处理结果。</p>
+    </section> : running && unknownTaskWorkflow ? <section className="grid gap-3 rounded-xl border p-6" aria-label="任务处理状态">
+      <h2 className="text-lg font-medium text-balance">正在处理任务</h2>
+      <p role="status" className="text-sm leading-6 text-muted-foreground">{sourceRecoveryCopy(taskMessage) || '正在读取原任务状态，请稍候。'}</p>
+      <p className="text-sm leading-6 text-muted-foreground">任务用途尚未核验，暂不展示处理步骤。这里只查询本次任务，不会重新提交。</p>
     </section> : running ? <GenerateProgress videoSource={['video', 'meeting_video'].includes(receipt?.sourceType || '')} status={status} progress={progress} processedSeconds={transcriptionMeasure?.processed} totalSeconds={transcriptionMeasure?.total ?? analysisMeasure.total} receivedSeconds={analysisMeasure.received} speakerDetectionProgress={analysisMeasure.detection} speakersReady={analysisMeasure.speakersReady} currentStep={currentStep} error={sourceRecoveryCopy(error)} message={sourceRecoveryCopy(taskMessage)} meeting={isMeeting} audioOnlySource={receipt?.sourceType === 'audio' || isBilibiliSourceUrl(receipt?.sourceUrl || videoUrl)} documentSource={receipt?.sourceType === 'file' || uploadMode === 'document'} /> : <>
       {!restoringSource && <section className="border-b py-3">
         <div className="mb-3 flex items-start justify-between gap-4"><div className="flex items-start gap-3"><div><h2 className="text-lg font-semibold">{isMeeting ? '选择会议文件' : '选择笔记来源'}</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">{isMeeting ? '支持音频、视频和已有逐字稿。' : '粘贴网页或视频链接，或上传 PDF、Word、音视频和文字文件。PDF、Word 上限 20 MB，PDF 上限 200 页。'}</p></div></div></div>
@@ -679,7 +688,7 @@ export function NoteGenerator() {
       </section>}
 
       {import.meta.env.DEV && (receipt || error) && <details className="text-xs text-muted-foreground" aria-label="开发诊断"><summary>开发诊断</summary><div className="mt-2 grid gap-2">{receipt?.operationId && <p>提交编号：{receipt.operationId}</p>}{(receipt?.id || taskId) && <p>任务编号：{receipt?.id || taskId}</p>}<p>网页和 PDF/DOCX 支持提交去重；媒体、逐字稿与首次原件注册尚未覆盖。</p>{error && (readOnlyTask && recordFailure?.outcome !== sourceRecoveryCopy(error) || error !== sourceRecoveryCopy(error)) && <p className="whitespace-pre-wrap">{error}</p>}</div></details>}
-      {status === 'failed' ? <Alert variant="destructive"><AlertDescription><p>{recordFailure?.outcome ?? sourceRecoveryCopy(error)}</p><p className="mt-2">{recordFailure?.next ?? (receipt ? recoveryView.explanation : copy.generator.failedRecoveryHint)}</p></AlertDescription><div className="mt-4 flex flex-wrap gap-3"><Button onClick={() => void resumeOriginal()} disabled={recoveryUnavailable || !!recoveryLock.current || (!receipt && !sourceReady)}>{receipt ? recoveryView.action : copy.generator.retryGeneration}</Button>{!readOnlyTask && <Button variant="outline" disabled={readOnlyTask || recoveryUnavailable || !!receipt && (!taskRetryable || receipt.submissionState !== 'accepted')} onClick={handleEditInput}>{receipt ? '更换来源，开始新任务' : copy.generator.editInput}</Button>}{!receipt?.independentGeneration && verifiedTask?.taskId === receipt?.id && ['failed', 'error'].includes(verifiedTask?.status || '') && <Button variant="outline" disabled={newBusy} onClick={() => void openNewGeneration()}>确认原模型，开始新的处理</Button>}{(!readOnlyTask || originalNeedsAttention) && <Button variant="ghost" asChild><Link to={materialsPath} state={{ returnTo: parent }}>返回资料与原文件</Link></Button>}<Button variant="ghost" asChild><Link to={historyPath}>查看处理历史与恢复</Link></Button></div></Alert> : null}
+      {status === 'failed' ? <Alert variant="destructive"><AlertDescription><p>{recordFailure?.outcome ?? sourceRecoveryCopy(error)}</p><p className="mt-2">{recordFailure?.next ?? (receipt ? recoveryView.explanation : copy.generator.failedRecoveryHint)}</p></AlertDescription><div className="mt-4 flex flex-wrap gap-3"><Button onClick={() => void resumeOriginal()} disabled={recoveryUnavailable || !!recoveryLock.current || (!receipt && !sourceReady)}>{receipt ? recoveryView.action : copy.generator.retryGeneration}</Button>{!readOnlyTask && <Button variant="outline" disabled={readOnlyTask || recoveryUnavailable || !!receipt && (!taskRetryable || receipt.submissionState !== 'accepted')} onClick={handleEditInput}>{receipt ? '更换来源，开始新任务' : copy.generator.editInput}</Button>}{!unknownTaskWorkflow && !receipt?.independentGeneration && verifiedTask?.taskId === receipt?.id && ['failed', 'error'].includes(verifiedTask?.status || '') && <Button variant="outline" disabled={newBusy} onClick={() => void openNewGeneration()}>确认原模型，开始新的处理</Button>}{(!readOnlyTask || originalNeedsAttention) && <Button variant="ghost" asChild><Link to={materialsPath} state={{ returnTo: parent }}>返回资料与原文件</Link></Button>}<Button variant="ghost" asChild><Link to={historyPath}>查看处理历史与恢复</Link></Button></div></Alert> : null}
 
       {status !== 'failed' && !restoringSource && <div className="flex flex-col items-start justify-between gap-4 border-t bg-background py-4 sm:flex-row sm:items-center" style={{ animationDelay: '170ms' }}><div><p className="font-medium">{visibleSourceError ? '请修正来源链接' : sourceReady ? (isMeeting ? '会议文件已准备好' : '来源已准备好') : (isMeeting ? '先选择一个会议文件' : '先提供链接或文件')}</p><p className="mt-1 text-sm text-muted-foreground">{visibleSourceError ? '当前输入已保留，修改链接后再开始整理。' : sourceReady ? '开始后会显示真实处理阶段和失败恢复入口。' : '选好来源后即可开始，模型设置可在上方调整。'}</p></div><Button onClick={() => void handleGenerate()} disabled={status !== 'idle' || !sourceReady} size="lg" className="min-w-52"><Wand2 />{language === 'zh-CN' ? (isMeeting ? '生成会议纪要' : '开始整理') : (isMeeting ? 'Generate meeting minutes' : 'Organize notes')}</Button></div>}
     </>}

@@ -116,3 +116,13 @@ NoteGenerator 的 summaryOnly 回执初次恢复、查询恢复及重新查询�
 构建仅生成被忽略的 frontend/dist，不是桌面打包或部署；Browserslist 数据旧及 chunk 大小为非阻断警告。
 最终日志为本工作树 frontend/frontend-final-validated.log 与 frontend/frontend-final-build.log（不提交），最近的两项合成/mock API 浏览器 smoke 证据仍单独标记为离线验证。
 本轮产品源码零追加改动，所有前端改动仍未 stage/commit，交主线程统一审查、PR/CI/桌面构建安排。
+
+
+## PR61 后追加：bare task 工作流未知时保持中性
+
+审计现有 FileLibrary、Tasks、NoteEditor、RecordingRetryBar 与独立/摘要 operation 入口：已知会议均保留 meeting=1。当前 GET task 响应没有 workflow；new-generation-context 对活动任务不可用。本轮不新增任何 API 查询，不读取 request.json/artifact metadata，不按媒体格式猜 workflow。
+NoteGenerator 对没有明确 meeting 标志、也没有匹配 owner/task 的既有路由上下文的只读 task 显示“处理记录”和“正在处理任务”，不套用笔记六步；有效返回来源保留，缺省/非法来源回到 /tasks?tab=generation。
+未知 workflow 时不展示依赖 workflow 的新生成入口，必要原件入口使用 unknown 用途；查询原任务仍为 GET-only。明确 meeting=1 及原有普通生成流程保持不变。
+新增中性运行页、安全返回、外账号来源即使带 meeting_video 也不推断会议的回归，基线先复现2项失败；修复后 5 文件/149 项关联测试通过，tsc --noEmit 通过，diff检查通过。
+产品源码仅 NoteGenerator.tsx 与其测试；本节为附加记录。未改后端/Python、未重启 runtime、未发起 ASR/LLM/通知，未 stage/commit。
+后续方向：待活动任务结束后，由主线程单独增加 owner-scoped task workflow 权威响应字段及后端验证，再考虑前端接入；本轮未实施。

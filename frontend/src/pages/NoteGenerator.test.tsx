@@ -378,7 +378,7 @@ describe('NoteGenerator failed generation recovery', () => {
     let resolve!: (value: unknown) => void
     apiMock.apiJson.mockReturnValue(new Promise(done => { resolve = done }))
     renderGenerator('/files?purpose=meeting&q=kept')
-    expect(screen.getByRole('heading', { level: 1, name: meeting ? '会议处理记录' : '笔记处理记录' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: meeting ? '会议处理记录' : '处理记录' })).toBeInTheDocument()
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
     expect(screen.getByText('查看本次处理的进度、结果与来源。')).toBeInTheDocument()
     expect(screen.queryByText('从已有录制生成会议纪要')).not.toBeInTheDocument()
@@ -386,7 +386,8 @@ describe('NoteGenerator failed generation recovery', () => {
     expect(source.querySelector('details')).not.toHaveAttribute('open')
     await act(async () => resolve({ task_id: 'selected-task', status: 'failed', message: '此次处理未完成', error_code: 'unknown_result', retryable: false }))
     expect(await screen.findByRole('button', { name: '查看原任务状态' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '确认原模型，开始新的处理' })).toBeInTheDocument()
+    if (meeting) expect(screen.getByRole('button', { name: '确认原模型，开始新的处理' })).toBeInTheDocument()
+    else expect(screen.queryByRole('button', { name: '确认原模型，开始新的处理' })).toBeNull()
     expect(screen.queryByRole('button', { name: '更换来源，开始新任务' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: '查看处理历史与恢复' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '返回文件库' })).toHaveAttribute('href', '/files?purpose=meeting&q=kept')
@@ -449,6 +450,42 @@ describe('NoteGenerator failed generation recovery', () => {
     } finally { vi.unstubAllEnvs() }
   })
 
+  it('keeps a bare running task neutral without inventing note workflow, six steps or a media lookup', async () => {
+    queryMock.value = 'task=selected-task'
+    apiMock.apiJson.mockResolvedValue({ task_id: 'selected-task', status: 'transcribing', processed_seconds: 1200, total_seconds: 1536, message: '正在处理原任务' })
+    renderGenerator()
+    await screen.findByRole('heading', { name: '正在处理任务' })
+    expect(screen.getByRole('heading', { level: 1, name: '处理记录' })).toBeVisible()
+    expect(screen.getByRole('link', { name: '返回任务与恢复' })).toHaveAttribute('href', '/tasks?tab=generation')
+    expect(screen.queryByText('笔记处理记录')).toBeNull()
+    expect(screen.queryByText('正在生成笔记')).toBeNull()
+    expect(screen.queryByRole('list', { name: '笔记处理步骤' })).toBeNull()
+    expect(screen.queryByRole('progressbar')).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/selected-task' && !init?.method)).toBe(true)
+    expect(libraryMock.saveNote).not.toHaveBeenCalled()
+    expect(localStorage.length).toBe(0)
+  })
+  it('does not infer meeting workflow from media type or a foreign-owner task context', async () => {
+    queryMock.value = 'task=selected-task'
+    apiMock.apiJson.mockResolvedValue({ task_id: 'selected-task', status: 'transcribing', message: '' })
+    render(<MemoryRouter initialEntries={[{ pathname: '/generate', search: '?task=selected-task', state: { readOnlyTask: { id: 'selected-task', owner: 'different-owner', meeting: true, sourceType: 'meeting_video' } } }]}><I18nProvider><NoteGenerator /></I18nProvider></MemoryRouter>)
+    await screen.findByRole('heading', { name: '正在处理任务' })
+    expect(screen.getByRole('heading', { level: 1, name: '处理记录' })).toBeVisible()
+    expect(screen.queryByRole('list')).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/selected-task' && !init?.method)).toBe(true)
+  })
+  it('preserves a valid return context but rejects an unsafe parent for bare task records', async () => {
+    queryMock.value = 'task=selected-task'
+    apiMock.apiJson.mockResolvedValue({ task_id: 'selected-task', status: 'transcribing', message: '' })
+    const first = renderGenerator('/files?q=kept')
+    await screen.findByRole('heading', { name: '正在处理任务' })
+    expect(screen.getByRole('link', { name: '返回文件库' })).toHaveAttribute('href', '/files?q=kept')
+    first.unmount()
+    renderGenerator('https://outside.invalid/')
+    await screen.findByRole('heading', { name: '正在处理任务' })
+    expect(screen.getByRole('link', { name: '返回任务与恢复' })).toHaveAttribute('href', '/tasks?tab=generation')
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/selected-task' && !init?.method)).toBe(true)
+  })
   it('read-only first query failure remains unconfirmed and only offers another read', async () => {
     queryMock.value = 'task=selected-task'
     apiMock.apiJson.mockRejectedValue(new TypeError('network failure'))
