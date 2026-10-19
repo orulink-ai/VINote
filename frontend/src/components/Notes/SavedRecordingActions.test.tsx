@@ -2,13 +2,13 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { SavedRecordingActions } from './SavedRecordingActions'
 import { apiJson, apiFetch } from '../../lib/api'
-import { downloadRecording } from '../../lib/recordingDownload'
+import { downloadOriginalFile } from '../../lib/recordingDownload'
 
 vi.mock('../../lib/api', () => ({ apiJson: vi.fn(), apiFetch: vi.fn() }))
 vi.mock('../../lib/i18n', () => ({ useI18n: () => ({ locale: 'zh-CN' }) }))
-vi.mock('../../lib/recordingDownload', () => ({ downloadRecording: vi.fn() }))
+vi.mock('../../lib/recordingDownload', async importOriginal => ({ ...await importOriginal<typeof import('../../lib/recordingDownload')>(), downloadOriginalFile: vi.fn() }))
 const info = { available: true, deleted: false, can_delete: true, filename: 'meeting.m4a', size_bytes: 1000 }
-beforeEach(() => { vi.mocked(apiJson).mockResolvedValue(info) })
+beforeEach(() => { vi.mocked(apiJson).mockResolvedValue(info); vi.mocked(downloadOriginalFile).mockResolvedValue('browser_started') })
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 
 it('keeps the player and note intact when deletion fails', async () => {
@@ -35,8 +35,9 @@ it('labels video correctly and downloads the original endpoint, never its playba
   vi.mocked(apiFetch).mockResolvedValueOnce(new Response(new Blob(['original']), { status: 200 }));
   render(<SavedRecordingActions noteId="video-note" title="合成视频" mediaKind="video" onDeleted={vi.fn()} />);
   fireEvent.click(await screen.findByRole('button', { name: '导出原视频' }));
-  await vi.waitFor(() => expect(downloadRecording).toHaveBeenCalled());
-  expect(apiFetch).toHaveBeenCalledWith('/api/notes/video-note/media');
+  await vi.waitFor(() => expect(downloadOriginalFile).toHaveBeenCalled());
+  expect(downloadOriginalFile).toHaveBeenCalledWith('/api/notes/video-note/media', 'meeting.m4a', expect.any(Function), expect.any(AbortSignal));
+  expect(await screen.findByRole('status')).toHaveTextContent('下载列表');
 });
 
 it('keeps lookup failure distinct from missing or loading in compact mode', async () => {

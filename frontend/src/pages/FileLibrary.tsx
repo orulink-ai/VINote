@@ -8,6 +8,7 @@ import { listPendingMeetings, type PendingMeeting } from '@/lib/audioStorage'
 import { useAuthStore } from '@/stores/authStore'
 import { useTeamStore } from '@/stores/teamStore'
 import { useViewState } from '@/hooks/useViewState'
+import { OriginalDownloadButton } from '@/components/OriginalDownloadButton'
 import { LocalRecordingPreview } from '@/components/MeetingRecorder/LocalRecordingPreview'
 import { PageReturn } from '@/components/Layout/PageReturn'
 import { resolvePageParent, pageParentLabel } from '@/lib/navigation'
@@ -245,7 +246,7 @@ export function FileLibrary() {
           {selected.file.note_id ? <><p className="text-sm text-muted-foreground">已有正文保留在会议与笔记中。这里管理来源原件，不复制笔记正文。</p><Button asChild><Link to={contentTarget(selected.file.note_id)} state={{ returnTo }} onClick={() => setSelected(null)}>查看关联内容</Link></Button></> : selected.file.task_id ? <><p className="text-sm text-muted-foreground">{selected.file.error_code === "unknown_result" || selected.file.error_code === "unknown_error" ? "处理结果尚未确认。原文件已保留，请查询原结果，不重复提交。" : "已有处理记录，先查询原结果，不再次提交此原件。"}</p><Button disabled={busy || selected.purpose === 'unknown'} onClick={() => void generate(selected.file!)}>{selected.purpose === 'meeting' ? '查看纪要生成进度' : '查看笔记生成进度'}</Button></> : selected.file.can_generate ? <><p className="text-sm text-muted-foreground">从这份已保存原件整理正文，原件继续保留。已有未确认资料处理会先恢复。</p><Button variant="outline" disabled={busy || !selected.file.available || selected.purpose === 'unknown'} onClick={() => void generate(selected.file!)}>{selected.purpose === 'meeting' ? '用此原件生成纪要' : '用此原件整理笔记'}</Button></> : <p className="text-sm text-muted-foreground">此格式目前只支持原件保存与导出，尚未接入正文整理。</p>}
         </section>
         <section aria-labelledby="file-management-heading" className="grid gap-3 border-t pt-4"><h2 id="file-management-heading" className="text-sm font-medium">原件管理</h2>
-          {selected.file.available ? <Button variant="outline" asChild><a href={resolveContentUrl(selected.file.content_url + (selected.file.id.startsWith('note:') || selected.file.id.startsWith('task:') ? '' : '?download=true'))} download={selected.file.filename}>导出原文件</a></Button> : <Button variant="outline" disabled>原件不可用，暂不能导出</Button>}
+          {selected.file.available ? <OriginalDownloadButton key={`${owner}:${selected.file.id}`} url={selected.file.content_url + (selected.file.id.startsWith('note:') || selected.file.id.startsWith('task:') ? '' : '?download=true')} filename={selected.file.filename} /> : <Button variant="outline" disabled>原件不可用，暂不能导出</Button>}
           <Button ref={deleteButton} variant="ghost" className="text-destructive" disabled={busy || !selected.file.can_delete} onClick={() => beginDeletion(selected.file!)}>删除原始文件</Button>
           {!selected.file.can_delete && <p className="text-xs text-muted-foreground">{selected.file.id.startsWith('task:') ? '此原件作为处理记录的来源保留，当前不支持删除。' : '此原件当前不允许删除；已有正文与版本继续保留。'}</p>}
           <p className="text-xs leading-5 text-muted-foreground">{selected.file.can_delete ? "删除原文件后，已保存的纪要、笔记、版本与飞书文档仍保留。" : "已保存的纪要、笔记与版本可在对应页面管理。"}</p>

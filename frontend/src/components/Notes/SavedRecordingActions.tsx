@@ -3,8 +3,8 @@ import { Download, Trash2 } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
-import { apiFetch, apiJson } from '../../lib/api'
-import { downloadRecording } from '../../lib/recordingDownload'
+import { apiJson } from '../../lib/api'
+import { downloadOriginalFile, downloadResultMessage } from '../../lib/recordingDownload'
 import { useAuthStore } from '../../stores/authStore'
 import { useI18n } from '../../lib/i18n'
 
@@ -18,6 +18,9 @@ export function SavedRecordingActions({ noteId, title, onDeleted, compact = fals
   const [info, setInfo] = useState<RecordingInfo | null>(null)
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [downloadStatus, setDownloadStatus] = useState('')
+  const downloadLock = useRef(false)
+  const abort = useRef<AbortController | null>(null)
   const [loadAttempt, setLoadAttempt] = useState(0)
   const epoch = useRef(0)
   const context = useRef({ noteId, owner })
@@ -29,30 +32,31 @@ export function SavedRecordingActions({ noteId, title, onDeleted, compact = fals
   useEffect(() => {
     epoch.current++
     const current = guard()
-    setInfo(null); setError(''); setBusy(false)
+    setInfo(null); setError(''); setDownloadStatus(''); setBusy(false)
     void apiJson<RecordingInfo>(`/api/notes/${noteId}/recording`).then(result => {
       if (!current()) return
       if (!result || typeof result.available !== 'boolean' || typeof result.deleted !== 'boolean') throw new Error(zh ? '原文件状态未核验，请重新读取。' : 'Original status is unverified. Reload it.')
       setInfo(result)
     }).catch(cause => { if (current()) setError(cause instanceof Error ? cause.message : String(cause)) })
-    return () => { epoch.current++ }
+    return () => { epoch.current++; abort.current?.abort() }
   }, [noteId, owner, loadAttempt])
 
   const download = async () => {
+    if (downloadLock.current) return
+    downloadLock.current = true
     const current = guard()
-    setBusy(true); setError('')
+    const controller = new AbortController(); abort.current = controller
+    setBusy(true); setError(''); setDownloadStatus(zh ? '正在准备并导出原文件…' : 'Preparing and exporting original…')
     try {
-      // Export must retain the exact original, without playback=true.
-      const response = await apiFetch(`/api/notes/${noteId}/media`)
-      if (!response.ok) throw new Error(zh ? '原文件下载失败，请重试' : 'Original download failed. Retry.')
-      const blob = await response.blob()
-      if (current()) downloadRecording(blob, title, info?.filename)
-    } catch (cause) { if (current()) setError(cause instanceof Error ? cause.message : String(cause)) }
-    finally { if (current()) setBusy(false) }
+      const result = await downloadOriginalFile(`/api/notes/${noteId}/media`, info?.filename || `${title}.${mediaKind === 'video' ? 'webm' : 'm4a'}`, current, controller.signal)
+      if (current()) setDownloadStatus(downloadResultMessage(result, zh))
+    } catch (cause) { if (current()) { setDownloadStatus(''); setError(cause instanceof Error ? cause.message : String(cause)) } }
+    finally { downloadLock.current = false; if (current()) setBusy(false) }
   }
+
   const remove = async () => {
     const current = guard()
-    setBusy(true); setError('')
+    setBusy(true); setError(''); setDownloadStatus('')
     try {
       await apiJson(`/api/notes/${noteId}/recording`, { method: 'DELETE' })
       if (!current()) return
@@ -74,8 +78,9 @@ export function SavedRecordingActions({ noteId, title, onDeleted, compact = fals
     : info ? zh ? '暂无可用原文件' : 'Original unavailable'
     : zh ? '正在读取原文件状态…' : 'Loading original…'
   return <div className={compact ? 'grid gap-3' : 'grid min-w-0 gap-3 border-b pb-4'}>
-    <Button className={compact ? 'w-full' : undefined} variant="outline" disabled={busy || !info?.available} onClick={() => void download()}><Download />{busy ? zh ? '正在导出…' : 'Exporting…' : label}</Button>
-    <p role="status" className="text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">{status}</p>
+    <Button className={compact ? 'w-full' : undefined} variant="outline" disabled={busy || !info?.available} aria-busy={busy} onClick={() => void download()}><Download />{busy ? zh ? '正在导出…' : 'Exporting…' : label}</Button>
+    {busy && downloadStatus && <Button variant="ghost" onClick={() => abort.current?.abort()}>{zh ? '取消导出' : 'Cancel export'}</Button>}
+    <p role="status" aria-live="polite" className="text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">{downloadStatus || status}</p>
     {!compact && info?.available && info.can_delete && <details className="text-xs text-muted-foreground">
       <summary className="cursor-pointer py-2">{zh ? mediaKind === 'video' ? '管理原视频' : '管理原录音' : 'Manage original'}</summary>
       <AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="sm" disabled={busy} className="text-destructive hover:text-destructive"><Trash2 />{zh ? '删除录制' : 'Delete recording'}</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{zh ? '删除录制文件？' : 'Delete recording?'}</AlertDialogTitle><AlertDialogDescription>{zh ? '录制及音频副本会永久删除，文字纪要、转写和截图会保留。' : 'The recording is permanently deleted. Notes, transcript and screenshots are retained.'}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{zh ? '取消' : 'Cancel'}</AlertDialogCancel><AlertDialogAction onClick={() => void remove()}>{zh ? '确认删除' : 'Delete'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>

@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Download, FileText, Play, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 import { deleteLocalRecording, getRecordedAudio, getPendingMeeting, type PendingMeeting, type MeetingGenerationSelection } from '../../lib/audioStorage'
 import { processSavedMeeting, isMeetingProcessing } from '../../lib/meetingProcessing'
@@ -12,7 +13,7 @@ import { ModelSourcePanel } from '../Settings/ModelSourcePanel'
 import { useAppModeStore } from '../../stores/appModeStore'
 import { useModelProfileStore } from '../../stores/modelProfileStore'
 import { useSTTProfileStore } from '../../stores/sttProfileStore'
-import { downloadRecording } from '../../lib/recordingDownload'
+import { downloadRecording, downloadResultMessage } from '../../lib/recordingDownload'
 import { useI18n } from '../../lib/i18n'
 
 interface LocalRecordingPreviewProps { recording: PendingMeeting; onDeleted: () => void; onOpenNote?: (noteId: string) => void; confirmOnOpen?: boolean; onRecordingUpdated?: (recording: PendingMeeting) => void }
@@ -26,14 +27,19 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
   const [loading, setLoading] = useState(false)
   const [confirmGeneration, setConfirmGeneration] = useState(false)
   const [generating, setGenerating] = useState(false)
+  const [generationStatus, setGenerationStatus] = useState('')
+  const [frozenSelection, setFrozenSelection] = useState<MeetingGenerationSelection | null>(null)
   const generationLock = useRef(false)
+  const mediaLock = useRef(false)
+  const downloadAbort = useRef<AbortController | null>(null)
+  const [downloadStatus, setDownloadStatus] = useState('')
   const { config, saving: modelSaving, error: modeError, load: loadMode } = useAppModeStore()
   const models = useModelProfileStore()
   const speech = useSTTProfileStore()
   const request = useRef(0)
   useEffect(() => {
-    request.current += 1; setUrl(''); setExpanded(false); setError(''); setLoading(false); setConfirmGeneration(false); setGenerating(false)
-    return () => { request.current += 1 }
+    request.current += 1; setUrl(''); setExpanded(false); setError(''); setLoading(false); setDownloadStatus(''); setConfirmGeneration(false); setGenerating(false); setGenerationStatus(''); setFrozenSelection(null)
+    return () => { request.current += 1; downloadAbort.current?.abort() }
   }, [recording.id, recording.ownerId])
   useEffect(() => { setRenamedTitle('') }, [recording.options.title])
   useEffect(() => {
@@ -44,17 +50,31 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
   const processing = generating || !['idle', 'completed', 'failed'].includes(recording.processingStatus)
   useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
   const load = async (download: boolean) => {
-    const current = ++request.current; setError(''); setLoading(true)
+    if (mediaLock.current) return
+    mediaLock.current = true
+    const current = request.current; setError(''); setLoading(true); setDownloadStatus('')
+    const controller = new AbortController(); downloadAbort.current = controller
+    const active = () => request.current === current
+    const valid = () => active() && !controller.signal.aborted
     try {
-      const blob = await getRecordedAudio(recording.id)
-      if (request.current !== current) return
-      if (!blob) throw new Error(zh ? '找不到此设备上的录制文件' : 'Recording not found on this device')
-      if (download) downloadRecording(blob, title)
-      else { setUrl(URL.createObjectURL(blob)); setExpanded(true) }
+      const read = async () => {
+        const blob = await getRecordedAudio(recording.id)
+        if (!blob) throw new Error(zh ? '找不到此设备上的录制文件' : 'Recording not found on this device')
+        return blob
+      }
+      if (download) {
+        setDownloadStatus(zh ? '正在准备并导出原文件…' : 'Preparing and exporting original…')
+        const result = await downloadRecording(read, title, recording.fileName, valid)
+        if (active()) setDownloadStatus(downloadResultMessage(result, zh))
+      } else {
+        const blob = await read()
+        if (valid()) { setUrl(URL.createObjectURL(blob)); setExpanded(true) }
+      }
     } catch (cause) {
-      if (request.current === current) setError(cause instanceof Error ? cause.message : String(cause))
-    } finally { if (request.current === current) setLoading(false) }
+      if (active()) { if (controller.signal.aborted) setDownloadStatus(downloadResultMessage('cancelled', zh)); else { setDownloadStatus(''); setError(cause instanceof Error ? cause.message : String(cause)) } }
+    } finally { mediaLock.current = false; if (active()) setLoading(false) }
   }
+
   const playbackFailed = () => { setUrl(''); setError(zh ? '文件暂时无法播放，请重新加载；也可以下载后使用播放器打开。' : 'Playback failed. Reload the file or download it to play.') }
   const remove = async () => { setDeleting(true); setError(''); setUrl(''); try { await deleteLocalRecording(recording.id, recording.ownerId); setConfirmDelete(false); onDeleted() } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setDeleting(false) } }
   const selectedASR = speech.profiles.find(profile => profile.id === speech.selectedProfileId && profile.isActive)
@@ -62,30 +82,32 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
   const selection: MeetingGenerationSelection | null = config?.mode === 'cloud'
     ? config.configured && config.asr_model && config.llm_model ? { mode: 'cloud', asr: config.asr_model, llm: config.llm_model, asrLabel: config.asr_model, llmLabel: config.llm_model } : null
     : config?.mode === 'local' && selectedASR && selectedLLM ? { mode: 'local', asr: selectedASR.id, llm: selectedLLM.id, asrLabel: `${selectedASR.name} · ${selectedASR.modelName || selectedASR.provider}`, llmLabel: `${selectedLLM.name} · ${selectedLLM.modelName}` } : null
+  const displaySelection = generating ? frozenSelection : selection
   const modelError = modeError || (config?.mode === 'local' ? models.error || speech.error : '')
   const needsConfirmation = recording.generationConfirmationRequired || (!recording.taskId && !recording.generationOperation)
   const generate = async (confirm = false) => {
     if (generationLock.current || isMeetingProcessing(recording.id)) return
     if (confirm && (!selection || modelSaving || modelError)) return
     generationLock.current = true
+    if (confirm) setFrozenSelection(selection)
     const current = request.current
-    setGenerating(true); setError('')
+    setGenerating(true); setError(''); setGenerationStatus('正在处理会议资料，原录制保留…')
     try {
       await processSavedMeeting(recording, locale, undefined, confirm ? { selection: selection!, previousTaskId: recording.taskId, previousOperationId: recording.generationOperation?.id } : undefined)
       if (request.current !== current) return
       const updated = await getPendingMeeting(recording.id)
       if (request.current !== current) return
       if (updated && updated.ownerId === recording.ownerId) onRecordingUpdated?.(updated)
-      if (updated?.processingStatus === 'failed') setError(updated.processingError || '处理未完成，原录制保留。')
-      else setConfirmGeneration(false)
-    } catch (cause) { if (request.current === current) setError(cause instanceof Error ? cause.message : String(cause)) }
+      if (updated?.processingStatus === 'failed') { setGenerationStatus(''); setError(updated.processingError || '处理未完成，原录制保留。') }
+      else { setConfirmGeneration(false); setGenerationStatus(updated?.processingStatus === 'completed' ? '会议纪要已完成，可在会议列表查看。' : '已查询处理记录，请查看当前处理状态；不会再次提交。') }
+    } catch (cause) { if (request.current === current) { setGenerationStatus(''); setError(cause instanceof Error ? cause.message : String(cause)) } }
     finally { generationLock.current = false; if (request.current === current) setGenerating(false) }
   }
   const restore = () => {
     if (needsConfirmation) { setConfirmGeneration(true); setError(''); void loadMode() }
     else void generate()
   }
-  const statusText = zh ? stageCopy[recording.processingStatus] : recording.processingStatus.replace(/_/g, ' ')
+  const statusText = zh ? (generating && ['idle', 'failed'].includes(recording.processingStatus) ? '正在处理会议资料' : stageCopy[recording.processingStatus]) : recording.processingStatus.replace(/_/g, ' ')
 
   return <article className="flex min-w-0 flex-col gap-3">
     {expanded ? <div className="border-y bg-muted/20 py-3">{url ? isVideo ? <video src={url} controls preload="metadata" onError={playbackFailed} aria-label={zh ? '录屏回放' : 'Recording playback'} className="max-h-72 w-full rounded-md bg-black" /> : <audio src={url} controls preload="metadata" onError={playbackFailed} aria-label={zh ? '录音回放' : 'Recording playback'} className="w-full" /> : <button type="button" disabled={loading} onClick={() => void load(false)} className="flex min-h-32 w-full flex-col items-center justify-center rounded-md border border-dashed bg-background text-sm text-muted-foreground"><Play className="mb-2 size-5" />{loading ? (zh ? '正在读取文件…' : 'Loading file…') : (zh ? '重新加载并回放' : 'Reload and play')}</button>}</div> : null}
@@ -94,19 +116,22 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
       <details className="text-sm"><summary className="cursor-pointer text-muted-foreground">修改记录名称</summary><div className="pt-3"><RecordingTitleEditor recording={recording} title={title} onSaved={setRenamedTitle} /></div></details>
       {recording.generationOperation && <p className="text-xs leading-5 text-muted-foreground">本次语音转写：{recording.generationOperation.selection.asrLabel}；总结：{recording.generationOperation.selection.llmLabel}。恢复原任务沿用原选择。</p>}
       {recording.generationConfirmationRequired && recording.processingStatus !== 'failed' && recording.processingError && <p role="status" className="text-sm text-muted-foreground">{recording.processingError}</p>}
-      {confirmGeneration && <section aria-label="确认生成模型" className="grid gap-3 border-y py-4">
-        <h3 className="font-medium">{recording.taskId || recording.generationOperation ? '确认另建生成操作' : '确认本次生成'}</h3>
-        <p className="text-sm text-muted-foreground">{recording.taskId || recording.generationOperation ? '原操作不会自动重新提交。确认后从同一份原录制另建操作，原有纪要保留。' : '原录制已保存。确认转写与总结模型后开始会后处理。'}</p>
+      <Dialog open={confirmGeneration} onOpenChange={setConfirmGeneration}><DialogContent closeLabel="关闭模型确认" className="max-h-[85dvh] overflow-y-auto">
+        <DialogTitle>{recording.taskId || recording.generationOperation ? '确认另建生成操作' : '确认本次生成'}</DialogTitle>
+        <DialogDescription>{recording.taskId || recording.generationOperation ? '原操作不会自动重新提交。确认后从同一份原录制另建操作，原有纪要保留。' : '原录制已保存。此处仅确认模型，点击“确认模型并开始生成”后才开始会后处理。'}</DialogDescription>
         {generating ? <p role="status">正在处理，原录制保留…</p> : <ModelSourcePanel compact />}
-        {selection && <p className="text-sm">语音转写：{selection.asrLabel}；内容总结：{selection.llmLabel}</p>}
+        {displaySelection && <p className="text-sm">语音转写：{displaySelection.asrLabel}；内容总结：{displaySelection.llmLabel}</p>}
         {!selection && <p role="status" className="text-sm text-muted-foreground">请明确选择可用的转写和总结模型，不使用尚未核验的默认配置。</p>}
         {modelError && <p role="alert" className="text-sm text-destructive">{modelError}</p>}
-        <div className="flex flex-wrap gap-2"><Button disabled={generating || !selection || modelSaving || !!modelError || models.loading || speech.loading} onClick={() => void generate(true)}>{generating ? '正在处理…' : '确认模型并生成'}</Button><Button variant="outline" disabled={generating} onClick={() => setConfirmGeneration(false)}>暂不生成</Button><Button variant="ghost" disabled={generating || modelSaving} onClick={() => { void loadMode(); if (config?.mode === 'local') { void models.loadProfiles(); void speech.loadProfiles() } }}>重新读取模型配置</Button></div>
-      </section>}
+        <div className="flex flex-wrap gap-2"><Button disabled={generating || !selection || modelSaving || !!modelError || models.loading || speech.loading} onClick={() => void generate(true)}>{generating ? '正在处理…' : '确认模型并开始生成'}</Button><Button variant="outline" onClick={() => setConfirmGeneration(false)}>{generating ? '收起处理进度' : '暂不生成'}</Button><Button variant="ghost" disabled={generating || modelSaving} onClick={() => { void loadMode(); if (config?.mode === 'local') { void models.loadProfiles(); void speech.loadProfiles() } }}>重新读取模型配置</Button></div>
+        {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
+      </DialogContent></Dialog>
       <div className="mt-auto grid gap-2">{recording.processingStatus === 'failed' ? <Alert variant="destructive"><AlertDescription>{recording.failedStage ? (zh ? '失败阶段：' : 'Failed stage: ') + (stageCopy[recording.failedStage as keyof typeof stageCopy] || recording.failedStage) + '。' : ''}{recording.processingError}</AlertDescription></Alert> : null}{recording.processingStatus === 'completed' && recording.noteId ? <Button onClick={() => onOpenNote?.(recording.noteId!)}><FileText />{zh ? '查看会议纪要' : 'Open meeting notes'}</Button> : <Button disabled={processing || deleting} onClick={restore}>{recording.processingStatus === 'failed' ? <RotateCcw /> : <Sparkles />}{processing ? statusText : recording.processingStatus === 'failed' ? (zh ? '重试会后处理' : 'Retry processing') : (zh ? '生成会议纪要' : 'Generate meeting notes')}</Button>}
+        {needsConfirmation && !processing && recording.processingStatus !== 'completed' && <p className="text-xs text-muted-foreground">点击后选择并确认本次模型，确认前不会开始处理。</p>}
         <div className="flex flex-wrap gap-1">
           <Button variant="outline" size="sm" disabled={loading || deleting} onClick={() => void load(false)}><Play />{loading ? (zh ? '正在读取…' : 'Loading…') : (zh ? '预览' : 'Preview')}</Button>
-          <Button variant="outline" size="sm" disabled={loading || deleting} onClick={() => void load(true)}><Download />{zh ? '下载文件' : 'Download file'}</Button>
+          <Button variant="outline" size="sm" disabled={loading || deleting} aria-busy={loading && !!downloadStatus} onClick={() => void load(true)}><Download />{loading && downloadStatus ? (zh ? '正在导出…' : 'Exporting…') : (zh ? '下载文件' : 'Download file')}</Button>
+          {loading && downloadStatus && <Button variant="ghost" size="sm" onClick={() => downloadAbort.current?.abort()}>{zh ? '取消导出' : 'Cancel export'}</Button>}
           <AlertDialog open={confirmDelete} onOpenChange={value => { if (!deleting) { setConfirmDelete(value); setError('') } }}>
             <AlertDialogTrigger asChild><Button variant="ghost" size="sm" disabled={processing || deleting || loading} className="text-destructive hover:text-destructive"><Trash2 />{zh ? '删除录制文件' : 'Delete recording'}</Button></AlertDialogTrigger>
             <AlertDialogContent>
@@ -116,7 +141,9 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
             </AlertDialogContent>
           </AlertDialog>
         </div>
-        {error && !confirmDelete ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+        {generationStatus && !confirmGeneration && <p role="status" className="text-sm text-muted-foreground">{generationStatus}</p>}
+        {downloadStatus && <p role="status" aria-live="polite" className="text-sm text-muted-foreground">{downloadStatus}</p>}
+        {error && !confirmDelete && !confirmGeneration ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
       </div>
     </div>
   </article>

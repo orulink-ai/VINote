@@ -300,7 +300,7 @@ it('does not guess ambiguous legacy audio as a meeting and preserves export unti
   expect(screen.queryByRole('button', { name: /unknown.wav/ })).not.toBeInTheDocument();
   await userEvent.click(within(purposes).getByRole('button', { name: /待确认用途/ }));
   await userEvent.click(screen.getByRole('button', { name: /unknown.wav/ })); const sheet = screen.getByRole('dialog');
-  expect(within(sheet).getByRole('link', { name: '导出原文件' })).toBeInTheDocument();
+  expect(within(sheet).getByRole('button', { name: '导出原文件' })).toBeInTheDocument();
   expect(within(sheet).getByRole('button', { name: '用此原件整理笔记' })).toBeDisabled();
 });
 
@@ -351,7 +351,7 @@ it.each(['processing', 'failed', 'success'])('retained task original %s does not
   expect(within(dialog).getByText('此原件作为处理记录的来源保留，当前不支持删除。')).toBeInTheDocument();
   expect(within(dialog).getByRole('button', { name: '删除原始文件' })).toBeDisabled();
   expect(within(dialog).queryByText(/请先完成或核验/)).not.toBeInTheDocument();
-  expect(within(dialog).getByRole('link', { name: '导出原文件' })).toBeInTheDocument();
+  expect(within(dialog).getByRole('button', { name: '导出原文件' })).toBeInTheDocument();
   expect(mocks.api.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
 });
 

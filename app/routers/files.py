@@ -47,8 +47,11 @@ def info(identifier: str, user=Depends(get_current_user)):
 
 
 @router.get("/{identifier}/content")
-def content(identifier: str, download: bool = False, user=Depends(get_current_user)):
+def content(identifier: str, download: bool = False, user=Depends(get_current_user), playback: bool = False):
     info, path = service.get(user.user_id, identifier)
+    if playback and not download and info['media_type'].startswith(('video/', 'audio/')):
+        from app.services.media_playback_service import playback_file
+        path = playback_file(path)
     return FileResponse(path, media_type=info["media_type"], filename=info["filename"] if download else None,
                         headers={"Cache-Control": "private, no-store", "X-Content-Type-Options": "nosniff"})
 

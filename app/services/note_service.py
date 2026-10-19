@@ -598,20 +598,25 @@ class NoteService:
                 llm.configure_video_capabilities(entry.get('capabilities'), image_input_verified=verified)
             video_kwargs['video_evidence'] = context.video_evidence.align(
                 summary_segments, transcript.metadata.get('speaker_evidence', []))
-        markdown = llm.summarize(
-            title=context.audio_meta.title,
-            segments=summary_segments,
-            style=context.style,
-            summary_mode=context.summary_mode,
-            extras=summary_extras,
-            output_language=context.output_language,
-            progress_callback=lambda message: self.artifact_service.update_status(
-                context.task_dir,
-                "summarizing",
-                message,
-            ),
-            **video_kwargs,
-        )
+        from app.llm.source_references import capture_working_draft
+        from app.services.meeting_draft_artifact import save_working_draft
+        # Diagnostic working material only: never a saved result, a checkpoint
+        # authorizing another model call, or evidence of a successful review.
+        with capture_working_draft(lambda text: save_working_draft(self.artifact_service, context.task_dir, text)):
+            markdown = llm.summarize(
+                title=context.audio_meta.title,
+                segments=summary_segments,
+                style=context.style,
+                summary_mode=context.summary_mode,
+                extras=summary_extras,
+                output_language=context.output_language,
+                progress_callback=lambda message: self.artifact_service.update_status(
+                    context.task_dir,
+                    "summarizing",
+                    message,
+                ),
+                **video_kwargs,
+            )
         context.step_timings["summarize"] = time.time() - step_start
         update_current(
             input={"title": context.audio_meta.title, "summary_mode": context.summary_mode,

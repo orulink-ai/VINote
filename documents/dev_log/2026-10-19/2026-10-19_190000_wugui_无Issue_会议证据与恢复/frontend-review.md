@@ -175,3 +175,46 @@ RegenerateMeetingSummary 支持可选 noteId，复用于 NoteGenerator 已核验
 真实组件离线集成回归覆盖失败任务 prepare→confirm（唯一 regenerate-summary POST）→accepted/丢响应 GET恢复→自动保存及指针清理；另覆盖409、未知重复查询、账号ABA、路由迟到响应、旧unknown/typed总结错误及转写失败→新状态总结失败的竞态。
 最终4文件/149项关联测试、tsc --noEmit 与前端diff检查通过。原note入口及其成功清理兼容测试保留。
 产品源码仅 RegenerateMeetingSummary.tsx、NoteGenerator.tsx；另追加 NoteGenerator 测试和本记录。未写后端/Python、未调用真实模型/通知、未提交；本节完成后停止全部写入/测试，交主线程受控UI验收。
+
+
+## 2026-10-20：原件导出与生成确认反馈（前端 / Tauri）
+
+作者 wugui；本轮起点 e0426f8，工作树 codex/meeting-context-recovery-20261019。仅本地 diff，未 commit、打包、发布或重启。并行 Python/总结质量修改不属于本记录和写集。
+
+### 实际代码发现与交互约定
+
+- 原 downloadRecording 仅触发隐藏 anchor，调用方没有结果反馈；FileLibrary 也是直接 anchor。LocalRecordingPreview 的生成确认是页内区域，可能落在视口外。
+- 导出触发后即显示忙状态并锁定重复点击；native 先选择保存位置，再读取原件流。成功只在最终文件写入完成后显示；取消单独提示“已取消导出，原文件保留”，不记成功/失败；错误显示可重试。支持导出中取消，账号/文件/路由变化使旧结果失效。
+- 浏览器直接交给原件 URL（已有 IndexedDB 录制使用原 Blob URL），提示去下载列表查看，不宣称实际落盘成功。跨 Origin 回退保留当前产品页；浏览器的保存位置/下载成功以浏览器行为为准。
+- 生成按钮说明确认前不会处理，并打开具有标题、说明及焦点管理的现有 Dialog。暂不生成不启动 worker；明确确认后冻结具体 ASR/LLM，处理中禁重复确认，可收起进度而不取消/重发；成功/失败来自真实 pending record。原 processSavedMeeting、未知 GET-only、operation 与后端代码不改。
+
+### 实现与边界
+
+- lib/recordingDownload.ts：只允许现有 notes/media、task/artifacts、files/content 原件路径及 download=true；拒绝外站、路径回退、playback 参数、额外查询。认证仍经 apiFetch，native fetch 拒绝 redirect，401 不降级到其他 URL。服务端原件使用 Response.body 流读取，禁止整文件 blob()；IndexedDB 已有 Blob 只切片读取；每次 IPC 不超过 1 MiB。
+- src-tauri/src/original_download.rs：rfd 0.15.4 系统保存对话框绑定发起窗口，系统负责同名覆盖询问；IPC 不接受磁盘路径、URL、凭证。会话绑定窗口，同目录 NamedTempFile 分块写入并同步后 persist；取消/失败 drop 临时文件，销毁窗口仅清理其会话。rfd/tempfile 使用本机缓存，离线 Cargo.lock 已更新。权限 TOML 与必要生成 acl-manifests 保留；desktop-schema 仅有换行变化，恢复原字节。
+- 三个产品入口：LocalRecordingPreview、SavedRecordingActions、FileLibrary（复用 OriginalDownloadButton）。播放 URL 不由本轮改变，导出不加 playback=true。
+- root 临时文件 `-` 首次发现长 10 字节，后续只读核对时已不存在；无法认定产生者，本轮未删除未知归属文件。本轮验证日志收至忽略目录，不纳入源码。
+
+### 验证（离线；没有真实模型请求）
+
+实现后补有意义回归，不将其描述成先测试后实现的 TDD。旧 FileLibrary 链接断言随实际下载按钮更新；原件身份/可用性与禁止误生成断言保留。
+
+- 8 个前端文件，209/209 passed：recordingDownload、OriginalDownloadButton、LocalRecordingPreview、SavedRecordingActions、FileLibrary、meetingProcessing、MeetingWorkbench、NoteGenerator。
+- 反例包括取消 picker 0 fetch、流式原件无需大 Blob、取消 partial 清理、HTTP 401 不回退、URL 白名单、写入/finish 失败不报成功、重复点击单次调用、旧 owner/route 结果无效、确认前 0 worker、处理中模型展示冻结、收起不重发，以及既有 unknown GET-only 恢复。
+- `npm run build`（tsc + Vite）通过；有既有体积警告（部分 chunk >500 kB）。关联旧组件测试存在 React act/组件说明警告，未作为真实 UI 验收。
+- `cargo test --offline --lib`：9/9 passed，含 2 个新增原件临时文件/替换字节一致与分窗口清理测试；没有启动 Tauri 应用。
+- `git diff --check -- frontend` 通过。
+- 日志：`.desktop-build/ux-download-generation-20261020/{frontend-tests.log,frontend-build.log,rust-tests.log}`（当前工作树忽略目录）。
+
+### 留给实际验收
+
+主代理核验浏览器下载列表/跨 Origin 下载回退，native 保存位置、系统同名覆盖取消/确认、磁盘权限失败、大视频内存与进度收起体验。离线 mock/文件测试不证明这些系统 UI 已验收；本轮没有调用 ASR/LLM、通知或修改真实会议内容。
+
+
+### 同轮补充：浏览器原件下载授权预检
+
+按主代理复核，浏览器 backend URL 分支现在先经现有 apiFetch 发 GET + Range: bytes=0-0，保留认证、redirect:error 与 owner/AbortSignal；无 HEAD 假设。只接受 200/206 且有响应体，始终先 cancel 响应体，再进行浏览器下载交接；服务端忽略 Range 返回 200 时也不读取全文件。401/403/404/500 均显示失败，不触发 anchor，不报 browser_started；预检期间账号/路由失效或取消不再交接。浏览器最终落盘仍不在客户端可核验范围内，只提示查看下载列表。Native 不做 Range 预检，保留单次认证流读取，既有测试校验 apiFetch 恰好一次。
+
+LocalRecordingPreview 确认按钮及说明明确为“确认模型并开始生成”，确认前 0 worker、处理中重复点击保护不变。
+
+本次 TDD：新增/更新浏览器预检用例在旧实现 8 failed、19 passed；实现后相关 8 文件 216/216 passed。npm run build（含 tsc）通过；保留既有 chunk 体积与测试 React 警告。本次不改 Rust/Python；Rust 9/9 沿用上轮实际结果，未重复跑。新证据在忽略目录 .desktop-build/ux-download-generation-20261020/browser-preflight-{red,green,build}.log。仅离线验证，没有模型调用、运行时重启、提交或发布。完成后停止写入，实际浏览器/native 验收仍由主代理执行。

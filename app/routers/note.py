@@ -715,8 +715,10 @@ def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | N
     if not task_dir:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    normalized_parts = Path(asset_path).parts
-    if not normalized_parts or normalized_parts[0] not in {"screenshots", "media"}:
+    normalized_parts = asset_path.split('/')
+    if (len(normalized_parts) < 2 or normalized_parts[0] not in {"screenshots", "media"}
+            or '\\' in asset_path or ':' in asset_path or '\x00' in asset_path
+            or any(not part or part.startswith('.') for part in normalized_parts)):
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     if (task_dir / "source_reference.json").exists() and normalized_parts[0] == "media":
@@ -730,8 +732,15 @@ def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | N
 
     requested_path = (task_dir / asset_path).resolve()
     task_root = task_dir.resolve()
-    if task_root not in requested_path.parents and requested_path != task_root:
+    media_root = task_dir / normalized_parts[0]
+    if (media_root.is_symlink() or getattr(media_root, 'is_junction', lambda: False)()
+            or media_root.resolve().parent != task_root or media_root.resolve() not in requested_path.parents):
         raise HTTPException(status_code=404, detail="Artifact not found")
+    current_path = task_dir
+    for part in normalized_parts:
+        current_path = current_path / part
+        if current_path.is_symlink() or getattr(current_path, 'is_junction', lambda: False)():
+            raise HTTPException(status_code=404, detail="Artifact not found")
     if not requested_path.exists() or not requested_path.is_file():
         raise HTTPException(status_code=404, detail="Artifact not found")
 

@@ -274,9 +274,16 @@ def _build_style_instruction(style: str, language: OutputLanguage) -> str:
         instruction += "\n" + (
             "保留行动主体、动作对象、否定词与前提条件，不能用常见流程替换原文安排。"
             "实际会议时间只采用明确提供的值；录音可能暂停，累计录音时长和章节偏移不能推算会议起止。"
+            "这是随后全文复核使用的初稿：关键事实和行动附实际支持的[ASR:编号]或[FRAME:编号]，"
+            "只引用输入中确实存在的编号；这些内部引用不规定最终报告结构。"
+            "逐项保留事项、数值的含义、时间角色、方向、条件与状态，不凭相邻或相似把它们合成同一对象。"
             if language == "zh-CN" else
             "Preserve actors, objects, negations and conditions; do not substitute a conventional workflow. "
             "Use only explicitly supplied meeting times. Paused recording duration and media offsets cannot establish meeting start/end times."
+            "This is a draft for whole-source review: attach actually supporting [ASR:ID] or [FRAME:ID] "
+            "references to substantive facts and actions; use only IDs present in the input. These internal "
+            "references impose no final report structure. Preserve the object, value meaning, time role, "
+            "direction, conditions and state; proximity or similarity does not establish a shared object."
         )
     return instruction
 

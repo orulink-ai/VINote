@@ -28,6 +28,7 @@ from PIL import Image, ImageChops, ImageStat
 
 from app.models.transcript import TranscriptSegment
 from app.services.media_playback_service import playback_file
+from app.llm.source_references import asr_reference, frame_reference
 
 _worker = threading.BoundedSemaphore(1)
 _WIDTH, _HEIGHT = 160, 90
@@ -174,7 +175,7 @@ class VideoEvidence:
         content = [{'type': 'text', 'text': prompt + '\n\n' + self.text_material()}]
         # Read only selected bounded JPEGs, never the full video or a full decoded timeline.
         actual_bytes = 0
-        for frame in self.frames:
+        for index, frame in enumerate(self.frames):
             with frame.image_path.open('rb') as handle:
                 data = handle.read(_MAX_IMAGE_BYTES + 1)
             if not data or len(data) > _MAX_IMAGE_BYTES:
@@ -182,8 +183,16 @@ class VideoEvidence:
             actual_bytes += len(data)
             if actual_bytes > _MAX_PAYLOAD_BYTES:
                 raise VideoEvidenceError('视频图片材料已变化或超过总预算，未截断或调用模型')
+            references = ', '.join(asr_reference(item) for item in frame.speech_indices) or 'none'
             content.extend([
-                {'type': 'text', 'text': f'Image at recording offset {frame.timestamp:.3f} seconds'},
+                {'type': 'text', 'text': (
+                    f'{frame_reference(index)} Image at recording offset {frame.timestamp:.3f} seconds. '
+                    f'Observed sample offsets: {frame.sample_offsets}. '
+                    f'Overlapping original ASR windows: {references}. '
+                    'References indicate temporal overlap only, not that the speech describes this image '
+                    'or that screen names identify the speaker. Read this image independently; '
+                    'bind each number, time role, state and assignee to its own visible object. '
+                    'Do not join different events or infer a conflict from unrelated values.')},
                 {'type': 'image_url', 'image_url': {'detail': 'high', 'url': 'data:image/jpeg;base64,'
                                                  + base64.b64encode(data).decode('ascii')}},
             ])
