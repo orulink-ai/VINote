@@ -59,6 +59,7 @@ export function loadingPageParent(pathname: string, search: string, stateParent?
   }
   const contextual = contextualPageParent(pathname, search, stateParent)
   if (contextual) return contextual
+  if (/^\/note\/[^/]+$/.test(pathname)) return null
   if (['/notes', '/meetings', '/files', '/connections', '/settings'].includes(pathname)) return null
   if (pathname === '/settings/sync' || pathname === '/settings/storage') return '/settings?tab=storage'
   if (pathname === '/settings/mcp') {

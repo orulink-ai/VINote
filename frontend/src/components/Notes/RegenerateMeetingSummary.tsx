@@ -7,16 +7,20 @@ import type { WorkspaceSelection } from '@/stores/teamStore'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 
-type SummaryContext = { parent_task_id: string; context_revision: string; source: { version: string; type: string }; can_regenerate_summary: boolean }
+type SummaryContext = { parent_task_id: string; context_revision: string; source: { version: string; type: string; title?: string }; can_regenerate_summary: boolean }
 type Receipt = { operation_id: string; task_id: string; state: string; source_type?: string }
-type Props = { noteId: string; taskId: string; workspace: WorkspaceSelection; returnTo: string; disabled?: boolean }
+type Props = { noteId?: string; taskId: string; workspace: WorkspaceSelection; returnTo: string; disabled?: boolean }
+
+export function summaryOperationKey(owner: string, origin: string | undefined, taskId: string, noteId?: string) {
+  return `vinote:summary-operation:${owner}:${origin || ''}:${noteId || 'task'}:${taskId}`
+}
 
 export function RegenerateMeetingSummary(props: Props) {
   const owner = useAuthStore(s => s.user?.id)
   const config = useAppModeStore(s => s.config)
   const location = useLocation()
   // A changed route/account/Origin remounts the confirmation, including ABA changes.
-  return <SummaryAction key={JSON.stringify([owner, config?.mode, config?.server_url, location.key, location.pathname, location.search, props.noteId, props.taskId])} {...props} owner={owner} />
+  return <SummaryAction key={JSON.stringify([owner, config?.mode, config?.server_url, location.key, location.pathname, location.search, location.hash, props.noteId, props.taskId, props.returnTo, props.workspace])} {...props} owner={owner} />
 }
 
 function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }: Props & { owner?: string }) {
@@ -29,7 +33,7 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
   const origin = useAppModeStore.getState().config?.server_url
   const active = () => mounted.current && owner === useAuthStore.getState().user?.id && origin === useAppModeStore.getState().config?.server_url
   useEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
-  const pointerKey = `vinote:summary-operation:${owner}:${origin || ''}:${noteId}:${taskId}`
+  const pointerKey = summaryOperationKey(owner || '', origin, taskId, noteId)
   const openOperation = (operationId: string) => navigate('/generate?' + new URLSearchParams({ meeting: '1', operation: operationId }), { state: { returnTo } })
 
   async function prepare() {
@@ -60,7 +64,7 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
     lock.current = true; setBusy(true); setError('')
     const operationId = crypto.randomUUID()
     const key = `vinote:source-receipt:${owner}:${operationId}`
-    const pending = { operationId, createdAt: new Date().toISOString(), submissionState: 'unknown', workspace, meeting: true, mode: 'file', independentGeneration: true, summaryOnly: true, summaryNoteId: noteId, parentTaskId: taskId, sourceType: confirmation.context.source.type, summaryContext: confirmation.context, modelName: confirmation.config.llm_model, origin }
+    const pending = { operationId, createdAt: new Date().toISOString(), submissionState: 'unknown', workspace, meeting: true, mode: 'file', independentGeneration: true, summaryOnly: true, summaryNoteId: noteId, parentTaskId: taskId, sourceType: confirmation.context.source.type, sourceTitle: typeof confirmation.context.source.title === 'string' ? confirmation.context.source.title.trim() || undefined : undefined, summaryContext: confirmation.context, modelName: confirmation.config.llm_model, origin }
     let protectedOperation = false
     try {
       const existing = localStorage.getItem(pointerKey)
@@ -84,13 +88,13 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
   }
 
   return <div className="grid min-w-0 gap-2">
-    <Button variant="outline" size="sm" disabled={disabled || busy || !owner} onClick={() => void prepare()}>{busy ? '正在核验…' : '重新生成纪要'}</Button>
+    <Button variant="outline" size="sm" disabled={disabled || busy || !owner} onClick={() => void prepare()}>{busy ? '正在核验…' : noteId ? '重新生成纪要' : '仅重新生成纪要'}</Button>
     {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
     <Dialog open={!!confirmation} onOpenChange={open => { if (!open && !busy) setConfirmation(null) }}>
-      <DialogContent><DialogHeader><DialogTitle>确认重新生成纪要</DialogTitle><DialogDescription>复用已有逐字稿及可用的说话人、视频资料，不重新转录。新纪要独立保存，原纪要和原文件保留；总结可能产生模型费用。</DialogDescription></DialogHeader>
+      <DialogContent><DialogHeader><DialogTitle>{noteId ? '确认重新生成纪要' : '确认仅重新生成纪要'}</DialogTitle><DialogDescription>复用已有逐字稿及可用的说话人、视频资料，不重新转录。新纪要独立保存，已有记录和原文件保留；总结可能产生模型费用。</DialogDescription></DialogHeader>
         <p className="break-all text-sm">总结模型：{confirmation?.config.llm_model}</p>
-        <p className="text-sm">来源类型：{confirmation?.context.source.type === 'video' ? '视频' : confirmation?.context.source.type === 'audio' ? '音频' : '已保留资料'}。仅使用已核验的证据，不将缺失内容当作静音。</p>
-        <Button disabled={busy || disabled} onClick={() => void confirm()}>{busy ? '正在提交…' : '确认并重新生成纪要'}</Button>
+        <p className="text-sm">来源类型：{['video', 'meeting_video'].includes(confirmation?.context.source.type || '') ? '视频' : ['audio', 'meeting_audio', 'meeting_recording'].includes(confirmation?.context.source.type || '') ? '音频' : '已保留资料'}。仅使用已核验的证据，不将缺失内容当作静音。</p>
+        <Button disabled={busy || disabled} onClick={() => void confirm()}>{busy ? '正在提交…' : noteId ? '确认并重新生成纪要' : '确认，仅重新总结'}</Button>
         <Button variant="outline" disabled={busy} onClick={() => setConfirmation(null)}>取消</Button>
       </DialogContent>
     </Dialog>

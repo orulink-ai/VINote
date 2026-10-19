@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes, Link, useLocation } from "react-router-dom";
 import { I18nProvider } from "../lib/i18n";
 import { NoteEditor } from "./NoteEditor";
+import { useAuthStore } from "../stores/authStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 
 const noteStoreMock = vi.hoisted(() => ({
@@ -77,6 +78,7 @@ function renderEditor(
         <Route path="/settings/mcp" element={<ContextDestination />} />
         <Route path="/files" element={<ContextDestination />} />
         <Route path="/notes" element={<div>Notes</div>} />
+        <Route path="/meetings" element={<div>Meetings</div>} />
         <Route path="/" element={<div>Recording workbench</div>} />
         <Route path="/assistant" element={<div>Meeting assistant</div>} />
       </Routes>
@@ -97,6 +99,8 @@ async function openDeleteAction() {
 describe("NoteEditor transcript evidence", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    useAuthStore.setState({ user: null });
     useWorkspaceStore.setState({ mappings: {}, items: [], changeDeleted: vi.fn(async key => ({ key, deleted: true }) as never) });
     Object.defineProperty(window.HTMLMediaElement.prototype, "play", {
       configurable: true,
@@ -262,9 +266,53 @@ describe("NoteEditor transcript evidence", () => {
     renderEditor("/note/note-1?returnTo=https%3A%2F%2Funtrusted.invalid");
     await screen.findByText("Minutes only.");
     fireEvent.click(screen.getByRole("button", { name: "Return to list" }));
-    expect(await screen.findByText("Notes")).toBeInTheDocument();
+    expect(await screen.findByText("Meetings")).toBeInTheDocument();
   });
 
+  it.each(['meeting_video', 'document'])('waits for verified %s kind before binding a direct deep-link return', async sourceType => {
+    let resolve!: (value: unknown) => void
+    noteStoreMock.loadNoteById.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    renderEditor()
+    expect(screen.queryByRole('button', { name: '返回上级' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '返回笔记' })).toBeNull()
+    await act(async () => resolve({ id: 'note-1', title: 'Synthetic note', content: '# Synthetic content', sourceType, status: 'done', scope: 'personal', createdAt: '', updatedAt: '' }))
+    await screen.findByRole('heading', { name: 'Synthetic note' })
+    fireEvent.click(screen.getByRole('button', { name: 'Return to list' }))
+    expect(await screen.findByText(sourceType === 'meeting_video' ? 'Meetings' : 'Notes')).toBeVisible()
+  })
+  it('validates query and state parents independently before kind is known and preserves the selected parent', async () => {
+    let resolve!: (value: unknown) => void
+    noteStoreMock.loadNoteById.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    renderEditor({ pathname: '/note/note-1', search: '?returnTo=https%3A%2F%2Foutside.invalid', state: { returnTo: '/files?q=kept' } })
+    expect(screen.getByRole('button', { name: '返回文件库' })).toBeVisible()
+    await act(async () => resolve({ id: 'note-1', title: 'Synthetic meeting', content: '# Body', sourceType: 'meeting_video', status: 'done', scope: 'personal', createdAt: '', updatedAt: '' }))
+    await screen.findByRole('heading', { name: 'Synthetic meeting' })
+    fireEvent.click(screen.getByRole('button', { name: 'Return to list' }))
+    expect(await screen.findByLabelText('Destination')).toHaveTextContent('/files?q=kept')
+  })
+  it('ignores the previous id late meeting response when binding the next note parent', async () => {
+    let resolve!: (value: unknown) => void
+    noteStoreMock.loadNoteById.mockImplementation((id: string) => id === 'note-1' ? new Promise(done => { resolve = done }) : Promise.resolve({ id: 'note-2', title: 'Second note', content: '# Second content', sourceType: 'document', status: 'done', scope: 'personal', createdAt: '', updatedAt: '' }))
+    render(<MemoryRouter initialEntries={['/note/note-1']}><Routes><Route path="/note/:id" element={<><Link to="/note/note-2">Next note</Link><I18nProvider><NoteEditor /></I18nProvider></>} /><Route path="/notes" element={<div>Notes</div>} /><Route path="/meetings" element={<div>Meetings</div>} /></Routes></MemoryRouter>)
+    fireEvent.click(screen.getByRole('link', { name: 'Next note' }))
+    await screen.findByRole('heading', { name: 'Second note' })
+    await act(async () => resolve({ id: 'note-1', title: 'Stale meeting', content: '# Stale content', sourceType: 'meeting_video', status: 'done', scope: 'personal', createdAt: '', updatedAt: '' }))
+    expect(screen.queryByRole('heading', { name: 'Stale meeting' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Return to list' }))
+    expect(await screen.findByText('Notes')).toBeVisible()
+  })
+  it('ignores an old-account late meeting response when resolving the new account note parent', async () => {
+    useAuthStore.setState({ user: { id: 'old-owner' } as never })
+    let resolve!: (value: unknown) => void
+    noteStoreMock.loadNoteById.mockReturnValueOnce(new Promise(done => { resolve = done })).mockResolvedValue({ id: 'note-1', title: 'New owner note', content: '# New content', sourceType: 'document', status: 'done', scope: 'personal', createdAt: '', updatedAt: '' })
+    renderEditor()
+    act(() => useAuthStore.setState({ user: { id: 'new-owner' } as never }))
+    await screen.findByRole('heading', { name: 'New owner note' })
+    await act(async () => resolve({ id: 'note-1', title: 'Old owner meeting', content: '# Old content', sourceType: 'meeting_video', status: 'done', scope: 'personal', createdAt: '', updatedAt: '' }))
+    expect(screen.queryByRole('heading', { name: 'Old owner meeting' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Return to list' }))
+    expect(await screen.findByText('Notes')).toBeVisible()
+  })
   it("does not invent a synced object for content with no acknowledged mapping", async () => {
     renderEditor();
     await screen.findByText("Minutes only.");
@@ -299,9 +347,9 @@ describe("NoteEditor transcript evidence", () => {
   });
 
   it.each([
-    ["/", "Notes"],
-    ["/assistant", "Notes"],
-    ["https://untrusted.invalid", "Notes"],
+    ["/", "Meetings"],
+    ["/assistant", "Meetings"],
+    ["https://untrusted.invalid", "Meetings"],
   ])("returns to the supported entry point %s", async (returnTo, expected) => {
     renderEditor({ pathname: "/note/note-1", state: { returnTo } });
     await screen.findByText("Minutes only.");
@@ -382,7 +430,7 @@ describe("NoteEditor transcript evidence", () => {
     expect(noteStoreMock.deleteNote).not.toHaveBeenCalled();
     await openDeleteAction();
     fireEvent.click(screen.getByRole("button", { name: "Confirm deletion" }));
-    expect(await screen.findByText("Notes")).toBeInTheDocument();
+    expect(await screen.findByText("Meetings")).toBeInTheDocument();
     expect(useWorkspaceStore.getState().changeDeleted).toHaveBeenCalledWith("note-1", true);
     expect(noteStoreMock.deleteNote).not.toHaveBeenCalled();
   });

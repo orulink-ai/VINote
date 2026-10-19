@@ -1,5 +1,5 @@
 import { RegenerateMeetingSummary } from '@/components/Notes/RegenerateMeetingSummary';
-import { resolvePageParent, pageParentLabel } from '@/lib/navigation';
+import { contextualPageParent, pageParentLabel } from '@/lib/navigation';
 import { noteOrigin } from "@/lib/noteOrigin";
 import { useNoteMediaPlayback } from '@/hooks/useNoteMediaPlayback';
 import { sourceVideoUrl } from "@/lib/sourceInput";
@@ -243,8 +243,7 @@ export function NoteEditor() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const origin = (location.state as { returnTo?: unknown } | null)?.returnTo ?? searchParams.get("returnTo");
-  const returnTo = resolvePageParent(origin);
+  const explicitParent = contextualPageParent(location.pathname, location.search, (location.state as { returnTo?: unknown } | null)?.returnTo);
   const { copy, locale } = useI18n();
   const {
     loadNoteById,
@@ -287,7 +286,17 @@ export function NoteEditor() {
   const [sharePanelOpen, setSharePanelOpen] = useState(false);
   const [error, setError] = useState("");
   const [currentNote, setCurrentNote] = useState<NoteRecord | null>(null);
-  const isMeetingContent = !!currentNote?.sourceType?.startsWith('meeting_');
+  const [loadedFor, setLoadedFor] = useState<{ owner?: string; id: string } | null>(null);
+  const loadEpoch = useRef(0);
+  useEffect(() => useAuthStore.subscribe((next, previous) => { if (next.user?.id !== previous.user?.id) loadEpoch.current++ }), []);
+  const identityLoaded = !!loadedFor && loadedFor.id === id && loadedFor?.owner === owner && currentNote?.id === id;
+  const isMeetingContent = !!identityLoaded && !!currentNote?.sourceType?.startsWith('meeting_');
+  const parentKey = JSON.stringify([owner, id, explicitParent]);
+  const boundParent = useRef<{ key: string; parent: string | null }>({ key: parentKey, parent: explicitParent });
+  if (boundParent.current.key !== parentKey) boundParent.current = { key: parentKey, parent: explicitParent };
+  if (!boundParent.current.parent && identityLoaded) boundParent.current.parent = isMeetingContent ? '/meetings' : '/notes';
+  // Unknown loading has no bound default. Resolve once after verified content kind.
+  const returnTo = boundParent.current.parent || '/tasks';
   const hasMediaTranscript = !!taskId && !['file', 'text', 'document', 'transcript'].includes(currentNote?.sourceType || '');
   const hasUnsavedChanges =
     !!currentNote &&
@@ -382,10 +391,17 @@ export function NoteEditor() {
   };
 
   useEffect(() => {
-    let active = true;
+    let mounted = true;
+    const epoch = ++loadEpoch.current;
+    const active = () => mounted && epoch === loadEpoch.current && owner === useAuthStore.getState().user?.id;
 
     async function loadNote() {
       setLoading(true);
+      setLoadedFor(null);
+      setCurrentNote(null);
+      setContent("");
+      setLocalTitle("");
+      setTaskId("");
       setError("");
       if (!id) {
         setError(copy.noteEditor.missingId);
@@ -394,11 +410,11 @@ export function NoteEditor() {
       }
 
       const note = await loadNoteById(id);
-      if (!active) {
+      if (!active()) {
         return;
       }
 
-      if (!note) {
+      if (!note || note.id !== id) {
         setError(copy.noteEditor.notFound);
         setLoading(false);
         return;
@@ -420,11 +436,12 @@ export function NoteEditor() {
       setNoteScope(note.scope);
       setNoteWorkspaceName(note.teamName || "");
       setCurrentNote(note);
+      setLoadedFor({ owner, id });
       setError("");
       setLoading(false);
 
       const existingShare = await getShareLink(note.id);
-      if (!active || !existingShare) {
+      if (!active() || !existingShare) {
         return;
       }
 
@@ -432,7 +449,7 @@ export function NoteEditor() {
     }
 
     void loadNote().catch((cause) => {
-      if (active) {
+      if (active()) {
         setError(
           cause instanceof Error ? cause.message : copy.noteEditor.notFound,
         );
@@ -441,13 +458,14 @@ export function NoteEditor() {
     });
 
     return () => {
-      active = false;
+      mounted = false;
     };
   }, [
     copy.noteEditor.missingId,
     copy.noteEditor.notFound,
     getShareLink,
     id,
+    owner,
     loadNoteById,
     loadAttempt,
   ]);
@@ -667,10 +685,10 @@ export function NoteEditor() {
     );
   };
 
-  if (loading) {
+  if (loading || (!identityLoaded && !error)) {
     return (
       <div className="flex h-full items-center justify-center">
-        <Button variant="ghost" onClick={() => navigate(returnTo)}><ArrowLeft data-icon="inline-start" />返回上级</Button>
+        {boundParent.current.parent && <Button variant="ghost" onClick={() => navigate(returnTo)}><ArrowLeft data-icon="inline-start" />{pageParentLabel(returnTo)}</Button>}
         <LoadingState label="正在读取笔记…" />
       </div>
     );
@@ -688,7 +706,7 @@ export function NoteEditor() {
           onClick={() => navigate(returnTo)}
           variant="outline"
         >
-          {copy.noteEditor.backToLibrary}
+          {zh ? pageParentLabel(returnTo) : "Return to list"}
         </Button>
       </div>
     );

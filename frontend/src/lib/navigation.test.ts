@@ -52,3 +52,8 @@ it('keeps bare read-only task loading neutral and gives it the same safe task re
   expect(loadingPageParent('/generate', '?meeting=1&mode=file&task=selected-task')).toBe('/meetings')
   expect(loadingPageParent('/generate', '?mode=file')).toBe('/notes')
 })
+
+it('does not invent a note-list parent while a saved detail kind is still loading', () => {
+  expect(loadingPageParent('/note/example', '')).toBeNull()
+  expect(loadingPageParent('/note/example', '?returnTo=%2Ffiles%3Fq%3Dkept')).toBe('/files?q=kept')
+})
