@@ -82,7 +82,8 @@ from app.services.task_generation_context import frozen_generation_context
 @router.get("/task/{task_id}/new-generation-context")
 def new_generation_context(task_id: str, response: Response, user=Depends(get_current_user)):
     response.headers["Cache-Control"] = "private, no-store"
-    return frozen_generation_context(user.user_id, task_id, active=task_id in _ACTIVE_FILE_TASKS)
+    return frozen_generation_context(user.user_id, task_id, active=task_id in _ACTIVE_FILE_TASKS,
+                                     receipts=_source_requests)
 
 
 @router.post("/task/{task_id}/new-generation", response_model=SourceRequestReceipt)

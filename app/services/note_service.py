@@ -688,6 +688,12 @@ class NoteService:
     def _build_result(self, context: PipelineContext, transcript, markdown: str) -> NoteResult:
         context.step_timings["total"] = time.time() - context.task_start_time
         audio_meta = context.audio_meta
+        video_duration = getattr(getattr(context, 'video_evidence', None), 'duration', None)
+        if (context.style == 'meeting' and type(video_duration) in (int, float)
+                and math.isfinite(video_duration) and video_duration > 0):
+            # A transcript may end before the retained video. Display its actual
+            # media duration without changing the source or ASR coverage clock.
+            audio_meta = replace(audio_meta, duration=video_duration)
         if context.style == 'meeting':
             heading = re.search(r'^#\s+([^\n]+)', markdown, re.M)
             if heading:

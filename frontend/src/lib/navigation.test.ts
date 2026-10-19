@@ -42,3 +42,13 @@ describe('loading page return context', () => {
     expect(loadingPageParent('/settings', '?returnTo=https%3A%2F%2Fexample.com', '/meetings?q=review')).toBe('/meetings?q=review')
   })
 })
+
+
+it('keeps bare read-only task loading neutral and gives it the same safe task return as the loaded page', () => {
+  expect(loadingPageParent('/generate', '?task=selected-task')).toBe('/tasks?tab=generation')
+  expect(loadingPageParent('/generate', '?task=selected-task&returnTo=https%3A%2F%2Foutside.invalid')).toBe('/tasks?tab=generation')
+  expect(loadingPageParent('/generate', '?task=selected-task&returnTo=%2Ffiles%3Fq%3Dkept')).toBe('/files?q=kept')
+  expect(loadingPageParent('/generate', '?task=selected-task&returnTo=https%3A%2F%2Foutside.invalid', '/meetings?q=kept')).toBe('/meetings?q=kept')
+  expect(loadingPageParent('/generate', '?meeting=1&mode=file&task=selected-task')).toBe('/meetings')
+  expect(loadingPageParent('/generate', '?mode=file')).toBe('/notes')
+})

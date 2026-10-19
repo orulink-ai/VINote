@@ -67,6 +67,7 @@ export function loadingPageParent(pathname: string, search: string, stateParent?
   }
   if (pathname === '/settings/feishu') return '/connections'
   if (pathname === '/generate' && params.get('meeting') === '1') return '/meetings'
+  if (pathname === '/generate' && params.get('task')) return '/tasks?tab=generation'
   return '/notes'
 }
 

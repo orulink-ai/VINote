@@ -126,3 +126,32 @@ NoteGenerator 对没有明确 meeting 标志、也没有匹配 owner/task 的既
 新增中性运行页、安全返回、外账号来源即使带 meeting_video 也不推断会议的回归，基线先复现2项失败；修复后 5 文件/149 项关联测试通过，tsc --noEmit 通过，diff检查通过。
 产品源码仅 NoteGenerator.tsx 与其测试；本节为附加记录。未改后端/Python、未重启 runtime、未发起 ASR/LLM/通知，未 stage/commit。
 后续方向：待活动任务结束后，由主线程单独增加 owner-scoped task workflow 权威响应字段及后端验证，再考虑前端接入；本轮未实施。
+
+
+## ce7e717 后追加：懒加载返回与未知失败页
+
+App 的外层 RouteFallback 只有中性加载文案；错误“返回笔记”来自 MainLayout 内层 Suspense 所用 loadingPageParent 的默认 /notes。
+本轮产品修复仅 navigation.ts 增加 bare /generate?task=... 的 /tasks?tab=generation 返回，位于有效 query/state parent 与 meeting=1 判断之后，普通笔记入口保持原行为。
+增加真实 MainLayout+挂起 Outlet 的渲染回归，覆盖 bare、已知会议、有效查询 parent、无效查询/有效 state、全无效 parent、普通笔记六种情况。
+复核已提交 NoteGenerator 的未知工作流保护仍同时存在于按钮显示和 openNewGeneration handler；仅追加失败页回归，确认 unknown/terminal 且误报 retryable 时依然只 GET task，无新操作确认、无保存、更换来源或 POST。
+4 文件/90 项关联测试通过，tsc --noEmit 通过；单元基线先复现加载返回错误。未知 workflow 权威字段留给后续后端独立修复，本轮不读取底层 metadata、不新增 API。
+未改 App/MainLayout 产品实现及后端/Python，未重启 runtime、未运行 ASR/LLM/通知；仅保留前端及本记录的未提交 diff，已有并行后端改动保持原状。
+
+
+## 追加：独立失败子任务 frozen context v2
+
+只读核对 Hume 已集成 schema，NoteGenerator 的 open/confirm 不再硬限 protocol=1：v1 不接受 canonical 字段，v2 必须有规范 UUID canonical_task_id 且不同于当前 parent/所选 task；其他协议拒绝。
+确认前再次校验，保存 frozenContext 原值；仅 v2 POST 明确携带 canonical_task_id，v1 请求仍只有既有四字段。冻结 ASR/LLM 与 Origin 验证不变，不替换模型、不自动 retry/新建操作。
+新增 v2 丢响应/accepted 单次确认、非法 canonical（缺失/null/格式/大小写/同 parent）、v1 意外字段、账号 ABA 0POST 与 reserved 原 operation GET-only 恢复；已有 v1 与加载返回测试保留。
+先复现 v2 确认无法打开的基线失败；5 文件/111 项关联测试通过，tsc --noEmit 通过。该测试包含已有加载态/bare 失败保护及冻结模型展示回归。
+产品改动仅 NoteGenerator.tsx，另更新测试与本记录；不写 Python、后端或运行数据，不启动/重启服务，不调用 ASR/LLM/通知。保留未提交 diff，由主线程追加 commit。
+
+
+## 追加：独立确认使用权威 source.type
+
+确认时不再复制可能缺失的旧 receipt.sourceType；使用已校验 context.source.type 的明确白名单：video/meeting_video 映射视频，audio/meeting_audio/meeting_recording 映射既有音频分类；明确 transcript、file/document 保留对应类型，其他为 unknown，不按标题/扩展名猜测。
+confirmed context 的分类优先于提交响应的泛化 source_type；已登记 operation 的 GET 恢复及重开 accepted 回执也从原 frozenContext 恢复分类，不覆盖原 frozenContext，不新增 POST。
+视频会议因此在 ASR 阶段即可显示五步并保存 meeting_video，音频保持 meeting_recording；未知分类不会降级成音频（新独立会议保存 meeting_unknown）。普通旧 intake 的兼容行为保持不变。
+新增六组模拟确认→回执重开→进度→自动保存回归，覆盖视频/音频别名和伪文件名未知值，同时检查 15:41 原时间与只一次显式 POST；提交响应故意返回泛化 audio，验证其不覆盖冻结来源分类。
+4 文件/135 项关联测试通过，tsc --noEmit 通过。以上为离线 mock 合同验证，真实 UI v2 确认仍由主线程执行。
+未调用实际模型、未写 Python/后端、未重启进程；保留未提交 diff。

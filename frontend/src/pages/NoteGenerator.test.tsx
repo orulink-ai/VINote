@@ -257,10 +257,10 @@ describe('NoteGenerator failed generation recovery', () => {
     expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true)
   })
 
-  const frozenContext = { protocol: 1, parent_task_id: 'selected-task', workflow: 'meeting', context_revision: 'a'.repeat(64), source: { title: '保留视频', version: 'b'.repeat(64) }, frozen_models: { mode: 'cloud', origin: 'https://original.invalid', asr_model: 'original-asr', llm_model: 'original-llm' }, can_confirm_new_operation: true }
-  const openFrozenSheet = async () => {
+  const frozenContext = { protocol: 1, parent_task_id: 'selected-task', workflow: 'meeting', context_revision: 'a'.repeat(64), source: { title: '保留视频', version: 'b'.repeat(64), type: 'meeting_video' }, frozen_models: { mode: 'cloud', origin: 'https://original.invalid', asr_model: 'original-asr', llm_model: 'original-llm' }, can_confirm_new_operation: true }
+  const openFrozenSheet = async (context: typeof frozenContext & { canonical_task_id?: unknown } = frozenContext) => {
     queryMock.value = 'meeting=1&task=selected-task'
-    apiMock.apiJson.mockImplementation((path: string) => path.endsWith('/new-generation-context') ? Promise.resolve(frozenContext) : Promise.resolve({ task_id: 'selected-task', status: 'failed', message: '上次未完成', error_code: 'unknown_result', retryable: false }))
+    apiMock.apiJson.mockImplementation((path: string) => path.endsWith('/new-generation-context') ? Promise.resolve(context) : Promise.resolve({ task_id: 'selected-task', status: 'failed', message: '上次未完成', error_code: 'unknown_result', retryable: false }))
     renderGenerator('/files?purpose=meeting&file=task%3Aselected-task')
     await screen.findByText('上次未完成')
     await userEvent.click(screen.getByRole('button', { name: '确认原模型，开始新的处理' }))
@@ -311,6 +311,102 @@ describe('NoteGenerator failed generation recovery', () => {
     expect(navigateMock.mock.calls.at(-1)![0]).toContain(`operation=${body.operation_id}`)
     expect(localStorage.getItem('vinote:import-receipt:import-owner:meeting')).toBe(old)
     expect(JSON.parse(localStorage.getItem('vinote:source-task-receipt:import-owner:selected-task')!).id).toBe('selected-task')
+  })
+  it.each(['lost', 'accepted'])('v2 explicitly confirms one operation with canonical id and preserves frozen context for %s response', async outcome => {
+    const context = { ...frozenContext, protocol: 2, canonical_task_id: '2bfa5300-a102-45a8-89cf-123456789abc' }
+    const dialog = await openFrozenSheet(context)
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+    apiMock.apiJson.mockImplementation((_path: string, init?: RequestInit) => {
+      const body = JSON.parse(init!.body as string)
+      const pending = JSON.parse(localStorage.getItem(`vinote:source-receipt:import-owner:${body.operation_id}`)!)
+      expect(pending.frozenContext).toEqual(context)
+      expect(pending.sourceType).toBe('meeting_video')
+      expect(pending.submissionState).toBe('unknown')
+      return outcome === 'lost' ? Promise.reject(new Error('lost response')) : Promise.resolve({ operation_id: body.operation_id, task_id: 'new-independent-child', state: 'accepted' })
+    })
+    await userEvent.dblClick(within(dialog).getByRole('button', { name: '确认原模型并开始新的处理' }))
+    await waitFor(() => expect(navigateMock).toHaveBeenCalled())
+    const writes = apiMock.apiJson.mock.calls.filter(([, init]) => init?.method === 'POST')
+    expect(writes).toHaveLength(1)
+    expect(writes[0][0]).toBe('/api/task/selected-task/new-generation')
+    expect(JSON.parse(writes[0][1].body)).toEqual({ operation_id: expect.any(String), confirmed: true, canonical_task_id: context.canonical_task_id, context_revision: context.context_revision, source_version: context.source.version })
+    expect(navigateMock.mock.calls.at(-1)![0]).toContain('operation=')
+  })
+  it.each([
+    ['meeting_video', 'meeting_video', 5],
+    ['video', 'meeting_video', 5],
+    ['meeting_audio', 'meeting_recording', 4],
+    ['meeting_recording', 'meeting_recording', 4],
+    ['audio', 'meeting_recording', 4],
+    ['unrecognized.webm', 'unknown', 4],
+  ] as const)('v2 verified source %s survives confirmation, recovery and saving as %s', async (type, classified, steps) => {
+    const context = { ...frozenContext, protocol: 2, canonical_task_id: '2bfa5300-a102-45a8-89cf-123456789abc', source: { ...frozenContext.source, title: 'Synthetic-video.webm', type } }
+    const dialog = await openFrozenSheet(context)
+    apiMock.apiJson.mockImplementation(async (_path: string, init?: RequestInit) => {
+      const body = JSON.parse(init!.body as string)
+      expect(JSON.parse(localStorage.getItem(`vinote:source-receipt:import-owner:${body.operation_id}`)!).sourceType).toBe(classified)
+      return { operation_id: body.operation_id, task_id: 'classified-child', state: 'accepted', source_type: 'audio' }
+    })
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认原模型并开始新的处理' }))
+    await waitFor(() => expect(navigateMock).toHaveBeenCalled())
+    const route = navigateMock.mock.calls.at(-1)![0] as string
+    const operation = new URL(route, 'https://fixture.invalid').searchParams.get('operation')!
+    const key = `vinote:source-receipt:import-owner:${operation}`
+    expect(JSON.parse(localStorage.getItem(key)!).sourceType).toBe(classified)
+    cleanup(); queryMock.value = 'meeting=1&operation=' + operation
+    apiMock.apiJson.mockResolvedValue({ task_id: 'classified-child', status: 'transcribing', processed_seconds: 10, total_seconds: 30 })
+    renderGenerator()
+    const list = await screen.findByRole('list', { name: '会议纪要处理步骤' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(steps)
+    expect(screen.queryByRole('listitem', { name: /核对共享画面与发言/ }) !== null).toBe(classified === 'meeting_video')
+    cleanup()
+    libraryMock.saveNote.mockResolvedValue({ id: 'saved-classified' })
+    apiMock.apiJson.mockResolvedValue({ task_id: 'classified-child', status: 'success', result: { task_id: 'classified-child', title: '2026-10-19 15:41 | Source topic', markdown: '# Synthetic summary' } })
+    renderGenerator()
+    await waitFor(() => expect(libraryMock.saveNote).toHaveBeenCalled())
+    expect(libraryMock.saveNote.mock.calls[0][5]).toBe(classified === 'unknown' ? 'meeting_unknown' : classified)
+    expect(libraryMock.saveNote.mock.calls[0][0]).toBe('2026-10-19 15:41｜Synthetic summary')
+    expect(apiMock.apiJson.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+  })
+  it.each([undefined, null, 'bad-id', '2BFA5300-A102-45A8-89CF-123456789ABC', '11111111-1111-4111-8111-111111111111'])('v2 invalid canonical %s cannot open confirmation or POST', async canonical => {
+    const parent = '11111111-1111-4111-8111-111111111111'
+    const context = { ...frozenContext, protocol: 2, parent_task_id: parent, canonical_task_id: canonical }
+    queryMock.value = `meeting=1&task=${parent}`
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path.endsWith('/new-generation-context') ? context : { task_id: parent, status: 'failed', message: '上次未完成', retryable: false }))
+    renderGenerator(); await screen.findByText('上次未完成')
+    await userEvent.click(screen.getByRole('button', { name: '确认原模型，开始新的处理' }))
+    await screen.findByText('原文件与冻结模型尚不能完整核验，未使用当前默认模型。')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+    expect(localStorage.length).toBe(0)
+  })
+  it('v1 rejects an unexpected canonical field instead of upgrading the request implicitly', async () => {
+    queryMock.value = 'meeting=1&task=selected-task'
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path.endsWith('/new-generation-context') ? { ...frozenContext, canonical_task_id: '2bfa5300-a102-45a8-89cf-123456789abc' } : { task_id: 'selected-task', status: 'failed', message: '上次未完成', retryable: false }))
+    renderGenerator(); await screen.findByText('上次未完成')
+    await userEvent.click(screen.getByRole('button', { name: '确认原模型，开始新的处理' }))
+    await screen.findByText('原文件与冻结模型尚不能完整核验，未使用当前默认模型。')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+  it('v2 unknown operation recovery only queries the exact receipt and never replays its canonical submission', async () => {
+    const context = { ...frozenContext, protocol: 2, canonical_task_id: '2bfa5300-a102-45a8-89cf-123456789abc' }
+    const pending = { operationId: 'v2-unknown', independentGeneration: true, parentTaskId: 'selected-task', frozenContext: context, meeting: true, workspace: { scope: 'personal' }, submissionState: 'unknown' }
+    localStorage.setItem('vinote:source-receipt:import-owner:v2-unknown', JSON.stringify(pending))
+    queryMock.value = 'meeting=1&operation=v2-unknown'
+    apiMock.apiJson.mockResolvedValue({ operation_id: 'v2-unknown', task_id: 'reserved-child', state: 'reserved' })
+    renderGenerator()
+    expect(within(await screen.findByRole('alert')).getByText(/提交已登记，尚未确认排队/)).toBeVisible()
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/source-requests/v2-unknown' && !init?.method)).toBe(true)
+    expect(JSON.parse(localStorage.getItem('vinote:source-receipt:import-owner:v2-unknown')!).frozenContext).toEqual(context)
+    expect(libraryMock.saveNote).not.toHaveBeenCalled()
+  })
+  it('v2 account ABA invalidates the open confirmation before any POST', async () => {
+    await openFrozenSheet({ ...frozenContext, protocol: 2, canonical_task_id: '2bfa5300-a102-45a8-89cf-123456789abc' })
+    act(() => { useAuthStore.setState({ user: { id: 'other', email: 'other@example.invalid' } }); useAuthStore.setState({ user: { id: 'import-owner', email: 'import@example.invalid' } }) })
+    expect(screen.queryByRole('button', { name: '确认原模型并开始新的处理' })).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+    expect(localStorage.length).toBe(0)
   })
   it('double confirmation accepts one distinct operation without changing the global receipt', async () => {
     const old = JSON.stringify({ id: 'different-task', meeting: true, workspace: { scope: 'personal' } })
@@ -485,6 +581,21 @@ describe('NoteGenerator failed generation recovery', () => {
     await screen.findByRole('heading', { name: '正在处理任务' })
     expect(screen.getByRole('link', { name: '返回任务与恢复' })).toHaveAttribute('href', '/tasks?tab=generation')
     expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/selected-task' && !init?.method)).toBe(true)
+  })
+  it.each(['unknown_result', 'typed_terminal'])('bare failed %s can only query or return, never confirm a new note operation or save', async errorCode => {
+    queryMock.value = 'task=selected-task'
+    apiMock.apiJson.mockResolvedValue({ task_id: 'selected-task', status: 'failed', message: '此次处理未完成', error_code: errorCode, retryable: true })
+    renderGenerator()
+    await screen.findByRole('alert')
+    expect(screen.getByRole('heading', { level: 1, name: '处理记录' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: '确认原模型，开始新的处理' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /恢复保存|更换来源|开始整理/ })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: '查看原任务状态' }))
+    await screen.findByRole('alert')
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/selected-task' && !init?.method)).toBe(true)
+    expect(libraryMock.saveNote).not.toHaveBeenCalled()
+    expect(localStorage.length).toBe(0)
+    expect(screen.getByRole('link', { name: '返回任务与恢复' })).toHaveAttribute('href', '/tasks?tab=generation')
   })
   it('read-only first query failure remains unconfirmed and only offers another read', async () => {
     queryMock.value = 'task=selected-task'

@@ -60,9 +60,12 @@ MCP 工具管理使用 `/api/mcp-connections`，支持 HTTPS Streamable HTTP，�
 
 - 鉴权 `GET /api/task/{task_id}/summary-context` 只读确认上下文，返回 `context_revision`、`source.version`、`transcript_version` 和 `canonical_task_id`。
 - 鉴权 `POST /api/task/{task_id}/regenerate-summary` 要求 `operation_id`（UUID）、`confirmed:true`、`context_revision`、`source_version`、`model_name`。只有首次持久接受且通过执行核验的任务会派发；已预留、已接受或结果未知时通过原提交回执和任务 GET 查询，不自动重发或调用旧重试入口。
+- 失败的独立任务可通过鉴权 `GET /api/task/{task_id}/new-generation-context` 获取 `protocol:2` 上下文；明确确认的 `/new-generation` POST 还须提交该上下文的 `canonical_task_id`。新 operation 将直接父任务、canonical 原件、模型和版本绑定到 DB 回执；新任务仍一跳引用原件，仅复用直接父任务严格确认的连续 ASR 前缀（含重新核验的 typed empty），不复制旧 plan/inflight、不回退较短全局缓存、不自动重排未知操作。内部 `NewGenerationService.preflight_parent(owner, parent, normalized_wav)` 可用相同预处理得到的 WAV 离线核验采样边界和 checkpoint SHA，不创建 operation 或调用模型；实际执行仍重新核验、加锁并先 fsync 新 seed。v1 原件任务确认契约保持兼容。
 - 笔记媒体与任务媒体 GET 的 `playback=true` 可为 WebM 准备可拖动的播放副本；FFmpeg 只做流复制封装，播放失败可重新加载，导出始终保留原始字节。播放恢复不触发生成。
 
 会议视频从已保留原件准备有界的时间轴/变化画面及 OCR，连同完整原始 ASR 窗口供草稿和事实复核使用。只有所选模型的目录或实际能力核验允许时才发送图片，并遵守输入限制；纯文字模型只使用实际 OCR，不声称看过图片。抽样不代表逐帧理解；识别缺口、采样及技术诊断只约束内部推理，不生成技术报告章节，也不据此编造讨论、决定或待办。说话人时间窗不能确证某句话的身份。
+
+v2 的 opaque `context_revision` 同时冻结父锁内核验的 checkpoint SHA-256 与精确确认采样边界，并通过该 revision 纳入 operation fingerprint；前缀快照由服务端写入新任务，客户端不能指定。GET 后、POST 后或 seed 前父记录发生任何变化均阻断，不能重新采用缩短后的前缀；修改磁盘 link 也不能覆盖 live lease 内冻结的快照。公开确认字段保持不变。
 
 流式 ASR 只有在本机完整发送当前区间、服务返回匹配会话的协议化空终态证据时，才记录「已提交但未识别出文字」并继续；这不代表静音或完整识别。缺少证据、旧错误码和网络未知结果仍保持失败、禁止自动重放；整份录音无识别文字不会冒充纪要成功。该能力需要对应服务部署支持；源码、离线测试和真实设备/供应商验收分别记录。
 

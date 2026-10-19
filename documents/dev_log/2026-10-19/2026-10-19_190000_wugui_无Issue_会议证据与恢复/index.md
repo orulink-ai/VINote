@@ -48,6 +48,21 @@
 - 图像兼容性只用合成图片验证明确选择的模型；回执绑定 owner、Origin、model。截断、拒绝、工具调用和未知响应不得缓存为成功或自动重放。本轮未发布的 completed v1 测试回执由受控手工归档保留，再做一次 v2 前置检查；这不是产品自动迁移策略。
 - 真实素材、产物、逐帧评价和私人链接仅存忽略目录；仓库中只记录匿名结果和验证范围。以上均为功能源码运行证据，尚非新安装包发布验收。
 
+### 直接父独立任务前缀恢复（同轮后续）
+
+- v2 将 selected parent 和 canonical 原件分别绑定进确认、DB fingerprint 与 live lease；原件引用不形成链。新增 `parent_asr_prefix.py`，并接入 context、accept、lease 和 transcriber；保留 v1。
+- TDD：先写独立 helper 正反例（模块缺失），再写真实 operation/lease/transcriber 集成测试；集成前因 context 不支持 receipts 参数失败。修正 Windows TestClient 的本机事件循环 socket 夹具后，针对性回归 217 passed。
+- 集成反例验证 donor 损坏、未提交记录、stamp/typed-empty/WAV/DB 不匹配均不能提交或退回全局前缀；正例通过真实首次 claim 生成合成失败父任务，验证新 seed fsync 在策略读取和剩余提交之前、旧记录字节不变、重复 POST 不排队。
+- 私有运行态已通过只读 DB、同一预处理/FFmpeg 的离线 preflight；没有创建 operation、claim 或模型调用。该检查不是实际剩余 ASR/总结验收；具体私有身份与内容不入库。
+- 全量后端：`python -B -m pytest -p no:cacheprovider tests -q --tb=short`，1,747 passed、19 subtests、358 warnings，187.13 秒。合成集成测试只使用模拟 provider 响应，不代表实际剩余处理已完成；此后并行加入的测试需单独核验。
+
+### P1：冻结所选父 checkpoint 版本
+
+- 独立审核指出旧 v2 只绑定父身份；GET 后同一 stamp/DB 下缩短 confirmed prefix 不改变 revision，可能重复已完成部分。新增反例复现 GET→截短→POST、POST→截短→claim、lease→截短→seed 三个窗口，修复前均失败（其余 16 项通过）。
+- 服务端在父锁内严格读取 prefix，将完整 checkpoint SHA-256 与精确 end frame 纳入 opaque revision，因此纳入 accepted fingerprint；server-only link 与 live lease 冻结快照。worker 重算以及 seed 前父锁内复核均须相同。公开 GET/POST 字段不增加，v1 不变。
+- 增加同 end frame 改文字、伪改 child link、缺失/撤销 lease、seed fsync 失败反例；客户端传 parent_prefix 返回 422。针对性回归 225 passed；最终全量回归 1,758 passed、19 subtests、358 warnings，180.10 秒（同前述 pytest 命令，包含并行新增时长测试）。
+- 修复后再次用只读私有 DB 与相同预处理/FFmpeg 执行离线 preflight，冻结 prefix 匹配、原 checkpoint 字节未变；未创建 operation/claim，没有实际 ASR/LLM 调用。实际剩余处理仍待用户明确确认，不以离线检查冒充供应商验收。
+
 ### 公网与样本 B 的实际结果（未完成验收）
 
 - VILab-server 合并提交 fe8288f7 已在公网构建、切换并健康核验。完整源码树 624 个文件与目标提交相同；为目标机源码构建，不冒充 CI OCI 字节。旧镜像与冻结配置保留，仅 image 改变，环境、挂载、网络及账号配置一致。

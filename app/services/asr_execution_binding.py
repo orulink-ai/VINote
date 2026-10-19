@@ -14,7 +14,7 @@ from pathlib import Path
 from app.config import settings
 from app.db_models import SourceRequestDB
 from app.services.source_request_service import _fingerprint
-from app.services.task_generation_context import _read_json, frozen_generation_context
+from app.services.task_generation_context import _read_json, _frozen_generation_context
 from app.services.task_model_source import SNAPSHOT_FILE, validate_source
 
 _execution = ContextVar('independent_asr_execution', default=None)
@@ -35,6 +35,9 @@ class ASRExecutionBinding:
     folder: Path
     source: Path
     snapshot_json: str
+    canonical: str | None = None
+    parent_prefix_json: str | None = None
+    _receipts: object = field(default=None, compare=False, repr=False)
     # Revocation also invalidates copy_context snapshots retained after dispatch.
     _live: list = field(default_factory=lambda: [True], compare=False, repr=False)
 
@@ -73,10 +76,16 @@ class ASRExecutionBinding:
             _deny()
         reference = _read_json(self.folder / 'source_reference.json')
         link = _read_json(self.folder / 'new_generation.json')
-        if (reference != {'version': 1, 'owner': self.owner, 'parent_task_id': self.parent,
+        expected_link = {'version': 1, 'operation_id': self.operation, 'parent_task_id': self.parent,
+                         'source_version': self.source_version, 'context_revision': self.revision}
+        if self.canonical is not None:
+            if self.parent_prefix_json is None:
+                _deny()
+            expected_link.update(version=2, canonical_task_id=self.canonical,
+                                 parent_prefix=json.loads(self.parent_prefix_json))
+        if (reference != {'version': 1, 'owner': self.owner, 'parent_task_id': self.canonical or self.parent,
                           'source_version': self.source_version}
-                or link != {'version': 1, 'operation_id': self.operation, 'parent_task_id': self.parent,
-                            'source_version': self.source_version, 'context_revision': self.revision}):
+                or link != expected_link):
             _deny()
         artifacts = TaskArtifactService(settings.output_dir)
         if (artifacts.resolve_source_media(self.folder) != self.source
@@ -119,7 +128,7 @@ def _claimed_execution(receipts, artifacts, owner, task, folder, snapshot, link,
     if folder.is_symlink():
         _deny()
     confirmation = NewGenerationConfirmation(confirmed=True, **{
-        key: link[key] for key in ('operation_id', 'context_revision', 'source_version')})
+        key: link[key] for key in ('operation_id', 'context_revision', 'source_version', 'canonical_task_id') if key in link})
     operation = str(confirmation.operation_id)
     receipt = receipts.get(owner, operation)  # Existing owner-scoped read API.
     expected = _fingerprint(_submission(link['parent_task_id'], confirmation))
@@ -128,16 +137,20 @@ def _claimed_execution(receipts, artifacts, owner, task, folder, snapshot, link,
         if (not row or row.state != 'accepted' or row.task_id != task
                 or row.fingerprint != expected or receipt.state != 'accepted' or receipt.task_id != task):
             _deny()
-    context = frozen_generation_context(owner, link['parent_task_id'])
+    context, parent_prefix = _frozen_generation_context(owner, link['parent_task_id'], receipts=receipts)
     parent_folder = artifacts.find_task_dir(link['parent_task_id'])
     if (context['context_revision'] != link['context_revision']
             or context['source']['version'] != link['source_version']
+            or context.get('canonical_task_id') != link.get('canonical_task_id')
+            or (link.get('canonical_task_id') is not None and link.get('parent_prefix') != parent_prefix)
             or validate_source(_read_json(parent_folder / SNAPSHOT_FILE), owner) != snapshot
             or snapshot['mode'] != 'cloud'):
         _deny()
     binding = ASRExecutionBinding(owner, operation, task, link['parent_task_id'], link['source_version'],
                                   link['context_revision'], folder.resolve(), source.resolve(),
-                                  json.dumps(snapshot, sort_keys=True))
+                                  json.dumps(snapshot, sort_keys=True), canonical=link.get('canonical_task_id'),
+                                  parent_prefix_json=json.dumps(parent_prefix, sort_keys=True) if parent_prefix is not None else None,
+                                  _receipts=receipts)
     token = _execution.set(binding)
     try:
         binding.validate(owner=owner, task=task, folder=folder, source=source)

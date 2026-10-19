@@ -302,9 +302,24 @@ class VILabTranscriber(Transcriber):
                 except (OSError, ValueError):
                     raise _CheckpointEvidenceUnavailable() from None
                 parts, donor_hash = _read_donor(donor, total_frames)
+                parent_seed = None
+                if execution.canonical is not None:
+                    from app.services.parent_asr_prefix import locked_parent_prefix
+                    from app.services.task_artifact_service import TaskArtifactService
+                    parent_seed = locks.enter_context(locked_parent_prefix(
+                        execution._receipts, TaskArtifactService(settings.output_dir),
+                        owner=execution.owner, task_id=execution.task,
+                        normalized_identity=digest, total_frames=total_frames,
+                        expected_prefix=json.loads(execution.parent_prefix_json)))
+                    parts = parent_seed['completed']
+                    if saved is not None and (saved.get('seed') != parent_seed['seed']
+                            or confirmed[:len(parts)] != parts):
+                        raise _CheckpointEvidenceUnavailable()
                 if saved is None:
                     seeded = {'completed': parts, 'execution': stamp}
-                    if parts:
+                    if parent_seed is not None:
+                        seeded['seed'] = parent_seed['seed']
+                    elif parts:
                         seeded['seed'] = {'version': 1, 'donor_identity': digest,
                                           'checkpoint_sha256': donor_hash,
                                           'confirmed_end_frame': round(parts[-1]['end'] * 16000)}

@@ -28,7 +28,24 @@ import { Label } from '../components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '../components/ui/sheet'
 
-type FrozenNewContext = { protocol: number; parent_task_id: string; workflow: string; context_revision: string; source: { title: string; version: string }; frozen_models: { mode: string; origin: string; asr_model: string; llm_model: string }; can_confirm_new_operation: boolean }
+type FrozenNewContext = { protocol: number; canonical_task_id?: string; parent_task_id: string; workflow: string; context_revision: string; source: { title: string; version: string; type?: string }; frozen_models: { mode: string; origin: string; asr_model: string; llm_model: string }; can_confirm_new_operation: boolean }
+/** Only the verified source classification selects playback/workflow UI; never filenames. */
+function frozenSourceType(context: FrozenNewContext): string {
+  const type = context.source.type
+  if (type === 'video' || type === 'meeting_video') return context.workflow === 'meeting' ? 'meeting_video' : 'video'
+  if (type === 'audio' || type === 'meeting_audio' || type === 'meeting_recording') return context.workflow === 'meeting' ? 'meeting_recording' : 'audio'
+  if (type === 'transcript') return 'transcript'
+  if (type === 'file' || type === 'document') return 'file'
+  return 'unknown'
+}
+
+function validFrozenProtocol(context: FrozenNewContext, parentTask: string) {
+  if (context.protocol === 1) return context.canonical_task_id === undefined
+  return context.protocol === 2 && typeof context.canonical_task_id === 'string'
+    && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(context.canonical_task_id)
+    && context.canonical_task_id !== parentTask && context.canonical_task_id !== context.parent_task_id
+}
+
 type TaskResponse = { task_id: string; source_type?: string; operation_id?: string; state?: 'reserved' | 'accepted' }
 type ImportReceipt = { id?: string; operationId?: string; createdAt?: string; submissionState?: 'registering' | 'unknown' | 'reserved' | 'accepted'; workspace: WorkspaceSelection; sourceUrl?: string; sourceType?: string; sourceTitle?: string; mode?: UploadMode; meeting: boolean; localFileId?: string; independentGeneration?: boolean; summaryOnly?: boolean; summaryNoteId?: string; origin?: string; parentTaskId?: string; frozenContext?: FrozenNewContext }
 type TaskStatusResponse = {
@@ -157,7 +174,8 @@ export function NoteGenerator() {
     } else if (receiptKey) {
       try {
         const key = operationParam && /^[A-Za-z0-9_-]{1,160}$/.test(operationParam) ? `vinote:source-receipt:${owner}:${operationParam}` : receiptKey
-        const saved = JSON.parse(localStorage.getItem(key) || 'null') as ImportReceipt | null
+        let saved = JSON.parse(localStorage.getItem(key) || 'null') as ImportReceipt | null
+        if (saved?.independentGeneration && saved.frozenContext) saved = { ...saved, sourceType: frozenSourceType(saved.frozenContext) }
         if (saved?.summaryOnly && (saved.origin !== serviceOrigin || useAppModeStore.getState().config?.mode !== 'cloud')) throw new Error('原总结服务已变化，只能在原服务核验操作回执')
         if (operationParam && (!saved || saved.operationId !== operationParam)) throw new Error('缺少原操作回执')
         if ((saved?.id || saved?.operationId) && saved?.workspace && saved.meeting === isMeeting) {
@@ -245,7 +263,7 @@ export function NoteGenerator() {
             sourceUrl || undefined,
             data.result?.task_id || id,
             workspace,
-            isMeeting ? (sourceType === 'video' || sourceType === 'meeting_video' ? 'meeting_video' : 'meeting_recording') : sourceType,
+            isMeeting ? (['video', 'meeting_video'].includes(sourceType || '') ? 'meeting_video' : sourceType === 'unknown' ? 'meeting_unknown' : 'meeting_recording') : sourceType,
           )
           if (!active()) return
           if (note) {
@@ -342,7 +360,7 @@ export function NoteGenerator() {
       const data = await apiJson<TaskResponse>(`/api/source-requests/${encodeURIComponent(request.operationId)}`)
       if (!active()) return
       if (data.operation_id !== request.operationId || !data.task_id || !['reserved', 'accepted'].includes(data.state || '')) throw new Error('回执与原操作不一致，请继续核验')
-      resumeReceipt({ ...value, id: data.task_id, sourceType: data.source_type || value.sourceType, submissionState: data.state })
+      resumeReceipt({ ...value, id: data.task_id, sourceType: value.independentGeneration && value.frozenContext ? frozenSourceType(value.frozenContext) : data.source_type || value.sourceType, submissionState: data.state })
     } catch (cause) {
       if (!active()) return
       setStatus('failed')
@@ -511,7 +529,7 @@ export function NoteGenerator() {
       const context = await apiJson<FrozenNewContext>(`/api/task/${encodeURIComponent(parentTask)}/new-generation-context`)
       if (!active()) return
       const origin = new URL(context.frozen_models.origin)
-      if (context.protocol !== 1 || context.parent_task_id !== parentTask || !context.can_confirm_new_operation || context.workflow !== (isMeeting ? 'meeting' : 'note_organization') || context.frozen_models.mode !== 'cloud' || !context.frozen_models.asr_model?.trim() || !context.frozen_models.llm_model?.trim() || !/^[0-9a-f]{64}$/.test(context.context_revision) || !/^[0-9a-f]{64}$/.test(context.source.version) || !['https:', 'http:'].includes(origin.protocol) || origin.username || origin.password || origin.search || origin.hash) throw new Error('原文件与冻结模型尚不能完整核验，未使用当前默认模型。')
+      if (!validFrozenProtocol(context, parentTask) || context.parent_task_id !== parentTask || !context.can_confirm_new_operation || context.workflow !== (isMeeting ? 'meeting' : 'note_organization') || context.frozen_models.mode !== 'cloud' || !context.frozen_models.asr_model?.trim() || !context.frozen_models.llm_model?.trim() || !/^[0-9a-f]{64}$/.test(context.context_revision) || !/^[0-9a-f]{64}$/.test(context.source.version) || !['https:', 'http:'].includes(origin.protocol) || origin.username || origin.password || origin.search || origin.hash) throw new Error('原文件与冻结模型尚不能完整核验，未使用当前默认模型。')
       setNewConfirmation({ context, owner, epoch })
     } catch (cause) { if (active()) setError(cause instanceof Error ? cause.message : '无法读取冻结模型，请返回处理记录。') }
     finally { newLock.current = false; if (active()) setNewBusy(false) }
@@ -521,9 +539,10 @@ export function NoteGenerator() {
     if (!confirmed || !receipt?.id || newLock.current) return
     const active = () => mounted.current && confirmed.epoch === recoveryEpoch.current && confirmed.owner === useAuthStore.getState().user?.id && confirmed.context.parent_task_id === receipt.id
     if (!active()) { setNewConfirmation(null); return }
+    if (!validFrozenProtocol(confirmed.context, receipt.id)) { setNewConfirmation(null); setError('原文件与冻结模型尚不能完整核验，未使用当前默认模型。'); return }
     newLock.current = true; setNewBusy(true)
     const operationId = crypto.randomUUID()
-    const pending: ImportReceipt = { operationId, createdAt: new Date().toISOString(), submissionState: 'unknown', workspace: readOnlyTask ? currentWorkspace : receipt.workspace, sourceTitle: confirmed.context.source.title, sourceType: receipt.sourceType, localFileId: receipt.localFileId || `task:${receipt.id}`, mode: 'file', meeting: isMeeting, independentGeneration: true, parentTaskId: receipt.id, frozenContext: confirmed.context }
+    const pending: ImportReceipt = { operationId, createdAt: new Date().toISOString(), submissionState: 'unknown', workspace: readOnlyTask ? currentWorkspace : receipt.workspace, sourceTitle: confirmed.context.source.title, sourceType: frozenSourceType(confirmed.context), localFileId: receipt.localFileId || `task:${receipt.id}`, mode: 'file', meeting: isMeeting, independentGeneration: true, parentTaskId: receipt.id, frozenContext: confirmed.context }
     const key = `vinote:source-receipt:${owner}:${operationId}`
     let protectedOperation = false
     const route = `/generate?${new URLSearchParams({ ...(isMeeting ? { meeting: '1' } : {}), operation: operationId })}`
@@ -535,10 +554,10 @@ export function NoteGenerator() {
       if (localStorage.getItem(key) !== JSON.stringify(pending)) throw new Error('无法保护本次提交记录，未开始处理。')
       protectedOperation = true
       if (!active()) return
-      const result = await apiJson<TaskResponse>(`/api/task/${encodeURIComponent(receipt.id)}/new-generation`, { method: 'POST', body: JSON.stringify({ operation_id: operationId, confirmed: true, context_revision: confirmed.context.context_revision, source_version: confirmed.context.source.version }) })
+      const result = await apiJson<TaskResponse>(`/api/task/${encodeURIComponent(receipt.id)}/new-generation`, { method: 'POST', body: JSON.stringify({ operation_id: operationId, confirmed: true, context_revision: confirmed.context.context_revision, source_version: confirmed.context.source.version, ...(confirmed.context.protocol === 2 ? { canonical_task_id: confirmed.context.canonical_task_id } : {}) }) })
       if (!active()) return
       if (result.operation_id !== operationId || !result.task_id || result.task_id === receipt.id || !['reserved', 'accepted'].includes(result.state || '')) throw new Error('本次提交结果尚未确认，只能查询本次操作。')
-      localStorage.setItem(key, JSON.stringify({ ...pending, id: result.task_id, submissionState: result.state, sourceType: result.source_type || pending.sourceType }))
+      localStorage.setItem(key, JSON.stringify({ ...pending, id: result.task_id, submissionState: result.state, sourceType: pending.sourceType }))
       setNewConfirmation(null); navigate(route, { state: { returnTo: parent } })
     } catch (cause) {
       if (!active()) return
@@ -673,7 +692,7 @@ export function NoteGenerator() {
       <h2 className="text-lg font-medium text-balance">正在处理任务</h2>
       <p role="status" className="text-sm leading-6 text-muted-foreground">{sourceRecoveryCopy(taskMessage) || '正在读取原任务状态，请稍候。'}</p>
       <p className="text-sm leading-6 text-muted-foreground">任务用途尚未核验，暂不展示处理步骤。这里只查询本次任务，不会重新提交。</p>
-    </section> : running ? <GenerateProgress videoSource={['video', 'meeting_video'].includes(receipt?.sourceType || '')} status={status} progress={progress} processedSeconds={transcriptionMeasure?.processed} totalSeconds={transcriptionMeasure?.total ?? analysisMeasure.total} receivedSeconds={analysisMeasure.received} speakerDetectionProgress={analysisMeasure.detection} speakersReady={analysisMeasure.speakersReady} currentStep={currentStep} error={sourceRecoveryCopy(error)} message={sourceRecoveryCopy(taskMessage)} meeting={isMeeting} audioOnlySource={receipt?.sourceType === 'audio' || isBilibiliSourceUrl(receipt?.sourceUrl || videoUrl)} documentSource={receipt?.sourceType === 'file' || uploadMode === 'document'} /> : <>
+    </section> : running ? <GenerateProgress videoSource={['video', 'meeting_video'].includes(receipt?.sourceType || '')} status={status} progress={progress} processedSeconds={transcriptionMeasure?.processed} totalSeconds={transcriptionMeasure?.total ?? analysisMeasure.total} receivedSeconds={analysisMeasure.received} speakerDetectionProgress={analysisMeasure.detection} speakersReady={analysisMeasure.speakersReady} currentStep={currentStep} error={sourceRecoveryCopy(error)} message={sourceRecoveryCopy(taskMessage)} meeting={isMeeting} audioOnlySource={['audio', 'meeting_recording', 'meeting_audio'].includes(receipt?.sourceType || '') || isBilibiliSourceUrl(receipt?.sourceUrl || videoUrl)} documentSource={receipt?.sourceType === 'file' || uploadMode === 'document'} /> : <>
       {!restoringSource && <section className="border-b py-3">
         <div className="mb-3 flex items-start justify-between gap-4"><div className="flex items-start gap-3"><div><h2 className="text-lg font-semibold">{isMeeting ? '选择会议文件' : '选择笔记来源'}</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">{isMeeting ? '支持音频、视频和已有逐字稿。' : '粘贴网页或视频链接，或上传 PDF、Word、音视频和文字文件。PDF、Word 上限 20 MB，PDF 上限 200 页。'}</p></div></div></div>
         <fieldset disabled={!!receipt || recoveryUnavailable}><FileUploader videoUrl={videoUrl} urlError={visibleSourceError} urlInputRef={sourceInput} onVideoUrlChange={value => { if (!receipt) { setVideoUrl(value); setSourceError('') } }} onFileSelect={value => { if (!receipt) setSelectedFile(value) }} onModeChange={value => { if (!receipt) { setUploadMode(value); setSourceError('') } }} fileUploadEnabled initialMode={uploadMode} file={selectedFile} urlEnabled={!isMeeting} meetingOnly={isMeeting} /></fieldset>

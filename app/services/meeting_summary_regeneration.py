@@ -24,6 +24,7 @@ from app.services.vilab_cloud_service import VILabCloudService
 
 
 class SummaryConfirmation(NewGenerationConfirmation):
+    canonical_task_id: None = None  # v2 ASR donor selection is not summary input.
     model_name: str = Field(min_length=1, max_length=200)
 
     @field_validator('model_name')
