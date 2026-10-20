@@ -1,4 +1,4 @@
-"""Actual draft3/review4 host, screenshot renderer and ReactMarkdown/GFM parity."""
+"""Actual draft3/review4-or-5 host and ReactMarkdown/GFM parity."""
 import copy
 import json
 from pathlib import Path
@@ -37,6 +37,24 @@ def automatic(c, value):
 def summarize(llm, c):
     return llm.summarize('Synthetic', [TranscriptSegment(0, 10, SOURCE)],
                          style='meeting', video_evidence=c.evidence)
+
+
+def graphic5_fixture(value):
+    """Explicit new graphic response; preserve the tested Markdown exactly."""
+    value = copy.deepcopy(value)
+    value['protocol'] = 5
+    value['blocks'] = [
+        {'id': block['id'], 'parts': [{'id': f'PART_{index}', 'text': block['markdown']}]}
+        for index, block in enumerate(value['blocks'])
+    ]
+    ref = {'part_id': 'PART_0', 'claim_ids': ['C1']}
+    if value['visual']['diagram'] is None:
+        value['visual'] = {'protocol': 2, 'scenes': [
+            {'id': 'S1', 'frame_id': '[FRAME:0001]', 'label_ref': ref}], 'diagram': None}
+    else:
+        value['visual'] = {'protocol': 2, 'scenes': [], 'diagram': {
+            'kind': 'cards', 'nodes': [{'id': 'N1', 'label_ref': ref}], 'edges': []}}
+    return value
 
 
 @pytest.fixture(scope='module')
@@ -250,7 +268,7 @@ def test_multiple_figure_input_order_need_not_match_document_order(case, react_r
 ])
 def test_footnotes_are_explicitly_unsupported_in_actual_host(case, presentation, blocks, used, react_render):
     # remark-gfm hides unused definitions; referenced ones become a separate
-    # footnote section. Neither may stand in for a protocol-4 reviewed block.
+    # footnote section. Neither may stand in for a reviewed block/part.
     html = react_render(['\n\n'.join(blocks)])[0]
     if used:
         assert 'data-footnotes' in html and SOURCE in html
@@ -260,13 +278,43 @@ def test_footnotes_are_explicitly_unsupported_in_actual_host(case, presentation,
         assert 'data-footnotes' not in html and html.count(SOURCE) == 1
     value = response(case, presentation)
     value['blocks'] = [{'id':f'B{i+1}', 'markdown':text} for i, text in enumerate(blocks)]
-    llm, raw4 = automatic(case, value)
+    if presentation in {'comic', 'infographic'}:
+        value = graphic5_fixture(value)
+        assert [''.join(part['text'] for part in block['parts']) for block in value['blocks']] == blocks
+    llm, raw_review = automatic(case, value)
     with presentation_scope('detailed', presentation) as state:
         with pytest.raises(FinalLedgerError) as error:
             summarize(llm, case)
         assert error.value.code == 'invalid_block_content'
-        assert state.raw_review == raw4 and state.figures == [] and state.visual_review is None
+        assert state.raw_review == raw_review and state.figures == [] and state.visual_review is None
+        assert json.loads(raw_review)['protocol'] == (5 if presentation in {'comic', 'infographic'} else 4)
     assert len(llm.calls) == 2
+
+
+@pytest.mark.parametrize('presentation', ['comic', 'infographic'])
+@pytest.mark.parametrize('blocks', [
+    ['[^unused]: ' + SOURCE],
+    ['A condition[^used].', '[^used]: ' + SOURCE],
+    ['[^unused]:', '    ' + SOURCE],
+    [SOURCE, '[^unused]: ' + SOURCE],
+])
+def test_historical_raw4_graphic_finalizer_keeps_footnote_guard(case, presentation, blocks):
+    # Historical direct validation does not represent a new expected5 model
+    # operation. Keep its original raw4 response and exact rejection semantics.
+    from app.llm.meeting_final_review import finalize_final_review
+    from app.llm.source_references import bind_source_references
+    from app.llm.video_material import bind_video_material
+    value = response(case, presentation)
+    value['blocks'] = [{'id': f'B{i+1}', 'markdown': text} for i, text in enumerate(blocks)]
+    raw4 = json.dumps(value)
+    with presentation_scope('detailed', presentation) as state, \
+            bind_source_references([TranscriptSegment(0, 10, SOURCE)]), \
+            bind_video_material(case.evidence, {'vision': True}):
+        with pytest.raises(FinalLedgerError) as error:
+            finalize_final_review(raw4, json.dumps(case.material))
+        assert error.value.code == 'invalid_block_content'
+        assert state.raw_review == raw4 and state.figures == [] and state.visual_review is None
+        assert json.loads(state.raw_review)['protocol'] == 4
 
 
 @pytest.mark.parametrize('presentation', ['text', 'html'])

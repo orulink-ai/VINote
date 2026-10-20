@@ -404,3 +404,5 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 狭窄兼容只允许本人personal/done的exact saved非空正文、可信UUID root及明确成功meeting request，metadata确实不存在，且无持久版本receipt/sidecar/generation/派生引用。损坏文件、现代凭证缺损、未知/跨账号/非完成仍拒绝；不推断形式、不补metadata，Wiki新归组照旧要求严格形式。原HTTP两例文件/断言完全未改。
 - 独审73项＋21项通过，3源码/测试SHA与冻结一致，原metadata stripping、真实fresh回执、unknown/账号切换均保留。此为新增失败后的定向回归，不把前轮完整失败记录改成通过；完整集成还需再次验证。
 - 前端最终136文件/1606项通过（74.82秒）、TypeScript及生产构建通过（15.43秒），23项桌面脚本和test打包plan通过。plan仅为配置，不是安装包构建验收；当前完整后端与最终知识库交付仍未放行。
+
+- 13项过时协议测试修复只改fixture/契约断言：实际新graphic用raw5，text/html/illustrated及历史分支仍精确raw4，不能以“4或5均可”通过。脚注照旧拒绝invalid_block_content，新增历史raw4分支与raw5正向对照保留。GFM独审93项＋2正向通过；prompt独审59项＋相邻77项通过、20错/混协议反例拒绝。产品源码守卫与失败原物未因此修改；本记录对应protocol5测试修复，后续protocol6另验。

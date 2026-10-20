@@ -1,16 +1,70 @@
 """The two model requests must agree on their actual response envelope."""
+import json
+import re
+
 import pytest
 
 from app.llm.meeting_draft import build_meeting_draft_prompts
+from app.llm.meeting_final_claim_ledger import FinalLedgerError
+from app.llm.meeting_final_review import review_protocol
 from app.llm.meeting_review import build_meeting_review_prompts
 from app.llm.meeting_presentation import presentation_scope
+from app.llm.meeting_visual_review import visual_review_instructions
 from app.llm.prompts import build_system_prompt
 
 
-@pytest.mark.parametrize('presentation', ['text', 'html', 'illustrated', 'comic', 'infographic'])
-def test_structured_stages_do_not_inherit_markdown_only_outer_response(presentation):
+def _assert_final_envelope(rules, presentation, expected_protocol):
+    assert re.findall(r'FINAL CLAIM LEDGER PROTOCOL (\d+)\.', rules) == [str(expected_protocol)]
+    lines = rules.splitlines()
+    header = next(i for i, line in enumerate(lines) if 'FINAL CLAIM LEDGER PROTOCOL ' in line)
+    example = json.loads(lines[header + 1].removesuffix('.'))
+    assert type(example['protocol']) is int and example['protocol'] == expected_protocol
+    expected_fields = {'protocol', 'blocks', 'claims'}
+    if presentation == 'illustrated':
+        expected_fields.add('figures')
+    if presentation in {'comic', 'infographic'}:
+        expected_fields.add('visual')
+    assert set(example) == expected_fields
+    for block in example['blocks']:
+        if expected_protocol == 5:
+            assert set(block) == {'id', 'parts'}
+            assert all(set(part) == {'id', 'text'} for part in block['parts'])
+        else:
+            assert set(block) == {'id', 'markdown'}
+    if presentation in {'comic', 'infographic'}:
+        visual = example['visual']
+        if expected_protocol == 5:
+            assert set(visual) == {'protocol', 'scenes', 'diagram'}
+            assert type(visual['protocol']) is int and visual['protocol'] == 2
+        else:
+            assert set(visual) == {'scenes', 'diagram'}
+        if presentation == 'comic':
+            assert visual['diagram'] is None and len(visual['scenes']) == 1
+            row = visual['scenes'][0]
+            base = {'id', 'frame_id'}
+        else:
+            assert visual['scenes'] == []
+            assert set(visual['diagram']) == {'kind', 'nodes', 'edges'}
+            assert visual['diagram']['kind'] == 'cards' and visual['diagram']['edges'] == []
+            assert len(visual['diagram']['nodes']) == 1
+            row = visual['diagram']['nodes'][0]
+            base = {'id'}
+        if expected_protocol == 5:
+            assert set(row) == base | {'label_ref'}
+            assert set(row['label_ref']) == {'part_id', 'claim_ids'}
+            assert row['label_ref']['part_id'] == example['blocks'][0]['parts'][0]['id']
+        else:
+            assert set(row) == base | {'block_ids', 'grounded_label'}
+            assert row['block_ids'] == [example['blocks'][0]['id']]
+            assert row['grounded_label'] == example['blocks'][0]['markdown']
+
+
+@pytest.mark.parametrize('presentation,expected_protocol', [
+    ('text', 4), ('html', 4), ('illustrated', 4), ('comic', 5), ('infographic', 5),
+])
+def test_structured_stages_do_not_inherit_markdown_only_outer_response(presentation, expected_protocol):
     source = '[ASR:0001] Synthetic source: verify the interlock before opening.'
-    with presentation_scope('concise', presentation):
+    with presentation_scope('concise', presentation) as state:
         draft = build_meeting_draft_prompts(title='Synthetic', source=source, extras=None, output_language='en')
         review = build_meeting_review_prompts(source=source, draft='Synthetic fallible draft', extras=None, output_language='en')
     for prompts in [draft, review]:
@@ -18,10 +72,40 @@ def test_structured_stages_do_not_inherit_markdown_only_outer_response(presentat
         assert 'exactly one JSON object' in prompts['system_prompt']
         assert 'Return only the final Markdown content' not in prompts['system_prompt']
         assert 'Return only the report, without' not in prompts['system_prompt']
-    assert 'FINAL CLAIM LEDGER PROTOCOL 4' in review['system_prompt']
+    _assert_final_envelope(review['system_prompt'], presentation, expected_protocol)
+    assert state.expected_review_protocol == expected_protocol
+    assert 'AUTOMATIC FACT MATERIAL PROTOCOL 3.' in draft['system_prompt']
     assert 'Define and account for each proposition together' in review['system_prompt']
     assert 'protocol-3 blocks/audit' not in review['system_prompt']
     assert 'This core ledger has no' not in review['system_prompt']
+
+
+@pytest.mark.parametrize('presentation', ['text', 'html', 'illustrated', 'comic', 'infographic'])
+def test_legacy_contract_builder_keeps_protocol_four_and_original_label_schema(presentation):
+    rules = review_protocol(presentation)
+    assert rules == review_protocol(presentation, protocol=4)
+    _assert_final_envelope(rules, presentation, 4)
+    assert 'Markdown belongs only inside blocks[].markdown;' in rules
+    assert 'blocks[].parts[].text' not in rules
+    visual_rules = visual_review_instructions(presentation, protocol=4)
+    assert 'label_ref' not in visual_rules
+    assert 'FINAL/5 BODY PARTS AND VISUAL-REF/2.' not in visual_rules
+    if presentation in {'comic', 'infographic'}:
+        assert 'protocol-4 blocks/claims/visual contract' in visual_rules
+        assert 'grounded_label' in visual_rules
+    if presentation == 'infographic':
+        for instruction in ('Select self-contained unchanged excerpts naming objects and essential attributes',
+                            'omit unsuitable excerpts rather than expand prose',
+                            'unchanged contiguous substrings', 'Cards/comparison have no edges',
+                            'Do not manufacture relations to fill a graph'):
+            assert instruction in visual_rules
+
+
+@pytest.mark.parametrize('presentation', ['text', 'html', 'illustrated'])
+def test_protocol_five_is_not_a_non_graphic_contract(presentation):
+    with pytest.raises(FinalLedgerError) as error:
+        review_protocol(presentation, protocol=5)
+    assert error.value.code == 'invalid_protocol'
 
 
 def test_legacy_and_intermediate_requests_keep_the_original_markdown_envelope():
@@ -52,6 +136,8 @@ def test_materiality_contract_is_specific_to_the_actual_stage(language, depth, p
             assert obsolete not in prompts['system_prompt']
         assert 'materiality is not certainty' in prompts['system_prompt']
         assert 'No source window or frame is required to yield a business fact' in prompts['system_prompt']
+    _assert_final_envelope(review['system_prompt'], presentation,
+                           5 if presentation in {'comic', 'infographic'} else 4)
     assert 'Classify each unique draft claim' in draft['system_prompt']
     assert 'Do not reclassify original.material' not in draft['system_prompt']
     assert 'Classify each unique draft claim' not in review['system_prompt']
@@ -117,10 +203,20 @@ def test_source_fidelity_replacements_reach_both_stages_without_rewriting_source
     assert 'never correct punctuation, repetitions, spelling, spacing or broken grammar inside it' in review['system_prompt']
     node_rule = 'Select self-contained unchanged excerpts naming objects and essential attributes'
     assert node_rule not in draft['system_prompt']
-    assert review['system_prompt'].count(node_rule) == (1 if presentation == 'infographic' else 0)
+    assert node_rule not in review['system_prompt']
+    if presentation in {'comic', 'infographic'}:
+        for instruction in ('FINAL/5 BODY PARTS AND VISUAL-REF/2.',
+                            'Write reader-facing text once, only in blocks[].parts[].text.',
+                            'Only graphic labels use label_ref=',
+                            'never grounded_label, free label text or block_ids',
+                            'Keep existing claims/accounting/evidence rules'):
+            assert review['system_prompt'].count(instruction) == 1
+        assert 'Markdown belongs only inside blocks[].markdown;' not in review['system_prompt']
+        assert 'FINAL/5 BODY PARTS AND VISUAL-REF/2.' not in draft['system_prompt']
     if presentation == 'infographic':
         for instruction in ('Never split an object and its values across independent nodes',
-                            'omit unsuitable excerpts rather than expand prose',
-                            'unchanged contiguous substrings', 'Cards/comparison have no edges',
-                            'Do not manufacture relations to fill a graph'):
+                            'Omit unsuitable excerpts rather than remove their qualifiers',
+                            'Cards/comparison have no edges; flow/relationship require a supported edge',
+                            'Check each complete source -> relation -> target proposition',
+                            'manufacture an edge, change format/model or make another call'):
             assert instruction in review['system_prompt']
