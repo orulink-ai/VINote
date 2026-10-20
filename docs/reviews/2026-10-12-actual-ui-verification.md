@@ -241,3 +241,5 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 当前全部更改保存到同一功能分支阶段commit，尚未合并、发布或部署；原App子模块gitlink不包含在本次桌面阶段提交中。真实自动总结A05仍83分，B01为524无可评分正文；未重跑ASR或再发送飞书通知。
 
 - 18:19原生返回复验通过：点击“返回文件库”恢复同一source_video.webm详情Sheet，purpose=meeting/type=all/q及原file身份保留。跳转、定位/展开、返回三段真实跑通；未调用生成或飞书发送。
+
+- 18:22原生“另存为…”复验：确实打开OS保存路径选择框，默认文件名source_video.webm；Esc取消后返回原Sheet，按钮恢复可用，提示“已取消导出，原文件保留”。没有选择目标、没有写副本；不能将取消验收称为实际副本字节保存验收。阶段提交0251565已推送同一功能分支，尚未合并。
