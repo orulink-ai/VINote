@@ -42,6 +42,11 @@ _MAX_DURATION = 8 * 60 * 60
 _VIDEO_SUFFIXES = {'.mp4', '.webm', '.mkv', '.mov', '.m4v', '.avi'}
 _MANIFEST_LIMIT = 2 * 1024 * 1024
 _REVISION = 3  # Original-sized text evidence replaces the former 1280x720 policy.
+_IMAGE_REFERENCE_RULE = (
+    'References indicate temporal overlap only, not that the speech describes this image '
+    'or that screen names identify the speaker. Read this image independently; '
+    'bind each number, time role, state and assignee to its own visible object. '
+    'Do not join different events or infer a conflict from unrelated values.')
 
 
 def _atomic_manifest(path: Path, payload: dict) -> None:
@@ -178,6 +183,8 @@ class VideoEvidence:
     def _chronological_content(self, prompt, packets=(), *, text_only=False):
         from app.llm.meeting_source_bundle import chronological_content
         header = self._text_header() + json.dumps(self._text_metadata(), ensure_ascii=False)
+        if packets:
+            header += '\n' + _IMAGE_REFERENCE_RULE
         if text_only:
             header += ('\nOnly extracted text was supplied. No images were supplied to this model; '
                        'do not claim to have read images, diagrams, gestures or unseen screen operations.')
@@ -256,10 +263,7 @@ class VideoEvidence:
                     f'{frame_reference(index)} Image at recording offset {frame.timestamp:.3f} seconds. '
                     f'Observed sample offsets: {frame.sample_offsets}. '
                     f'Overlapping original ASR windows: {references}. '
-                    'References indicate temporal overlap only, not that the speech describes this image '
-                    'or that screen names identify the speaker. Read this image independently; '
-                    'bind each number, time role, state and assignee to its own visible object. '
-                    'Do not join different events or infer a conflict from unrelated values.')},
+                    + ('' if chronological else _IMAGE_REFERENCE_RULE))},
                 {'type': 'image_url', 'image_url': {'detail': 'high', 'url': f'data:{encoded.mime_type};base64,'
                                                  + base64.b64encode(encoded.data).decode('ascii')}},
             ])

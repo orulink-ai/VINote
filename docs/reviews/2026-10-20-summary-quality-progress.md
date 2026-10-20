@@ -209,6 +209,16 @@ B信息图正文SHA `10ca1fe6706a5ccf811732252bac0e16756c03987f14c3786b972320c87
 
 V10成对分为详细文字**76/100**、信息图**75/100**。其余四项未启动此候选补跑；不拿旧候选高分补入本轮。原JPEG与实际wire编码的可读性、模型上下文压力是下一步只读调查假设，未确认为根因，不以增加同义提示或人工修改标准答案替代实际生成。
 
+### v11 单变量候选：逐帧相同规则只放一次
+
+只读核对6张关键画面的Q80重建均匹配实际wire SHA，尺寸保持1920×1080，SKU、箭头、AS5600及勾选仍可辨认；没有证明压缩导致V10错误，不据此换编码。现存run未保存原response usage，不能给出准确token数或声称达到上下文上限。A详细文字、B信息图完整review中ledger分别占紧凑JSON约82.4%/83.7%，说明输出负担，但不证明是语义错误根因。
+
+本候选只搬移原有304字符图像阅读规则：结构化会议图片路径的公共header保留一次，每帧原ref、offset、采样offset、ASR重叠元数据及OCR/image邻接不变；text-only与非SourcePrompt保持旧行为。没有增加同义提示、调用、schema、字段或标准答案，也不改Q80/high detail与来源守卫。
+
+真实A/B材料的离线序列化对照中，规则分别由64/61次变为一次；A draft/review文字字符数115184→96033、131329→112178，均少19151；B138982→120743、153143→134904，均少18239。净减少包含header新增换行，非token统计、非历史网络包捕获。全部125帧source/wire hash与V10一致，原ASR/OCR/图片保留。143项定向测试通过，最后补header位置断言的6项再次通过，不重复相加。
+
+38项新清单为 `2026-10-21-meeting-review-v11-candidate.sha256`，SHA256 `3069bbb61aa3d4026d130fc7d28e80725d2b6e44631f3af1fc8131ff213afe0c`，相对V10只有授权的 `video_evidence_service.py` 改变。独审46项通过，并用完整A/B真实材料各捕获adapter的两阶段调用、验证每call规则一次及125帧/OCR/元数据/原ASR完整，legacy图片和legacy/typed text-only逐字一致；变化、mixed/revoked bundle拒绝。全部外发mock，不是新模型质量证据。新operation真实生成后另记；减少重复文本本身不提高质量分。
+
 ### 仍待关闭的视觉交付缺口
 
 独立真实service加假CLI反例确认：画面分镜/信息图的sidecar只接入桌面预览与SVG/PNG/HTML导出；飞书交付当前只冻结正文，正文没有图片引用时进入文字writer。Wiki可按metadata显示相应形式，但实际不含sidecar视觉；`images_embedded=false`不足以让界面“已交付”说明这种差异。不能将illustrated原图上传能力冒充这两种sidecar适配。
