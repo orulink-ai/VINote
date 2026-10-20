@@ -412,3 +412,11 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 仅原collector最终未同时满足DONE及stop的失败附带sse_terminal/1枚举，严格bool done_seen、白名单finish及一致category；未知终止值归other，不保留原值、原因文本、URL、消息或凭据。typed异常→failure_details→task status同attempt保留→recovery均重新做安全投影，未新增公开response字段或日志。原HTTP文案/错误码/retryable=false、成功接收条件和请求/超时/重试完全不变。
 - 独立166项定向回归通过；另对旧/新collector 2928种终止流输入比较成功正文/usage及失败HTTP code/copy均一致，300种历史字典只有13种安全且一致记录保留，8个并发task写入/覆盖/新attempt不串。六文件SHA均匹配冻结，无P1/P2阻断。
 - 没有回填旧A信息图V12；其具体终止原因仍未知。本组只是后续同次调用的私有诊断能力，没有新增模型探测、ASR、外发或结果重试，实际新调用验收另列。
+
+### 2026-10-21 V13 联合运行与回归基线
+
+运行源码d4f2611、8fe1aa5仅追加清单文档。完整后端tests目录4360 passed、3 skipped、19 subtests、362 warnings，586.48秒退出0；跨组90例及实际材料适配器421例通过。45项联合清单SHA424f55d4a70627642fe2a5c796d84f35bdd8524975d0e813fa8a2c75b3e43d14匹配。两项新DeepSeek信息图受控运行已受理，ASR入口被禁止；尚在途，不报告新质量分。
+
+原生398272打开飞书授权/发送设置/位置选择器：账号已连接，但位置选择器最近及收藏禁用；实际只读连接审计确认不是缺授权，而是status缺binding投影且手动host漏传connectionKey，两P2后续最小修复。此完整回归先于这些新修复，不可称为新写集最终全量。原生WebView下拉菜单子窗口坐标被电脑操作工具拒绝，已用Escape收起并取消试选，未修改目的地/启用自动交付/创建文档或通知。
+
+旧独立工作区83项文件已核hash备份，清理脚本被自动审批以blocked by policy拒绝，零删除执行；应用归档仅queued，后续清单仍active，尚未完成清理。没有改用其他删除途径。
