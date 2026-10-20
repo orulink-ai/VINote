@@ -47,14 +47,18 @@ class _BasePromptLLM(LLMSummarizer):
 
     def _review_meeting_note(self, *, source, draft, extras, output_language,
                              intermediate=False, source_is_reviewed_notes=False):
+        from app.llm.meeting_presentation import presentation_state
+        model_draft = draft
+        if not intermediate and presentation_state() and presentation_state().depth:
+            from app.llm.meeting_review_draft_view import review_draft_input_view
+            model_draft = review_draft_input_view(draft)
         review_name = "LLM｜核对会议分段" if intermediate else "LLM｜核对最终会议纪要"
         with generation_name(review_name):
             result = self._complete_review(**build_meeting_review_prompts(
-                source=source, draft=draft, extras=extras,
+                source=source, draft=model_draft, extras=extras,
                 output_language=output_language, intermediate=intermediate,
                 source_is_reviewed_notes=source_is_reviewed_notes,
             ))
-        from app.llm.meeting_presentation import presentation_state
         if not intermediate and presentation_state() and presentation_state().depth:
             from app.llm.meeting_final_review import finalize_final_review
             result = finalize_final_review(result or '', draft)
