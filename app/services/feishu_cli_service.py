@@ -129,11 +129,15 @@ class FeishuCLIService(FeishuService):
         return cli.start(owner)
 
     def complete_authorization(self, owner, flow_id):
-        next_step = cli.complete(owner, flow_id)
-        if next_step is not None:
-            return next_step
-        self._verify_identity(owner, connect=True, flow_id=flow_id)
-        return self.status(owner)
+        # Exchange changes CLI credentials before the database connection is
+        # committed. Serialize the whole transition with business dispatch.
+        # The independent flow epoch lock still permits immediate cancellation.
+        with _lock(owner):
+            next_step = cli.complete(owner, flow_id)
+            if next_step is not None:
+                return next_step
+            self._verify_identity(owner, connect=True, flow_id=flow_id)
+            return self.status(owner)
 
     def user_token(self, owner):
         return self._verify_identity(owner)

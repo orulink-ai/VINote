@@ -244,3 +244,144 @@ def test_complete_authorization_passes_original_flow_and_pending_stage_never_sav
     monkeypatch.setattr(cli, "complete", lambda owner, flow: None)
     assert completion.service.complete_authorization("alice", "synthetic-flow") == {"connected": True}
     assert observed == [("alice", {"connect": True, "flow_id": "synthetic-flow"})]
+
+
+def test_completion_cannot_switch_cli_profile_before_frozen_dispatch_finishes(completion, monkeypatch):
+    from app.services import feishu_auto_policy as policy, feishu_service as base
+    from app.services.cloud_account_service import _cipher
+    from contextvars import copy_context
+
+    ctx = completion
+    monkeypatch.setattr(base, "session_scope", ctx.scope)
+    with ctx.scope() as db:
+        db.add(FeishuConnectionDB(owner="alice", open_id="ou_alice",
+            tokens=_cipher().encrypt(json.dumps({"transport": "cli", "app_id": "cli_synthetic",
+                "tenant_key": "synthetic-tenant", "scope": "docs:read"}).encode()).decode(),
+            preferences=json.dumps({"connection_id": "original-connection"})))
+    flow = cli._flows["synthetic-flow"]
+    flow.pop("exchange_complete")
+    flow.update(code="synthetic-code", busy=False)
+    profile = {"open_id": "ou_alice"}
+    dispatching, release, boundary, exchanged = (threading.Event() for _ in range(4))
+    sent_as, outcomes = [], []
+    expiry = (datetime.now(timezone.utc) + timedelta(hours=1)).isoformat()
+
+    def status(owner):
+        return {"appId": "cli_synthetic", "brand": "feishu", "identities": {"user": {
+            "openId": profile["open_id"], "tokenStatus": "valid", "expiresAt": expiry, "scope": "docs:read"}}}
+
+    def exchange(owner, args, **kwargs):
+        assert args[:2] == ["auth", "login"]
+        profile["open_id"] = "ou_reconnected"
+        exchanged.set()
+        boundary.set()
+        return {"ok": True}
+
+    def api(owner, method, path, **kwargs):
+        if method == "GET":
+            assert path == "authen/v1/user_info"
+            return {"open_id": profile["open_id"], "tenant_key": "synthetic-tenant", "name": "合成用户"}
+        assert (method, path) == ("POST", "docx/v1/documents")
+        dispatching.set()
+        assert release.wait(3)
+        # Model the child CLI resolving its config on process startup, after
+        # the service snapshot check. This is the previously unguarded gap.
+        sent_as.append(profile["open_id"])
+        return {"document": {"document_id": "synthetic-doc"}}
+
+    def owner_lock(owner):
+        if threading.current_thread().name == "synthetic-reconnect":
+            boundary.set()
+        return _lock(owner)
+
+    monkeypatch.setattr(cli, "auth_status", status)
+    monkeypatch.setattr(cli, "api", api)
+    monkeypatch.setattr(cli, "run", exchange)
+    monkeypatch.setattr(module, "_lock", owner_lock)
+    snapshot = {"open_id": "ou_alice", "app_id": "cli_synthetic", "tenant_key": "synthetic-tenant",
+                "connection_id": "original-connection", "contact_selection_protocol": 1}
+    marker = policy.active_delivery.set(("alice", snapshot))
+    try:
+        context = copy_context()
+    finally:
+        policy.active_delivery.reset(marker)
+
+    def write():
+        try:
+            ctx.service.request("POST", "docx/v1/documents", token=USER, body={"title": "合成纪要"})
+            outcomes.append("written")
+        except BaseException as error:
+            outcomes.append(error)
+
+    def reconnect():
+        try:
+            ctx.service.complete_authorization("alice", "synthetic-flow")
+        except FeishuError as error:
+            outcomes.append(error.code)
+
+    writer = threading.Thread(target=context.run, args=(write,), name="synthetic-dispatch")
+    completer = threading.Thread(target=reconnect, name="synthetic-reconnect")
+    writer.start()
+    try:
+        assert dispatching.wait(3)
+        completer.start()
+        assert boundary.wait(3)
+        switched_during_dispatch = exchanged.is_set()
+    finally:
+        release.set()
+        writer.join(3)
+        if completer.ident is not None:
+            completer.join(3)
+    assert not writer.is_alive() and not completer.is_alive()
+    assert sent_as == ["ou_alice"], "a frozen original delivery must not use the exchanged CLI profile"
+    assert switched_during_dispatch is False
+    assert outcomes == ["written", "connection_changed"]
+
+
+@pytest.mark.parametrize("window", ["exchange", "identity_readback"])
+def test_owner_execution_lock_does_not_block_flow_cancel_during_completion(completion, monkeypatch, window):
+    ctx = completion
+    flow = cli._flows["synthetic-flow"]
+    flow.pop("exchange_complete")
+    flow.update(code="synthetic-code", busy=False)
+    entered, release, cancelled = threading.Event(), threading.Event(), threading.Event()
+    errors = []
+
+    def exchange(*args, **kwargs):
+        if window == "exchange":
+            entered.set()
+            assert release.wait(3)
+        return {"ok": True}
+
+    def readback():
+        if window == "identity_readback":
+            entered.set()
+            assert release.wait(3)
+
+    def complete():
+        try:
+            ctx.service.complete_authorization("alice", "synthetic-flow")
+        except FeishuError as error:
+            errors.append(error.code)
+
+    def cancel():
+        cli.cancel("alice")
+        cancelled.set()
+
+    ctx.on_read = readback
+    monkeypatch.setattr(cli, "run", exchange)
+    worker, canceller = threading.Thread(target=complete), threading.Thread(target=cancel)
+    worker.start()
+    try:
+        assert entered.wait(3)
+        canceller.start()
+        assert cancelled.wait(3), "owner execution lock must not hold the flow epoch lock during network I/O"
+    finally:
+        release.set()
+        worker.join(3)
+        if canceller.ident is not None:
+            canceller.join(3)
+    assert not worker.is_alive() and not canceller.is_alive()
+    assert errors == ["authorization_cancelled"]
+    with ctx.scope() as db:
+        assert db.get(FeishuConnectionDB, "alice") is None

@@ -76,3 +76,11 @@
 - 审查红反例针对写后 identity 异常误判可重试、cancel 后迟到 complete 重建连接、重连后旧自动任务使用新绑定；现已用 uncertain、撤销代次与提交 guard、冻结 snapshot 的实际写前校验修复。新增真实 SQLite/线程互斥测试；原生 keychain 的共享身份刷新锁与配置目录边界分别说明。
 - 后端全量 2119 passed / 2 skipped / 19 subtests，最终新 CLI/绑定/热词 172 passed、授权提交及保存链路 16 passed；前端全量 1096 passed，文案复验 46 passed；桌面脚本 23 passed；TypeScript、锁版本 Rollup 生产构建、文档构建通过。全量测试启动后新补丁由定向用例复验，不把不同批次伪称同一最终全量。
 - 详细结果及剩余真实验收边界见 [本机 CLI 验收报告](../../../../docs/reviews/2026-10-20-feishu-cli-acceptance.md)。尚未真实验证新纪要保存后自动发文，也未给第三方联系人或群实发；群权限/组织策略不作超范围承诺。应用热更新持续运行。
+
+
+### 2026-10-20 14:53:30 Asia/Shanghai｜wugui / Codex
+
+- 中文草稿 PR #63 已创建并推送，替代的旧 PR #62 已正常关闭；第一批前后端 CI 均通过。
+- 最终复审新增 P1：授权交换先修改 CLI profile，若未与实际 dispatch 共用 owner 锁，旧任务可能用新身份发送后才被最终 DB 核验拒绝。正式线程反例先复现，现将 complete_authorization 从交换前至身份回读及提交全程持同一 owner 锁；flow epoch 仍独立允许即时 cancel。
+- 定向 CLI completion/冻结交付/revocation 87 passed（含新增反例及交换/回读时撤销），diff 检查通过；准备追加修复 commit，不更换或重跑模型。
+- 用户已另行明确允许一次自动交付虚构纪要并仅通知本人；测试已保存并被真实本机 worker 接收，正在等待原交付完成，尚不记为成功。验收只使用合成完成元数据，不代表 ASR/LLM 生成质量。
