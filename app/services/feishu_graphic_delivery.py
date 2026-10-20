@@ -40,16 +40,9 @@ def _renderer():
         raise _error('graphic_renderer_unavailable') from None
 
 
-def verify_supported_presentation(artifacts, db, owner, task, metadata):
-    """A display label cannot override an accepted generation's form."""
-    from fastapi import HTTPException
+def _has_version_authority(db, owner, task, folder, metadata):
     from sqlalchemy import select
     from app.db_models import SourceRequestDB
-    from app.services.summary_visual_artifact import _folder, _authorization
-
-    folder = artifacts.find_task_dir(task)
-    if folder is None:
-        raise ValueError('presentation source unavailable')
     # Ordinary intake also has accepted rows. Only explicit version bindings
     # identify a modern receipt; missing mutable files cannot erase that fact.
     with db.no_autoflush:
@@ -65,10 +58,55 @@ def verify_supported_presentation(artifacts, db, owner, task, metadata):
                           or saved.get('contract') in ('meeting-summary-only-v1', 'meeting-fresh-asr-v1'))
     markers = ('new_generation.json', 'summary_generation_started', 'new_generation_started',
                'summary_visual.json')
-    modern = (bound_version
-              or any(key in metadata for key in ('operation_id', 'parent_task_id', 'source_version'))
-              or any((folder / name).exists() or (folder / name).is_symlink() for name in markers))
-    if not modern:
+    return (bound_version
+            or any(key in metadata for key in ('operation_id', 'parent_task_id', 'source_version'))
+            or any(not _missing(folder / name) for name in markers))
+
+
+def _missing(path):
+    # lstat distinguishes actual absence from a dangling link or another inode.
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return True
+    return False
+
+
+def legacy_saved_snapshot(artifacts, db, owner, note, content):
+    """Permit an owned completed legacy root body, without assigning a form."""
+    from app.services.summary_visual_artifact import _folder, _load
+
+    if (note.created_by != owner or note.scope != 'personal' or note.team_id is not None
+            or note.status != 'done' or note.content != content or not content.strip()):
+        return False
+    folder = _folder(artifacts, owner, note.task_id)
+    absent = ('summary_presentation.json', 'source_reference.json',
+              'summary_visual_reference.json', 'recording_deleted')
+
+    def historical_root():
+        return (all(_missing(folder / name) for name in absent)
+                and not _has_version_authority(db, owner, note.task_id, folder, {}))
+
+    if not historical_root():
+        return False
+    status = _load(folder / 'status.json', 65536)
+    request = _load(folder / 'request.json', 65536)
+    if (not isinstance(status, dict) or status.get('status') != 'success'
+            or not isinstance(request, dict) or not isinstance(request.get('request'), dict)
+            or request['request'].get('workflow') != 'meeting'):
+        return False
+    return _folder(artifacts, owner, note.task_id) == folder and historical_root()
+
+
+def verify_supported_presentation(artifacts, db, owner, task, metadata):
+    """A display label cannot override an accepted generation's form."""
+    from fastapi import HTTPException
+    from app.services.summary_visual_artifact import _folder, _authorization
+
+    folder = artifacts.find_task_dir(task)
+    if folder is None:
+        raise ValueError('presentation source unavailable')
+    if not _has_version_authority(db, owner, task, folder, metadata):
         return  # Original legacy supported forms have no accepted version contract.
     try:
         folder = _folder(artifacts, owner, task)

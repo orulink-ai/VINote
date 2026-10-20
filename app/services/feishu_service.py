@@ -858,6 +858,10 @@ class FeishuService:
         artifacts = TaskArtifactService()
         try:
             presentation = read_presentation(artifacts, owner, note.task_id)
+            if presentation is None:
+                from app.services.feishu_graphic_delivery import legacy_saved_snapshot
+                if legacy_saved_snapshot(artifacts, db, owner, note, content):
+                    return
             # A bound task with unavailable/unknown presentation is not evidence
             # of plain text. Only verified supported forms may bypass the guard.
             if (not isinstance(presentation, dict)

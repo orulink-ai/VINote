@@ -397,3 +397,10 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 独审再发现仅比URL/账号值不能隔离A→B→A旧metadata闭包的P2。追加独立visit token，在任何副作用前拒绝旧访问；不复用随probe/reload/ready变化的request sequence，同访问重渲染和播放位置/倍速/播放恢复仍合法。原ready/failed行为未改，不启动生成/ASR。
 - 最终两文件SHA匹配，现有62项＋独立原4个ABA反例＋3个同visit反例共69项通过，39模型runtime未漂移。真实原生HMR窗口正常显示B26:25；没有在原生人工制造网络/权限错误，因此竞态闭环是hook反例证据，不冒称正式安装包已验收。
 - B V11新版本对话框实际显示默认复用已有转写、沿用所选DeepSeek原模型，详略/形式可选，取消/确认在固定底部。截图 `B-text-v11-regenerate-defaults.png`，仅查看并取消，没有额外提交或改变全局偏好。
+
+### 新增完整回归发现的历史快照兼容问题
+
+- `72e163e`阶段完整backend tests运行653.20秒，3997通过、15失败、3跳过、19 subtests；没有把此次运行记作全绿。2例为真实HTTP保存/outbox链的历史无metadata root被新图形guard拦截；其余13例为实际graphic已选5但测试仍提供raw4/断言旧prompt。分开修复，不删除失败或改错码来放行。
+- 狭窄兼容只允许本人personal/done的exact saved非空正文、可信UUID root及明确成功meeting request，metadata确实不存在，且无持久版本receipt/sidecar/generation/派生引用。损坏文件、现代凭证缺损、未知/跨账号/非完成仍拒绝；不推断形式、不补metadata，Wiki新归组照旧要求严格形式。原HTTP两例文件/断言完全未改。
+- 独审73项＋21项通过，3源码/测试SHA与冻结一致，原metadata stripping、真实fresh回执、unknown/账号切换均保留。此为新增失败后的定向回归，不把前轮完整失败记录改成通过；完整集成还需再次验证。
+- 前端最终136文件/1606项通过（74.82秒）、TypeScript及生产构建通过（15.43秒），23项桌面脚本和test打包plan通过。plan仅为配置，不是安装包构建验收；当前完整后端与最终知识库交付仍未放行。
