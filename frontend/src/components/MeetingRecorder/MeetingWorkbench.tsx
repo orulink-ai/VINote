@@ -1,4 +1,6 @@
 import type { MeetingTaskStates } from '@/hooks/useMeetingTaskStates';
+import { useMeetingSummaryPresentations } from '@/hooks/useMeetingSummaryPresentations';
+import { depthLabels, presentationLabels } from '@/lib/summaryPresentation';
 import { Sheet, SheetContent, SheetHeader, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useViewState } from "@/hooks/useViewState";
@@ -94,20 +96,24 @@ function associationNoteId(note: NoteRecord) {
     /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(id) ? id : undefined;
 }
 
-function MeetingNoteItems({ notes, onOpenNote, taskStates, onAssociate, locatedNoteId }: {
+function MeetingNoteItems({ notes, onOpenNote, taskStates, onAssociate, locatedNoteId, ownerId, expanded = true }: {
   notes: NoteRecord[];
   onOpenNote: (id: string, edit?: boolean) => void;
   taskStates: MeetingTaskStates;
   onAssociate?: (note: NoteRecord) => void;
   locatedNoteId?: string;
+  ownerId?: string;
+  expanded?: boolean;
 }) {
+  const readPresentation = useMeetingSummaryPresentations(notes, ownerId, expanded);
+  const presentationId = useId();
   const items = notes.map(relatedNotePresentation);
   const presentations = new Map<string, number>();
   items.forEach(({ signature }) => presentations.set(signature, (presentations.get(signature) || 0) + 1));
   return <ul className="grid min-w-0 gap-2">
-    {items.map(({ note, savedTime, updatedTime, metadata, preview, signature }) => <li key={JSON.stringify([note.scope, note.teamId, note.workspaceKey, note.id])} className="min-w-0">
+    {items.map(({ note, savedTime, updatedTime, metadata, preview, signature }, index) => <li key={JSON.stringify([note.scope, note.teamId, note.workspaceKey, note.id])} className="min-w-0">
       <Button data-meeting-return-target={`${note.scope}:${note.teamId || ''}:note:${note.id}`} data-meeting-located={note.id === locatedNoteId || undefined}
-        aria-current={note.id === locatedNoteId ? 'true' : undefined} variant="outline" className={`h-auto min-h-11 w-full items-start justify-start whitespace-normal py-3 text-left ${note.id === locatedNoteId ? 'ring-2 ring-ring' : ''}`} onClick={() => onOpenNote(note.id)}>
+        aria-describedby={`${presentationId}-${index}`} aria-current={note.id === locatedNoteId ? 'true' : undefined} variant="outline" className={`h-auto min-h-11 w-full items-start justify-start whitespace-normal py-3 text-left ${note.id === locatedNoteId ? 'ring-2 ring-ring' : ''}`} onClick={() => onOpenNote(note.id)}>
         <span className="min-w-0">
           <span className="block [overflow-wrap:anywhere]">查看纪要 · {note.title}</span>
           <span className="mt-1 block text-xs leading-5 text-muted-foreground">保存于 <span title={savedTime.full} className="tabular-nums">{savedTime.full}</span>{metadata && ` · ${metadata}`}</span>
@@ -115,9 +121,19 @@ function MeetingNoteItems({ notes, onOpenNote, taskStates, onAssociate, locatedN
           <span className="mt-2 line-clamp-2 [overflow-wrap:anywhere] text-xs leading-5 text-muted-foreground">{preview}</span>
         </span>
       </Button>
-      <div className="flex flex-wrap justify-end gap-2">
+      <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 py-1">
+      <div id={`${presentationId}-${index}`} role="group" aria-label="生成形式与详略" className="flex min-w-0 flex-wrap items-center gap-2">
+        {(() => {
+          const summary = readPresentation(note);
+          return typeof summary === 'object'
+            ? <><Badge variant="secondary">{presentationLabels[summary.presentation]}</Badge><Badge variant="outline">{depthLabels[summary.depth]}</Badge></>
+            : <span className="text-xs text-muted-foreground">{summary === 'checking' ? '正在读取形式与详略…' : summary === 'missing' ? '形式/详略未记录' : '形式/详略暂未核验'}</span>;
+        })()}
+      </div>
+      <div className="ml-auto flex flex-wrap justify-end gap-2">
         {onAssociate && <Button size="sm" variant="outline" className="min-h-11" disabled={!associationNoteId(note)} aria-label={`关联《${note.title}》到会议`} onClick={() => onAssociate(note)}>关联到会议</Button>}
         <Button size="sm" variant="ghost" className="min-h-11" aria-label={`编辑《${note.title}》`} onClick={() => onOpenNote(note.id, true)}>编辑纪要</Button>
+      </div>
       </div>
       {onAssociate && !associationNoteId(note) && <p className="text-xs leading-5 text-muted-foreground">此历史内容暂无可关联的设备稿件记录，仍可查看内容和原项目。</p>}
       {(presentations.get(signature) || 0) > 1 && <details className="mt-1 text-xs">
@@ -414,7 +430,7 @@ export function MeetingWorkbench({
                   {row.notes.length > 0 && <section aria-label="关联纪要" className="grid gap-2">
                     <h3 className="font-medium">纪要</h3>
                     <p className="text-xs leading-5 text-muted-foreground">关联纪要分别保留自己的保存版本。</p>
-                    <MeetingNoteItems notes={row.notes} onOpenNote={onOpenNote} taskStates={taskStates} locatedNoteId={locatedNote?.id} />
+                    <MeetingNoteItems notes={row.notes} onOpenNote={onOpenNote} taskStates={taskStates} locatedNoteId={locatedNote?.id} ownerId={ownerId} expanded={expanded} />
                   </section>}
                   {row.recordings.length > 0 && <section aria-label="关联原录制" className="grid gap-2">
                     <h3 className="font-medium">原录制</h3>
@@ -442,7 +458,7 @@ export function MeetingWorkbench({
             );
           })}
           {pendingView && unlinked.length > 0 && <section aria-label="待归档内容" className="grid min-w-0 gap-3 py-3">
-            <MeetingNoteItems notes={unlinked} onOpenNote={onOpenNote} taskStates={taskStates} locatedNoteId={locatedNote?.id}
+            <MeetingNoteItems notes={unlinked} onOpenNote={onOpenNote} taskStates={taskStates} locatedNoteId={locatedNote?.id} ownerId={ownerId}
               onAssociate={ownerId && onAssociated ? note => setAssociating({ note, ownerId, context: associationContextKey }) : undefined} />
           </section>}
           {!pendingView && unlinked.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">
