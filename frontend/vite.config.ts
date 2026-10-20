@@ -56,7 +56,9 @@ export default defineConfig({
         }
       : undefined,
     watch: {
-      ignored: ['**/src-tauri/**'],
+      // Test edits are handled by the separate Vitest server. They must not
+      // reload the user's running desktop window during parallel development.
+      ignored: ['**/src-tauri/**', '**/*.{test,spec}.{ts,tsx,js,jsx}', '**/__tests__/**'],
     },
     proxy: {
       '/api': {
