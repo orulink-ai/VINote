@@ -390,3 +390,10 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 独审先后复现两个同根P2：只改形式标签，以及删可编辑metadata/磁盘marker后退legacy。修复改用owner+task持久回执/sidecar识别现代来源，再强制原授权；不把普通accepted intake当新版本。主线再发现真实fresh分支只持久化嵌套meeting_version，独审通过实际reserve/accept/_bind形状复现四个失败，追加key存在性后关闭，null/损坏同样不得降级。历史失败证据保留，不声称首版完备。
 - 最终独立107项（27.82秒）＋24项（15.11秒）通过，无失败/跳过，源码与依赖前后hash稳定。包含原四stripping、真实fresh receipt、ordinary intake、legacy/no-task、生成PNG后改变实际open_id而connection_id不变、旧unknown query-only，以及当前protocol5依赖下68项旧4回读。主线核对最终6项源码/测试及3依赖SHA一致；协议5另由独立审查通过，不互相代替。
 - 全程临时DB、合成资料、模拟CLI边界；未调用实际ASR/模型/飞书、没有真实知识库写入或通知。本组源码可提交继续验收，**不表示最终目标知识库交付完成或允许合并发布**。
+
+### 播放器较新元数据与旧诊断隔离
+
+- 原生B显示26:25时仍残留读取失败提示的现象已保留截图。离线hook复现首次error/probe失败后metadata到达仍留错，以及metadata后旧404覆盖新媒体证据；canplay已有原请求代次保护，未误认成其失效。metadata现取消旧探测、清旧提示并保持loading，不能把时长可读当成可解码成功；新真实error继续探测，canplay才建立ready。
+- 独审再发现仅比URL/账号值不能隔离A→B→A旧metadata闭包的P2。追加独立visit token，在任何副作用前拒绝旧访问；不复用随probe/reload/ready变化的request sequence，同访问重渲染和播放位置/倍速/播放恢复仍合法。原ready/failed行为未改，不启动生成/ASR。
+- 最终两文件SHA匹配，现有62项＋独立原4个ABA反例＋3个同visit反例共69项通过，39模型runtime未漂移。真实原生HMR窗口正常显示B26:25；没有在原生人工制造网络/权限错误，因此竞态闭环是hook反例证据，不冒称正式安装包已验收。
+- B V11新版本对话框实际显示默认复用已有转写、沿用所选DeepSeek原模型，详略/形式可选，取消/确认在固定底部。截图 `B-text-v11-regenerate-defaults.png`，仅查看并取消，没有额外提交或改变全局偏好。
