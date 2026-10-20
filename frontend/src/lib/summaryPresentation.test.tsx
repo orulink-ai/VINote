@@ -24,3 +24,43 @@ it('embeds only this exact task authentic screenshot assets and fails rather tha
   expect(fetchImage).toHaveBeenCalledTimes(1)
   await expect(buildSummaryHtml(`![source](${src})`, 'Topic', task, vi.fn().mockRejectedValue(new Error('missing')))).rejects.toThrow('missing')
 })
+
+it('preserves GFM marker states as readable static text, including nested and uppercase checked items', async () => {
+  const markdown = '- [x] Check the same device\n- [ ] Check the same device\n  - [X] Verify the cable\n- Ordinary note'
+  const html = await buildSummaryHtml(markdown, 'Task states')
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  const items = [...doc.querySelectorAll('li')]
+  expect(items).toHaveLength(4)
+  // Marker labels remain Chinese for English text and do not assert factual completion.
+  expect(items[0].textContent).toBe('（已勾选） Check the same device')
+  expect(items[1].firstElementChild?.textContent).toBe('（未勾选）')
+  expect(items[2].textContent).toBe('（已勾选） Verify the cable')
+  expect(items[3].textContent).toBe('Ordinary note')
+  const states = [...doc.querySelectorAll('li > span')]
+  expect(states.map(state => state.textContent)).toEqual(['（已勾选）', '（未勾选）', '（已勾选）'])
+  expect(states.every(state => !state.closest('[aria-hidden="true"], [hidden], [inert]'))).toBe(true)
+  expect(doc.querySelector('input, button, form, [role="checkbox"], [tabindex]')).toBeNull()
+})
+
+it('keeps non-GFM indeterminate markers, escaped markers and code literal rather than inferring checkbox state', async () => {
+  // GFM defines checked/unchecked only; [-] is not an indeterminate checkbox.
+  const markdown = '- [-] State not established\n- [?] Unknown\n- \\[x] Escaped\n\n`- [x] Inline example`\n\n```md\n- [ ] Code example\n```'
+  const html = await buildSummaryHtml(markdown, 'Literal states')
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  expect([...doc.querySelectorAll('li')].map(item => item.textContent)).toEqual(['[-] State not established', '[?] Unknown', '[x] Escaped'])
+  expect([...doc.querySelectorAll('code')].map(code => code.textContent)).toEqual(['- [x] Inline example', '- [ ] Code example\n'])
+  expect(doc.querySelector('input, li > span, [aria-checked]')).toBeNull()
+  expect(doc.querySelector('main')?.textContent).not.toMatch(/（已勾选）|（未勾选）/)
+})
+
+it('does not admit malicious raw HTML controls or scripts when preserving real GFM task states', async () => {
+  const fetchImage = vi.fn()
+  const markdown = '<input type="checkbox" checked indeterminate tabindex="0" onchange="alert(1)">\n\n<script>alert(1)</script>\n\n- [x] Approved <img src="https://evil.invalid/pixel" onerror="alert(1)">\n- [ ] Pending <input type="checkbox" checked aria-label="Spoofed state">\n\n[unsafe](javascript:alert(1))'
+  const html = await buildSummaryHtml(markdown, 'Safe states', undefined, fetchImage)
+  const doc = new DOMParser().parseFromString(html, 'text/html')
+  expect([...doc.querySelectorAll('li')].map(item => item.textContent?.trim())).toEqual(['（已勾选） Approved', '（未勾选） Pending'])
+  expect(doc.querySelector('input, button, script, img, iframe, object, embed, form, [tabindex], [aria-checked], [onchange], [onerror]')).toBeNull()
+  expect(doc.querySelector('a[href^="javascript:"]')).toBeNull()
+  expect(doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content')).toBe("default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
+  expect(fetchImage).not.toHaveBeenCalled()
+})

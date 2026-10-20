@@ -43,7 +43,10 @@ export async function buildSummaryHtml(markdown: string, title: string, taskId?:
     components={{
       img: ({ src, alt }) => src && images.has(src) ? <img src={images.get(src)} alt={alt || '原视频画面'} /> : null,
       a: ({ href, children }) => href ? <a href={href} rel="noreferrer noopener">{children}</a> : <span>{children}</span>,
-      input: () => null,
+      // Describe GFM markers, not verified completion; export no controls or raw HTML props.
+      // Labels stay Chinese even in non-Chinese reports; no language inference is applied.
+      input: ({ type, checked }) => type === 'checkbox' && typeof checked === 'boolean'
+        ? <span>{checked ? '（已勾选）' : '（未勾选）'}</span> : null,
     }}>{markdown}</ReactMarkdown>)
   return `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'"><title>${escapeHtml(title)}</title><style>body{max-width:900px;margin:32px auto;padding:0 24px;font:16px/1.8 system-ui,sans-serif;color:#17202a;background:white;overflow-wrap:anywhere}img,svg{max-width:100%;height:auto}table{border-collapse:collapse;display:block;overflow:auto}th,td{border:1px solid #aaa;padding:8px}pre{white-space:pre-wrap}blockquote{border-left:3px solid #aaa;padding-left:16px}</style></head><body><main>${graphic}${body}</main></body></html>`
 }
