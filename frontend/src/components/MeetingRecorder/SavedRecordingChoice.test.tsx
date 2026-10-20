@@ -9,10 +9,10 @@ import { DEFAULT_CAPTURE_OPTIONS } from '../../lib/meetingCapture'
 import { useAppModeStore } from '../../stores/appModeStore'
 import { useModelProfileStore } from '../../stores/modelProfileStore'
 import { useSTTProfileStore } from '../../stores/sttProfileStore'
+import { useAuthStore } from '../../stores/authStore'
 
 vi.mock('../../lib/audioStorage', () => ({ getPendingMeeting: vi.fn(), getRecordedAudio: vi.fn(), deleteLocalRecording: vi.fn() }))
 vi.mock('../../lib/meetingProcessing', () => ({ processSavedMeeting: vi.fn().mockResolvedValue(undefined), isMeetingProcessing: vi.fn(() => false) }))
-vi.mock('../../stores/authStore', () => ({ useAuthStore: Object.assign((selector: (state: unknown) => unknown) => selector({ user: { id: 'owner' } }), { getState: () => ({ user: { id: 'owner' } }) }) }))
 vi.mock('../../lib/i18n', () => ({ useI18n: () => ({ locale: 'zh-CN' }) }))
 vi.mock('./RecordingTitleEditor', () => ({ RecordingTitleEditor: () => null }))
 vi.mock('../Settings/ModelSourcePanel', () => ({ ModelSourcePanel: () => <div>真实详情中的现有模型选择入口</div> }))
@@ -24,6 +24,7 @@ function LocationProbe() { const location = useLocation(); return <output aria-l
 describe('SavedRecordingChoice', () => {
   beforeEach(() => {
     vi.clearAllMocks(); vi.mocked(getPendingMeeting).mockResolvedValue(recording)
+    useAuthStore.setState({ user: { id: 'owner', email: 'owner@example.test' } })
     useAppModeStore.setState({ config: { configured: true, mode: 'cloud', asr_model: 'asr-confirmed', llm_model: 'llm-confirmed' }, saving: false, error: '', load: vi.fn().mockResolvedValue(undefined) })
     useModelProfileStore.setState({ error: '', loading: false }); useSTTProfileStore.setState({ error: '', loading: false })
   })

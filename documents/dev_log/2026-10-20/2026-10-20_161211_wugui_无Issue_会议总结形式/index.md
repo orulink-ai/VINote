@@ -252,3 +252,6 @@ A09 draft HTTP524未返回稿；Bbrief03完成draft/review但guardfailed。B只�
 - v4 HTML guard正则误拒Markdown中的C++代码。改用已有Markdown解析器区分真实HTML token与行内/围栏代码，仍在所有代码区域拒绝内部来源ID、图片和截图占位符。新生产host52例、相关组合223 passed，raw4不改；打包hooks及现有release/test PYZ都包含所需Markdown模块，不新增依赖。
 - 新实际AHTML02在完整复核前RemoteProtocolError中断，B信息图05在完整复核前HTTP502，均已有draft但无完整review、无ASR checkpoint、无可评分成品。当前和冻结连接均api.orulink.ai/gpt-6-luna，未跨地址/切模型；暂不继续发模型请求，等待服务错误日志/状态，同时完成本机修复。
 - B04新统一rubric正文72/90，呈现/总分N/A，不能换算100；独立视觉计划另有N6标签不属于引用正文的问题，未因slot修复就称图形成品通过。旧历史临时分数继续保留，不覆盖或拼成最终100。
+
+- 参会人6项同为modern summary fixture缺模型快照/DB摘要，补真实合成证明后目标全部通过，四文件组合261 passed/81.07秒。未改runtime或放宽来源、缓存或交付权限；真实A/B/AHTML只读context复用及模型核验均true，41份原JSON哈希不变。
+- SavedRecordingChoice的5项失败及同根未捕获错误来自测试认证store缺subscribe，改用真实Zustand store并逐例设置owner，保留实际订阅/退订/换号清理。原失败文件9例与preview/录制相关10文件组合115 passed；未改产品或快照。所有已发现完整检查失败均已有对应修复/专项验证，接下来进行第二次完整yarn verify，尚不提前宣称全绿。

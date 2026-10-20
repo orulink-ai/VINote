@@ -670,8 +670,9 @@ def test_missing_material_cannot_be_cleared_to_authorize_delivery(confirmable):
 
 def summary_child(saved, *, parent=None, title="另一个摘要形式", content="独立的最终正文", presentation="html", depth="brief"):
     from app.db_models import SourceRequestDB
-    from app.services.meeting_summary_regeneration import SummaryConfirmation, _submission
+    from app.services.meeting_summary_regeneration import SummaryConfirmation, _submission, _digest
     from app.services.source_request_service import _fingerprint
+    from app.services.task_model_source import SNAPSHOT_FILE
     parent = parent or saved.task
     task, key, operation = [str(uuid.uuid4()) for _ in range(3)]
     source_hash = json.loads((saved.folder / "source_media.json").read_text())["sha256"]
@@ -688,9 +689,17 @@ def summary_child(saved, *, parent=None, title="另一个摘要形式", content=
     from app.services.meeting_summary_regeneration import _evidence
     inherited, _ = _evidence(saved.artifacts.find_task_dir(parent))
     saved.artifacts.save_transcript(folder, inherited)
+    # Accepted modern summaries bind their frozen model snapshot in the DB.
+    # Keep that proof even when a test later adds a task-owned visual cache.
+    model_source = {"version": 1, "owner": saved.owner, "mode": "cloud",
+                    "server_url": "https://participants.invalid", "asr_model": "",
+                    "llm_model": body["model_name"], "needs_stt": False}
+    saved.artifacts.write_json(folder / SNAPSHOT_FILE, model_source)
     with saved.sessions() as db:
         db.add(SourceRequestDB(owner=saved.owner, operation_id=operation, task_id=task, state="accepted",
-                               fingerprint=_fingerprint(_submission(parent, SummaryConfirmation(**body)))))
+                               fingerprint=_fingerprint(_submission(parent, SummaryConfirmation(**body))),
+                               receipt_json=json.dumps({"summary_snapshot_sha256": _digest(model_source),
+                                                        "summary_visual_reference_sha256": None})))
         db.add(NoteDB(id=key, task_id=task, created_by=saved.owner, title=title, content=content, scope="personal",
                       status="done", generation_client="desktop", source_type="meeting_recording"))
     return SimpleNamespace(task=task, key=key, operation=operation, folder=folder, title=title, content=content)
