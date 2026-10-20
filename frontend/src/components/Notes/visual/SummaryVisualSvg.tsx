@@ -1,6 +1,6 @@
 import type { SummaryVisual } from '@/lib/summaryVisual'
 import { visualTimestamp } from '@/lib/summaryVisual'
-import { diagramLayout, diagramTextLines, visualTextLines } from '@/lib/summaryVisualLayout'
+import { diagramLayout, diagramTextLines, visualTextLines, comicTextLines } from '@/lib/summaryVisualLayout'
 import { DiagramGraphic, exportPalette } from './DiagramGraphic'
 
 /** Standalone export made entirely of owned SVG elements and embedded JPEGs. */
@@ -16,7 +16,7 @@ export function SummaryVisualSvg({ visual, title, images }: { visual: SummaryVis
   const width = Math.max(1104, (layout?.width || 0) + margin * 2)
   const panels = visual.scenes.map((scene, index) => {
     const frame = visual.frames.find(frame => frame.id === scene.frame_id)!
-    return { scene, frame, lines: visualTextLines(scene.grounded_label, 52), index }
+    return { scene, frame, lines: comicTextLines(scene.grounded_label, columnWidth - 32), index }
   })
   const panelHeight = 330 + Math.max(0, ...panels.map(panel => panel.lines.length * 22))
   let legendY = top + (layout?.height || 0) + 16

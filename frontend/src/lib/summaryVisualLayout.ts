@@ -296,3 +296,45 @@ export function diagramLayout(items: DiagramItem[], links: DiagramLink[], flow: 
   return { width: Math.max(width, ...bounds.map(p => p.x + 16)) + shiftX,
     height: Math.max(y - rowGap + margin, ...bounds.map(p => p.y + 16), 32) + shiftY, nodes, edges }
 }
+
+
+/** Comic captions preserve exact text positions, or fail explicitly. */
+export function comicTextLines(text: string, width: number, measure = labelWidth): string[] {
+  if (!Number.isFinite(width) || width <= 0 || /[\x00-\x1f\x7f]/.test(text)) throw new Error('text_layout_budget')
+  const tokens = Array.from(text.matchAll(/[A-Za-z0-9]+(?:[.:/%–-][A-Za-z0-9]+)*/gu))
+    .filter(token => measure(token[0]) <= width)
+  const legal = (offset: number) => offset === 0 || offset === text.length
+    || (!noLineEnd.test(text.slice(0, offset).trimEnd())
+      && !noLineStart.test(text.slice(offset).trimStart())
+      && !tokens.some(token => offset > token.index! && offset < token.index! + token[0].length))
+  const fits = (lines: string[]) => {
+    let offset = 0
+    return lines.join('') === text && lines.every((line, index) => {
+      offset += line.length
+      return measure(line) <= width && (index === lines.length - 1 || legal(offset))
+    })
+  }
+  const preferred = diagramTextLines(text, width, measure)
+  if (fits(preferred)) return preferred
+
+  // A greedy word wrap can split a fitting identifier to avoid a comma. Search
+  // legal original grapheme boundaries, including before that identifier, and
+  // keep only breaks whose remaining suffix can also be laid out completely.
+  const offsets = [0]
+  for (const part of textSegments(text, 'grapheme')) offsets.push(offsets[offsets.length - 1] + part.length)
+  const last = offsets.length - 1, next = Array<number>(offsets.length).fill(-1)
+  next[last] = last
+  for (let start = last - 1; start >= 0; start--) {
+    if (!legal(offsets[start])) continue
+    for (let end = last; end > start; end--) {
+      if (next[end] !== -1 && legal(offsets[end]) && measure(text.slice(offsets[start], offsets[end])) <= width) {
+        next[start] = end; break
+      }
+    }
+  }
+  if (next[0] === -1) throw new Error('text_layout_budget')
+  const lines: string[] = []
+  for (let start = 0; start < last; start = next[start]) lines.push(text.slice(offsets[start], offsets[next[start]]))
+  if (!fits(lines)) throw new Error('text_layout_budget')
+  return lines
+}
