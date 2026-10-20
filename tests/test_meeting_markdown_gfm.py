@@ -1,4 +1,4 @@
-"""Actual draft3/review4-or-5 host and ReactMarkdown/GFM parity."""
+"""Actual draft3/review4-or-6 host and ReactMarkdown/GFM parity."""
 import copy
 import json
 from pathlib import Path
@@ -53,6 +53,24 @@ def graphic5_fixture(value):
             {'id': 'S1', 'frame_id': '[FRAME:0001]', 'label_ref': ref}], 'diagram': None}
     else:
         value['visual'] = {'protocol': 2, 'scenes': [], 'diagram': {
+            'kind': 'cards', 'nodes': [{'id': 'N1', 'label_ref': ref}], 'edges': []}}
+    return value
+
+
+def graphic6_fixture(value):
+    """Explicit new graphic response; preserve the tested Markdown exactly."""
+    value = copy.deepcopy(value)
+    value['protocol'] = 6
+    value['blocks'] = [
+        {'id': block['id'], 'parts': [block['markdown']]}
+        for index, block in enumerate(value['blocks'])
+    ]
+    ref = {'block_id': value['blocks'][0]['id'], 'part_index': 0, 'claim_ids': ['C1']}
+    if value['visual']['diagram'] is None:
+        value['visual'] = {'protocol': 3, 'scenes': [
+            {'id': 'S1', 'frame_id': '[FRAME:0001]', 'label_ref': ref}], 'diagram': None}
+    else:
+        value['visual'] = {'protocol': 3, 'scenes': [], 'diagram': {
             'kind': 'cards', 'nodes': [{'id': 'N1', 'label_ref': ref}], 'edges': []}}
     return value
 
@@ -279,15 +297,15 @@ def test_footnotes_are_explicitly_unsupported_in_actual_host(case, presentation,
     value = response(case, presentation)
     value['blocks'] = [{'id':f'B{i+1}', 'markdown':text} for i, text in enumerate(blocks)]
     if presentation in {'comic', 'infographic'}:
-        value = graphic5_fixture(value)
-        assert [''.join(part['text'] for part in block['parts']) for block in value['blocks']] == blocks
+        value = graphic6_fixture(value)
+        assert [''.join(block['parts']) for block in value['blocks']] == blocks
     llm, raw_review = automatic(case, value)
     with presentation_scope('detailed', presentation) as state:
         with pytest.raises(FinalLedgerError) as error:
             summarize(llm, case)
         assert error.value.code == 'invalid_block_content'
         assert state.raw_review == raw_review and state.figures == [] and state.visual_review is None
-        assert json.loads(raw_review)['protocol'] == (5 if presentation in {'comic', 'infographic'} else 4)
+        assert json.loads(raw_review)['protocol'] == (6 if presentation in {'comic', 'infographic'} else 4)
     assert len(llm.calls) == 2
 
 
@@ -299,7 +317,7 @@ def test_footnotes_are_explicitly_unsupported_in_actual_host(case, presentation,
     [SOURCE, '[^unused]: ' + SOURCE],
 ])
 def test_historical_raw4_graphic_finalizer_keeps_footnote_guard(case, presentation, blocks):
-    # Historical direct validation does not represent a new expected5 model
+    # Historical direct validation does not represent a new expected6 model
     # operation. Keep its original raw4 response and exact rejection semantics.
     from app.llm.meeting_final_review import finalize_final_review
     from app.llm.source_references import bind_source_references
@@ -315,6 +333,33 @@ def test_historical_raw4_graphic_finalizer_keeps_footnote_guard(case, presentati
         assert error.value.code == 'invalid_block_content'
         assert state.raw_review == raw4 and state.figures == [] and state.visual_review is None
         assert json.loads(state.raw_review)['protocol'] == 4
+
+
+@pytest.mark.parametrize('presentation', ['comic', 'infographic'])
+@pytest.mark.parametrize('blocks', [
+    ['[^unused]: ' + SOURCE],
+    ['A condition[^used].', '[^used]: ' + SOURCE],
+    ['[^unused]:', '    ' + SOURCE],
+    [SOURCE, '[^unused]: ' + SOURCE],
+])
+def test_historical_raw5_graphic_finalizer_keeps_footnote_guard(case, presentation, blocks):
+    # Historical direct validation does not represent a new expected6 model
+    # operation. Keep its original raw5 response and exact rejection semantics.
+    from app.llm.meeting_final_review import finalize_final_review
+    from app.llm.source_references import bind_source_references
+    from app.llm.video_material import bind_video_material
+    value = response(case, presentation)
+    value['blocks'] = [{'id': f'B{i+1}', 'markdown': text} for i, text in enumerate(blocks)]
+    value = graphic5_fixture(value)
+    raw5 = json.dumps(value)
+    with presentation_scope('detailed', presentation) as state, \
+            bind_source_references([TranscriptSegment(0, 10, SOURCE)]), \
+            bind_video_material(case.evidence, {'vision': True}):
+        with pytest.raises(FinalLedgerError) as error:
+            finalize_final_review(raw5, json.dumps(case.material))
+        assert error.value.code == 'invalid_block_content'
+        assert state.raw_review == raw5 and state.figures == [] and state.visual_review is None
+        assert json.loads(state.raw_review)['protocol'] == 5
 
 
 @pytest.mark.parametrize('presentation', ['text', 'html'])

@@ -1,4 +1,4 @@
-"""Explicit protocol-4/5 presentation envelopes over the strict final ledger.
+"""Explicit protocol-4/5/6 presentation envelopes over the strict final ledger.
 
 Projection removes only host-declared fields after exact envelope validation.
 It never repairs model JSON, creates claims/audit rows or rewrites raw review.
@@ -40,6 +40,12 @@ def validate_review_envelope(value, material, *, depth, presentation):
     """Return the checked ledger and detached original versioned envelope."""
     _need(isinstance(presentation, str) and presentation in _EXTRAS, 'invalid_presentation')
     _need(isinstance(value, dict) and set(value) == _CORE | _EXTRAS[presentation], 'invalid_host_envelope')
+    if type(value.get('protocol')) is int and value['protocol'] == 6:
+        from app.llm.meeting_visual_projection6 import core_review6, project_review6
+        _need(presentation in {'comic', 'infographic'}, 'invalid_protocol')
+        ledger = validate_final_ledger(core_review6(value), material, depth=depth)
+        project_review6(value, presentation=presentation)
+        return ledger, copy.deepcopy(value)
     if type(value.get('protocol')) is int and value['protocol'] == 5:
         from app.llm.meeting_visual_projection import core_review5, project_review5
         _need(presentation in {'comic', 'infographic'}, 'invalid_protocol')
@@ -84,7 +90,7 @@ def _illustrated_figures(review, ledger):
 
 
 def finalize_final_review(text, draft):
-    """Finalize a structured run; preserve exact raw4/raw5 on failure too."""
+    """Finalize a structured run; preserve exact raw4/raw5/raw6 on failure too."""
     state = presentation_state()
     _need(state is not None, 'missing_presentation_state')
     state.raw_review = text
@@ -112,6 +118,24 @@ def review_protocol(presentation, *, protocol=4):
     """The model sees the actual envelope, not contradictory core-only rules."""
     presentation = presentation or 'text'
     _need(isinstance(presentation, str) and presentation in _EXTRAS, 'invalid_presentation')
+    if protocol == 6:
+        _need(type(protocol) is int and presentation in {'comic', 'infographic'}, 'invalid_protocol')
+        # Build the new explicit contract from core4 accounting, not raw5 or
+        # its projector. Historical 4/5 rules and artifacts stay unchanged.
+        lines = review_protocol(presentation).splitlines()
+        example = json.loads(lines[1].rstrip('.'))
+        example['protocol'] = 6
+        for block in example['blocks']:
+            block['parts'] = [block.pop('markdown')]
+        ref = {'block_id': 'B1', 'part_index': 0, 'claim_ids': ['C1']}
+        example['visual'] = ({'protocol': 3, 'scenes': [
+            {'id': 'S1', 'frame_id': '[FRAME:0001]', 'label_ref': ref}], 'diagram': None}
+            if presentation == 'comic' else {'protocol': 3, 'scenes': [], 'diagram': {
+                'kind': 'cards', 'nodes': [{'id': 'N1', 'label_ref': ref}], 'edges': []}})
+        lines[0] = lines[0].replace('PROTOCOL 4', 'PROTOCOL 6')
+        lines[1] = json.dumps(example, ensure_ascii=False, separators=(',', ':')) + '.'
+        return '\n'.join(lines).replace('Markdown belongs only inside blocks[].markdown;',
+            'Markdown belongs only inside blocks[].parts[] strings;')
     if protocol == 5:
         _need(type(protocol) is int and presentation in {'comic', 'infographic'}, 'invalid_protocol')
         # Reuse all frozen accounting/evidence prose; only explicitly replace

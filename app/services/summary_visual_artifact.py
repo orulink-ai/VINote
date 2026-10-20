@@ -171,6 +171,9 @@ def reviewed_visual_blocks(review):
     Call only after existing fact-protocol finalization succeeds. This function
     performs no evidence review and cannot turn a failed/raw draft into a final.
     """
+    if type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 6:
+        from app.llm.meeting_visual_projection6 import core_review6
+        review = core_review6(review)
     if type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 5:
         from app.llm.meeting_visual_projection import core_review5
         review = core_review5(review)
@@ -217,6 +220,9 @@ def reviewed_claim_sources(review):
     or semantic validation. Saved reads additionally bind the original raw file
     hash and the accepted operation/Origin/model fingerprint.
     """
+    if type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 6:
+        from app.llm.meeting_visual_projection6 import core_review6
+        review = core_review6(review)
     if type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 5:
         from app.llm.meeting_visual_projection import core_review5
         review = core_review5(review)
@@ -361,6 +367,21 @@ def _review_binding(folder, wire):
         text = text[7:-3].strip()
     review = _decode(text.encode('utf-8'))
     _need(wire['blocks'] == reviewed_visual_blocks(review))
+    if review['protocol'] == 6:
+        from app.llm.meeting_visual_projection6 import project_review6
+        _need(not fenced)
+        core, plan = project_review6(review, presentation=wire['presentation'])
+        body = '\n\n'.join(row['markdown'] for row in core['blocks']).strip()
+        _need(wire['body_sha256'] == _sha(body.encode('utf-8')))
+        _need(plan['scenes'] == wire['scenes'] and plan['diagram'] == wire['diagram'])
+        selected = {}
+        for scene in plan['scenes']:
+            selected.setdefault(scene['frame_id'], scene['grounded_label'])
+        _need(len(wire['frames']) == len(selected))
+        for index, ((key, label), frame) in enumerate(zip(selected.items(), wire['frames'])):
+            _need(frame['id'] == key and frame['screenshot_index'] == index
+                  and frame['grounded_label'] == label)
+        reviewed_claim_sources(review)
     if review['protocol'] == 5:
         from app.llm.meeting_visual_projection import project_review5
         _need(not fenced)

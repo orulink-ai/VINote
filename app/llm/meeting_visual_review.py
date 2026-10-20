@@ -7,6 +7,11 @@ import copy
 
 
 def visual_review_instructions(presentation, *, protocol=3):
+    if type(protocol) is int and protocol == 6:
+        if presentation not in {'comic', 'infographic'}:
+            raise ValueError('Unsupported visual review protocol')
+        from app.llm.meeting_visual_projection6 import PARTS_RULE6, COMIC_RULE6, INFO_RULE6
+        return '\n' + PARTS_RULE6 + '\n' + (COMIC_RULE6 if presentation == 'comic' else INFO_RULE6)
     if type(protocol) is int and protocol == 5:
         if presentation not in {'comic', 'infographic'}:
             raise ValueError('Unsupported visual review protocol')
@@ -35,11 +40,11 @@ Select self-contained unchanged excerpts naming objects and essential attributes
 
 def capture_review_visual(review, claims, included):
     """Snapshot effective evidence, never the draft's or model's claimed IDs."""
-    fifth = type(review.get('protocol')) is int and review['protocol'] == 5
-    expected = {'protocol', 'scenes', 'diagram'} if fifth else {'scenes', 'diagram'}
+    versioned = type(review.get('protocol')) is int and review['protocol'] in (5, 6)
+    expected = {'protocol', 'scenes', 'diagram'} if versioned else {'scenes', 'diagram'}
     if not isinstance(review.get('visual'), dict) or set(review['visual']) != expected:
         raise ValueError('图形尚未完成：本次复核没有返回可核验的布局')
-    final = type(review.get('protocol')) is int and review['protocol'] in (4, 5)
+    final = type(review.get('protocol')) is int and review['protocol'] in (4, 5, 6)
     sources = {}
     for key in included:
         claim = claims[key] if final else claims[key][1]

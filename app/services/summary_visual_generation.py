@@ -24,10 +24,13 @@ def render_review_visual(artifacts, context, markdown):
     _need(isinstance(snapshot, dict) and set(snapshot) == {'review', 'claim_sources'})
     review, sources = snapshot['review'], snapshot['claim_sources']
     blocks = reviewed_visual_blocks(review)
-    if review['protocol'] in (4, 5):
+    if review['protocol'] in (4, 5, 6):
         _need(sources == reviewed_claim_sources(review))
     _need('\n\n'.join(block['text'] for block in blocks).strip() == markdown)
-    if review['protocol'] == 5:
+    if review['protocol'] == 6:
+        from app.llm.meeting_visual_projection6 import project_review6
+        _, plan = project_review6(review, presentation=context.presentation)
+    elif review['protocol'] == 5:
         from app.llm.meeting_visual_projection import project_review5
         _, plan = project_review5(review, presentation=context.presentation)
     else:

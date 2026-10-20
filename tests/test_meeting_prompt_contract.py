@@ -26,14 +26,20 @@ def _assert_final_envelope(rules, presentation, expected_protocol):
         expected_fields.add('visual')
     assert set(example) == expected_fields
     for block in example['blocks']:
-        if expected_protocol == 5:
+        if expected_protocol == 6:
+            assert set(block) == {'id', 'parts'}
+            assert all(type(part) is str for part in block['parts'])
+        elif expected_protocol == 5:
             assert set(block) == {'id', 'parts'}
             assert all(set(part) == {'id', 'text'} for part in block['parts'])
         else:
             assert set(block) == {'id', 'markdown'}
     if presentation in {'comic', 'infographic'}:
         visual = example['visual']
-        if expected_protocol == 5:
+        if expected_protocol == 6:
+            assert set(visual) == {'protocol', 'scenes', 'diagram'}
+            assert type(visual['protocol']) is int and visual['protocol'] == 3
+        elif expected_protocol == 5:
             assert set(visual) == {'protocol', 'scenes', 'diagram'}
             assert type(visual['protocol']) is int and visual['protocol'] == 2
         else:
@@ -49,7 +55,11 @@ def _assert_final_envelope(rules, presentation, expected_protocol):
             assert len(visual['diagram']['nodes']) == 1
             row = visual['diagram']['nodes'][0]
             base = {'id'}
-        if expected_protocol == 5:
+        if expected_protocol == 6:
+            assert set(row) == base | {'label_ref'}
+            assert row['label_ref'] == {'block_id': example['blocks'][0]['id'], 'part_index': 0, 'claim_ids': ['C1']}
+            assert type(row['label_ref']['part_index']) is int
+        elif expected_protocol == 5:
             assert set(row) == base | {'label_ref'}
             assert set(row['label_ref']) == {'part_id', 'claim_ids'}
             assert row['label_ref']['part_id'] == example['blocks'][0]['parts'][0]['id']
@@ -60,7 +70,7 @@ def _assert_final_envelope(rules, presentation, expected_protocol):
 
 
 @pytest.mark.parametrize('presentation,expected_protocol', [
-    ('text', 4), ('html', 4), ('illustrated', 4), ('comic', 5), ('infographic', 5),
+    ('text', 4), ('html', 4), ('illustrated', 4), ('comic', 6), ('infographic', 6),
 ])
 def test_structured_stages_do_not_inherit_markdown_only_outer_response(presentation, expected_protocol):
     source = '[ASR:0001] Synthetic source: verify the interlock before opening.'
@@ -137,7 +147,7 @@ def test_materiality_contract_is_specific_to_the_actual_stage(language, depth, p
         assert 'materiality is not certainty' in prompts['system_prompt']
         assert 'No source window or frame is required to yield a business fact' in prompts['system_prompt']
     _assert_final_envelope(review['system_prompt'], presentation,
-                           5 if presentation in {'comic', 'infographic'} else 4)
+                           6 if presentation in {'comic', 'infographic'} else 4)
     assert 'Classify each unique draft claim' in draft['system_prompt']
     assert 'Do not reclassify original.material' not in draft['system_prompt']
     assert 'Classify each unique draft claim' not in review['system_prompt']
@@ -205,18 +215,49 @@ def test_source_fidelity_replacements_reach_both_stages_without_rewriting_source
     assert node_rule not in draft['system_prompt']
     assert node_rule not in review['system_prompt']
     if presentation in {'comic', 'infographic'}:
-        for instruction in ('FINAL/5 BODY PARTS AND VISUAL-REF/2.',
-                            'Write reader-facing text once, only in blocks[].parts[].text.',
-                            'Only graphic labels use label_ref=',
-                            'never grounded_label, free label text or block_ids',
+        for instruction in ('FINAL/6 STRING PARTS AND VISUAL-REF/3.',
+                            'Write reader-facing text once, only in blocks[].parts[] strings.',
+                            'Graphic labels use only label_ref=',
+                            'Never output grounded_label, part_id, a second block_ids list or free label text',
                             'Keep existing claims/accounting/evidence rules'):
             assert review['system_prompt'].count(instruction) == 1
         assert 'Markdown belongs only inside blocks[].markdown;' not in review['system_prompt']
-        assert 'FINAL/5 BODY PARTS AND VISUAL-REF/2.' not in draft['system_prompt']
+        assert 'FINAL/6 STRING PARTS AND VISUAL-REF/3.' not in draft['system_prompt']
     if presentation == 'infographic':
         for instruction in ('Never split an object and its values across independent nodes',
-                            'Omit unsuitable excerpts rather than remove their qualifiers',
-                            'Cards/comparison have no edges; flow/relationship require a supported edge',
-                            'Check each complete source -> relation -> target proposition',
-                            'manufacture an edge, change format/model or make another call'):
+                            'omit unsuitable excerpts rather than lose qualifiers',
+                            'Cards/comparison have no edges; flow/relationship require a source-supported edge',
+                            'Check the complete source -> relation -> target proposition',
+                            'manufacture an edge'):
             assert instruction in review['system_prompt']
+
+
+@pytest.mark.parametrize('presentation', ['comic', 'infographic'])
+def test_explicit_historical_five_keeps_its_own_part_ids_and_visual_two(presentation):
+    rules = review_protocol(presentation, protocol=5)
+    _assert_final_envelope(rules, presentation, 5)
+    assert 'blocks[].parts[].text' in rules
+    visual = visual_review_instructions(presentation, protocol=5)
+    assert 'FINAL/5 BODY PARTS AND VISUAL-REF/2.' in visual
+    assert 'FINAL/6' not in rules + visual
+    assert 'part_index' not in rules + visual
+
+
+@pytest.mark.parametrize('presentation', ['comic', 'infographic'])
+def test_six_common_rule_has_no_conflicting_empty_layout_command(presentation):
+    from app.llm.meeting_visual_projection6 import PARTS_RULE6
+    assert 'diagram:null' not in PARTS_RULE6 and '"diagram":null' not in PARTS_RULE6
+    visual = visual_review_instructions(presentation, protocol=6)
+    if presentation == 'comic':
+        assert '"diagram":null' in visual
+        assert 'diagram must be an object' not in visual
+    else:
+        assert 'diagram must be an object, not null' in visual
+        assert '"diagram":null' not in visual
+
+
+@pytest.mark.parametrize('presentation', ['text', 'html', 'illustrated'])
+def test_protocol_six_is_not_a_non_graphic_contract(presentation):
+    with pytest.raises(FinalLedgerError) as error:
+        review_protocol(presentation, protocol=6)
+    assert error.value.code == 'invalid_protocol'

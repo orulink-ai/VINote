@@ -20,10 +20,10 @@ def test_actual_opt_in_layout_keeps_two_full_source_calls_and_original_responses
             'disposition': 'included', 'block_ids': ['B6'],
             'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': raw_source}]}]}
     if presentation == 'infographic':
-        review['protocol'] = 5
-        review['blocks'] = [{'id': 'B6', 'parts': [{'id': 'P6', 'text': raw_source}]}]
-        review['visual'] = {'protocol': 2, 'scenes': [], 'diagram': {'kind': 'cards',
-            'nodes': [{'id': 'N8', 'label_ref': {'part_id': 'P6', 'claim_ids': ['C8']}}], 'edges': []}}
+        review['protocol'] = 6
+        review['blocks'] = [{'id': 'B6', 'parts': [raw_source]}]
+        review['visual'] = {'protocol': 3, 'scenes': [], 'diagram': {'kind': 'cards',
+            'nodes': [{'id': 'N8', 'label_ref': {'block_id': 'B6', 'part_index': 0, 'claim_ids': ['C8']}}], 'edges': []}}
     class Automatic(_BasePromptLLM):
         def __init__(self): self.calls = []
         def _complete(self, **prompts):
@@ -45,7 +45,7 @@ def test_actual_opt_in_layout_keeps_two_full_source_calls_and_original_responses
         else:
             assert state.visual_review is None
     assert body == raw_source and len(automatic.calls) == 2 and observed == [json.dumps(draft)]
-    assert ('BODY PARTS AND VISUAL-REF/2' in automatic.calls[1]['system_prompt']) == (presentation == 'infographic')
+    assert ('STRING PARTS AND VISUAL-REF/3' in automatic.calls[1]['system_prompt']) == (presentation == 'infographic')
 
 
 def test_actual_graphic_without_layout_keeps_raw_review_but_cannot_claim_completion(monkeypatch):
