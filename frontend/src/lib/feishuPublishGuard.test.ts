@@ -18,21 +18,21 @@ it.each([['b'], ['b', 'a']])('blocks dispatch after asynchronous account changes
 });
 it('publishes once for the unchanged account after installed state resolves', async () => {
   state.read.mockResolvedValue({ installed: true, enabled: true });
-  state.api.mockResolvedValue({ id: 'job' });
+  state.api.mockRejectedValueOnce({ status: 404 }).mockResolvedValue({ id: 'job' });
   await publishToFeishu('note', 'title', 'body');
-  expect(state.api).toHaveBeenCalledTimes(1);
+  expect(state.api).toHaveBeenCalledTimes(2);
 });
 it('rejects a stale response after a dispatched request without submitting it again', async () => {
   state.read.mockResolvedValue({ installed: true, enabled: true });
   let resolve!: (value: { id: string }) => void;
-  state.api.mockReturnValue(new Promise(done => { resolve = done; }));
+  state.api.mockRejectedValueOnce({ status: 404 }).mockImplementationOnce(() => new Promise(done => { resolve = done; }));
   const pending = publishToFeishu('note', 'title', 'body');
   const rejected = expect(pending).rejects.toThrow(/账号/);
-  await vi.waitFor(() => expect(state.api).toHaveBeenCalledTimes(1));
+  await vi.waitFor(() => expect(state.api).toHaveBeenCalledTimes(2));
   changeOwner('b'); changeOwner('a');
   resolve({ id: 'job' });
   await rejected;
-  expect(state.api).toHaveBeenCalledTimes(1);
+  expect(state.api).toHaveBeenCalledTimes(2);
 });
 it('queries only the exact job without browser cache and forwards cancellation', async () => {
   const controller = new AbortController();
@@ -64,11 +64,17 @@ it('network failures after POST remain unknown even for a live attempt', async (
   const draft = makeIntent(), attempt = beginPublishAttempt(draft);
   persistPublishDraft({ ...draft, state: 'unknown' });
   state.read.mockResolvedValue({ installed: true, enabled: true });
-  state.api.mockRejectedValue(new Error('network unknown'));
+  state.api.mockRejectedValueOnce({ status: 404 }).mockRejectedValue(new Error('network unknown'));
   await expect(publishToFeishu('note', 'title', 'body', false, { operation_id: draft.operationId }, attempt)).rejects.toThrow('network');
-  expect(state.api).toHaveBeenCalledTimes(1);
+  expect(state.api).toHaveBeenCalledTimes(2);
   expect(restoreUndispatchedDraft(attempt)).toBeNull();
   expect(readPublishDraft('a', 'note')?.state).toBe('unknown');
+});
+it.each(['queued', 'submitting', 'unknown'])('never dispatches a manual publication while automatic state is %s', async status => {
+  state.read.mockResolvedValue({ installed: true, enabled: true });
+  state.api.mockResolvedValueOnce({ status });
+  await expect(publishToFeishu('note', 'title', 'body')).rejects.toThrow('不会重复发送');
+  expect(state.api).toHaveBeenCalledExactlyOnceWith('/api/feishu/automatic-deliveries/local/note', { cache: 'no-store' });
 });
 it('input validation refuses before POST and produces only current-attempt evidence', async () => {
   localStorage.clear();
