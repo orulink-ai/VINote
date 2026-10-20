@@ -361,3 +361,10 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 38项模型/formatter源码在四项真实候选运行期间保持冻结，终态核验无漂移。A/B精简信息图分别在656.0/638.9秒成功，后续原样普通保存为 `7ff061c3-ca67-5132-bd75-e5f9b74d78b7` / `0a9e1c52-fd26-50d8-9500-b767e1b19b56`，归入原canonical会议；不是原生生成提交。A详细文字912.0秒成功后普通保存至 `8922158a-629f-5d13-b605-bf3b8c6ae495`。
 - B详细文字是原生一次提交operation `02fb5d59-4569-48e1-a704-fe8ee0f90f4b`，界面明确显示复用转写及生成反馈；接受快照needs_stt=false，实际ASR方法未在原生进程内替换。678.6秒成功后，原生自动保存ACK并打开note `35ee53c3-2287-5751-a7c8-ad31a2164172`，显示详细·文字及26:25视频；只读DB与raw/result正文相同，独评87/100。截图为 `B-text-v10-before-submit.png`、`B-text-v10-native-saved.png`，不是只用runner或测试推定原生链路。
 - 两份V10信息图分别从原会议档案打开，实际通过系统SaveAs保存SVG/PNG，界面反馈“图形已保存到所选位置”。A5645/95324字节，B5323/85571字节，原生截图 `A-info-v10-native-export.png`、`B-info-v10-native-export.png`；B完整8卡片独评75/100，A正文75/90加实际呈现7分、总82/100。导出没有改写模型正文/连线。A播放器28:32、B26:25均可见；本轮不把时长显示冒充连续全片播放。正式安装包、所有形式100分及最终知识库交付仍未验收。
+
+### 中文断行与反向共线路由闭环
+
+- 通用排版保留原文与字体测量，优先自然词/标点边界，退避闭合标点行首与开括号行尾；长词可紧急拆字素。Intl.Segmenter不可用时使用有界Unicode fallback，不注入本会议的人名词典或改写字符。路线对正长度反向共线增加独立lane和端口，保留全部节点/边/标签/方向与原plan。
+- A V10原plan的两边原先反向共用50px路段，修复后为0。主线在原生热更新窗口实际另存 `A-info-v10-renderfix.svg` 和PNG，未覆盖原评分文件；独审确认SVG与候选逐字节一致、PNG逐像素一致，首卡三行且无顿号行首，原bodyhash和模型错误的边均保留。本项是新render-only复验，不倒改旧正文75或总82，也不宣称修好了LLM语义。
+- 独审又复现缺少Segmenter时ASCII＋ZWJ链被错误合成单字素、超236px裁字的P2。已按合法Extended_Pictographic上下文约束ZWJ连接，补反例；独审8项闭环及真实SVG/PNG通过，SSR保字/测宽、正常原生A保真，无残留本组P1/P2。初轮53项、修复后8项是不同审查阶段，不合算为全量。
+- 最终前端 **136文件／1583项通过**（66.23秒，maxWorkers=4），TypeScript和生产构建通过（Vite6.16秒）。前次并行构建时全量1576通过／1个连接设置测试5秒超时；原测试未改断言/超时，独立单文件10项通过（原失败case672ms）。保留两轮日志，不把单文件通过替代全套；最终全套在P2修复后重新执行。对应ignored日志 `v11-ui-full-tests.log`、`v11-model-connection-isolated.log`、`v11-ui-full-tests-r2.log`、`v11-ui-build-r2.log`。

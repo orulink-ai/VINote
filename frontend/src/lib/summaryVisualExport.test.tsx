@@ -31,6 +31,70 @@ it('includes exact model-supplied relationships and no external resources', asyn
   expect(readImage).not.toHaveBeenCalled()
 })
 
+it('exports punctuation-aware labels and distinct shared-node return routes without rewriting a plan', async () => {
+  const visual = await makeVisualFixture('infographic')
+  const labels = ['设备校准记录必须由管理员复核，保留原值。', '缓冲区', '离线校准', '结果复核']
+  const pairs = [[0, 1], [1, 2], [2, 3], [3, 1]]
+  const relationLabels = pairs.map((_, i) => `合成关系${i + 1}`)
+  const body = [...labels, ...relationLabels].join('\n')
+  visual.blocks = [{ id: 'B1', text: body, claim_ids: ['C1'] }]
+  visual.body_sha256 = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body))), byte => byte.toString(16).padStart(2, '0')).join('')
+  visual.diagram = { kind: 'relationship', nodes: labels.map((grounded_label, i) => ({ id: `N${i}`, block_ids: ['B1'], grounded_label })),
+    edges: pairs.map(([a, b], i) => ({ id: `E${i}`, from: `N${a}`, to: `N${b}`, block_ids: ['B1'], grounded_label: relationLabels[i] })) }
+  const before = JSON.stringify(visual), readImage = vi.fn()
+  const svg = await buildSummaryVisualSvg(visual, body, visualTitle, readImage)
+  const root = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement
+  const diagram = root.querySelector('svg')!
+  const groups = [...diagram.querySelectorAll('g')].filter(g => g.querySelector(':scope > rect'))
+  expect(groups.map(g => g.querySelectorAll('text')[1].textContent)).toEqual(labels)
+  for (const group of groups) {
+    const lines = [...group.querySelectorAll('tspan')]
+    expect(lines.slice(1).every(line => !/^[\p{Pe}\p{Pf}、。，]/u.test(line.textContent!.trimStart()))).toBe(true)
+    for (const line of lines) expect(Array.from(line.textContent!).length * 16).toBeLessThanOrEqual(236)
+  }
+  // The returned fourth relationship must not reuse the incoming third edge's
+  // vertical stem, including when routes have different whole-path shapes.
+  const paths = [...diagram.querySelectorAll('path[marker-end]')].map(path => {
+    const values = path.getAttribute('d')!.match(/-?\d+(?:\.\d+)?/g)!.map(Number)
+    const points = Array.from({ length: values.length / 2 }, (_, i) => [values[2 * i], values[2 * i + 1]])
+    return points.slice(1).map((end, i) => [points[i], end])
+  })
+  expect(paths).toHaveLength(4)
+  for (const [a, b] of paths[2]) for (const [c, d] of paths[3]) {
+    if (a[0] !== b[0] || c[0] !== d[0] || a[0] !== c[0] || (b[1] - a[1]) * (d[1] - c[1]) >= 0) continue
+    expect(Math.min(Math.max(a[1], b[1]), Math.max(c[1], d[1])) - Math.max(Math.min(a[1], b[1]), Math.min(c[1], d[1]))).toBeLessThanOrEqual(0)
+  }
+  for (const label of relationLabels) expect(root.textContent).toContain(label)
+  expect(root.querySelector('image,a,script,foreignObject')).toBeNull()
+  expect(JSON.stringify(visual)).toBe(before)
+  expect(readImage).not.toHaveBeenCalled()
+})
+
+it.each([false, true])('exports a Latin + ZWJ label within card width without replacement (fallback=%s)', async fallback => {
+  const visual = await makeVisualFixture('infographic')
+  const label = 'A\u200D'.repeat(32) + 'A'
+  visual.blocks = [{ id: 'B1', text: label, claim_ids: ['C1'] }]
+  visual.body_sha256 = Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(label))), byte => byte.toString(16).padStart(2, '0')).join('')
+  visual.diagram = { kind: 'cards', nodes: [{ id: 'N1', block_ids: ['B1'], grounded_label: label }], edges: [] }
+  const before = JSON.stringify(visual), descriptor = Object.getOwnPropertyDescriptor(Intl, 'Segmenter')!
+  if (fallback) Object.defineProperty(Intl, 'Segmenter', { configurable: true, value: undefined })
+  try {
+    const readImage = vi.fn()
+    const svg = await buildSummaryVisualSvg(visual, label, visualTitle, readImage)
+    const root = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement
+    const group = [...root.querySelector('svg')!.querySelectorAll('g')].find(g => g.querySelector(':scope > rect'))!
+    const text = group.querySelectorAll('text')[1], lines = [...text.querySelectorAll('tspan')]
+    expect(lines.length).toBeGreaterThan(1)
+    expect(text.textContent).toBe(label)
+    expect(text.textContent).not.toContain('\uFFFD')
+    // No canvas in jsdom: the production conservative measure counts each BMP
+    // code point, including ZWJ, as 16px. No resulting line may exceed the box.
+    expect(lines.every(line => Array.from(line.textContent!).length * 16 <= 236)).toBe(true)
+    expect(JSON.stringify(visual)).toBe(before)
+    expect(readImage).not.toHaveBeenCalled()
+  } finally { Object.defineProperty(Intl, 'Segmenter', descriptor) }
+})
+
 it.each([
   ['wide Latin', 'W'.repeat(120)],
   ['mixed Unicode', '控制W🧭12.5% / 08:30；'.repeat(5)],

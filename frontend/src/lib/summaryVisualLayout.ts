@@ -40,25 +40,83 @@ function labelWidth(text: string): number {
   return Array.from(text).reduce((width, char) => width + (char.codePointAt(0)! > 0xffff ? 32 : 16), 0)
 }
 
-/** Wrap by rendered width, preserving every label character (never ellipsize). */
-export function diagramTextLines(text: string, width: number, measure = labelWidth): string[] {
-  const lines: string[] = []
-  let line = ''
-  // Keep flight numbers, amounts and times together when they fit on a line.
-  // An individually overlong token still wraps without losing characters.
-  const tokens = text.match(/[A-Za-z0-9]+(?:[.:/%–-][A-Za-z0-9]+)*|[\s\S]/gu) || []
-  for (const token of tokens) {
-    if (token === '\n') { lines.push(line); line = ''; continue }
-    if (measure(token) <= width) {
-      if (line && measure(line + token) > width) { lines.push(line); line = '' }
-      line += token
-    } else for (const char of token) {
-      if (line && measure(line + char) > width) { lines.push(line); line = '' }
-      line += char
-    }
+type TextSegmenter = new (locale: string, options: { granularity: 'word' | 'grapheme' }) => {
+  segment(text: string): Iterable<{ segment: string; index: number }>
+}
+
+function textSegments(text: string, granularity: 'word' | 'grapheme') {
+  // ES2020 builds can use newer WebView/ICU segmentation without requiring it.
+  const Segmenter = (Intl as unknown as { Segmenter?: TextSegmenter }).Segmenter
+  if (Segmenter) return Array.from(new Segmenter('zh', { granularity }).segment(text), part => part.segment)
+  if (granularity === 'word') return text.match(/[A-Za-z0-9]+(?:[.:/%–-][A-Za-z0-9]+)*|[^\S\n]+|[\s\S]/gu) || []
+  // Conservative fallback: preserve combining marks and emoji ZWJ sequences.
+  // CJK boundaries remain character-based without an ICU dictionary.
+  const result: string[] = []
+  for (const char of text) {
+    const previous = result[result.length - 1]
+    // GB11 joins across ZWJ only from Extended_Pictographic Extend* ZWJ to
+    // another pictograph. A ZWJ following Latin text must not absorb its next A.
+    const emojiJoin = /^\p{Extended_Pictographic}$/u.test(char)
+      && /\p{Extended_Pictographic}[\p{Grapheme_Extend}\p{Emoji_Modifier}]*\u200D$/u.test(previous || '')
+    if (previous && (/^[\p{Mark}\uFE0E\uFE0F\u{1F3FB}-\u{1F3FF}\u200D]$/u.test(char) || emojiJoin
+      || (/^[\u{1F1E6}-\u{1F1FF}]$/u.test(previous) && /^[\u{1F1E6}-\u{1F1FF}]$/u.test(char)))) {
+      result[result.length - 1] += char
+    } else result.push(char)
   }
-  lines.push(line)
-  return lines
+  return result
+}
+
+// Closing punctuation stays with preceding text; opening brackets/quotes stay
+// with following text. These are break constraints, never text substitutions.
+const noLineStart = /^[\p{Pe}\p{Pf}、。，．？！：；％‰…·・,.:;!?%]/u
+const noLineEnd = /[\p{Ps}\p{Pi}]$/u
+
+/** Measured word wrapping with bounded emergency breaks; never rewrite a label. */
+export function diagramTextLines(text: string, width: number, measure = labelWidth): string[] {
+  return text.split('\n').flatMap(paragraph => {
+    if (!paragraph) return ['']
+    const graphemes = textSegments(paragraph, 'grapheme')
+    const offsets = [0]
+    graphemes.forEach(part => offsets.push(offsets[offsets.length - 1] + part.length))
+    const words = new Set<number>()
+    let offset = 0
+    for (const part of textSegments(paragraph, 'word')) { offset += part.length; words.add(offset) }
+    const keepTogether = (start: number, end: number) => {
+      for (const boundary of words) if (boundary > start && boundary < end) words.delete(boundary)
+    }
+    // Dictionary boundaries vary across ICU versions. Keep a fitting list term
+    // or short clause whole, without recognizing names or changing its text.
+    for (const match of paragraph.matchAll(/[^、，,；;。！？!?]+/gu)) {
+      if (measure(match[0]) <= width) keepTogether(match.index!, match.index! + match[0].length)
+    }
+    // ICU may split punctuation within a time/range/identifier. Keep the existing
+    // technical-token boundary when it fits, without guessing entity meanings.
+    for (const match of paragraph.matchAll(/[A-Za-z0-9]+(?:[.:/%–-][A-Za-z0-9]+)*/gu)) {
+      keepTogether(match.index!, match.index! + match[0].length)
+    }
+    const legal = (end: number) => end === graphemes.length
+      || (!noLineEnd.test(paragraph.slice(0, offsets[end]).trimEnd())
+          && !noLineStart.test(paragraph.slice(offsets[end]).trimStart()))
+    const lines: string[] = []
+    let start = 0
+    while (start < graphemes.length) {
+      let fit = start
+      while (fit < graphemes.length && measure(paragraph.slice(offsets[start], offsets[fit + 1])) <= width) fit++
+      let end = fit
+      if (fit < graphemes.length) {
+        // Prefer whole words, then an allowed grapheme boundary. Backtracking
+        // carries the preceding text with closing punctuation instead of spilling.
+        while (end > start && !(words.has(offsets[end]) && legal(end))) end--
+        if (end === start) { end = fit; while (end > start && !legal(end)) end-- }
+      }
+      // A long word still splits; a lone glyph wider than the entire box is the
+      // same irreducible case as before, never a reason to lose its characters.
+      if (end === start) end = Math.max(start + 1, fit)
+      lines.push(paragraph.slice(offsets[start], offsets[end]))
+      start = end
+    }
+    return lines
+  })
 }
 
 type Point = { x: number; y: number }
@@ -103,6 +161,37 @@ function routeLink(a: Box, b: Box, boxes: Box[], slot: number, count: number): P
   const exitY = start.y + (down ? 1 : -1) * (clearance + slot * 32)
   const entryY = end.y - (down ? 1 : -1) * (clearance + slot * 32)
   return [start, { x: start.x, y: exitY }, { x: lane, y: exitY }, { x: lane, y: entryY }, { x: end.x, y: entryY }, end]
+}
+
+function reverseOverlap(route: Point[], occupied: Point[][]): boolean {
+  return route.slice(1).some((end, i) => {
+    const start = route[i], vertical = start.x === end.x
+    return occupied.some(other => other.slice(1).some((q, j) => {
+      const p = other[j]
+      if (vertical ? p.x !== q.x || p.x !== start.x : p.y !== q.y || p.y !== start.y) return false
+      const [a, b, c, d] = vertical ? [start.y, end.y, p.y, q.y] : [start.x, end.x, p.x, q.x]
+      return (b - a) * (d - c) < 0 && Math.min(Math.max(a, b), Math.max(c, d)) > Math.max(Math.min(a, b), Math.min(c, d))
+    }))
+  })
+}
+
+function separateRoute(a: Box, b: Box, lane: number, index: number, count: number, occupied: Point[][]): Point[] {
+  // All legs outside the endpoint cards use row gutters or a fresh outer lane.
+  // Distinct ports/gutter levels also separate edges sharing a node, not just a
+  // pair of endpoints. Trying new fractions avoids occupied collinear stems.
+  const attempts = 8 * occupied.reduce((sum, route) => sum + route.length, 0) + 2
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    const t = (attempt + 1) / (attempts + 1)
+    const from = (index + .2 + .4 * t) / (count + 1), to = (index + .75 + .2 * t) / (count + 1)
+    const down = b.y > a.y, sameRow = a.y === b.y
+    const start = { x: a.x + 18 + (a.width - 36) * from, y: a.y + (!sameRow && down ? a.height : 0) }
+    const end = { x: b.x + 18 + (b.width - 36) * to, y: b.y + (!sameRow && !down ? b.height : 0) }
+    const exitY = start.y + (sameRow || !down ? -1 : 1) * (16 + 8 * from)
+    const entryY = end.y + (sameRow || down ? -1 : 1) * (16 + 8 * to)
+    const route = [start, { x: start.x, y: exitY }, { x: lane, y: exitY }, { x: lane, y: entryY }, { x: end.x, y: entryY }, end]
+    if (!reverseOverlap(route, occupied)) return route
+  }
+  throw new Error('Unable to separate diagram relationship routes')
 }
 
 export function diagramLayout(items: DiagramItem[], links: DiagramLink[], flow: boolean): DiagramLayout {
@@ -150,12 +239,18 @@ export function diagramLayout(items: DiagramItem[], links: DiagramLink[], flow: 
     }
   }
   const groupSlots = new Map<string, number>()
-  const routes = links.map(link => {
+  const routes: Point[][] = []
+  links.forEach((link, index) => {
     const a = nodes.find(node => node.id === link.from)!, b = nodes.find(node => node.id === link.to)!
     const key = groupKey(link), slot = groupSlots.get(key) || 0
     groupSlots.set(key, slot + 1)
-    return routeLink(a, b, nodes, slot, groupCounts.get(key)!)
+    let route = routeLink(a, b, nodes, slot, groupCounts.get(key)!)
       .filter((p, i, all) => !i || p.x !== all[i - 1].x || p.y !== all[i - 1].y)
+    if (reverseOverlap(route, routes)) {
+      const lane = Math.min(...nodes.map(node => node.x), ...routes.flat().map(p => p.x)) - 32
+      route = separateRoute(a, b, lane, index, links.length, routes)
+    }
+    routes.push(route)
   })
   const labels: Point[] = []
   const clearLabel = (p: Point) => !nodes.some(box => p.x + 13 > box.x && p.x - 13 < box.x + box.width && p.y + 13 > box.y && p.y - 13 < box.y + box.height)
@@ -182,14 +277,9 @@ export function diagramLayout(items: DiagramItem[], links: DiagramLink[], flow: 
       // a reference. Row gutters keep its entry/exit away from all other cards.
       const a = nodes.find(node => node.id === link.from)!, b = nodes.find(node => node.id === link.to)!
       const lane = Math.min(...nodes.map(node => node.x), ...routes.flat().map(p => p.x), ...labels.map(p => p.x - 13)) - 32
-      const sameRow = a.y === b.y, down = b.y > a.y
-      const start = { x: a.x + a.width / 2 - (a.id === b.id ? 16 : 0), y: a.y + (!sameRow && down ? a.height : 0) }
-      const end = { x: b.x + b.width / 2 + (a.id === b.id ? 16 : 0), y: b.y + (!sameRow && !down ? b.height : 0) }
-      const exitY = start.y + (sameRow || !down ? -28 : 28)
-      const entryY = sameRow ? end.y - 60 : end.y + (down ? -28 : 28)
-      points = [start, { x: start.x, y: exitY }, { x: lane, y: exitY }, { x: lane, y: entryY }, { x: end.x, y: entryY }, end]
+      points = separateRoute(a, b, lane, index, links.length, routes.filter((_, i) => i !== index))
       routes[index] = points
-      label = { x: lane, y: (exitY + entryY) / 2 }
+      label = { x: lane, y: (points[2].y + points[3].y) / 2 }
     }
     labels.push(label)
     return { ...link, number: index + 1, path: points.map((p, i) => `${i ? 'L' : 'M'} ${p.x} ${p.y}`).join(' '), labelX: label.x, labelY: label.y }
