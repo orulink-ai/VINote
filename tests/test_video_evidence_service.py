@@ -1,5 +1,6 @@
 """Synthetic media only: full-timeline selection and honest evidence transport."""
 from pathlib import Path
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -54,6 +55,12 @@ def test_scan_covers_beginning_middle_tail_and_detects_small_whiteboard_edits(mo
     prompt = evidence.text_material()
     assert 'A proposal' not in prompt  # Do not duplicate or mutate full speech source.
     assert 'temporal overlap does not establish' in prompt
+    material = json.loads(prompt.split('\n')[-1])
+    assert [row['source_ref'] for row in material['frames']] == [
+        f'[FRAME:{index + 1:04d}]' for index in range(len(evidence.frames))]
+    for row, actual in zip(material['frames'], evidence.frames):
+        assert row['offset_seconds'] == actual.timestamp
+        assert row['visible_text'] == actual.ocr_text
     assert source.read_bytes() == b'retained-original'
 
 

@@ -225,3 +225,11 @@ A09 draft HTTP524未返回稿；Bbrief03完成draft/review但guardfailed。B只�
 - 原生桌面已重编译重新运行，HTML84分原稿实际预览、另存为4353字节成功；证据补到实际UI验收文档。没有借此宣称质量100或飞书交付完成。
 - Windows原生中文OCR已发现并完成A/B各一张真实图测试：727/1398字符，约464/320ms识别时间；125图及两份旧manifest哈希不变。新增有界批处理模块与桌面新子任务派生材料接入：前后图hash、原文/坐标、真实引擎/语言/系统版本、不可覆盖子任务receipt；旧ASR/图片/manifest不改。失败不采用部分OCR，不截断全文材料，不安装/下载OCR引擎，不发新provider修复请求。
 - 新OCR接入与既有summary回归86 passed；OCR模块/派生接入/visual pipeline组合94 passed。仍在独立审查，尚未以完整125图OCR的新材料生成下一候选，不提前声称质量改善。
+
+### 2026-10-20 20:26 · 真实 OCR 批次与补充来源标识
+
+- A11耗时187.1秒后模型连接中断，无draft/review；B信息图02耗时126.2秒，有raw review但exact证据拦截。native OCR在两批分别完整采用64/61张、50846/81002字符，均completed且inputs_verified_after；旧ASR/原图/manifest未变。OCR成功不证明模型质量改善。
+- B02原始正文独评81、raw visual plan83（旧口径临时分数），不是保存成品。具体问题包括行程方向/同一事件关系错误、重要差异遗漏、8项引文不匹配及缺figures。保留raw不修补。typed质量记录按task和bodyhash绑定，正文与图形计划分开，缺失与unknown不赋分。
+- 新冻结统一rubric见summary-quality-20261020-v1文档；历史临时分数不换算、不同版本最高分不拼盘。后续两样本六项取较低分，事实/关系错误必须扣分，不以渲染或测试冒称100。
+- 通用来源提示补强：OCR每条frame记录增加与实际图片一致的显式source_ref，不要求模型按61条OCR数组心算图片编号。raw OCR原文、空格和错误不规范化；独立看清图像时使用frame_observation，不冒充exact OCR。没有重排/裁剪帧、修改旧manifest或增加provider。新增绑定断言及视频/OCR组合36 passed。
+- UI前置入口和固定弹窗操作区分别c9dd784/dff3ca3已推送并原生验收。新HTML再生成的视觉来源关联修复候选已实际GET与原生弹窗恢复复用，但独立审查仍在修补现代回执缺hash的读取完整性反例，尚未最终冻结。
