@@ -50,3 +50,49 @@ PR64仍为草稿，同一功能分支继续修复；没有合并、发布、修�
 ## 用户要求后的服务只读诊断
 
 已实际核对生产容器、历史用量和隧道日志，见[诊断证据](2026-10-20-luna-service-diagnosis.md)。Luna直接上游为Magpie；12:47:32Z的真实上游502、隧道EOF与Magpie容器重启集中于同一秒。另有三次约125秒的入口400与隧道context canceled，不能将所有中断都归为同一次重启或模型维护。当前health/catalog200不证明长请求已修复；本轮未再次生成，分数未增加，旧任务未重放。
+
+## DeepSeek D01 两场真实终态与后续编码独审
+
+以下 `.desktop-build/` 路径仅为本机忽略目录中的私有证据定位，未发布、不纳入文档站点；不上传会议原文、日志或媒体。
+
+本段记录后续显式选择 `deepseek-v4.1-flash` 的两场 `detailed / text` 实测，冻结Origin均为 `https://api.orulink.ai`。依据已有 A质量报告：`.desktop-build/meeting-delivery-20261020/A-text-detailed-D01/quality-review.md` 与 B质量报告：`.desktop-build/meeting-delivery-20261020/B-text-detailed-D01/quality-review.md`，沿用统一 `summary-quality-20261020-v1`（事实35／关系与限定25／覆盖20／呈现10／可读性10）。D01使用原输入编码；下述WebP80仅为之后的离线候选审查，不能追溯计入这两场运行。
+
+| 实际run / task | 终态及现存输出 | raw_review / saved_product分 | operation至终态 | 失败请求日志 |
+| --- | --- | --- | --- | --- |
+| A-text-detailed-D01 / `084ecd2c-45d6-473a-b108-e9b22bbb6584` | failed；无draft、完整review或最终产物 | N/A / N/A | 199.059043秒 | ReadError；headers=False；attempt=1；171.0秒 |
+| B-text-detailed-D01 / `7532db9c-a43e-47b4-9e37-bcd3d2df54da` | failed；有draft，无完整review或最终产物 | N/A / N/A | 468.997179秒 | ReadError；headers=False；attempt=1；175.7秒，发生于review阶段 |
+
+两场均为 `failed_stage=summarizing`、`summary_result_unconfirmed`、`retryable=false`；五个分项、小计和100分总分全部N/A，不给draft评分，不记0分，不归一化，不增加一组有效质量分。不存在的最终正文hash为N/A，不计算空串hash，也不用B的draft hash代替review hash。headers=False及客户端包装的502不能证明收到了真实上游HTTP502，更不能据此确定模型、输入规模或编码是根因。
+
+运行总耗时来自本地只读receipt时间差：A为UTC 14:54:32.529384至14:57:51.588427（北京时间22:54:32.529384至22:57:51.588427）；B为UTC 14:54:30.203239至15:02:19.200418（北京时间22:54:30.203239至23:02:19.200418）。它们与表内单次失败请求耗时不同，也不使用评审等待及阅读时间充当模型耗时。运行日志分别见 A日志：`.desktop-build/meeting-delivery-20261020/A-text-detailed-D01-run.log` 和 B日志：`.desktop-build/meeting-delivery-20261020/B-text-detailed-D01-run.log`；receipt时间来源为 `.desktop-build/meeting-quality-20261019/acceptance-state/vinote.db` 的 `source_request_receipts`。
+
+两场均默认复用原ASR、显式选择本次LLM：`asr_mode=reuse`、`llm_mode=select`、`needs_stt=false`，运行日志 **asr_requests=0**、`has_minutes=false`、`asr_checkpoint_created=false`，child无新ASR checkpoint。A选中parent `1173a77a-731e-4e23-a66a-dd8115642fb5`，B选中parent `4c0d2184-257a-471b-a0ed-9e047239f262`；各自child transcript与各自selected parent逐字节相同，原帧hash及来源绑定核验一致。这里的source identical指同一场的继承材料保持一致，不表示A/B互为同源，也不表示OCR或原ASR内容必然正确。
+
+可复核的transcript SHA-256：A为 `61244b2da2b4338ae4043d4bbbc0864a7493c54c170f8edc7e691ad881d1724a`，B为 `4bf236a367514dcb446df23fa5d041fdde3190fb0606d3e3ada042928eef0237`；两场冻结候选清单原字节SHA-256均为 `d88dce4bff25fbefbae3d4929fbdabb490387500d652ed31a295aae45303e65b`。A完整读取27个原始ASR窗口，核验64帧hash及64项／50,846字符OCR，累计实看28张不同原图（本次20张、前序已看且hash一致8张），其余36张未视觉阅读；B完整读取22个原始窗口，核验61帧hash及61项／81,002字符OCR，实看21张、未看40张。没有将旧总结作真值，也不声称连续看完整视频。
+
+### 后续原分辨率WebP80离线可读性抽查
+
+独立结果见 编码可读性报告：`.desktop-build/meeting-delivery-20261020/A-text-detailed-D01/encoding-review/readability-review.md`、逐帧编码清单：`.desktop-build/meeting-delivery-20261020/A-text-detailed-D01/encoding-review/encoding-manifest.json` 和 对照区域清单：`.desktop-build/meeting-delivery-20261020/A-text-detailed-D01/encoding-review/comparison-manifest.json`。仅对私有副本调用纯编码函数；模块SHA-256为 `4ed8c67415bd1fce373132546ba09c42378892d48ae64ea06916124ddddad5ad`。保持1920×1080、RGB，WebP quality=80、method=4，候选比原JPEG至少省10%才选择，否则保留原JPEG。独立Pillow等价编码与模块的64帧最终输出逐字节一致；Pillow11.3.0／libwebp1.5.0，不承诺其他编码器版本产生相同hash。
+
+64帧全部选择WebP，总字节14,056,766→10,542,926，减少3,513,840字节（24.9975%），单帧减少13.2437%–35.3977%；本批没有实际触发收益不足回退。另验证 `allow_webp=False` 逐帧保留原JPEG原字节。图像base64数据部分18,742,444→14,057,324字节，不含URI、JSON、提示、OCR和输出预算，不能视为完整请求大小或token计数。原图／manifest、全部时间点与顺序、OCR、transcript及source/visual refs核验未变，原产物未改。
+
+人眼对照仅覆盖 **10个时间点、11个区域**：635、761、887（两个区域）、967、1011、1022、1125、1188、1278、1687秒。抽查价格85与67/71及对应SKU选中态、358.98/12.69小数、灰色待评估限定、ESP32P4／STM32／AS5600／minifoc节点与箭头、本人勾选和指定群未勾选。所列关键位置未见新增不可接受信息损失；967秒小灰字轻微软化但限定仍可读。1188秒原JPEG总览小字本已不足以逐字可靠阅读，文字保真记N/A，只核对拓扑，仍需保留1125/1278细节帧。其余54帧只核验字节、尺寸、时间线和hash，未做人眼编码对照。
+
+这是有损编码的限定范围通过，不是64帧视觉全检、B场编码验收、全片通过或真实pipeline接线验收。已有DeepSeek小样本WebP probe仅证明那次格式可用，不证明64/61图或上下文上限；约25%字节节省也不证明ReadError已修复。后续使用新编码的真实run须另绑输入hash、完整raw_review与saved_product并独评，不能把本段抽查换算成D01质量分。本次文档追加没有模型、ASR、网络、飞书或任务重放操作。
+
+## v5 原生并行生成与统一评分
+
+A/B 均从实际 Tauri 桌面提交，使用 DeepSeek、详细文字及原有 ASR/说话人/画面材料，没有复制旧最终纪要作为输入。两次均产生完整复核响应，原未知操作未重放。
+
+| run | 实际终态 | 操作至终态 | 统一评分 |
+| --- | --- | ---: | --- |
+| A-text-detailed-D02 | 成功；原生自动保存并重新打开，归入原会议档案 | 682.5秒 | **86/100**：事实34/35、关系18/25、覆盖16/20、文字呈现10/10、可读性8/10 |
+| B-text-detailed-D02 | 完整 review 后来源校验失败，未形成完成稿 | 598.8秒 | **61/90**：事实26/35、关系9/25、覆盖18/20、可读性8/10；呈现10分及成品N/A，不折算100 |
+
+A 评审对象是实际 LLM 最终正文，不是草稿或人工改稿。raw blocks、result.json.markdown 与保存记录 `d494baf2-ebc9-5c65-809e-03c7977819f2` 的 content 主线复算一致，正文SHA256为 `2dd788b05522d1d82763ea556d69f4baefcb62d7df4eef04ecbaf1ad9c49f305`，保存类型为 meeting_video。原生保存、重开和归档另有证据，内容相同不代表正式安装包或飞书交付通过。
+
+A 确认扣分涵盖连线方向/反馈目标、报价与选中配置绑定、两项实质要求/用途遗漏、引号内表述精度与界面操作细节偏多。完整读取27个原始ASR窗口，实看28张相关帧，其中14张做原生像素核查；64张source/wire SHA核验一致。没有把字节核验当作全帧语义检查，没有用草稿、旧总结或模型自己的audit作真值。私有报告定位为 `.desktop-build/meeting-delivery-20261020/A-text-detailed-D02/quality-review.md`，不发布源正文或图片。
+
+v5 详细文字的A/B成对分仍待定；简介、图文、HTML、画面分镜、信息图本候选尚无新的完整成对结果，不沿用历史不同口径分数填表。所有形式达到100及目标知识库最终交付尚未完成。后续三个提示文件的阶段契约修复发生在v5终态之后，不能追溯计入本次实际分数。
+
+B 的精确守卫失败为 invalid_rejection：一个 relation 行选用仅允许 entity 的 unclear_entity 拒绝代码。29条ASR引文均唯一精确匹配，45条图像观察引用均存在，不将这次结构失败误报为引文错配。正文的图像状态和时间、价格关系仍存在独立语义错误；引用存在不代表事实正确。raw正文SHA256为 `be6da0e05531f18626a097d0a236dd2851436c651be1d7e1238da085f792228c`，完整读取22个原始窗口、实看30张原图，其余31张未逐项语义核查。私有报告为 `.desktop-build/meeting-delivery-20261020/B-text-detailed-D02/quality-review.md`。没有替模型更换拒绝代码或人工改正文，也没有据此放宽守卫。
