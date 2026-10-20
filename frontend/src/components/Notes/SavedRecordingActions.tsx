@@ -4,7 +4,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert'
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { apiJson } from '../../lib/api'
-import { downloadOriginalFile, downloadResultMessage } from '../../lib/recordingDownload'
+import { downloadOriginalFile, downloadProgressMessage, downloadResultMessage } from '../../lib/recordingDownload'
 import { useAuthStore } from '../../stores/authStore'
 import { useI18n } from '../../lib/i18n'
 import { OriginalLocationButton } from '@/components/OriginalLocationButton'
@@ -59,7 +59,9 @@ export function SavedRecordingActions({ noteId, title, onDeleted, compact = fals
     const controller = new AbortController(); abort.current = controller
     setBusy(true); setError(''); setErrorAction('download'); setDownloadStatus(zh ? '正在准备并导出原文件…' : 'Preparing and exporting original…')
     try {
-      const result = await downloadOriginalFile(`/api/notes/${noteId}/media`, info?.filename || `${title}.${mediaKind === 'video' ? 'webm' : 'm4a'}`, current, controller.signal)
+      const result = await downloadOriginalFile(`/api/notes/${noteId}/media`, info?.filename || `${title}.${mediaKind === 'video' ? 'webm' : 'm4a'}`, current, controller.signal, progress => {
+        if (current() && !controller.signal.aborted) setDownloadStatus(downloadProgressMessage(progress, zh))
+      })
       if (current()) {
         setDownloadStatus(downloadResultMessage(result, zh))
         if (result === 'cancelled') window.setTimeout(() => { if (current()) saveButton.current?.focus() }, 0)

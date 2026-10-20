@@ -13,7 +13,7 @@ import { ModelSourcePanel } from '../Settings/ModelSourcePanel'
 import { useAppModeStore } from '../../stores/appModeStore'
 import { useModelProfileStore } from '../../stores/modelProfileStore'
 import { useSTTProfileStore } from '../../stores/sttProfileStore'
-import { downloadRecording, downloadResultMessage } from '../../lib/recordingDownload'
+import { downloadRecording, downloadProgressMessage, downloadResultMessage } from '../../lib/recordingDownload'
 import { useI18n } from '../../lib/i18n'
 import { OriginalLocationButton } from '@/components/OriginalLocationButton'
 import { useAuthStore } from '@/stores/authStore'
@@ -74,7 +74,9 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
       }
       if (download) {
         setDownloadStatus(zh ? '正在准备并导出原文件…' : 'Preparing and exporting original…')
-        const result = await downloadRecording(read, title, recording.fileName, valid)
+        const result = await downloadRecording(read, title, recording.fileName, valid, undefined, progress => {
+          if (valid()) setDownloadStatus(downloadProgressMessage(progress, zh))
+        })
         if (active()) setDownloadStatus(downloadResultMessage(result, zh))
       } else {
         const blob = await read()

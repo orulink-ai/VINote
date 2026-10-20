@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Download, Loader2 } from 'lucide-react'
 import { Button } from '@/components/ui/button'
-import { downloadOriginalFile, downloadResultMessage } from '@/lib/recordingDownload'
+import { downloadOriginalFile, downloadProgressMessage, downloadResultMessage } from '@/lib/recordingDownload'
 import { useAuthStore } from '@/stores/authStore'
 import { OriginalLocationButton } from './OriginalLocationButton'
 import { isTauriRuntime } from '@/lib/desktopMicrophonePermission'
@@ -31,7 +31,9 @@ export function OriginalDownloadButton({ url, filename }: { url: string; filenam
     const controller = new AbortController(); abort.current = controller
     setBusy(true); setError(''); setMessage('正在准备并导出原文件…')
     try {
-      const result = await downloadOriginalFile(url, filename, current, controller.signal)
+      const result = await downloadOriginalFile(url, filename, current, controller.signal, progress => {
+        if (current() && !controller.signal.aborted) setMessage(downloadProgressMessage(progress))
+      })
       if (current()) {
         setMessage(downloadResultMessage(result))
         if (result === 'cancelled') window.setTimeout(() => { if (current()) saveButton.current?.focus() }, 0)

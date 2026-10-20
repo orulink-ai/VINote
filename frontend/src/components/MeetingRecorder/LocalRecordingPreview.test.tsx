@@ -15,7 +15,7 @@ import { useAppModeStore } from '../../stores/appModeStore'
 import { useModelProfileStore } from '../../stores/modelProfileStore'
 import { useSTTProfileStore } from '../../stores/sttProfileStore'
 import { useAuthStore } from '@/stores/authStore'
-import { downloadRecording } from '../../lib/recordingDownload'
+import { downloadRecording, type DownloadProgressCallback } from '../../lib/recordingDownload'
 
 const recording = { id: 'recording-1', ownerId: 'owner', options: { title: '设计评审', meetingType: 'audio' }, processingStatus: 'idle' } as PendingMeeting
 beforeEach(() => {
@@ -84,14 +84,20 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
 it('invalidates an IndexedDB save immediately on account changes without relying on new recording props', async () => {
   let finish!: (result: 'saved') => void, valid!: () => boolean
-  vi.mocked(downloadRecording).mockImplementationOnce((_read, _title, _filename, current) => {
+  let progress!: DownloadProgressCallback
+  vi.mocked(downloadRecording).mockImplementationOnce((_read, _title, _filename, current, _browserUrl, onProgress) => {
+    progress = onProgress!
     valid = current!; return new Promise(resolve => { finish = resolve })
   })
   render(<LocalRecordingPreview recording={recording} onDeleted={vi.fn()} />)
   fireEvent.click(screen.getByRole('button', { name: '另存为…' }))
   expect(valid()).toBe(true)
+  act(() => progress({ stage: 'writing', writtenBytes: 1024, totalBytes: 2048 }))
+  expect(screen.getByRole('status')).toHaveTextContent('1.0 KB / 2.0 KB')
   act(() => useAuthStore.setState({ user: { id: 'different-owner' } as never }))
   expect(valid()).toBe(false)
+  act(() => progress({ stage: 'finishing', writtenBytes: 2048, totalBytes: 2048 }))
+  expect(screen.queryByText(/正在完成落盘/)).toBeNull()
   await act(async () => finish('saved'))
   expect(screen.queryByText(/已保存到所选位置/)).toBeNull()
 })
