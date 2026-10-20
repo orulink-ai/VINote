@@ -29,7 +29,7 @@ SessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False, expi
 
 def init_db():
     from app import db_models  # noqa: F401
-    from app.models import feishu_destination, mcp_connections, workspace, workspace_generation_claim, workspace_attachment, local_file, content_plugins  # noqa: F401
+    from app.models import feishu_destination, feishu_auto_delivery, mcp_connections, workspace, workspace_generation_claim, workspace_attachment, local_file, content_plugins  # noqa: F401
 
     if settings.workspace_cloud_runtime:
         from app.services.workspace_bootstrap import protect_api_tables

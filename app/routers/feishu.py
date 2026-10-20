@@ -3,6 +3,7 @@ import hashlib
 import logging
 from typing import Literal
 from urllib.parse import urlencode
+from uuid import UUID
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
@@ -16,6 +17,7 @@ from app.services.auth_service import get_current_user
 from app.services.cloud_account_service import CloudAccountService, _request
 from app.services.feishu_service import FeishuService
 from app.services.feishu_application_service import application_status, save_application, clear_application
+from app.services import feishu_auto_policy as auto_policy
 
 router = APIRouter(prefix="/feishu", tags=["feishu"])
 service = FeishuService()
@@ -60,7 +62,8 @@ def proxy(identity, method, path, body=None):
     token = CloudAccountService().access_token(identity[1])
     try:
         response = httpx.request(method, settings.feishu_service_url + "/api/feishu" + path,
-                                 headers={"Authorization": "Bearer " + token}, json=body,
+                                 headers={"Authorization": "Bearer " + token,
+                                          "X-VINote-Automatic-Delivery": "1"}, json=body,
                                  timeout=45, follow_redirects=False)
         payload = response.json()
     except (httpx.RequestError, ValueError):
@@ -84,12 +87,30 @@ class Destination(BaseModel):
         return self
 
 
+class PreferenceContact(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    open_id: str = Field(pattern=r"^ou_[A-Za-z0-9_-]{1,196}$")
+    selection_token: str | None = Field(default=None, min_length=1, max_length=4096)
+
+
 class Preferences(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     notify_self: bool = True
     groups: list[str] = Field(default_factory=list, max_length=20)
     auto_publish: bool = False
     destination_config: Destination | None = None
     permission_policy: Literal["private", "inherit"] | None = None
+    contacts: list[PreferenceContact] | None = Field(default=None, max_length=20)
+    automatic_delivery_consent: bool = Field(default=False, strict=True)
+
+
+class AutomaticDelivery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    operation_id: UUID
+    policy_id: UUID
+    note_key: str = Field(min_length=1, max_length=160)
+    title: str = Field(min_length=1, max_length=500)
+    content: str = Field(min_length=1, max_length=300000)
 
 
 class ContactSelection(BaseModel):
@@ -128,11 +149,23 @@ class DocumentRecovery(BaseModel):
 
 
 @router.get("/status")
-def status(identity=Depends(principal), response: Response = None):
+def status(identity=Depends(principal), response: Response = None, request: Request = None):
     if response is not None:
         response.headers["Cache-Control"] = "no-store"
     remote, result = proxy(identity, "GET", "/status")
-    return result if remote else service.for_owner(identity[0]).status(identity[0])
+    result = result if remote else service.for_owner(identity[0]).status(identity[0])
+    # Display negotiation only. Old Bearer clients cannot enqueue saved minutes;
+    # keep their automatic toggle off without changing policy or manual grants.
+    if identity[1] is None and (request is None or request.headers.get('X-VINote-Automatic-Delivery') != '1'):
+        return {**result, 'auto_publish': False,
+                'capabilities': {**result.get('capabilities', {}), 'background_delivery': False}}
+    runtime = auto_policy.runtime()
+    if runtime:
+        return runtime.decorate_status(identity, result)
+    if identity[1] is not None:
+        result = {**result, 'auto_publish': False, 'capabilities': {**result.get('capabilities', {}), 'background_delivery': False},
+                  'automatic_delivery': {**result.get('automatic_delivery', {}), 'enabled': False}}
+    return result
 
 
 @router.post("/authorize")
@@ -154,6 +187,9 @@ def callback(state: str, code: str = "", error: str = ""):
 
 @router.delete("/connection")
 def disconnect(identity=Depends(principal)):
+    runtime = auto_policy.runtime()
+    if runtime and identity[1] is not None:
+        runtime.bind_device_policy(identity[1], None)
     remote, result = proxy(identity, "DELETE", "/connection")
     return result if remote else service.for_owner(identity[0]).disconnect(identity[0])
 
@@ -170,9 +206,9 @@ def contacts(response: Response, query: str = Query(min_length=1, max_length=50,
              page_token: str = Query(default="", max_length=2000), identity=Depends(principal)):
     """One search page; items carry open_id/name/selection_token (900s).
 
-    Requires the existing owner's contact:user:search grant. Selection is
-    per-publication, not a saved notification default. Reading permission and
-    bot availability remain not_checked; no document/message write occurs.
+    Requires the existing owner's contact:user:search grant. Proof may confirm
+    a publication or a saved automatic policy. Reading permission and bot
+    availability remain not_checked; no document/message write occurs.
     """
     response.headers["Cache-Control"] = "no-store"
     params = dict(query=query, page_size=page_size, page_token=page_token)
@@ -183,8 +219,23 @@ def contacts(response: Response, query: str = Query(min_length=1, max_length=50,
 @router.put("/preferences")
 def preferences(payload: Preferences, identity=Depends(principal)):
     body = payload.model_dump(exclude_none=True)
+    runtime = auto_policy.runtime()
+    if runtime and identity[1] is not None and not payload.auto_publish:
+        runtime.bind_device_policy(identity[1], None)
+    if payload.auto_publish or payload.contacts is not None:
+        remote, capability = proxy(identity, "GET", "/status")
+        if remote and capability.get('automatic_delivery_protocol') != 1:
+            raise HTTPException(409, {"code": "AUTOMATIC_DELIVERY_PROTOCOL_UNAVAILABLE", "message": "飞书服务尚未支持已确认的自动交付，未保存自动授权"})
+        if payload.auto_publish and not payload.automatic_delivery_consent and identity[1] is not None:
+            current = capability if remote else service.for_owner(identity[0]).status(identity[0])
+            if not runtime or not runtime.decorate_status(identity, current).get('auto_publish'):
+                raise HTTPException(409, {"code": "DEVICE_AUTOMATIC_CONSENT_REQUIRED", "message": "此设备启用自动交付需要明确同意"})
     remote, result = proxy(identity, "PUT", "/preferences", body)
-    return result if remote else service.for_owner(identity[0]).save_preferences(identity[0], body)
+    result = result if remote else service.for_owner(identity[0]).save_preferences(identity[0], body)
+    if runtime and identity[1] is not None:
+        runtime.bind_device_policy(identity[1], result)
+        return runtime.decorate_status(identity, result)
+    return result
 
 
 @router.get("/destinations")
@@ -247,6 +298,9 @@ def publish(payload: Publish, background: BackgroundTasks, identity=Depends(prin
         if remote and capability.get("contact_selection_protocol") != 1:
             raise HTTPException(409, {"code": "CONTACT_PROTOCOL_UNAVAILABLE",
                                       "message": "远端飞书服务尚未支持联系人发布，请升级服务后重试"})
+    runtime = auto_policy.runtime()
+    if runtime and identity[1] is not None and not payload.automatic:
+        runtime.guard_manual_publish(identity, payload.note_key)
     remote, result = proxy(identity, "POST", "/deliveries", body)
     if remote:
         return result
@@ -254,6 +308,24 @@ def publish(payload: Publish, background: BackgroundTasks, identity=Depends(prin
     dispatch = result.pop("_dispatch_required", True) if result else False
     if result and dispatch:
         background.add_task(service.for_owner(identity[0]).process, identity[0], result["id"])
+    return result
+
+
+@router.post("/automatic-deliveries")
+def automatic_publish(payload: AutomaticDelivery, identity=Depends(principal)):
+    body = payload.model_dump(mode='json')
+    remote, capability = proxy(identity, 'GET', '/status')
+    if remote and capability.get('automatic_delivery_protocol') != 1:
+        raise HTTPException(409, {"code": "AUTOMATIC_DELIVERY_PROTOCOL_UNAVAILABLE", "message": "远端不支持自动交付协议，未提交"})
+    remote, result = proxy(identity, 'POST', '/automatic-deliveries', body)
+    if not remote:
+        result = service.for_owner(identity[0]).enqueue_automatic(identity[0], **body)
+        dispatch = result.pop('_dispatch_required', False)
+        runtime = auto_policy.runtime()
+        if dispatch and runtime:
+            runtime.wake()
+    elif isinstance(result, dict):
+        result.pop('_dispatch_required', None)
     return result
 
 
@@ -325,6 +397,9 @@ def get_application(identity=Depends(principal)):
 
 @router.put("/application")
 def put_application(payload: EnterpriseApplication, identity=Depends(principal)):
+    runtime = auto_policy.runtime()
+    if runtime and identity[1] is not None:
+        runtime.bind_device_policy(identity[1], None)
     remote, result = proxy(identity, "PUT", "/application", payload.model_dump())
     if remote:
         return result
@@ -336,5 +411,8 @@ def put_application(payload: EnterpriseApplication, identity=Depends(principal))
 
 @router.delete("/application")
 def delete_application(identity=Depends(principal)):
+    runtime = auto_policy.runtime()
+    if runtime and identity[1] is not None:
+        runtime.bind_device_policy(identity[1], None)
     remote, result = proxy(identity, "DELETE", "/application")
     return result if remote else clear_application(identity[0])
