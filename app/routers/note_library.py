@@ -24,6 +24,7 @@ from app.services.task_artifact_service import TaskArtifactService
 from app.services.note_repository import NoteRepository
 from app.services.meeting_media_service import MeetingMediaService
 from app.services.note_origin_service import read_origin
+from app.config import settings
 
 router = APIRouter(tags=["notes-library"])
 _repository = NoteRepository()
@@ -79,8 +80,10 @@ def _with_meeting_source(note: NoteRecordResponse, owner: str) -> NoteRecordResp
         # Intake type is not canonical identity. Verify the recorded workflow;
         # capture-only tasks may have no request yet but carry explicit meeting type.
         request_path = original / 'request.json'
+        request_document = None
         if request_path.exists() or request_path.is_symlink():
-            if json.loads(regular(request_path))['request']['workflow'] != 'meeting':
+            request_document = json.loads(regular(request_path))
+            if request_document['request']['workflow'] != 'meeting':
                 raise ValueError('Not a meeting')
         elif note.source_type not in {'meeting_recording', 'meeting_video'} or reference:
             raise ValueError('Unknown workflow')
@@ -96,10 +99,24 @@ def _with_meeting_source(note: NoteRecordResponse, owner: str) -> NoteRecordResp
             if any(declared.get(key) != value for key, value in {
                     'owner': owner, 'task_id': canonical, 'workflow': 'meeting'}.items()):
                 raise ValueError('Original mismatch')
-        source = MeetingSourceResponse(owner_id=owner, canonical_task_id=canonical)
+        from app.services.meeting_recording_metadata import recording_started_at
+        source = MeetingSourceResponse(owner_id=owner, canonical_task_id=canonical,
+                                       recording_started_at=recording_started_at(request_document))
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         pass
     return note.model_copy(update={'meeting_source': source})
+
+
+def _with_meeting_display_source(note: NoteRecordResponse, owner: str) -> NoteRecordResponse:
+    """Archive grouping only; domain callers retain artifact-only provenance."""
+    note = _with_meeting_source(note, owner)
+    if note.meeting_source is not None or not settings.desktop_runtime or note.scope != 'personal':
+        return note
+    from app.services.meeting_source_link import MeetingSourceLinkService
+    projected = MeetingSourceLinkService().project(owner, note.id)
+    if projected is None:
+        return note
+    return note.model_copy(update={'meeting_source': MeetingSourceResponse(**projected)})
 
 
 def _with_media_kind(note: NoteRecordResponse, owner: str) -> NoteRecordResponse:
@@ -182,7 +199,7 @@ def list_notes(
     team_id: str | None = Query(default=None),
     user: AuthenticatedUser = Depends(get_current_user),
 ):
-    return [_with_meeting_source(note, user.user_id)
+    return [_with_meeting_display_source(note, user.user_id)
             for note in _repository.list_notes(user.user_id, scope=scope, team_id=team_id)]
 
 
@@ -191,7 +208,7 @@ def get_note(note_id: str, user: AuthenticatedUser = Depends(get_current_user)):
     note = _repository.get_note(user.user_id, note_id)
     if not note:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
-    return _with_media_kind(_with_meeting_source(note, user.user_id), user.user_id)
+    return _with_media_kind(_with_meeting_display_source(note, user.user_id), user.user_id)
 
 
 @router.get("/notes/{note_id}/media", include_in_schema=False)
@@ -319,7 +336,7 @@ def create_note(payload: NoteCreateRequest, request: Request, user: Authenticate
         folder = _artifact_service.find_task_dir(payload.task_id) if payload.task_id else None
         client = read_origin(folder)
         note = _repository.create_note(user.user_id, payload, generation_client=client)
-        return _with_media_kind(_with_meeting_source(note, user.user_id), user.user_id)
+        return _with_media_kind(_with_meeting_display_source(note, user.user_id), user.user_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -329,7 +346,7 @@ def update_note(note_id: str, payload: NoteUpdateRequest, user: AuthenticatedUse
     note = _repository.update_note(user.user_id, note_id, payload)
     if not note:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
-    return _with_media_kind(_with_meeting_source(note, user.user_id), user.user_id)
+    return _with_media_kind(_with_meeting_display_source(note, user.user_id), user.user_id)
 
 
 @router.delete("/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)

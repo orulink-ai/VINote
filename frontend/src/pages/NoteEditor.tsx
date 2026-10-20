@@ -1,4 +1,5 @@
 import { RegenerateMeetingSummary } from '@/components/Notes/RegenerateMeetingSummary';
+import { MeetingParticipantsConfirmation } from '@/components/Notes/MeetingParticipantsConfirmation';
 import { contextualPageParent, pageParentLabel } from '@/lib/navigation';
 import { noteOrigin } from "@/lib/noteOrigin";
 import { useNoteMediaPlayback } from '@/hooks/useNoteMediaPlayback';
@@ -41,7 +42,7 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import { MarkdownContent } from "../components/Markdown/MarkdownContent";
+import { ResultPreview } from '@/components/Notes/ResultPreview';
 import { KeyMomentsRail } from "../components/Notes/KeyMomentsRail";
 import { VideoReferencePanel } from "../components/Notes/VideoReferencePanel";
 import { SavedRecordingActions } from "../components/Notes/SavedRecordingActions";
@@ -752,7 +753,12 @@ export function NoteEditor() {
               <section aria-label={zh ? '版本与来源' : 'Versions and source'} className="grid content-start gap-2"><h2 className="text-xs font-medium text-muted-foreground">{zh ? '版本与来源' : 'Versions and source'}</h2><div className="flex flex-wrap items-center gap-2">{id && <><div><span className="mr-2 text-xs text-muted-foreground">{zh ? '历史版本' : 'Version history'}</span><NoteVersions noteId={id} revision={currentNote?.updatedAt} currentContent={content} onRestore={(title, body) => { setLocalTitle(title); setContent(body); setWorkspaceMode('write'); }} /></div><Button variant="ghost" size="sm" disabled={hasUnsavedChanges || saving} asChild><Link to={sourceFilesPath} state={{ returnTo: detailReturnTo }} aria-disabled={hasUnsavedChanges || saving || undefined} aria-describedby={hasUnsavedChanges || saving ? 'source-file-save-help' : undefined} tabIndex={hasUnsavedChanges || saving ? -1 : undefined} onClick={event => { if (hasUnsavedChanges || saving) event.preventDefault(); }}>{zh ? '查看原文件' : 'View original file'}</Link></Button></>}{sharedKey && <><Button variant="ghost" size="sm" disabled={hasUnsavedChanges || saving} asChild><Link to={`/workspace/${encodeURIComponent(sharedKey)}`} state={{ returnTo: detailReturnTo }} aria-disabled={hasUnsavedChanges || saving || undefined} tabIndex={hasUnsavedChanges || saving ? -1 : undefined} onClick={event => { if (hasUnsavedChanges || saving) event.preventDefault(); }}>{zh ? '查看保存版本' : 'View saved versions'}</Link></Button></>}</div>{(hasUnsavedChanges || saving) && <p id="source-file-save-help" className="text-xs leading-5 text-muted-foreground">{saving ? zh ? '正在保存修改，完成后可查看原文件。' : 'Saving changes. You can view the original file once saving finishes.' : zh ? '请先保存修改后查看原文件。' : 'Save your changes before viewing the original file.'}</p>}<p className="text-xs leading-5 text-muted-foreground">{zh ? '查看历史正文、保存记录和可核验的来源文件。查看不会修改当前内容。' : 'View content history, saved records and verified source files without changing the current content.'}</p></section>
 
               <section aria-label={zh ? '内容工具' : 'Content tools'} className="grid content-start gap-2"><h2 className="text-xs font-medium text-muted-foreground">{zh ? '内容工具' : 'Content tools'}</h2><div className="flex flex-wrap items-center gap-2">{sharedKey && <><Button variant="outline" size="sm" disabled={hasUnsavedChanges || saving} asChild><Link to={`/settings/mcp?mode=translation&note=${encodeURIComponent(sharedKey)}`} state={{ returnTo: detailReturnTo }} aria-disabled={hasUnsavedChanges || saving || undefined} tabIndex={hasUnsavedChanges || saving ? -1 : undefined} onClick={event => { if (hasUnsavedChanges || saving) event.preventDefault(); }}>{zh ? '全文翻译 · MCP' : 'Full-text translation · MCP'}</Link></Button></>}{!sharedKey && <><Button variant="outline" size="sm" disabled>{zh ? '全文翻译 · MCP' : 'Full-text translation · MCP'}</Button><Button variant="ghost" size="sm" asChild><Link to="/settings/mcp" state={{ returnTo: detailReturnTo }}>{zh ? '配置 MCP 工具' : 'Configure MCP tools'}</Link></Button></>}</div><p className="text-xs leading-5 text-muted-foreground">{sharedKey ? zh ? '工具使用所选已保存正文；确认发送范围后执行。核对结果后另存，保留原文。' : 'Tools use the selected saved text after you confirm what to send. Review results before saving a new version.' : zh ? '此工具尚未接入这份内容的已保存版本。正文与历史保留，可先配置工具。' : 'This tool does not yet support this saved content. Text and history remain available; you can configure tools first.'}</p></section>
-              <section aria-label={zh ? '更多内容操作' : 'Additional content actions'} className="flex min-w-0 flex-wrap items-center gap-2 border-t pt-3 lg:col-span-2">{id && taskId && isMeetingContent && currentNote?.id === id && <RegenerateMeetingSummary noteId={id} taskId={taskId} workspace={currentNote.scope === 'team' && currentNote.teamId ? { scope: 'team', teamId: currentNote.teamId } : { scope: 'personal' }} returnTo={detailReturnTo} disabled={hasUnsavedChanges || saving} />}{sourceTaskPath && !['failed', 'transcribing_failed', 'generation_failed'].includes(currentNote?.status || '') && <Button variant="ghost" size="sm" disabled={hasUnsavedChanges || saving} asChild><Link to={sourceTaskPath} aria-disabled={hasUnsavedChanges || saving || undefined} tabIndex={hasUnsavedChanges || saving ? -1 : undefined} onClick={event => { if (hasUnsavedChanges || saving) event.preventDefault(); }}>{zh ? '查看处理任务' : 'View processing task'}</Link></Button>}{keyMoments.length > 0 && <Button variant="ghost" size="sm" onClick={() => setMomentsOpen(true)}><ListVideo />{zh ? '关键片段' : 'Key moments'}</Button>}</section>
+              <section aria-label={zh ? '更多内容操作' : 'Additional content actions'} className="flex min-w-0 flex-wrap items-center gap-2 border-t pt-3 lg:col-span-2">
+                {id && taskId && isMeetingContent && currentNote?.id === id && currentNote.scope === 'personal' && currentNote.generationClient === 'desktop' && <MeetingParticipantsConfirmation noteId={id} taskId={taskId} sourceRevision={currentNote.updatedAt} disabled={hasUnsavedChanges || saving} onConfirmed={() => setDeliveryRevision(value => value + 1)} />}
+                {id && taskId && isMeetingContent && currentNote?.id === id && <RegenerateMeetingSummary noteId={id} taskId={taskId} workspace={currentNote.scope === 'team' && currentNote.teamId ? { scope: 'team', teamId: currentNote.teamId } : { scope: 'personal' }} returnTo={detailReturnTo} disabled={hasUnsavedChanges || saving} />}
+                {sourceTaskPath && !['failed', 'transcribing_failed', 'generation_failed'].includes(currentNote?.status || '') && <Button variant="ghost" size="sm" disabled={hasUnsavedChanges || saving} asChild><Link to={sourceTaskPath} aria-disabled={hasUnsavedChanges || saving || undefined} tabIndex={hasUnsavedChanges || saving ? -1 : undefined} onClick={event => { if (hasUnsavedChanges || saving) event.preventDefault(); }}>{zh ? '查看处理任务' : 'View processing task'}</Link></Button>}
+                {keyMoments.length > 0 && <Button variant="ghost" size="sm" onClick={() => setMomentsOpen(true)}><ListVideo />{zh ? '关键片段' : 'Key moments'}</Button>}
+              </section>
             </div>
           </details>
         </div>
@@ -1048,7 +1054,10 @@ export function NoteEditor() {
                       ref={previewRef}
                       className="stealth-scroll min-w-0 flex-1 overflow-auto"
                     >
-                      <MarkdownContent
+                      <ResultPreview
+                        taskId={currentNote?.taskId}
+                        title={currentNote?.title}
+                        exportContent={currentNote?.content}
                         content={content ? previewContent : copy.noteEditor.previewEmpty}
                         className="prose mx-auto min-w-0 w-full max-w-4xl px-6 py-6 [overflow-wrap:anywhere] dark:prose-invert lg:px-8"
                         videoUrl={videoUrl || undefined}

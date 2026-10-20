@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({ api: vi.fn(), recordings: vi.fn(), owner: 'owner' }))
 vi.mock('@/lib/api', () => ({ apiJson: mocks.api }))
 vi.mock('@/lib/audioStorage', () => ({ listPendingMeetings: mocks.recordings }))
-vi.mock('@/stores/authStore', () => ({ useAuthStore: Object.assign(() => mocks.owner, { getState: () => ({ user: { id: mocks.owner } }) }) }))
+vi.mock('@/stores/authStore', () => ({ useAuthStore: Object.assign(() => mocks.owner, { getState: () => ({ user: { id: mocks.owner } }), subscribe: () => () => undefined }) }))
 vi.mock('@/stores/teamStore', () => ({ useTeamStore: { getState: () => ({ currentWorkspace: { scope: 'personal' } }) } }))
 vi.mock('@/components/MeetingRecorder/LocalRecordingPreview', () => ({ LocalRecordingPreview: () => null }))
 import { FileLibrary } from './FileLibrary'

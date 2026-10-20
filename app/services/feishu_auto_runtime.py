@@ -58,11 +58,11 @@ def guard_manual_publish(identity, note_key):
             FeishuAutoOutboxDB.user_id == user_id, FeishuAutoOutboxDB.note_id == note_key))
         if row and row.status in {"submitting", "unknown"}:
             raise HTTPException(409, "自动交付结果尚未核验，请先核验原交付，不要重复发布")
-        if row and row.status == "queued":
+        if row and row.status in {"queued", "waiting_participants"}:
             # Competes with the dispatcher's queued->submitting CAS, not a stale
             # ORM write that could overwrite its claim after this read.
             changed = db.execute(update(FeishuAutoOutboxDB).where(
-                FeishuAutoOutboxDB.id == row.id, FeishuAutoOutboxDB.status == "queued"
+                FeishuAutoOutboxDB.id == row.id, FeishuAutoOutboxDB.status == row.status
             ).values(status="cancelled", error="已选择手动发布，未提交自动交付"))
             if changed.rowcount != 1:
                 raise HTTPException(409, "自动交付正在提交，请先核验原结果")
@@ -94,10 +94,11 @@ def local_status(user_id, note_id):
 
 
 class HandoffError(Exception):
-    def __init__(self, message, *, uncertain=False, cancelled=False):
+    def __init__(self, message, *, uncertain=False, cancelled=False, waiting_participants=False):
         super().__init__(message)
         self.uncertain = uncertain
         self.cancelled = cancelled
+        self.waiting_participants = waiting_participants
 
 
 def _assert_binding(row, *, policy_required):
@@ -129,7 +130,10 @@ def _request(row, *, read_only):
                     service.enqueue_automatic(row.cloud_owner, **json.loads(row.payload)))
         except HTTPException as exc:
             raise HandoffError(str(exc.detail), uncertain=(read_only or exc.status_code >= 500
-                                                          or getattr(exc, "uncertain", False))) from None
+                                                          or getattr(exc, "uncertain", False)),
+                               waiting_participants=(not read_only and exc.status_code == 409
+                                   and not getattr(exc, "uncertain", False)
+                                   and getattr(exc, "code", "") == "attendance_confirmation_required")) from None
     # Never transfer a device-owned publication to any integration server.
     raise HandoffError("桌面飞书连接未启用，未提交此纪要", cancelled=True)
 
@@ -161,7 +165,8 @@ def attempt_device(operation_id, *, read_only=False):
         state = "accepted"
     except HandoffError as exc:
         # A read-only error cannot establish that the prior POST was rejected.
-        state = "unknown" if read_only or exc.uncertain else "cancelled" if exc.cancelled else "failed"
+        state = ("unknown" if read_only or exc.uncertain else "cancelled" if exc.cancelled else
+                 "waiting_participants" if exc.waiting_participants else "failed")
         message = str(exc)
     except Exception:
         message = "交付暂时中断，请核验原结果；不会重复提交"
@@ -172,6 +177,31 @@ def attempt_device(operation_id, *, read_only=False):
         ).values(status=state, error=message, job_id=job_id if state == "accepted" else "", lease_until=0))
     if state == "accepted":
         wake()
+
+
+def resume_participants(user_id, note_id):
+    """Wake only an original, definitely unsent attendee-waiting intent.
+
+    Called after the authenticated meeting confirmation commits. No new intent
+    or authority is created; the dispatcher rechecks the original policy and
+    newly confirmed evidence before it can create a document or send anything.
+    """
+    with session_scope() as db:
+        rows = db.scalars(select(FeishuAutoOutboxDB).where(
+            FeishuAutoOutboxDB.user_id == user_id,
+            FeishuAutoOutboxDB.note_id == note_id,
+            FeishuAutoOutboxDB.status == "waiting_participants")).all()
+        for row in rows:
+            if row.job_id or row.lease_until > time.time():
+                continue
+            db.execute(update(FeishuAutoOutboxDB).where(
+                FeishuAutoOutboxDB.id == row.id,
+                FeishuAutoOutboxDB.user_id == user_id,
+                FeishuAutoOutboxDB.status == "waiting_participants",
+                FeishuAutoOutboxDB.lease_until == row.lease_until,
+                FeishuAutoOutboxDB.job_id == "",
+            ).values(status="queued", error=""))
+    wake()
 
 
 def check_local(user_id, note_id):

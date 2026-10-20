@@ -208,7 +208,7 @@ def test_local_mode_does_not_call_cloud(monkeypatch):
     assert row.asr_model == "asr"
 
 
-def test_cloud_model_selection_rejects_wrong_type(monkeypatch):
+def test_cloud_model_selection_rejects_wrong_type(monkeypatch, isolated_preferences):
     service = VILabCloudService()
     monkeypatch.setattr(service, "models", lambda uid: [{"id": "asr-only", "modelType": "asr"}])
     with pytest.raises(HTTPException) as error:

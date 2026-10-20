@@ -37,6 +37,23 @@ Keep offsets internal unless the user explicitly requests recording references. 
             "actions, constraints and evidence timestamps for the final merge. "
             "Do not produce a complete meeting overview from a partial chunk."
         )
+    if not intermediate:
+        from app.llm.meeting_presentation import depth_instructions
+        rules += '\n' + depth_instructions()
+        from app.llm.meeting_presentation import presentation_state
+        state = presentation_state()
+        if state and state.depth:
+            from app.llm.meeting_fact_material import REVIEW_PROTOCOL, COVERAGE_RULE, MATERIALITY_RULE, REVIEW_ACCOUNTING_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
+            rules = rules.replace('return only the corrected Markdown.', 'return the corrected report in the JSON markdown field.')
+            rules += '\n\n' + REVIEW_PROTOCOL + COVERAGE_RULE + MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + REVIEW_ACCOUNTING_RULE
+            if state.presentation == 'illustrated':
+                rules += ('\nIllustrated output: choose 1–8 genuinely relevant actual supplied frames during this review. '
+                    'Use figures entries {"frame_ref":"[FRAME:0001]","fact_ids":["F001"],'
+                    '"after_passage":"unique exact report passage ending the relevant paragraph",'
+                    '"caption":"brief supported description of the actual frame"}. '
+                    'Each selected frame must be in the cited fact source_refs and independently support its object/relationship; '
+                    'timing proximity alone is insufficient. Return no arbitrary URL. No valid relevant frame means illustrated is incomplete, '
+                    'never select opening frames or decorative screenshots just to fill a quota.')
     source_label = "Reviewed chunk notes" if source_is_reviewed_notes else "Original transcript"
     return {
         "system_prompt": build_system_prompt(language) + "\n\n" + rules,

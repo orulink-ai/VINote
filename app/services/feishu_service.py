@@ -181,6 +181,8 @@ class FeishuService:
                     "connected": connected,
                     "expired": bool(row and row.expired), "name": row.name if row else "",
                     "notify_self": preferences.get("notify_self", True), "groups": preferences.get("groups", []),
+                    "notify_participants": preferences.get("notify_participants") is True,
+                    "group_meeting_versions": preferences.get("group_meeting_versions") is True,
                     "auto_publish": enabled, "destination": destination["kind"],
                     "destination_config": destination,
                     "permission_policy": preferences.get("permission_policy", "private" if destination["kind"] == "personal" else "inherit"),
@@ -603,7 +605,14 @@ class FeishuService:
             raise FeishuError("自动交付至少需要选择本人、联系人或一个群")
         enabled = preferences.get('auto_publish') is True
         consent = preferences.get('automatic_delivery_consent') is True
-        content = auto_policy.spec(binding, destination, bool(preferences.get('notify_self')), groups, policy, contacts)
+        options = {key: preferences.get(key, saved.get(key, False))
+                   for key in ('notify_participants', 'group_meeting_versions')}
+        if any(type(value) is not bool for value in options.values()):
+            raise FeishuError("自动交付设置无效", 422, code="invalid_automatic_request")
+        if options['group_meeting_versions'] and destination['kind'] != 'wiki':
+            raise FeishuError("按会议归组需要选择知识库节点", 422, code="invalid_destination")
+        content = auto_policy.spec(binding, destination, bool(preferences.get('notify_self')), groups, policy, contacts,
+                                   **options)
         changed = not old_policy or old_policy['fingerprint'] != auto_policy.fingerprint(content)
         contacts_changed = auto_policy.fingerprint(contacts) != auto_policy.fingerprint(list(retained.values()))
         if (enabled and (changed or not old_policy['enabled']) or
@@ -622,6 +631,7 @@ class FeishuService:
                 "notify_self": bool(preferences.get("notify_self")), "groups": groups,
                 "group_names": {item["chat_id"]: item["name"] for item in available_groups if item["chat_id"] in groups},
                 "auto_publish": bool(preferences.get("auto_publish"))}
+            merged.update(options)
             if next_policy is not None:
                 merged['auto_policy'] = next_policy
             # Legacy clients must not reset a destination selected by another device.
@@ -675,6 +685,8 @@ class FeishuService:
                 "version_id": source.get("version_id") if source.get("verified") else None,
                 "revision_id": source.get("revision_id") if source.get("verified") else None,
                 "content_source": source,
+                "group_meeting_versions": snapshot.get('group_meeting_versions') is True,
+                **({'meeting_attendance': snapshot['meeting_attendance']} if snapshot.get('meeting_attendance') else {}),
                 **({"automatic_policy_id": snapshot['automatic_policy_id'], "automatic_delivery_protocol": 1}
                    if snapshot.get('automatic_policy_id') else {}),
                 "formatting": {
@@ -702,6 +714,9 @@ class FeishuService:
             metadata = db.get(FeishuDeliveryDestinationDB, job_id)
             snapshot = json.loads(metadata.snapshot) if metadata else {}
             destination = snapshot.get("destination", {"kind": "personal"})
+            if snapshot.get('group_meeting_versions') is True:
+                from app.services.feishu_meeting_wiki import child_destination
+                destination = child_destination(owner, job.id)
             self.assert_delivery_connection(owner, snapshot)
             token = self.user_token(owner)
             document_id = parts[1]
@@ -733,8 +748,12 @@ class FeishuService:
                     raise FeishuError("无法核验恢复文档在本次目标文件夹内", 409, code="destination_mismatch")
             document = self.request("GET", f"docx/v1/documents/{document_id}", token=token)["document"]
             children = self.request("GET", f"docx/v1/documents/{document_id}/blocks/{document_id}/children", token=token, params={"page_size": 500})
+            expected_title = job.title
+            if snapshot.get('group_meeting_versions') is True:
+                from app.services.feishu_meeting_wiki import child_title
+                expected_title = child_title(owner, job.id)
             # A create-time interruption occurs before writing any body blocks.
-            if document.get("title") != job.title or children.get("items") or children.get("has_more"):
+            if document.get("title") != expected_title or children.get("items") or children.get("has_more"):
                 raise FeishuError("仅可关联本次会议同名、空白且可访问的文档；请检查所填链接")
             job.document_id = document_id
             job.document_url = url if destination["kind"] == "wiki" else self.config.feishu_doc_base_url + "/docx/" + document_id
@@ -870,13 +889,27 @@ class FeishuService:
         groups = self.groups(owner) if policy['groups'] else []
         if any(group not in {g['chat_id'] for g in groups} for group in policy['groups']):
             raise FeishuError("自动通知目标群已不可用", 403, code="recipient_unavailable")
+        contacts = list(policy['contacts'])
+        attendance = None
+        if policy.get('notify_participants'):
+            from app.services.meeting_participants import resolve_saved_meeting
+            attendance = resolve_saved_meeting(self, owner, note_key, title=title, content=content)
+            if attendance.get('confirmation_status') not in {'confirmed', 'cleared'}:
+                raise FeishuError("请先在本会议确认实际参会人，纪要已保留，尚未创建文档或通知", 409,
+                                  code="attendance_confirmation_required")
+            selected = {item['open_id']: item for item in contacts}
+            selected.update({item['open_id']: item for item in attendance['contacts']})
+            if len(selected) > 20:
+                raise FeishuError("已确认的通知联系人超过单次上限，请调整范围", 422, code="invalid_recipient")
+            contacts = list(selected.values())
         content_revision = hashlib.sha256((title + '\n' + content).encode()).hexdigest()
         revision = receipts.fingerprint(dict(content_revision=content_revision, automatic_policy_id=policy_id))
         try:
             return self._enqueue(owner, note_key, title, content, True, True, destination,
                 policy['permission_policy'], policy['notify_self'], policy['groups'], groups,
                 None, None, content_revision, revision, source, operation_id, request_hash,
-                policy['contacts'], recipient_access.POLICY, automatic_policy_id=policy_id)
+                contacts, recipient_access.POLICY, automatic_policy_id=policy_id,
+                attendance=attendance)
         except IntegrityError:
             with session_scope() as db:
                 prior = receipts.operation_job(db, owner, operation_id, request_hash)
@@ -967,7 +1000,7 @@ class FeishuService:
     def _enqueue(self, owner, note_key, title, content, automatic, enhanced, destination, policy,
                  notify_self, groups, available_groups, version_id, revision_id, content_revision, revision, source,
                  operation_id=None, request_hash=None, contacts=None, recipient_access_policy=None,
-                 automatic_policy_id=None):
+                 automatic_policy_id=None, attendance=None):
         with _lock(owner), session_scope() as db:
             if db.get_bind().dialect.name == 'sqlite':
                 # SQLite ignores FOR UPDATE; take its writer lock before the final
@@ -989,7 +1022,7 @@ class FeishuService:
             if not automatic:
                 self._assert_no_pending_automatic(db, owner, note_key)
             if automatic_policy_id is not None:
-                self._automatic_policy(owner, account, preferences, automatic_policy_id)
+                saved_automatic = self._automatic_policy(owner, account, preferences, automatic_policy_id)
             for contact in contacts or []:
                 if (contact["connection_id"] != preferences.get("connection_id") or
                         contact["sender_open_id"] != account.open_id or account.expired or
@@ -1032,9 +1065,18 @@ class FeishuService:
                         "content_source": source, "automatic": automatic,
                         "open_id": account.open_id, "connection_id": preferences.get("connection_id"),
                         "tenant_key": self.config.feishu_tenant_key}
+            if snapshot['format_selection'].get('image_source_preserved'):
+                snapshot['app_id'] = self.config.feishu_app_id
             if automatic_policy_id is not None:
                 snapshot.update(automatic_policy_id=automatic_policy_id,
                                 app_id=self.config.feishu_app_id, automatic_delivery_protocol=1)
+            group_versions = (saved_automatic.get('group_meeting_versions', False)
+                              if automatic_policy_id is not None else preferences.get('group_meeting_versions', False))
+            if group_versions and destination.get('kind') == 'wiki':
+                snapshot.update(group_meeting_versions=True, app_id=self.config.feishu_app_id)
+            if attendance is not None:
+                snapshot['meeting_attendance'] = {key: attendance[key] for key in
+                    ('candidates', 'unresolved', 'evidence_revision') if key in attendance}
             if contacts:
                 snapshot["contacts"] = [{"open_id": item["open_id"], "name": item["name"]} for item in contacts]
                 snapshot["contact_selection_protocol"] = 1
@@ -1102,6 +1144,29 @@ class FeishuService:
         if not document.get("document_id"):
             raise FeishuError("创建响应缺少文档标识，需要核验", 502, uncertain=True)
         return document["document_id"], self.config.feishu_doc_base_url + "/docx/" + document["document_id"]
+
+    def meeting_wiki_context(self, owner, job):
+        """Resolve grouping from saved device content, never a supplied title match."""
+        from app.db_models import NoteDB
+        from app.services.feishu_meeting_wiki import context_for_saved_note
+        from app.services.summary_presentation_artifact import read_presentation
+        from app.services.task_artifact_service import TaskArtifactService
+
+        with session_scope() as db:
+            note = db.get(NoteDB, job.note_key)
+            if not note or note.created_by != owner or not note.task_id:
+                raise FeishuError("缺少已保存的会议来源，未建立知识库目录", 409, code="meeting_source_unverified")
+            task = note.task_id
+        presentation = read_presentation(TaskArtifactService(), owner, task) or {}
+        format_name = presentation.get('presentation', 'text')
+        depth = presentation.get('content_depth', 'detailed')
+        if format_name not in {'text', 'illustrated', 'html', 'comic', 'infographic'} or depth not in {'brief', 'concise', 'detailed'}:
+            raise FeishuError("纪要形式尚不能核验", 409, code="meeting_context_unverified")
+        # The canonical capture clock names the meeting container. Generated
+        # content titles never establish its identity or recording time.
+        return context_for_saved_note(owner, job, recorded_at=None,
+            meeting_topic='会议录制', summary_format=format_name + ':' + depth,
+            version_id=task)
 
     def create_at_destination(self, owner, title, destination):
         target = {key: destination[key] for key in ("kind", "folder_token", "space_id", "node_token") if key in destination}
@@ -1559,11 +1624,17 @@ class FeishuService:
                 if job.document_id == "__creating__":
                     raise FeishuError("创建文档结果未确认。请在所选位置查找同名空白文档，关联链接后继续，避免重复创建", uncertain=True, code="create_unknown")
                 if not job.document_id:
+                    effective_destination = snapshot.get('destination', {'kind': 'personal'})
+                    creation_title = job.title
+                    if snapshot.get('group_meeting_versions') is True:
+                        from app.services.feishu_meeting_wiki import grouped_creation, child_title
+                        effective_destination = grouped_creation(owner, job, effective_destination, self)
+                        creation_title = child_title(owner, job.id)
                     self.checkpoint(owner, job_id, document_id="__creating__", phase="pending_create", error_code="")
                     try:
                         self._check_automatic_delivery(owner, job)
                         if snapshot.get("enhanced"):
-                            document_id, url = self.create_at_destination(owner, job.title, snapshot["destination"])
+                            document_id, url = self.create_at_destination(owner, creation_title, effective_destination)
                         else:
                             document_id, url = self.create_document(owner, job.title)
                     except FeishuError as exc:

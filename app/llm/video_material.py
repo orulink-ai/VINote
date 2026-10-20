@@ -9,6 +9,12 @@ def has_video_material() -> bool:
     return _material.get() is not None
 
 
+def video_reference_ids():
+    from app.llm.source_references import frame_reference
+    binding = _material.get()
+    return [frame_reference(index) for index in range(len(binding[0].frames))] if binding else []
+
+
 @contextmanager
 def bind_video_material(evidence, capabilities):
     if evidence is not None:

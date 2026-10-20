@@ -66,6 +66,50 @@ def receipt(c):
     return {'id': c.job, 'operation_id': c.operation, 'status': 'queued'}
 
 
+def test_unconfirmed_attendees_wait_without_repeated_submission(queue, monkeypatch):
+    calls = []
+
+    def prepare(row, **kwargs):
+        calls.append(row.id)
+        raise runtime.HandoffError('请确认本会议参会人', waiting_participants=True)
+
+    monkeypatch.setattr(runtime, '_request', prepare)
+    runtime.run_once()
+    runtime.run_once()
+    assert calls == [queue.operation]
+    assert row(queue).status == 'waiting_participants'
+    assert not row(queue).job_id
+
+
+def test_attendee_confirmation_resumes_only_original_waiting_intent(queue, monkeypatch):
+    with queue.scope() as db:
+        db.get(FeishuAutoOutboxDB, queue.operation).status = 'waiting_participants'
+    original = row(queue).payload
+    runtime.resume_participants('alice', queue.note)
+    assert row(queue).status == 'queued'
+    assert row(queue).payload == original
+    assert row(queue).id == queue.operation
+    monkeypatch.setattr(runtime, '_request', lambda r, **kw: receipt(queue))
+    runtime.run_once()
+    runtime.resume_participants('alice', queue.note)
+    assert row(queue).status == 'accepted'
+
+
+@pytest.mark.parametrize('state', ['unknown', 'submitting', 'accepted', 'failed', 'cancelled'])
+def test_attendee_confirmation_cannot_replay_other_delivery_states(queue, state):
+    with queue.scope() as db:
+        db.get(FeishuAutoOutboxDB, queue.operation).status = state
+    runtime.resume_participants('alice', queue.note)
+    assert row(queue).status == state
+
+
+def test_attendee_confirmation_cannot_resume_another_owner(queue):
+    with queue.scope() as db:
+        db.get(FeishuAutoOutboxDB, queue.operation).status = 'waiting_participants'
+    runtime.resume_participants('bob', queue.note)
+    assert row(queue).status == 'waiting_participants'
+
+
 def test_queue_survives_caller_exit_and_is_dispatched_once(queue, monkeypatch):
     c, calls = queue, []
     monkeypatch.setattr(runtime, '_request', lambda r, **kw: calls.append((r.payload, kw)) or receipt(c))
@@ -201,8 +245,11 @@ def test_owner_scoped_local_status_and_check_are_http_readback_only(queue, monke
         assert calls == []
 
 
-def test_manual_post_can_cancel_only_queued_auto_intent(queue):
+@pytest.mark.parametrize('status', ['queued', 'waiting_participants'])
+def test_manual_post_can_cancel_only_definitely_unsent_auto_intent(queue, status):
     c = queue
+    with c.scope() as db:
+        db.get(FeishuAutoOutboxDB, c.operation).status = status
     runtime.guard_manual_publish(('alice', 'alice'), c.note)
     assert row(c).status == 'cancelled'
 

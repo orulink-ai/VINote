@@ -1150,6 +1150,7 @@ describe('meeting shared-video verification stage', () => {
 
 describe('failed meeting task summary-only entrance', () => {
   const config = { configured: true, mode: 'cloud' as const, llm_model: 'explicit-selected-summary', asr_model: 'never-run', server_url: 'https://summary.invalid' }
+  const summaryModels = [{ id: config.llm_model, modelType: 'llm', runtimeStatus: 'available' }]
   const context = { parent_task_id: 'failed-summary-parent', context_revision: 'a'.repeat(64), source: { version: 'b'.repeat(64), type: 'meeting_video', title: 'Verified synthetic meeting source' }, can_regenerate_summary: true }
   const pointer = 'vinote:summary-operation:import-owner:https://summary.invalid:task:failed-summary-parent'
   beforeEach(() => {
@@ -1158,7 +1159,7 @@ describe('failed meeting task summary-only entrance', () => {
     useNoteGenerationStore.getState().reset(); useAuthStore.setState({ user: { id: 'import-owner', email: 'import@example.invalid' } })
     useAppModeStore.setState({ config, saving: false })
     libraryMock.notes = []; libraryMock.saveNote.mockReset()
-    apiMock.apiJson.mockImplementation(async (path: string) => path === '/api/vilab/config' ? config : path.endsWith('/summary-context') ? context : { task_id: 'failed-summary-parent', status: 'failed', failed_stage: 'summarizing', error_code: 'llm_failed', message: '总结服务未完成', retryable: false })
+    apiMock.apiJson.mockImplementation(async (path: string) => path === '/api/vilab/models' ? summaryModels : path === '/api/vilab/config' ? config : path.endsWith('/summary-context') ? context : { task_id: 'failed-summary-parent', status: 'failed', failed_stage: 'summarizing', error_code: 'llm_failed', message: '总结服务未完成', retryable: false })
   })
   afterEach(() => { cleanup(); localStorage.clear(); queryMock.value = ''; useAppModeStore.getState().reset() })
   async function prepare() {
@@ -1169,6 +1170,7 @@ describe('failed meeting task summary-only entrance', () => {
   it.each(['accepted', 'lost'])('real task component prepare/confirm for %s response posts only regenerate-summary and saves the child', async outcome => {
     let operation = ''
     apiMock.apiJson.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === '/api/vilab/models') return summaryModels
       if (path === '/api/vilab/config') return config
       if (path.endsWith('/summary-context')) return context
       if (path.endsWith('/regenerate-summary')) {
@@ -1218,7 +1220,7 @@ describe('failed meeting task summary-only entrance', () => {
   it('blocks incomplete-ASR summary-context 409 with no confirmation and no POST', async () => {
     apiMock.apiJson.mockImplementation(async path => {
       if (path.endsWith('/summary-context')) throw new ApiError('Incomplete ASR', 409, {})
-      return path === '/api/vilab/config' ? config : { task_id: 'failed-summary-parent', status: 'failed', message: '处理未完成', retryable: false }
+      return path === '/api/vilab/models' ? summaryModels : path === '/api/vilab/config' ? config : { task_id: 'failed-summary-parent', status: 'failed', message: '处理未完成', retryable: false }
     })
     renderGenerator(); await screen.findByRole('button', { name: '仅重新生成纪要' })
     await userEvent.click(screen.getByRole('button', { name: '仅重新生成纪要' }))
@@ -1281,7 +1283,7 @@ describe('failed meeting task summary-only entrance', () => {
   })
   it('late context from the previous task route cannot open confirmation on another task', async () => {
     let resolve!: (value: unknown) => void
-    apiMock.apiJson.mockImplementation(path => path.endsWith('/summary-context') ? new Promise(done => { resolve = done }) : Promise.resolve(path === '/api/vilab/config' ? config : { task_id: 'failed-summary-parent', status: 'failed', message: '处理未完成', retryable: false }))
+    apiMock.apiJson.mockImplementation(path => path.endsWith('/summary-context') ? new Promise(done => { resolve = done }) : Promise.resolve(path === '/api/vilab/models' ? summaryModels : path === '/api/vilab/config' ? config : { task_id: 'failed-summary-parent', status: 'failed', message: '处理未完成', retryable: false }))
     const first = renderGenerator()
     await screen.findByRole('button', { name: '仅重新生成纪要' })
     await userEvent.click(screen.getByRole('button', { name: '仅重新生成纪要' }))

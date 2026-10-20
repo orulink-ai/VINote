@@ -22,6 +22,10 @@ it('keeps the player and note intact when deletion fails', async () => {
   expect(screen.getByTestId('original').getAttribute('src')).toBe('/api/notes/note-a/media')
   expect(deleted).not.toHaveBeenCalled()
   expect(screen.getByRole('button', { name: '导出原音频' })).toBeEnabled()
+  expect(screen.queryByRole('button', { name: '重试导出' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: '重新核验原文件' }))
+  await screen.findByText(/原文件已保留/)
+  expect(downloadOriginalFile).not.toHaveBeenCalled()
 })
 
 it('can retry a failed recording lookup without leaving the meeting', async () => {

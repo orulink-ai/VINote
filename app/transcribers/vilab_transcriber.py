@@ -131,12 +131,14 @@ class VILabTranscriber(Transcriber):
     provider = "vilab-server"
     # A model name is not a transport capability or a duration limit.
     max_request_duration_seconds = None
-    def __init__(self, base_url: str, api_key: str, model: str | None = None, language: str | None = None, cloud_user_id: str | None = None):
+    def __init__(self, base_url: str, api_key: str, model: str | None = None, language: str | None = None, cloud_user_id: str | None = None, cloud_connection_id: str | None = None, cloud_connection_auth_mode: str | None = None):
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.model = model
         self.language = language
         self.cloud_user_id = cloud_user_id
+        self.cloud_connection_id = cloud_connection_id
+        self.cloud_connection_auth_mode = cloud_connection_auth_mode
         self.progress_callback = None
 
     @staticmethod
@@ -330,8 +332,10 @@ class VILabTranscriber(Transcriber):
 
     def _recognition_bearer(self):
         if self.cloud_user_id:
-            from app.services.cloud_account_service import CloudAccountService
-            return CloudAccountService().access_token(self.cloud_user_id)
+            from app.services.vilab_cloud_service import VILabCloudService
+            headers = VILabCloudService().authorization(self.cloud_user_id, self.base_url, self.cloud_connection_id,
+                                                       self.cloud_connection_auth_mode)
+            return headers.get("Authorization", "").removeprefix("Bearer ")
         return self.api_key
 
     def _transcribe_checkpoint(self, file_path, bearer, duration, total_frames, folder):
@@ -491,8 +495,13 @@ class VILabTranscriber(Transcriber):
         if self.cloud_user_id:
             from app.services.vilab_cloud_service import VILabCloudService
 
-            with Path(file_path).open("rb") as audio:
-                payload = VILabCloudService().request(self.cloud_user_id, "POST", "/v1/asr/transcriptions",
+            service = VILabCloudService()
+            frozen = {"mode": "cloud", "configured": True, "server_url": self.base_url,
+                      "asr_model": self.model, "llm_model": "",
+                      **({"connection_id": self.cloud_connection_id} if self.cloud_connection_id else {}),
+                      **({"connection_auth_mode": self.cloud_connection_auth_mode} if self.cloud_connection_auth_mode else {})}
+            with service.task_snapshot(self.cloud_user_id, snapshot=frozen), Path(file_path).open("rb") as audio:
+                payload = service.request(self.cloud_user_id, "POST", "/v1/asr/transcriptions",
                     files={"file": (Path(file_path).name, audio, "audio/wav")}, data=fields, timeout=timeout)
             return self._result(payload, file_path)
         with Path(file_path).open("rb") as audio:

@@ -68,4 +68,5 @@ it('offers cancellation during export and reports cancelled rather than failed o
   await vi.waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已取消导出'))
   expect(screen.queryByRole('alert')).toBeNull()
   expect(screen.getByRole('button', { name: '导出原文件' })).toBeEnabled()
+  await vi.waitFor(() => expect(screen.getByRole('button', { name: '导出原文件' })).toHaveFocus())
 })

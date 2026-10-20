@@ -64,6 +64,9 @@ def case(tmp_path, monkeypatch):
         frozen = _task_source.get()
         return dict(frozen[1]) if frozen and frozen[0] == owner else {'mode': 'cloud'}
     monkeypatch.setattr(VILabCloudService, 'status', status)
+    monkeypatch.setattr(VILabCloudService, 'connection_snapshot', lambda self, owner: {
+        'mode': 'cloud', 'server_url': settings.vilab_server_url, 'asr_model': 'old-asr',
+        'llm_model': 'chosen-catalog-id'})
     monkeypatch.setattr(VILabCloudService, 'models', lambda self, owner: [
         {'id': 'chosen-catalog-id', 'modelType': 'llm', 'runtimeStatus': 'available'}])
     context = service.context('alice', parent)
@@ -78,6 +81,251 @@ def accept(c, body=None):
     background = BackgroundTasks()
     receipt = c.service.accept('alice', c.parent, body or c.body, background, c.note)
     return receipt, background
+
+
+def test_formats_are_frozen_per_child_and_replay_cannot_change_them(case):
+    from app.services.meeting_summary_regeneration import SummaryConfirmation
+    c = case
+    body = SummaryConfirmation(**{**c.body.model_dump(), 'content_depth': 'brief', 'presentation': 'html'})
+    receipt, _ = accept(c, body)
+    child = c.artifacts.find_task_dir(receipt.task_id)
+    metadata = json.loads((child / 'summary_presentation.json').read_text())
+    assert metadata['content_depth'] == 'brief' and metadata['presentation'] == 'html'
+    assert metadata['transcript_version'] == c.context['transcript_version']
+    assert metadata['canonical_task_id'] == c.parent and metadata['model_name'] == body.model_name
+    with pytest.raises(HTTPException):
+        accept(c, body.model_copy(update={'presentation': 'text'}))
+    c.service.run_once(receipt.task_id, 'alice', c.note)
+    assert c.note.generate_from_transcript.call_args.kwargs['content_depth'] == 'brief'
+    assert c.note.generate_from_transcript.call_args.kwargs['presentation'] == 'html'
+    assert not c.note.generate_from_file.called
+
+
+@pytest.mark.parametrize('presentation', ['illustrated', 'comic', 'infographic'])
+def test_unavailable_presentation_fails_before_catalog_or_reservation(case, monkeypatch, presentation):
+    from app.services.meeting_summary_regeneration import SummaryConfirmation
+    c = case
+    body = SummaryConfirmation(**{**c.body.model_dump(), 'presentation': presentation})
+    monkeypatch.setattr(VILabCloudService, 'models', Mock(side_effect=AssertionError('no catalog')))
+    with pytest.raises(HTTPException) as error:
+        accept(c, body)
+    assert error.value.status_code == 409
+    with pytest.raises(HTTPException): c.receipts.get('alice', str(body.operation_id))
+
+
+def test_two_versions_of_same_format_are_distinct_operations(case):
+    c = case
+    first, _ = accept(c)
+    second, _ = accept(c, c.body.model_copy(update={'operation_id': uuid4()}))
+    assert first.task_id != second.task_id
+
+
+@pytest.mark.parametrize('actual_pipeline', [False, True])
+def test_selected_parent_visual_donor_is_not_replaced_by_canonical_cache(case, actual_pipeline):
+    from PIL import Image
+    from app.services.video_evidence_service import VideoEvidenceService, VideoEvidence, VideoFrameEvidence
+    c = case
+    parent_receipt, _ = accept(c)
+    selected = c.artifacts.find_task_dir(parent_receipt.task_id)
+    c.artifacts.update_status(selected, 'success', 'synthetic selected parent')
+    frame_dir = selected / 'video_evidence'; frame_dir.mkdir()
+    frame = frame_dir / 'frame.jpg'; Image.new('RGB', (10, 10)).save(frame)
+    evidence = VideoEvidence(10, [VideoFrameEvidence(0, frame, ['timeline'], [0, 9], 'synthetic', 'recognized')], 10, True)
+    video = VideoEvidenceService()
+    video._save(selected, evidence, video._identity(c.original, selected.resolve(), 'alice'))
+    c.artifacts.write_json(c.folder / 'video_evidence.json', {'version': 'historical stale canonical'})
+    before = {p: p.read_bytes() for root in (selected, c.folder) for p in root.rglob('*') if p.is_file()}
+    context = c.service.context('alice', parent_receipt.task_id)
+    body = c.body.model_copy(update={'operation_id': uuid4(), 'context_revision': context['context_revision']})
+    runner = c.note
+    if actual_pipeline:
+        from app.services.note_service import NoteService
+        runner = object.__new__(NoteService)
+        runner.artifact_service = c.artifacts
+        llm = SimpleNamespace(summarize=Mock(return_value='# Automatic synthetic report\n\nA supported synthetic proposal.'))
+        runner.llm_service = SimpleNamespace(create_summarizer=Mock(return_value=llm))
+        runner.transcription_service = SimpleNamespace(transcribe=Mock(side_effect=AssertionError('NEVER ASR')))
+        body = body.model_copy(update={'content_depth': 'detailed', 'presentation': 'text'})
+    receipt = c.service.accept('alice', parent_receipt.task_id, body, BackgroundTasks(), runner)
+    c.service.run_once(receipt.task_id, 'alice', runner)
+    if actual_pipeline:
+        assert llm.summarize.call_count == 1
+        assert llm.summarize.call_args.kwargs['video_evidence'].frames[0].image_path == frame
+        assert not runner.transcription_service.transcribe.called
+        assert c.artifacts.get_status(receipt.task_id)['status'] == 'success'
+    else:
+        assert c.note.generate_from_transcript.call_count == 1
+        assert c.note.generate_from_transcript.call_args.kwargs['video_evidence'].frames[0].image_path == frame
+    assert not c.note.generate_from_file.called
+    assert all(p.read_bytes() == value for p, value in before.items())
+
+
+def test_preparation_rejection_has_safe_enum_reason_without_private_values(case):
+    c = case
+    receipt, _ = accept(c)
+    child = c.artifacts.find_task_dir(receipt.task_id)
+    c.artifacts.write_json(child / 'request.json', {'request': {'extras': 'PRIVATE MUST NOT APPEAR'}})
+    c.service.run_once(receipt.task_id, 'alice', c.note)
+    status = c.artifacts.get_status(receipt.task_id)
+    assert status['error_code'] == 'summary_preflight_request_changed'
+    assert status['retryable'] is False and not c.note.generate_from_transcript.called
+    assert 'PRIVATE' not in json.dumps(status)
+
+
+def test_preparation_reason_serializer_accepts_only_exact_allowlisted_enums(case):
+    c = case
+    c.artifacts.update_status(c.folder, 'failed', 'synthetic', error_code='summary_preflight_request_changed')
+    assert c.artifacts.get_status(c.parent)['error_code'] == 'summary_preflight_request_changed'
+    other = c.artifacts.create_task_dir(str(uuid4()))
+    c.artifacts.update_status(other, 'failed', 'synthetic', error_code='summary_preflight_PRIVATE_VALUE')
+    assert 'error_code' not in json.loads((other / 'status.json').read_text())
+
+
+def test_second_version_uses_original_evidence_never_previous_summary_and_freezes_explicit_llm(case, monkeypatch):
+    from app.services.note_service import NoteService
+    from app.llm.openai_llm import _BasePromptLLM
+    c = case
+    first, _ = accept(c)
+    parent = c.artifacts.find_task_dir(first.task_id)
+    c.artifacts.update_status(parent, 'success', 'synthetic first version')
+    sentinel = 'PREVIOUS_MINUTES_MUST_NEVER_ENTER_MODEL_INPUT'
+    for filename in ('note.md', 'result.json', 'meeting_working_draft.json', 'meeting_fact_review.json'):
+        c.artifacts.write_text(parent / filename, sentinel)
+    c.artifacts.write_json(parent / 'speaker_evidence.json', {'timeline': 'recording_offset_seconds', 'duration': 10,
+        'turns': [{'start': 0, 'end': 10, 'speaker_id': 'speaker_0'}]})
+    monkeypatch.setattr(VILabCloudService, 'models', lambda self, owner: [
+        {'id': model, 'modelType': 'llm', 'runtimeStatus': 'available'} for model in ('chosen-catalog-id', 'second-explicit-llm')])
+    class CaptureLLM(_BasePromptLLM):
+        def __init__(self): self.calls = []
+        def _complete(self, **prompts):
+            self.calls.append(prompts)
+            if len(self.calls) == 1:
+                return json.dumps({'topics': [{'id': 'T1', 'title': 'Synthetic source'}],
+                    'facts': [{'id': 'F1', 'topic_id': 'T1', 'subject': 'fixture', 'relation': 'states',
+                        'object': c.transcript['full_text'], 'status': 'statement', 'source_refs': ['[ASR:0001]'], 'material': True}],
+                    'coverage': [{'source_ref': '[ASR:0001]', 'fact_ids': ['F1'], 'reason': ''}]})
+            return json.dumps({'markdown': '# Synthetic source\n\n' + c.transcript['full_text'],
+                'audit': [{'fact_id': 'F1', 'disposition': 'included', 'passage': c.transcript['full_text'], 'reason': ''}],
+                'topic_audit': [{'topic_id': 'T1', 'passage': c.transcript['full_text'], 'reason': ''}], 'figures': []})
+    llm = CaptureLLM()
+    runner = object.__new__(NoteService)
+    runner.artifact_service = c.artifacts
+    runner.llm_service = SimpleNamespace(create_summarizer=Mock(return_value=llm))
+    runner.transcription_service = SimpleNamespace(transcribe=Mock(side_effect=AssertionError('NEVER ASR')))
+    before = {p: p.read_bytes() for p in parent.rglob('*') if p.is_file()}
+    context = c.service.context('alice', first.task_id)
+    body = c.body.model_copy(update={'operation_id': uuid4(), 'context_revision': context['context_revision'],
+        'model_name': 'second-explicit-llm', 'content_depth': 'detailed', 'presentation': 'text'})
+    second = c.service.accept('alice', first.task_id, body, BackgroundTasks(), runner)
+    c.service.run_once(second.task_id, 'alice', runner)
+    assert c.artifacts.get_status(second.task_id)['status'] == 'success'
+    assert len(llm.calls) == 2
+    assert all(sentinel not in json.dumps(call) for call in llm.calls)
+    assert all(c.transcript['full_text'] in call['user_prompt'] for call in llm.calls)
+    assert all('speaker_0' in call['user_prompt'] for call in llm.calls)
+    snapshot = json.loads((c.artifacts.find_task_dir(second.task_id) / SNAPSHOT_FILE).read_text())
+    assert snapshot['llm_model'] == 'second-explicit-llm' and snapshot['needs_stt'] is False
+    assert not runner.transcription_service.transcribe.called
+    assert before == {p: p.read_bytes() for p in parent.rglob('*') if p.is_file()}
+
+
+def test_summary_snapshot_preserves_connection_auth_mode_without_tokens(monkeypatch):
+    import app.services.meeting_summary_regeneration as module
+    connection = {'configured': True, 'mode': 'cloud', 'server_url': 'https://connection.invalid',
+        'connection_id': 'immutable-account-connection', 'connection_auth_mode': 'account',
+        'asr_model': 'asr-unchanged', 'llm_model': 'global-default'}
+    monkeypatch.setattr(VILabCloudService, 'connection_snapshot', lambda self, owner: connection)
+    monkeypatch.setattr(module, 'validate_source', lambda source, owner: source)
+    frozen = module._snapshot('alice', 'this-version-llm')
+    assert frozen['connection_auth_mode'] == 'account' and frozen['connection_id'] == connection['connection_id']
+    assert frozen['llm_model'] == 'this-version-llm' and frozen['asr_model'] == 'asr-unchanged'
+    assert 'configured' not in frozen and 'token' not in frozen
+
+
+@pytest.mark.parametrize('changed', ['connection', 'mode', 'asr'])
+def test_accepted_summary_uses_db_bound_snapshot_after_global_changes(case, monkeypatch, changed):
+    c = case
+    receipt, _ = accept(c)
+    accepted = json.loads((c.artifacts.find_task_dir(receipt.task_id) / SNAPSHOT_FILE).read_text())
+    monkeypatch.setattr(VILabCloudService, 'connection_snapshot', Mock(side_effect=AssertionError('NEVER current selection after accept')))
+    def changed_status(self, owner):
+        frozen = _task_source.get()
+        if frozen and frozen[0] == owner: return dict(frozen[1])
+        return {'mode': 'local'} if changed == 'mode' else {'mode': 'cloud', 'server_url': 'https://other.invalid', 'asr_model': 'new-asr'}
+    monkeypatch.setattr(VILabCloudService, 'status', changed_status)
+    seen = []
+    c.note.generate_from_transcript.side_effect = lambda **kwargs: seen.append(dict(_task_source.get()[1]))
+    c.service.run_once(receipt.task_id, 'alice', c.note)
+    assert len(seen) == 1
+    assert {key: value for key, value in seen[0].items() if key != 'configured'} == accepted
+    assert not c.note.generate_from_file.called
+
+
+@pytest.mark.parametrize('tamper', [
+    {'asr_model': 'tampered-snapshot-field'}, {'llm_model': 'another-model'},
+    {'server_url': 'https://different.invalid'}, {'connection_id': 'different-connection'},
+    {'connection_id': 'different-connection', 'connection_auth_mode': 'account'}, {'needs_stt': True},
+])
+def test_tampering_frozen_snapshot_cannot_be_authorized_by_current_global_selection(case, monkeypatch, tamper):
+    c = case
+    receipt, _ = accept(c)
+    child = c.artifacts.find_task_dir(receipt.task_id)
+    frozen = json.loads((child / SNAPSHOT_FILE).read_text())
+    c.artifacts.write_json(child / SNAPSHOT_FILE, {**frozen, **tamper})
+    monkeypatch.setattr(VILabCloudService, 'connection_snapshot', lambda self, owner: {**frozen, **tamper})
+    c.service.run_once(receipt.task_id, 'alice', c.note)
+    assert not c.note.generate_from_transcript.called
+    assert c.artifacts.get_status(receipt.task_id)['retryable'] is False
+
+
+def test_legacy_receipt_without_accepted_snapshot_binding_never_gains_execution(case):
+    c = case
+    receipt, _ = accept(c)
+    with c.receipts.sessions() as db:
+        row = db.get(SourceRequestDB, ('alice', str(c.body.operation_id)))
+        payload = json.loads(row.receipt_json)
+        payload.pop('summary_snapshot_sha256')
+        row.receipt_json = json.dumps(payload)
+    c.service.run_once(receipt.task_id, 'alice', c.note)
+    assert not c.note.generate_from_transcript.called
+    assert c.artifacts.get_status(receipt.task_id)['retryable'] is False
+
+
+def test_illustrated_reuses_verified_visuals_and_never_mutates_donor(case):
+    from PIL import Image
+    from app.services.video_evidence_service import VideoEvidenceService, VideoEvidence, VideoFrameEvidence
+    from app.services.meeting_summary_regeneration import SummaryConfirmation
+    c = case
+    frame_folder = c.folder / 'video_evidence'
+    frame_folder.mkdir()
+    image = frame_folder / 'frame.jpg'
+    Image.new('RGB', (10, 10)).save(image)
+    visual = VideoEvidence(10, [VideoFrameEvidence(0, image, ['timeline'], [0, 9], 'synthetic screen', 'recognized')], 10, True)
+    service = VideoEvidenceService()
+    service._save(c.folder, visual, service._identity(c.original, c.folder.resolve(), 'alice'))
+    before = {p: p.read_bytes() for p in c.folder.rglob('*') if p.is_file()}
+    context = c.service.context('alice', c.parent)
+    assert context['presentation_options']['illustrated']['available'] is True
+    assert context['visual_evidence_version']
+    body = SummaryConfirmation(**{**c.body.model_dump(), 'context_revision': context['context_revision'],
+                                 'content_depth': 'brief', 'presentation': 'illustrated'})
+    receipt, _ = accept(c, body)
+    c.service.run_once(receipt.task_id, 'alice', c.note)
+    call = c.note.generate_from_transcript.call_args.kwargs
+    assert call['video_evidence'].frames[0].image_path == image
+    call['video_evidence'].align([])  # Must not rewrite donor's manifest.
+    from app.services.summary_presentation_artifact import render_presentation
+    figures = [{'frame_ref': '[FRAME:0001]', 'after_passage': 'Automatic synthetic facts.', 'caption': 'Synthetic screen'}]
+    render_context = SimpleNamespace(task_dir=c.artifacts.find_task_dir(receipt.task_id),
+        task_id=receipt.task_id, presentation='illustrated', video_evidence=call['video_evidence'], presentation_figures=figures)
+    with pytest.raises(ValueError): render_presentation(c.artifacts, render_context, '# No model selection')
+    output = render_presentation(c.artifacts, render_context, '# Topic\n\nAutomatic synthetic facts.\n\n[FRAME:0001]\n\nNext paragraph.')
+    assert 'FRAME:' not in output and output.index('summary-source-0.jpg') < output.index('Next paragraph.')
+    assert f'/api/task/{receipt.task_id}/artifacts/screenshots/summary-source-0.jpg' in output
+    assert (c.artifacts.find_task_dir(receipt.task_id) / 'screenshots/summary-source-0.jpg').read_bytes() == image.read_bytes()
+    assert before == {p: p.read_bytes() for p in c.folder.rglob('*') if p.is_file()}
+    image.write_bytes(b'changed')
+    with pytest.raises(HTTPException): c.service.context('alice', c.parent)
 
 
 @pytest.mark.parametrize('status', ['failed', 'success'])

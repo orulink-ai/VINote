@@ -1,5 +1,14 @@
 # Repository Guidelines
 
+## Meeting dossiers and explicit delivery (2026-10-20)
+
+- Desktop original media actions use “在文件夹中显示” for a verified existing OS file and “另存为…” for a copy. The Cookie/loopback-only `/api/files/{id}/local-path`, `/api/notes/{id}/media/local-path`, and `/api/task/{id}/original/local-path` return owned original paths with no-store headers. Tauri reveals/selects the file without launching it. IndexedDB-only recordings have no OS path until saved; never invent a folder or reveal a playback derivative. Browser and cloud clients do not receive OS-location controls.
+
+- Desktop Meetings shows one dossier per owner-scoped canonical recording, with all its summary objects/forms/versions below it. A summary title, save time or status never creates a meeting identity. Dossier labels use the explicit capture start time; unknown capture time stays unknown. The original request's verified desktop capture fields are projected as `meeting_source.recording_started_at`; file mtimes and generated titles are never date fallbacks.
+- “待归档” means saved meeting content without a recording association. Desktop-only authenticated `/api/meeting-source-links/targets` and `GET/PUT /api/meeting-source-links/{note_id}` allow an explicit, hash-bound association without changing task IDs, bodies or originals. This is display metadata only: `_with_meeting_display_source` is for client responses; domain callers retain artifact-only `_with_meeting_source`. Manual links never authorize media, ASR, generation, attendee identity or publication.
+- Summary-only new versions let users select the current connection's available LLM, content depth and presentation per run. They reuse original ASR/speaker/video materials, never a previous final summary; global preferences remain unchanged. Accepted execution is bound to its immutable connection/model snapshot, not the later global choice. Unknown operations are queried, not resubmitted.
+- Feishu attendee confirmation is desktop-only and bound to the canonical meeting, immutable evidence and actual account connection. First automatic publication with unconfirmed attendees waits before any document/message write; explicit confirmation resumes only the original definitely-unsent intent. Unknown/accepted/failed deliveries are never replayed by attendee confirmation. Employee departure/disabled-state querying was explicitly cancelled by the user; do not introduce new scopes or validity blockers for it.
+
 ## Branch and submodule contract (2026-10-20)
 
 - Desktop/backend changes start from the latest fetched `origin/dev`, use a `codex/` feature branch and target `dev` in pull requests. Do not target the historical `main` branch for this product workflow.
@@ -156,6 +165,11 @@ Default local ports:
 - Tauri desktop dev window: loads `http://127.0.0.1:3100`
 
 ## Environment and Configuration
+
+2026-10-20 desktop manual meeting archive: Cookie-only `/api/meeting-source-links` exposes owner-scoped GET targets, GET note association, and explicitly confirmed PUT with canonical task/hash and expected revision. `meeting_source_links` stores immutable display associations without replacing note.task_id or source artifacts. Verify personal meeting ownership, canonical original workflow, contained regular media and actual SHA256 before insertion; conflicting trusted/manual relations fail closed. `_with_meeting_source` remains artifact-only for domain consumers; `_with_meeting_display_source` adds the manual fallback only to desktop personal note responses. This relationship never authorizes playback, regeneration, ASR cache reuse or publication. Recording start is read only through `meeting_recording_metadata.recording_started_at`; missing capture time remains unknown, never inferred from a title/mtime. Clients format the returned ISO instant in their timezone.
+
+2026-10-20 desktop model connections: `VILAB_SERVER_URL` and release presets select the built-in default only. Device-side `GET /api/vilab/connections`, catalog-only `POST /api/vilab/connections/check`, and explicit `PUT /api/vilab/connection` support owner-scoped external VILab Origins. Checks never infer or activate. Account mode requires explicit consent to the exact Origin before sending the shared account token; LAN 143 and official public URLs use the explicit check button, other URLs additionally require an Origin confirmation. Tokens are not copied into connection records or snapshots; immutable issuer/subject bindings use the existing refresh helper. API-key mode never inherits account tokens or deployment keys. Frozen task sources retain `connection_id`, `server_url` and `connection_auth_mode`; HTTP and ASR resolve that original binding after settings change. Historical sources without a connection ID remain restricted to their original built-in Origin; missing bindings never fall back. `VILabCloudService.connection_snapshot(owner)` reads sanitized selected configuration without catalog/model calls; strict artifacts retain its source fields, not `configured`. See `docs/vilab-model-connections.md`.
+
 Backend settings live in root `.env` and are loaded by `app/config.py`.
 
 Important backend variables:

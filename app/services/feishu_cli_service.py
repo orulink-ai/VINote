@@ -1,5 +1,5 @@
 """Reuse VINote document/permission/receipt workflows with device-owned CLI auth."""
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from datetime import datetime
 import json
 import re
@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from urllib.parse import urlsplit
 import uuid
 
-from sqlalchemy import delete
+from sqlalchemy import delete, inspect, update
 
 from app.config import settings
 from app.db import session_scope
@@ -34,9 +34,144 @@ class FeishuCLIService(FeishuService):
         return FeishuCLIService(owner)
 
     def serialize(self, row, db=None):
-        result = super().serialize(row, db=db)
+        if db is None:
+            with session_scope() as session:
+                return self.serialize(row, db=session)
+        with db.no_autoflush:
+            result = super().serialize(row, db=db)
         result["execution_location"] = "device"
+        if result.get("formatting", {}).get("image_source_preserved"):
+            from app.models.feishu_native_images import FeishuNativeImagePlanDB
+
+            def has_plan(session):
+                return (inspect(session.connection()).has_table(FeishuNativeImagePlanDB.__tablename__)
+                        and session.get(FeishuNativeImagePlanDB, row.id) is not None)
+
+            with db.no_autoflush:
+                present = has_plan(db)
+            if present:
+                from app.services.feishu_native_images import PROTOCOL
+                receipt = self._native_image_writer().receipt(row.owner, row.id, db=db)
+                confirmed = receipt["images_embedded"] is True
+                result["formatting"].update(protocol=PROTOCOL, status="written" if confirmed else "partial",
+                    native_write_confirmed=confirmed, images_embedded=confirmed,
+                    image_source_preserved=not confirmed,
+                    message="原生图片及正文顺序已回读核验" if confirmed else "图片写入尚未完整核验，请查询原回执")
         return result
+
+    def _native_image_writer(self):
+        from app.services.feishu_native_images import NativeImageWriter
+        from app.services.task_artifact_service import TaskArtifactService
+
+        def guard(owner, job, snapshot):
+            if owner != self.owner:
+                raise FeishuError("交付账号不匹配", 409, code="connection_changed")
+            config = self.config
+            if (snapshot.get("app_id") != config.feishu_app_id or
+                    snapshot.get("tenant_key") != config.feishu_tenant_key):
+                raise FeishuError("原图文交付绑定的飞书应用或租户已变化", 409, code="connection_changed")
+            self.assert_delivery_connection(owner, snapshot)
+            self._check_automatic_delivery(owner, job)
+
+        @contextmanager
+        def dispatch_context(owner, job, snapshot):
+            # Same lock as disconnect/revoke; hold it for ONE external action,
+            # never across the complete publication pipeline.
+            with _lock(owner):
+                guard(owner, job, snapshot)
+                yield
+
+        def request(owner, method, path, **kwargs):
+            return self.request(method, path, token=self.user_token(owner), **kwargs)
+
+        def convert(content):
+            return self.request("POST", "docx/v1/documents/blocks/convert", token=self.user_token(self.owner),
+                                body={"content_type": "markdown", "content": content})
+
+        return NativeImageWriter(TaskArtifactService(), request=request, guard=guard, convert=convert,
+                                 dispatch_context=dispatch_context, session_factory=session_scope)
+
+    def prepare_native_body(self, owner, job):
+        from app.db_models import NoteDB
+        from app.models.feishu_destination import FeishuDeliveryDestinationDB, FeishuWriteBatchDB
+        from app.models.feishu_native_images import FeishuNativeImagePlanDB
+        from app.services import feishu_native_images as images, feishu_receipt_service as receipts
+        from app.services.task_artifact_service import TaskArtifactService
+
+        with session_scope() as db:
+            original = receipts.owned_job(db, owner, job.id)
+            metadata = db.get(FeishuDeliveryDestinationDB, job.id)
+            snapshot = json.loads(metadata.snapshot) if metadata else {}
+            if not snapshot.get("format_selection", {}).get("image_source_preserved"):
+                illustrated = False
+            else:
+                illustrated = True
+                if original.document_id == "__creating__":
+                    raise FeishuError("创建图片目标文档的结果未确认，请查询原回执并关联原文档", 409,
+                                      uncertain=True, code="create_unknown")
+                if not inspect(db.get_bind()).has_table(FeishuNativeImagePlanDB.__tablename__):
+                    raise FeishuError("原生图片回执存储尚未初始化，请重新启动桌面服务", 503, code="image_journal_unavailable")
+                note = db.get(NoteDB, original.note_key)
+                if note is None or note.created_by != owner or not note.task_id:
+                    raise FeishuError("缺少当前账号已保存的会议来源", 409, code="image_task_unbound")
+                task = note.task_id
+                if original.content != job.content or original.document_id != job.document_id:
+                    raise FeishuError("原发布内容或目标已变化", 409, code="image_plan_changed")
+        if not illustrated:
+            return super().prepare_native_body(owner, job)
+        self.assert_delivery_connection(owner, snapshot)
+        self.user_token(owner)
+        with session_scope() as db:
+            grants = self.granted_scopes(db.get(FeishuConnectionDB, owner))
+        if images.REQUIRED_UPLOAD_SCOPE not in grants:
+            raise FeishuError("缺少文档素材上传权限，图片未写入；需用户明确补充飞书授权", 403,
+                              code="image_upload_scope_missing")
+        if not grants & {"docx:document", "docx:document:write_only"}:
+            raise FeishuError("缺少文档编辑权限，图片未写入", 403, code="user_scope_missing")
+        if snapshot.get("format_selection", {}).get("needs_converter") and "docx:document.block:convert" not in grants:
+            raise FeishuError("缺少原生格式转换权限，图片正文未写入", 403, code="converter_scope_missing")
+        if not snapshot.get("app_id") or snapshot["app_id"] != self.config.feishu_app_id:
+            raise FeishuError("图片交付缺少原应用快照，禁止补用当前默认值", 409, code="connection_changed")
+        assets = []
+        for part in images.split_body(job.content):
+            if part["kind"] == "image":
+                asset, _ = images.read_asset(TaskArtifactService(), owner, task, part["reference"])
+                assets.append(asset)
+        source = {"protocol": images.PROTOCOL, "task_id": task,
+                  "source_hash": images.markdown.source_hash(job.content), "assets": assets}
+        with session_scope() as db:
+            original = receipts.owned_job(db, owner, job.id)
+            metadata = db.get(FeishuDeliveryDestinationDB, job.id)
+            current = json.loads(metadata.snapshot)
+            previous = current.get("image_source_manifest")
+            if previous is not None and previous != source:
+                raise FeishuError("原截图或正文已变化，禁止继续原发布", 409, code="image_source_changed")
+            if previous is None:
+                if current != snapshot or original.content != job.content:
+                    raise FeishuError("原发布快照已变化", 409, code="image_plan_changed")
+                from sqlalchemy import select
+                if int(original.written_blocks) or db.scalar(select(FeishuWriteBatchDB.job_id).where(
+                        FeishuWriteBatchDB.job_id == job.id).limit(1)):
+                    raise FeishuError("已有正文写入但缺少原图片清单，禁止重写", 409, uncertain=True, code="write_unknown")
+                current["image_source_manifest"] = source
+                changed = db.execute(update(FeishuDeliveryDestinationDB).where(
+                    FeishuDeliveryDestinationDB.delivery_id == job.id,
+                    FeishuDeliveryDestinationDB.snapshot == metadata.snapshot).values(snapshot=json.dumps(current)))
+                if changed.rowcount != 1:
+                    raise FeishuError("图片清单正在保存，请查询原发布", 409, code="image_plan_changed")
+        if not job.document_id:
+            return {"protocol": images.PROTOCOL, "preflight": True}
+        return self._native_image_writer().prepare(owner, job.id, task)
+
+    def write_document(self, owner, job):
+        from app.services.feishu_native_images import PROTOCOL
+        plan = self.prepare_native_body(owner, job)
+        if isinstance(plan, dict) and plan.get("protocol") == PROTOCOL:
+            result = self._native_image_writer().run(owner, job.id)
+            self.checkpoint(owner, job.id, written_blocks=str(result["written_blocks"]))
+            return result
+        # The original text writer and its old receipt protocol remain intact.
+        return super().write_document(owner, job)
 
     def configured(self):
         try:
@@ -101,6 +236,27 @@ class FeishuCLIService(FeishuService):
                     "transport": "cli", "scope": user.get("scope", ""), "expires_at": expiry,
                     "app_id": raw["appId"], "tenant_key": who["tenant_key"]}).encode()).decode()
         return USER
+
+    def _connection_status(self, owner, refresh_unavailable=False):
+        result = super()._connection_status(owner, refresh_unavailable)
+        from app.services.feishu_native_images import PROTOCOL, REQUIRED_UPLOAD_SCOPE
+        with session_scope() as db:
+            scopes = self.granted_scopes(db.get(FeishuConnectionDB, owner)) if result.get("connected") else set()
+        image_grants = {
+            "upload": REQUIRED_UPLOAD_SCOPE in scopes,
+            "document_write": bool(scopes & {"docx:document", "docx:document:write_only"}),
+            "document_read": bool(scopes & {"docx:document", "docx:document:readonly"}),
+        }
+        ready = bool(result.get("connected") and all(image_grants.values()))
+        # Capability and grant evidence never establish a successful image write
+        # or real-provider acceptance. HTTP service's image mode stays unchanged.
+        result["markdown_conversion_preflight"].update(
+            image_mode="source_bound_native" if ready else "unsupported_before_write",
+            image_protocol=PROTOCOL, image_required_scope=REQUIRED_UPLOAD_SCOPE,
+            image_user_grant_available=ready, image_grants=image_grants,
+            image_provider_acceptance="unverified", image_write_confirmed=False,
+            image_message="仅支持账号与任务绑定的截图；尚未完成真实飞书图文发布验收，未确认写入")
+        return result
 
     def status(self, owner):
         unavailable = False
@@ -171,7 +327,7 @@ class FeishuCLIService(FeishuService):
                            credential_identity={"app_id": self.config.feishu_app_id, "open_id": open_id})
 
     def recover_document(self, owner, job_id, url):
-        """Extract a Feishu docx token; never fetch the supplied tenant URL."""
+        """Preserve the Feishu object kind; never fetch the supplied tenant URL."""
         if owner != self.owner:
             raise FeishuError("交付记录不存在", 404)
         # urlsplit strips some controls, so reject them before parsing. Neither
@@ -183,7 +339,7 @@ class FeishuCLIService(FeishuService):
             host = parsed.hostname or ""
             valid_host = re.fullmatch(
                 r"(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+feishu\.cn", host)
-            document = re.fullmatch(r"/docx/([A-Za-z0-9]+)", parsed.path)
+            document = re.fullmatch(r"/(docx|wiki)/([A-Za-z0-9]+)", parsed.path)
             valid = (parsed.scheme == "https" and valid_host and document and
                      parsed.username is None and parsed.password is None and parsed.port in (None, 443))
         except ValueError:
@@ -194,7 +350,7 @@ class FeishuCLIService(FeishuService):
         # body checks to the existing recovery workflow. Its GETs use only the
         # fixed official API paths; the tenant URL grants no recovery authority.
         return super().recover_document(owner, job_id,
-            self.config.feishu_doc_base_url + "/docx/" + document[1])
+            self.config.feishu_doc_base_url + "/" + document[1] + "/" + document[2])
 
     def refresh_objects(self, owner):
         """Read one filtered contact page and the current visible groups.

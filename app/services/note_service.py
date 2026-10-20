@@ -53,6 +53,9 @@ class PipelineContext:
     speaker_count: int | None = None
     preloaded_transcript: TranscriptResult | None = None
     video_evidence: object | None = None
+    content_depth: str | None = None
+    presentation: str | None = None
+    presentation_figures: list | None = None
 
 
 class NoteService:
@@ -245,6 +248,9 @@ class NoteService:
         base_url: str | None = None,
         user_id: Optional[str] = None,
         asr_model: str | None = None,
+        content_depth: str | None = None,
+        presentation: str | None = None,
+        video_evidence=None,
     ) -> NoteResult:
         task_start_time = time.time()
         task_dir = self.artifact_service.create_task_dir(task_id)
@@ -281,6 +287,9 @@ class NoteService:
                 user_id=user_id,
                 source_video_url=None,
                 preloaded_transcript=transcript,
+                content_depth=content_depth,
+                presentation=presentation,
+                video_evidence=video_evidence,
                 task_start_time=task_start_time,
                 step_timings=step_timings,
             )
@@ -390,6 +399,9 @@ class NoteService:
         step_timings: dict[str, float],
         diarize: bool = False,
         speaker_count: int | None = None,
+        content_depth: str | None = None,
+        presentation: str | None = None,
+        video_evidence=None,
     ) -> NoteResult:
         resolved_output_language = normalize_output_language(output_language)
         resolved_summary_mode = normalize_summary_mode(summary_mode)
@@ -411,6 +423,9 @@ class NoteService:
             base_url=base_url,
             user_id=user_id,
             preloaded_transcript=preloaded_transcript,
+            content_depth=content_depth,
+            presentation=presentation,
+            video_evidence=video_evidence,
             diarize=diarize,
             speaker_count=speaker_count,
             source_video_url=source_video_url,
@@ -437,7 +452,9 @@ class NoteService:
                         manifest = canonical / 'source_media.json' if canonical else None
                         is_video = bool(manifest and manifest.is_file() and
                             json.loads(manifest.read_text(encoding='utf-8')).get('media_kind') == 'video')
-                if context.style == 'meeting' and is_video:
+                if context.style == 'meeting' and is_video and context.video_evidence is None:
+                    if (context.task_dir / 'summary_presentation.json').exists():
+                        raise ValueError('缺少已保存的视频证据，未重新扫描或提交推理')
                     from app.services.video_evidence_service import VideoEvidenceService
                     with ThreadPoolExecutor(max_workers=1, thread_name_prefix='meeting-video') as pool:
                         video = pool.submit(VideoEvidenceService().collect, local_video_path=source,
@@ -602,21 +619,29 @@ class NoteService:
         from app.services.meeting_draft_artifact import save_working_draft
         # Diagnostic working material only: never a saved result, a checkpoint
         # authorizing another model call, or evidence of a successful review.
-        with capture_working_draft(lambda text: save_working_draft(self.artifact_service, context.task_dir, text)):
-            markdown = llm.summarize(
-                title=context.audio_meta.title,
-                segments=summary_segments,
-                style=context.style,
-                summary_mode=context.summary_mode,
-                extras=summary_extras,
-                output_language=context.output_language,
-                progress_callback=lambda message: self.artifact_service.update_status(
-                    context.task_dir,
-                    "summarizing",
-                    message,
-                ),
-                **video_kwargs,
-            )
+        from app.llm.meeting_presentation import presentation_scope
+        with presentation_scope(getattr(context, 'content_depth', None), getattr(context, 'presentation', None)) as presentation_state, capture_working_draft(lambda text: save_working_draft(self.artifact_service, context.task_dir, text)):
+            try:
+                markdown = llm.summarize(
+                    title=context.audio_meta.title,
+                    segments=summary_segments,
+                    style=context.style,
+                    summary_mode=context.summary_mode,
+                    extras=summary_extras,
+                    output_language=context.output_language,
+                    progress_callback=lambda message: self.artifact_service.update_status(
+                        context.task_dir,
+                        "summarizing",
+                        message,
+                    ),
+                    **video_kwargs,
+                )
+            finally:
+                if presentation_state.raw_review is not None:
+                    self.artifact_service.write_json(context.task_dir / 'meeting_fact_review.json', {
+                        'protocol': 1, 'raw_response': presentation_state.raw_review})
+            if getattr(context, 'presentation', None) == 'illustrated':
+                context.presentation_figures = presentation_state.figures
         context.step_timings["summarize"] = time.time() - step_start
         update_current(
             input={"title": context.audio_meta.title, "summary_mode": context.summary_mode,
@@ -628,6 +653,9 @@ class NoteService:
 
     @traced("提取关键帧")
     def _enrich_markdown_with_media(self, context: PipelineContext, transcript, markdown: str) -> str:
+        if getattr(context, 'presentation', None) is not None:
+            from app.services.summary_presentation_artifact import render_presentation
+            return render_presentation(self.artifact_service, context, markdown)
         self.artifact_service.update_status(
             context.task_dir, "summarizing", "正在整理正文与媒体引用…", stage="enriching_media")
         if (context.audio_meta.platform == "bilibili" or context.style == "meeting"

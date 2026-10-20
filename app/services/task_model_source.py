@@ -18,7 +18,7 @@ SNAPSHOT_FILE = "model_source_snapshot.json"
 
 
 def config_fingerprint(config):
-    value = config.model_dump(exclude={"api_key", "cloud_user_id"})
+    value = config.model_dump(exclude={"api_key", "cloud_user_id", "cloud_connection_id", "cloud_connection_auth_mode"})
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
 
 
@@ -33,14 +33,21 @@ def validate_source(value, user_id):
             raise HTTPException(409, "原任务缺少模型服务来源")
         parsed = urlsplit(origin)
         if (parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password
-                or parsed.query or parsed.fragment or origin.rstrip('/') != settings.vilab_server_url.rstrip('/')):
+                or parsed.query or parsed.fragment):
             raise HTTPException(409, "原任务的模型服务来源已变化，请明确确认恢复来源")
+        from app.services.vilab_connection_service import VILabConnectionService
+        from app.services import vilab_cloud_service
+        if "connection_id" in value and (not isinstance(value["connection_id"], str) or not value["connection_id"]):
+            raise HTTPException(409, "原任务的模型连接绑定无效")
+        VILabConnectionService(vilab_cloud_service.session_scope).validate_snapshot(user_id, value)
         for kind in ("llm_model", "asr_model"):
             if kind == "asr_model" and value.get("needs_stt") is False:
                 continue
             if not isinstance(value.get(kind), str) or not value[kind].strip():
                 raise HTTPException(409, "原任务缺少具体模型，请明确确认恢复模型")
-        allowed = {"version", "owner", "mode", "server_url", "asr_model", "llm_model"}
+        allowed = {"version", "owner", "mode", "server_url", "asr_model", "llm_model", "connection_id", "connection_auth_mode"}
+        if "connection_auth_mode" in value and (not value.get("connection_id") or value["connection_auth_mode"] not in {"account", "api_key"}):
+            raise HTTPException(409, "原任务连接认证方式无效")
     else:
         allowed = {"version", "owner", "mode", "server_url", "asr_model", "llm_model",
                    "local_llm_fingerprint", "local_stt_fingerprint"}
@@ -59,17 +66,22 @@ def capture_source(user_id, options, confirmation=None):
     from app.config import settings
     from app.services.vilab_cloud_service import VILabCloudService
     service = VILabCloudService()
-    cloud = service.status(user_id) if user_id else {"mode": "local"}
+    cloud = service.connection_snapshot(user_id) if user_id else {"mode": "local"}
     if confirmation is not None:
-        if (set(confirmation) != {"confirmed", "mode", "server_url", "asr_model", "llm_model"}
+        if (set(confirmation) - {"confirmed", "mode", "server_url", "asr_model", "llm_model", "connection_id", "connection_auth_mode"}
                 or confirmation.get("confirmed") is not True or confirmation.get("mode") != "cloud"
                 or not isinstance(confirmation.get("server_url"), str)
-                or confirmation.get("server_url", "").rstrip('/') != settings.vilab_server_url.rstrip('/')):
+                or confirmation.get("server_url", "").rstrip('/') != cloud.get("server_url", "").rstrip('/')
+                or confirmation.get("connection_id", cloud.get("connection_id")) != cloud.get("connection_id")):
             raise HTTPException(409, "请明确确认配置的服务来源及两个具体模型")
-        cloud = {key: confirmation.get(key) for key in ("mode", "server_url", "asr_model", "llm_model")}
+        cloud = {**cloud, **{key: confirmation.get(key) for key in ("mode", "server_url", "asr_model", "llm_model")}}
     value = {"version": 1, "owner": user_id, "mode": cloud["mode"],
              "server_url": cloud.get("server_url", settings.vilab_server_url), "asr_model": "", "llm_model": "",
              "needs_stt": options.get("needs_stt", True)}
+    if cloud.get("connection_id") and value["mode"] == "cloud":
+        value["connection_id"] = cloud["connection_id"]
+        if cloud.get("connection_auth_mode"):
+            value["connection_auth_mode"] = cloud["connection_auth_mode"]
     # asr_model is the explicit new paired-selection marker. model_name alone
     # retains its historical cloud/default and local/custom behavior.
     paired = options.get("asr_model") is not None and confirmation is None
@@ -80,7 +92,7 @@ def capture_source(user_id, options, confirmation=None):
             raise HTTPException(422, "请同时明确选择 ASR 和 LLM 两个模型")
         if value["mode"] != "cloud":
             raise HTTPException(409, "当前为本地模型模式，未切换到请求中的云端模型")
-        if not settings.vilab_server_url:
+        if not cloud.get("server_url"):
             raise HTTPException(503, "云端模型服务尚未配置")
         models = service.models(user_id)
         for key, kind in (("asr_model", "asr"), ("llm_model", "llm")):

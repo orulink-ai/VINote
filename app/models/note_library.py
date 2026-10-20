@@ -16,6 +16,7 @@ class MeetingSourceResponse(BaseModel):
     """Verified grouping evidence only; never authorizes playback or generation."""
     owner_id: str
     canonical_task_id: str
+    recording_started_at: datetime | None = None
 
 
 class NoteRecordResponse(BaseModel):

@@ -9,6 +9,13 @@ export type FormattingReceipt = {
 };
 
 export function feishuFormattingMessage(formatting?: FormattingReceipt, deliveryStatus?: string): string {
+  if (formatting?.protocol === 'feishu-task-native-images-v1') {
+    return deliveryStatus === 'completed' && formatting.status === 'written'
+      && formatting.native_write_confirmed === true && formatting.images_embedded === true
+      && formatting.image_source_preserved === false
+      ? '原生图文及段落顺序已回读核验。'
+      : '图文写入尚未完整核验，请查询原回执。';
+  }
   if (!formatting || !['legacy-safe-v1', 'feishu-markdown-selective-v2', 'feishu-markdown-descendant-v1'].includes(formatting.protocol || '')) {
     return '正文格式尚未核验。';
   }

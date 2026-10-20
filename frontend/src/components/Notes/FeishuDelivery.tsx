@@ -30,6 +30,8 @@ import {
   type FeishuDestination,
 } from "@/lib/feishu";
 import { FeishuDestinationPicker } from "@/components/Settings/FeishuDestinationPicker";
+import { FeishuMeetingContainerRecovery } from './FeishuMeetingContainerRecovery';
+import { isTauriRuntime } from '@/lib/desktopMicrophonePermission';
 import { ErrorState, LoadingState } from "@/components/Feedback/ResourceState";
 import { MarkdownContent } from "@/components/Markdown/MarkdownContent";
 import { Button } from "@/components/ui/button";
@@ -565,6 +567,8 @@ export function FeishuDelivery({
                 </Button>
               )}
               {job.error && <ErrorState error={job.error} />}
+              {isTauriRuntime() && (job.status === 'failed' || job.phase === 'unknown') && <FeishuMeetingContainerRecovery
+                key={job.id} deliveryId={job.id} onRecovered={() => { void refresh(); }} />}
               {Object.entries(job.recipients).map(([id, recipient]) => (
                 <div key={id} className="flex flex-col gap-2 border-b py-2">
                   <p className="text-sm">

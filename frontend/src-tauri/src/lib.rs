@@ -1,4 +1,5 @@
 mod original_download;
+mod original_reveal;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -51,6 +52,7 @@ pub fn run() {
             original_download::append_original_bytes,
             original_download::finish_original_download,
             original_download::cancel_original_download,
+            original_reveal::reveal_original_file,
             request_microphone_access,
             open_external_url,
             open_recorder_window,

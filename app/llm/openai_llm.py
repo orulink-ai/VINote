@@ -53,7 +53,12 @@ class _BasePromptLLM(LLMSummarizer):
                 output_language=output_language, intermediate=intermediate,
                 source_is_reviewed_notes=source_is_reviewed_notes,
             ))
-        result = (result or '').strip() if intermediate else without_internal_references(result or '')
+        from app.llm.meeting_presentation import presentation_state
+        if not intermediate and presentation_state() and presentation_state().depth:
+            from app.llm.meeting_fact_material import finalize_fact_review
+            result = finalize_fact_review(result or '', draft, source)
+        else:
+            result = (result or '').strip() if intermediate else without_internal_references(result or '')
         if not result:
             raise RuntimeError("会议纪要事实复核未返回内容，请重试。")
         return result
@@ -157,6 +162,10 @@ class _BasePromptLLM(LLMSummarizer):
         if style != "meeting":
             return draft
         record_working_draft(draft)
+        from app.llm.meeting_presentation import presentation_state
+        if presentation_state() and presentation_state().depth:
+            from app.llm.meeting_fact_material import prepare_fact_material
+            draft = prepare_fact_material(draft, self._build_segment_text(segments))
         if progress_callback:
             progress_callback("正在核对音视频材料并组织会议纪要…")
         return self._review_meeting_note(

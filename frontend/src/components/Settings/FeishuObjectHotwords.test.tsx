@@ -88,3 +88,15 @@ it('rejects an already bound normalized alias and keeps separate IDs for same-ki
   await screen.findByText(/这个别称已对应/); expect(apiJson).toHaveBeenCalledTimes(1);
   await openPicker(); expect(screen.getByRole('option', { name: '同名 · 群 · oc_one' })).toBeVisible(); expect(screen.getByRole('option', { name: '同名 · 群 · oc_two' })).toBeVisible();
 });
+
+it('binds the explicitly selected visible contact without an employment check or reauthorization request', async () => {
+  mount(); await openPicker();
+  fireEvent.click(screen.getByRole('option', { name: '同名 · 联系人' }));
+  fireEvent.change(screen.getByLabelText('别称'), { target: { value: '负责同事' } });
+  expect(screen.queryByRole('button', { name: '重新授权获取状态' })).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: '保存别称' }));
+  await screen.findByText('别称已保存。');
+  expect(apiJson).toHaveBeenCalledTimes(2);
+  expect(apiJson).toHaveBeenLastCalledWith('/api/feishu/object-hotwords', { method: 'POST', body: JSON.stringify({ alias: '负责同事', target_id: 'ou_one' }) });
+  expect(vi.mocked(apiJson).mock.calls.some(([path]) => path.includes('authorize') || path.includes('deliveries'))).toBe(false);
+});

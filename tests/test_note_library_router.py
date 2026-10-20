@@ -60,7 +60,7 @@ class MeetingSourceProjectionTest(unittest.TestCase):
                     self.assertEqual(response.status_code, 200)
                     return response.json()
 
-                expected = {'owner_id': 'owner-a', 'canonical_task_id': parent}
+                expected = {'owner_id': 'owner-a', 'canonical_task_id': parent, 'recording_started_at': None}
                 before = {str(p): p.read_bytes() for p in Path(temporary).rglob('*') if p.is_file()}
                 self.assertEqual([n.get('meeting_source') for n in read()], [expected] * 3)
                 self.assertEqual(client.get('/api/notes/child').json().get('meeting_source'), expected)
@@ -73,6 +73,16 @@ class MeetingSourceProjectionTest(unittest.TestCase):
                 # Missing original media is not missing saved text or its proven relation.
                 self.assertFalse((canonical / 'media/source_audio.wav').exists())
                 self.assertEqual(before, {str(p): p.read_bytes() for p in Path(temporary).rglob('*') if p.is_file()})
+
+                # A summary child reads the original's explicit capture clock,
+                # never its own generated title or current save time.
+                artifacts.write_json(canonical / 'request.json', {
+                    'request': {'workflow': 'meeting', 'extras': '录制开始时间：2026-01-03T02:04:05.123Z。录制结束时间：2026-01-03T03:00:00Z。'},
+                    'trace': {'source': 'desktop_recording', 'session_id': 'rec-123-abc',
+                        'input': {'source': 'desktop_recording', 'workflow': 'meeting',
+                            'recording_id': 'rec-123-abc', 'filename': 'meeting-recording-2026-01-03-02-04-05.webm'}}})
+                projected = read()
+                self.assertTrue(all(n['meeting_source']['recording_started_at'] == '2026-01-03T02:04:05.123000Z' for n in projected))
 
                 child_folder = artifacts.find_task_dir(child)
                 reference_path = child_folder / 'source_reference.json'

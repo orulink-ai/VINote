@@ -145,7 +145,7 @@ export function FeishuSettings() {
           parsed.groups.every((id: unknown) => typeof id === "string")
         )
           draft = {
-            notify_self: parsed.notify_self, auto_publish: parsed.auto_publish, groups: parsed.groups,
+            notify_self: parsed.notify_self, notify_participants: parsed.notify_participants === true, group_meeting_versions: parsed.group_meeting_versions === true, auto_publish: parsed.auto_publish, groups: parsed.groups,
             destination_config: parsed.destination_config, permission_policy: parsed.permission_policy,
             ...(Array.isArray(parsed.contacts) ? { contacts: parsed.contacts.filter((contact: { open_id?: unknown }) => contact && typeof contact.open_id === 'string' && /^ou_[A-Za-z0-9_-]+$/.test(contact.open_id)).map((contact: { open_id: string }) => ({ open_id: contact.open_id, name: '' })) } : {}),
           };
@@ -155,6 +155,8 @@ export function FeishuSettings() {
       if (!draft && dirty && value && valueOwner.current === owner)
         draft = {
           notify_self: value.notify_self,
+          notify_participants: value.notify_participants === true,
+          group_meeting_versions: value.group_meeting_versions === true,
           auto_publish: value.auto_publish,
           groups: value.groups,
           destination_config: value.destination_config,
@@ -163,7 +165,7 @@ export function FeishuSettings() {
         };
       if (revision !== editRevision.current && currentValue.current && valueOwner.current === owner) {
         const latest = currentValue.current;
-        draft = { notify_self: latest.notify_self, auto_publish: latest.auto_publish, groups: latest.groups, contacts: latest.contacts, destination_config: latest.destination_config, permission_policy: latest.permission_policy };
+        draft = { notify_self: latest.notify_self, notify_participants: latest.notify_participants === true, group_meeting_versions: latest.group_meeting_versions === true, auto_publish: latest.auto_publish, groups: latest.groups, contacts: latest.contacts, destination_config: latest.destination_config, permission_policy: latest.permission_policy };
       }
       valueOwner.current = owner;
       savedValue.current = next;
@@ -285,6 +287,8 @@ export function FeishuSettings() {
             draftKey,
             JSON.stringify({
               notify_self: next.notify_self,
+              notify_participants: next.notify_participants === true,
+              group_meeting_versions: next.group_meeting_versions === true,
               auto_publish: next.auto_publish,
               groups: next.groups,
               destination_config: next.destination_config,
@@ -312,7 +316,7 @@ export function FeishuSettings() {
     if (automaticConsentNeeded(snapshot, savedValue.current) && !accepted) {
       setConsent({ snapshot, revision: editRevision.current, current: requestGuard(statusRequest),
         destinationLabel: destinationCheck?.path?.join(' / ') || (snapshot.destination_config?.kind === 'folder' ? '所选文件夹' : snapshot.destination_config?.kind === 'wiki' ? '所选知识库' : '个人云文档'),
-        recipientLabel: [snapshot.notify_self ? '我本人' : '', ...(snapshot.contacts || []).map(contact => contact.name), ...snapshot.groups.map(id => groups.find(group => group.chat_id === id)?.name || `已选群（${id}）`)].filter(Boolean).join('、') || (snapshot.auto_publish ? '未选择通知对象：只创建文档，不发送通知。' : '未选择通知对象。'),
+        recipientLabel: [snapshot.notify_self ? '我本人' : '', snapshot.notify_participants ? '已核验的会议参会人' : '', ...(snapshot.contacts || []).map(contact => contact.name), ...snapshot.groups.map(id => groups.find(group => group.chat_id === id)?.name || `已选群（${id}）`)].filter(Boolean).join('、') || (snapshot.auto_publish ? '未选择通知对象：只创建文档，不发送通知。' : '未选择通知对象。'),
       }); return;
     }
     const current = requestGuard(statusRequest);
@@ -320,6 +324,7 @@ export function FeishuSettings() {
     try {
       const saved = await apiJson<FeishuStatus>('/api/feishu/preferences', {
         method: 'PUT', body: JSON.stringify({ notify_self: snapshot.notify_self, groups: snapshot.groups, auto_publish: snapshot.auto_publish,
+          notify_participants: snapshot.notify_participants === true, group_meeting_versions: snapshot.group_meeting_versions === true,
           destination_config: snapshot.destination_config, permission_policy: snapshot.permission_policy,
           ...(contacts ? { contacts } : {}), ...(accepted ? { automatic_delivery_consent: true } : {}),
         }),
@@ -354,7 +359,7 @@ export function FeishuSettings() {
   };
   const closingAutomaticOnly = !!value && !!savedValue.current?.auto_publish && !value.auto_publish && !automaticConsentNeeded({ ...value, auto_publish: true }, savedValue.current);
   return (
-    <div className="mx-auto flex w-full max-w-[640px] flex-col gap-6 px-6 py-8">
+    <div className="workspace-page min-w-0 max-w-5xl">
       <div>
         <PageReturn to="/connections" label="返回插件" />
         <div className="mt-4">
@@ -377,7 +382,7 @@ export function FeishuSettings() {
           <AlertDescription>{message}</AlertDescription>
         </Alert>
       )}
-      <Tabs defaultValue="authorization" activationMode="manual" className="flex flex-col gap-4">
+      <Tabs defaultValue="authorization" activationMode="manual" className="flex min-w-0 flex-col gap-4">
         <TabsList aria-label="飞书设置" className="h-auto flex-wrap self-start">
           <TabsTrigger value="authorization">授权</TabsTrigger>
           <TabsTrigger value="delivery">会议纪要发送设置</TabsTrigger>
@@ -530,9 +535,9 @@ export function FeishuSettings() {
           {(!value.connected || value.expired || verificationUnavailable) && <Alert><AlertDescription>请先在授权页签连接飞书并核验权限，再设置会议纪要发送。</AlertDescription></Alert>}
           {value.connected && !value.expired && !verificationUnavailable && <><section
             aria-labelledby="delivery-preferences-heading"
-            className="overflow-hidden rounded-2xl border border-border/80 bg-background"
+            className="grid min-w-0 overflow-hidden rounded-2xl border border-border/80 bg-background lg:grid-cols-2"
           >
-            <header className="border-b bg-muted/40 px-5 py-4">
+            <header className="border-b bg-muted/40 px-5 py-4 lg:col-span-2">
               <h2 id="delivery-preferences-heading" className="font-semibold">
                 发布偏好
               </h2>
@@ -540,10 +545,11 @@ export function FeishuSettings() {
                 设置文档位置和通知对象。自动交付需在这台桌面单独确认启用，手动发布仍在详情确认。
               </p>
             </header>
-            <section className="flex flex-col gap-3 border-b p-5">
+            <section className="flex min-w-0 flex-col gap-3 border-b p-5 lg:border-r">
               <h3 className="text-sm font-medium">文档存放位置</h3>
               <FeishuDestinationPicker
-                key={JSON.stringify([owner, identityVisit])}
+                key={JSON.stringify([owner, identityVisit, 'connection_binding_hash' in value ? value.connection_binding_hash : null])}
+                connectionKey={'connection_binding_hash' in value && typeof value.connection_binding_hash === 'string' ? value.connection_binding_hash : undefined}
                 value={value.destination_config || { kind: "personal" }}
                 capabilities={verificationUnavailable ? undefined : value.capabilities}
                 disabled={busy || !value.connected || value.expired}
@@ -568,7 +574,7 @@ export function FeishuSettings() {
                 </p>
               )}
             </section>
-            <section className="border-b p-5">
+            <section className="min-w-0 border-b p-5">
               <FieldGroup>
                 <FieldSet disabled={busy || !value.connected || value.expired}>
                   <FieldLegend>{cliMode ? '文档通知' : '机器人通知'}</FieldLegend>
@@ -582,6 +588,11 @@ export function FeishuSettings() {
                     />
                     <FieldLabel htmlFor="feishu-self">发给我本人</FieldLabel>
                   </Field>
+                  <Field orientation="horizontal">
+                    <Checkbox id="feishu-participants" checked={value.notify_participants === true} onCheckedChange={checked => change({ notify_participants: checked === true })} />
+                    <FieldLabel htmlFor="feishu-participants">发给会议参会人</FieldLabel>
+                  </Field>
+                  <FieldDescription>仅通知已明确关联并核验的飞书参会人；不会按转写姓名猜测接收人。可同时通知本人。</FieldDescription>
                   <Field orientation="horizontal">
                     <Checkbox
                       id="feishu-groups-enabled"
@@ -627,7 +638,7 @@ export function FeishuSettings() {
                 </FieldSet>
               </FieldGroup>
             </section>
-            <section className="bg-muted/20 p-5">
+            <section className="min-w-0 bg-muted/20 p-5 lg:col-span-2">
               <FieldSet disabled={busy || !value.connected || value.expired}>
                 <Field orientation="horizontal">
                   <FieldLabel htmlFor="feishu-auto">自动交付新纪要</FieldLabel>
@@ -645,7 +656,12 @@ export function FeishuSettings() {
                     ? "仅这台桌面今后成功生成并保存的新个人会议纪要自动交付。历史稿、编辑稿和失败任务不发送；请保持应用运行。"
                     : "当前服务暂不支持经确认的自动交付，可在详情页手动发布。"}
                 </FieldDescription>
-                <FieldDescription>{!value.notify_self && !value.groups.length && !value.contacts?.length ? '未选择通知对象：自动交付只创建文档，不发送通知。' : '通知所选联系人和群时会授予文档阅读权限。'}</FieldDescription>
+                <Field orientation="horizontal">
+                  <Checkbox id="feishu-group-versions" checked={value.group_meeting_versions === true} disabled={!canEnableAutomatic && !value.group_meeting_versions} onCheckedChange={checked => change({ group_meeting_versions: checked === true })} />
+                  <FieldLabel htmlFor="feishu-group-versions">按会议归组历史版本</FieldLabel>
+                </Field>
+                <FieldDescription>知识库中同一会议的后续纪要放在该会议容器下，保留每份历史稿；不会按相似标题合并不同会议。</FieldDescription>
+                <FieldDescription>{!value.notify_self && !value.notify_participants && !value.groups.length && !value.contacts?.length ? '未选择通知对象：自动交付只创建文档，不发送通知。' : '通知所选联系人和群时会授予文档阅读权限。'}</FieldDescription>
                 <FieldDescription>
                   当前服务不支持更新已有飞书链接；新修订发布为新文档，历史文档继续保留。
                 </FieldDescription>
@@ -654,7 +670,7 @@ export function FeishuSettings() {
           </section>
           <div
             aria-label="保存发布偏好"
-            className="sticky bottom-0 flex items-center justify-between gap-4 rounded-xl border bg-background/95 px-5 py-4 shadow-sm backdrop-blur-sm"
+            className="sticky bottom-0 flex flex-wrap items-center justify-between gap-4 rounded-xl border bg-background/95 px-5 py-4 shadow-sm backdrop-blur-sm"
           >
             <span className="text-sm text-muted-foreground">
               {saveFailed && dirty
@@ -697,6 +713,7 @@ export function FeishuSettings() {
           <div className="flex flex-col gap-3 text-sm">
             <p>文档位置：{consent?.destinationLabel}</p>
             <p>通知对象：{consent?.recipientLabel}</p>
+            <p>会议版本：{consent?.snapshot.group_meeting_versions ? '在知识库按会议归组，保留历史稿' : '不启用会议版本归组'}</p>
             <p>{consent?.snapshot.auto_publish ? '通知联系人或群会授予文档阅读权限。断开飞书或关闭自动交付将停止尚未启动的任务；自动交付需要应用保持运行。' : '当前仅保存预设。将来开启自动交付时需要再次确认目的地、通知对象和阅读权限。'}</p>
           </div>
           <AlertDialogFooter>

@@ -25,6 +25,46 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); vi.restoreAllMocks() });
 
+it('defaults participant notification/version grouping off and freezes both beside self notification in explicit consent', async () => {
+  mount(); await ready();
+  const participants = screen.getByRole('checkbox', { name: '发给会议参会人' });
+  const versions = screen.getByRole('checkbox', { name: '按会议归组历史版本' });
+  expect(participants).not.toBeChecked(); expect(versions).not.toBeChecked();
+  fireEvent.click(screen.getByRole('checkbox', { name: '发给我本人' })); fireEvent.click(participants); fireEvent.click(versions);
+  fireEvent.click(screen.getByRole('switch', { name: '自动交付新纪要' })); await verify();
+  const draft = JSON.parse(sessionStorage.getItem('vinote:feishu-preferences:auto-owner')!);
+  expect(draft).toMatchObject({ notify_self: true, notify_participants: true, group_meeting_versions: true });
+  fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
+  const confirmation = await screen.findByRole('alertdialog');
+  expect(confirmation).toHaveTextContent('我本人、已核验的会议参会人');
+  expect(confirmation).toHaveTextContent('在知识库按会议归组，保留历史稿');
+  expect(puts()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: '取消，保留修改' }));
+  expect(puts()).toHaveLength(0); expect(participants).toBeChecked();
+  vi.mocked(apiJson).mockResolvedValue({ ...base, auto_publish: true, notify_self: true, notify_participants: true, group_meeting_versions: true });
+  fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
+  fireEvent.click(await screen.findByRole('button', { name: '确认自动交付并保存' }));
+  await waitFor(() => expect(puts()).toHaveLength(1));
+  expect(JSON.parse(puts()[0][1]!.body as string)).toMatchObject({ notify_self: true, notify_participants: true, group_meeting_versions: true, automatic_delivery_consent: true });
+});
+
+it.each(['发给会议参会人', '按会议归组历史版本'])('changing %s on enabled automatic delivery requires another explicit consent', async label => {
+  vi.mocked(feishuStatus).mockResolvedValue({ ...base, auto_publish: true });
+  mount(); await ready(); fireEvent.click(screen.getByRole('checkbox', { name: label })); await verify();
+  fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
+  expect(await screen.findByRole('alertdialog')).toBeVisible(); expect(puts()).toHaveLength(0);
+  fireEvent.click(screen.getByRole('button', { name: '取消，保留修改' })); expect(puts()).toHaveLength(0);
+});
+
+it('participant and version drafts never migrate to another owner', async () => {
+  mount(); await ready(); fireEvent.click(screen.getByRole('checkbox', { name: '发给会议参会人' })); fireEvent.click(screen.getByRole('checkbox', { name: '按会议归组历史版本' }));
+  act(() => useAuthStore.setState({ user: { id: 'other', email: 'other@example.invalid' } }));
+  await waitFor(() => expect(feishuStatus).toHaveBeenCalledTimes(2)); await ready();
+  expect(screen.getByRole('checkbox', { name: '发给会议参会人' })).not.toBeChecked();
+  expect(screen.getByRole('checkbox', { name: '按会议归组历史版本' })).not.toBeChecked();
+  expect(sessionStorage.getItem('vinote:feishu-preferences:other')).toBeNull(); expect(puts()).toHaveLength(0);
+});
+
 it('legacy background capability alone cannot enable automatic delivery', async () => {
   vi.mocked(feishuStatus).mockResolvedValue({ ...base, automatic_delivery_protocol: undefined });
   mount(); await ready(); expect(screen.getByRole('switch', { name: '自动交付新纪要' })).toBeDisabled(); expect(puts()).toHaveLength(0);
@@ -140,8 +180,13 @@ it('requires new consent when enabled recipients change, while disabling saves d
 });
 it('changing an enabled destination requires a new explicit confirmation', async () => {
   vi.mocked(feishuStatus).mockResolvedValue({ ...base, auto_publish: true, destination_config: { kind: 'folder', folder_token: 'old-folder' } });
-  mount(); await ready(); fireEvent.change(screen.getByRole('combobox', { name: '文档位置类型' }), { target: { value: 'personal' } });
-  await verify(); fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
+  vi.mocked(apiJson).mockImplementation(async path => path.includes('/destinations?') ? { items: [], has_more: false, page_token: '' } : { kind: 'personal', path: ['个人云文档'], can_attempt_create: true });
+  mount(); await ready(); fireEvent.click(screen.getByRole('button', { name: '选择文档位置' }));
+  await waitFor(() => expect(screen.getByRole('combobox', { name: '文档位置类型' })).toBeEnabled());
+  fireEvent.change(screen.getByRole('combobox', { name: '文档位置类型' }), { target: { value: 'personal' } });
+  fireEvent.click(screen.getByRole('button', { name: '确认位置并核验' }));
+  await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull());
+  fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
   expect(await screen.findByRole('alertdialog')).toHaveTextContent('文档位置：个人云文档'); expect(puts()).toHaveLength(0);
 });
 it('an open consent dialog cannot submit after the owner changes', async () => {

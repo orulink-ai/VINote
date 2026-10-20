@@ -40,7 +40,7 @@ it('recovers stable migration source IDs from retained versions when media_id is
   expect(JSON.stringify(state)).toBe(snapshot)
   expect(remote.versions).toHaveLength(2)
 })
-it('keeps different migrated workspace objects and all their histories reachable in one meeting', () => {
+it('keeps migrated objects without verified sources in the pending view with every object reachable', () => {
   const first = shared('desktop-app-source-task'), second = shared('mobile-app-source-task-v2')
   state.workspace.items = [first, second]; state.workspace.details = { [first.key]: first, [second.key]: second }
   const { result } = renderHook(() => useLibraryNotes())
@@ -49,10 +49,9 @@ it('keeps different migrated workspace objects and all their histories reachable
   expect(rows[0].notes.map(row => row.workspaceKey)).toEqual([first.key, second.key])
   const open = vi.fn()
   render(<MeetingWorkbench notes={result.current} recordings={[]} loading={false} onOpenNote={open} onDeleted={vi.fn()} />)
-  expect(screen.getAllByRole('button', { name: '旧会议 · 已完成' })).toHaveLength(1)
-  expect(screen.getByText('关联纪要（2条）')).toBeInTheDocument()
-  fireEvent.click(screen.getByText('关联纪要（2条）'))
-  expect(screen.getByRole('region', { name: '关联纪要' })).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '旧会议 · 已完成' })).not.toBeInTheDocument()
+  fireEvent.mouseDown(screen.getByRole('tab', { name: '待归档' }), { button: 0, ctrlKey: false })
+  expect(screen.getByRole('region', { name: '待归档内容' })).toBeInTheDocument()
   expect(screen.queryByRole('region', { name: '关联原录制' })).not.toBeInTheDocument()
   const history = screen.getAllByRole('button', { name: /查看纪要 · 旧会议/ })
   fireEvent.click(history[0]); fireEvent.click(history[1])
@@ -71,8 +70,9 @@ it('separates related minutes from the retained recording without inventing gene
 })
 it('retains known date-only metadata without fabricating a midnight time', () => {
   render(<MeetingWorkbench notes={[{ ...note('date-only'), createdAt: '2026-10-10' }]} recordings={[]} loading={false} onOpenNote={vi.fn()} onDeleted={vi.fn()} />)
+  fireEvent.mouseDown(screen.getByRole('tab', { name: '待归档' }), { button: 0, ctrlKey: false })
   expect(screen.getByText('2026-10-10（时间未记录）')).toBeInTheDocument()
-  expect(screen.queryByText(/00:00/)).not.toBeInTheDocument()
+  expect(screen.getByText('2026-10-10（时间未记录）').parentElement).not.toHaveTextContent('00:00')
 })
 it('keeps unrelated same-title same-content same-date meetings separate', () => {
   expect(buildMeetingRows([], [note('first', 'task-first'), note('second', 'task-second')])).toHaveLength(2)
@@ -111,4 +111,21 @@ it('preserves failed processing and every original while grouping the known task
   expect(rows[0].state).toBe('需处理')
   expect(rows[0].recordings).toHaveLength(2)
   expect(JSON.stringify(input)).toBe(before)
+})
+
+it('loads archived project snapshots without using their archive flag as meeting association', () => {
+  state.local = [{ ...note('confirmed-source', 'canonical'), meetingSource: { ownerId: 'owner', canonicalTaskId: 'canonical' } }]
+  const linked = { ...shared('desktop-confirmed-source', [], { project: 'Review' }), archived: true }
+  const pending = { ...shared('unlinked-project-content', [], { project: 'Review' }), archived: true }
+  state.workspace.items = [linked, pending]
+  state.workspace.details = { [linked.key]: linked, [pending.key]: pending }
+  const { result } = renderHook(() => useLibraryNotes())
+  expect(result.current).toHaveLength(2)
+  expect(result.current.every(note => note.archived && note.project === 'Review')).toBe(true)
+  const rows = buildMeetingRows([], result.current, {}, 'owner')
+  expect(rows.filter(row => row.kind === 'meeting')).toHaveLength(1)
+  expect(rows.filter(row => row.kind === 'unlinked').flatMap(row => row.notes.map(note => note.id)))
+    .toEqual(['unlinked-project-content'])
+  expect(state.workspace.details[linked.key].archived).toBe(true)
+  expect(state.workspace.details[pending.key].archived).toBe(true)
 })
