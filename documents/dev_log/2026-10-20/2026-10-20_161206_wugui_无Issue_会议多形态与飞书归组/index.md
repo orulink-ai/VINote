@@ -122,3 +122,9 @@
 - 当前目录真实只读核验：deepseek-v4.1-flash与codex/gpt-6-luna均available，但catalog没有vision或image_generation明确声明。已有同owner/Origin/Luna协议2完成回执supported=true，因此只可确认Luna图片输入已验证，不以目录缺字段断言DeepSeek不支持，也不把看图当生图。
 - 更正上一段预览判断：原生file video为preload=none，初始AX“无法播放媒体/0”不足以判失败。主线程实际点击播放后出现真实变化帧；UIA时间滑块可设1500秒。尚未据此声称已顺序看完全片。独立headless同源A/B各50%、90%、末尾前2秒六处均解码1920x1080帧、Range206，无media error，原件/缓存大小mtime不变；证据.desktop-build/meeting-delivery-20261020/probe-ab-seek-readonly.json。
 - 用户追加未来版本可明确重新ASR，默认复用原ASR+原LLM。此项正在独立调查，不将当前模型默认实现冒充满足；本轮真实验收继续禁止ASR调用。
+
+### 2026-10-20 18:44:19 +08:00｜主线程：并发能力回执修复与结果边界
+
+- 完成的image-input-checks协议2回执改为稳定、身份/模型/Origin/终态/TTL严格核验后无锁读取；pending/unknown/corrupt/expired仍锁内核验并拒绝重复付费探测。新probe用独占创建预约，旧原始回执不覆盖。跨进程占锁、错误绑定、异常时间及路径变化等38项测试通过，主线程diff审查通过。
+- A07（39c775f9-3e39-427f-8706-3cd882bec1ea，详细文字）与B简介01（132e3d1a-49de-4bdf-907c-43d9581fdec2）真实并发；原始模型working_draft已返回，但都在JSON结构解析处失败，未进入全源review、无final，不评分。失败证据原样保留，未将draft当终稿，未自动补调用或重放。B详细02连接中断约5分38秒，同样无稿可评。
+- 新版本默认原LLM调查确认当前UI仍取currentConfig.llm_model，不满足新要求，独立adapter/UI正在改；显式fresh-ASR执行契约单独开发、离线验证，不拿默认复用缓存冒充重新识别。当前所有真实生成均设ASR禁止guard。
