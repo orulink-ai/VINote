@@ -490,3 +490,7 @@ P7接线后原生继续显示既有V15分镜，打开“生成新版本”实际
 文件库B原件详情显示26:25及原件管理操作，点击“查看关联内容”实际导航到带locate_note/locate_task的会议列表，定位原18:02:18档案及其关联旧稿，没有跳到笔记列表。返回文件库后恢复同一source_video.webm详情、meeting用途及原查询。三个往返截图 `file-library-meeting-link-after-p7.png` / `file-library-located-meeting-after-p7.png` / `file-library-return-restored-after-p7.png`，源文件原历史标题保留，不把其占位词当作当前会议状态。
 
 V16四个新受控operation全部终态，47项runtime无漂移；仅A精简信息图成功610.4秒。普通保存校验原raw7/result/DB逐字一致，note254abf7d-4a70-5f26-aeda-f3218136f533、正文SHA `77e4c21d79f8df8d3943f593c47ae3f6d24bf53641b7fb1df959aafb8e5658a3`。这是受控service提交及普通保存，不冒充原生提交/自动保存。原生实际打开该新稿，两个图面节点显示，原视频28:32；实际SaveAs保存 `native-v16-evidence/A-info-v16.svg` / `.png`并显示成功反馈。SVG SHA `137de3931d0d2131f0b3ea5a58407c317aaa2d7b8b2f8569f6a95735faa5a991`，PNG SHA `a91c92bccb027ceff0256c9d739620e420ea20b60e6bfbfe5ac1afa23e170255`，独立呈现评分另记。未改模型正文、覆盖旧版本或创建飞书文档/通知；其它三个失败不补成品分。
+
+实际两文件独审通过，呈现10分、正文80分保持，总90/100；只用相同实际SVG做离线光栅化对比，其PNG字节与实际导出PNG相同，不以离线重渲染替代原生导出。两张成功反馈是相同UI状态/相同截图hash，不另充两个独立点击证明。回到原生会议页仍只有2场，A29/B18个纪要对象；新稿位于原15:41:05档案，收起后两个时间档案均可见。截图 `meetings-v16-two-dossiers.png` / `meetings-v16-two-dossiers-collapsed.png`。
+
+最终P7全量后端复跑4572通过、3跳过、19 subtests，584.39秒；391个Python源码及47项runtime起止指纹不变。首次27失败、长测试路径归因及双字段夹具初修仍3失败均保留，详见质量进度；未放宽来源或交付guard。最终前端1654通过、桌面脚本23通过及文档构建通过（最新10.92秒）另列，全部为源码/开发应用验收，尚非正式安装包、100分内容或目标Wiki交付验收。
