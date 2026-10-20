@@ -46,6 +46,9 @@ def host(blocks, presentation):
     ['# Type proposal', '```cpp', 'std::vector<int> candidate;', '```'],
     ['```html\n<script>literal example only</script>\n```'],
     ['Entity literal &lt;Widget&gt; remains visible.'],
+    [r'Use \<Widget> as the literal type.'],
+    ['```cpp\nstd::vector<int> candidate;\n````'],
+    ['```cpp\nstd::vector<int> candidate;'],
     ['See <https://example.org/types> for the proposal.'],
 ])
 def test_actual_host_preserves_code_literals_and_raw_review(blocks, presentation):
@@ -68,7 +71,7 @@ def test_actual_host_preserves_code_literals_and_raw_review(blocks, presentation
     ['```cpp\nstd::vector<int> candidate;\n```', 'Then <b>raw HTML</b>.'],
     ['```cpp', 'std::vector<int> candidate;', '```', '<img src="https://invalid.test/x">'],
     ['An unmatched ` does not protect <span>HTML</span>.'],
-    [r'A backslash \<Widget> still produces raw HTML with the installed parser.'],
+    ['```{title="`"}\n<img src="https://invalid.test/x">\n```'],
     ['<div', 'data-mode="raw">HTML across blocks</div>'],
 ])
 def test_actual_host_still_rejects_genuine_html_and_misleading_code_delimiters(blocks, presentation):

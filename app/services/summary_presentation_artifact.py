@@ -43,8 +43,10 @@ def render_presentation(artifacts, context, markdown):
         shutil.copyfile(frame.image_path, destination)
         if _frame_digest(destination) != expected:
             raise ValueError('图文尚未完成：截图复制核验失败')
-        label = f"{figure['caption']} · 原视频 {int(frame.timestamp) // 60:02d}:{int(frame.timestamp) % 60:02d}"
-        markdown = markdown.replace(figure['frame_ref'], f'![{label}](/api/task/{context.task_id}/artifacts/screenshots/{destination.name})', 1)
+        from app.llm.meeting_markdown import figure_markdown
+        image = figure_markdown(figure['caption'], frame.timestamp,
+            f'/api/task/{context.task_id}/artifacts/screenshots/{destination.name}')
+        markdown = markdown.replace(figure['frame_ref'], image, 1)
     return markdown
 
 

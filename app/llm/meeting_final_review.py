@@ -15,6 +15,7 @@ from app.llm.meeting_final_claim_ledger import (
 from app.llm.meeting_presentation import presentation_state
 from app.llm.video_material import visual_source_bindings
 from app.llm.meeting_fact_protocol import prepare as prepare_v3
+from app.llm.meeting_markdown import figures_are_images
 
 
 _CORE = {'protocol', 'blocks', 'claims'}
@@ -72,6 +73,7 @@ def _illustrated_figures(review, ledger):
     for figure in converted:
         passage = figure['after_passage']
         markdown = markdown.replace(passage, passage + '\n\n' + figure['frame_ref'], 1)
+    _need(figures_are_images(markdown, converted), 'invalid_figure_placement')
     return markdown, converted
 
 

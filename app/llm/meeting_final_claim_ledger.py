@@ -11,11 +11,8 @@ from dataclasses import dataclass
 import json
 import re
 
-from markdown import Markdown
-from markdown.inlinepatterns import HtmlInlineProcessor
-from markdown.preprocessors import HtmlBlockPreprocessor
-
 from app.llm.meeting_fact_protocol import REJECTIONS, _evidence, prepare as prepare_v3
+from app.llm.meeting_markdown import inspect_report
 
 
 class FinalLedgerError(ValueError):
@@ -64,31 +61,6 @@ def _source_evidence(rows):
         raise FinalLedgerError('invalid_final_evidence') from None
 
 
-class _RejectHtmlBlock(HtmlBlockPreprocessor):
-    def run(self, lines):
-        # fenced_code (priority 25) already stashed its escaped code output.
-        # Only raw HTML newly recognized by html_block (20) is disallowed.
-        before = len(self.md.htmlStash.rawHtmlBlocks)
-        result = super().run(lines)
-        _need(len(self.md.htmlStash.rawHtmlBlocks) == before, 'invalid_block_content')
-        return result
-
-
-class _RejectHtmlInline(HtmlInlineProcessor):
-    def handleMatch(self, match, data):
-        # The parser has already recognized escapes, code spans and autolinks.
-        raise FinalLedgerError('invalid_block_content')
-
-
-def _check_markdown_html(text):
-    """Reject actual raw HTML tokens without changing the supplied Markdown."""
-    parser = Markdown(extensions=['fenced_code'])
-    parser.preprocessors.register(_RejectHtmlBlock(parser), 'html_block', 20)
-    parser.inlinePatterns.register(_RejectHtmlInline(parser.inlinePatterns['html'].pattern, parser), 'html', 90)
-    # Generated HTML is discarded: validation never rewrites the body or raw4.
-    parser.convert(text)
-
-
 def validate_final_ledger(value, material, *, depth):
     """Validate a whole response; return nothing on any missing/invalid row.
 
@@ -120,7 +92,10 @@ def validate_final_ledger(value, material, *, depth):
                             block['markdown']), 'invalid_block_content')
     markdown = '\n\n'.join(block['markdown'] for block in blocks.values()).strip()
     # Code delimiters can span report blocks; parse the actual final body once.
-    _check_markdown_html(markdown)
+    try:
+        visible_blocks = inspect_report(list(blocks.values()))
+    except ValueError:
+        raise FinalLedgerError('invalid_block_content') from None
     claims = _index(value['claims'], 'id', 'invalid_claim_ids')
     _need(set(original) <= set(claims), 'missing_original_claims')
     required = {'id', 'field', 'text', 'material', 'disposition', 'block_ids', 'evidence'}
@@ -139,6 +114,7 @@ def validate_final_ledger(value, material, *, depth):
               and disposition in {'included', 'rejected', 'omitted_for_depth'}, 'invalid_disposition')
         if disposition == 'included':
             _need(bool(ids), 'included_without_block')
+            _need(all(key in visible_blocks for key in ids), 'included_without_visible_block')
             claim['evidence'] = _source_evidence(claim['evidence'])
         else:
             _need(not ids and _text(claim.get('reason')), 'invalid_exclusion')
@@ -195,7 +171,7 @@ CORE_ENVELOPE_RULE = ('The only top-level fields are protocol, blocks and claims
 REVIEW_PROTOCOL = '''FINAL CLAIM LEDGER PROTOCOL 4. Return exactly one JSON object, without a code fence or surrounding prose:
 {"protocol":4,"blocks":[{"id":"B1","markdown":"one reviewed report paragraph or heading"}],"claims":[{"id":"C1","field":"condition","text":"one independently source-supported proposition","material":true,"disposition":"included","block_ids":["B1"],"evidence":[{"kind":"asr_span","source_ref":"[ASR:0001]","quote":"unchanged source clause"}]}]}.
 This is a schema example, not meeting facts. ''' + CORE_ENVELOPE_RULE + '''
-Write the report once in ordered blocks. Markdown belongs only inside blocks[].markdown; do not put internal ASR/FRAME IDs, images, screenshot placeholders or raw HTML there. Reader-facing report and claim text use the requested output language; evidence quotes and proper names retain their original source spelling and language.
+Write the report once in ordered blocks. Markdown belongs only inside blocks[].markdown; do not put internal ASR/FRAME IDs, images, screenshot placeholders or raw HTML there. Footnotes are unsupported: outside code do not use an unescaped [^ prefix for references or definitions; put reviewed facts in ordinary visible blocks. Escaped text and code literals are allowed. Reader-facing report and claim text use the requested output language; evidence quotes and proper names retain their original source spelling and language.
 Every original draft claim ID must appear exactly once in claims, even when rejected or omitted. Preserve each original ID, field and boolean material flag; do not renumber it, relabel its field, lower material=true or replace it with a new ID to bypass accounting. Correct its text and evidence against the complete original source, not against a previous summary. Merged duplicates are included and may share block_ids. Each included claim must retain its actual relation and qualifiers in the linked blocks, not an unrelated neighboring paragraph. New source-supported propositions use new globally unique IDs and the exact same row shape, including their own disposition, block_ids and evidence. They need no second audit entry or separate definition table. Define and account for each proposition together.
 Each row requires id/field/text/material/disposition/block_ids/evidence. Included requires at least one real block ID and a complete valid final evidence list. Explicitly provide the effective evidence, including for original claims; it replaces any mistaken draft evidence, never merges with it. verification=unverified in the draft is not proof. Rejected requires block_ids=[], reason_code=unclear_entity/unsupported/misread/incidental/non_meeting, a specific nonempty reason and valid actual-source evidence. unclear_entity applies only to entity claims, never their independently clear quantities, conditions or deadlines. Corrected or rejection evidence may locate the actual source instead of repeating a mistaken draft reference. Rejection is not a way to shorten valid important content.
 omitted_for_depth requires block_ids=[] and a specific selection reason. Detailed output cannot omit a material=true claim for depth, including a new claim. An omitted row may use evidence=[] rather than invent support for unpublished material; any evidence supplied must still be valid. Working material is fallible even when the draft marked material=true. Use specific source reasons for non_meeting, incidental or garbled candidates (misread for garbled text), not an omission disguised as rejection. An unknown owner, missing final decision or uncertain outcome alone does not reject a supported request, proposal or condition.
