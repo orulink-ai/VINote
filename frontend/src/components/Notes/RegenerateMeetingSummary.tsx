@@ -215,6 +215,7 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
               <ToggleGroupItem value="reuse" disabled={!confirmation?.context.asr_modes.reuse.available}>复用已有转写（默认）</ToggleGroupItem>
               <ToggleGroupItem value="fresh" disabled={!confirmation?.context.asr_modes.fresh.available}>重新识别 ASR{!confirmation?.context.asr_modes.fresh.available ? '（不可用）' : ''}</ToggleGroupItem>
             </ToggleGroup>
+            {confirmation?.context.asr_modes.reuse.available === false && <p role="status" className="text-sm text-destructive">{confirmation.context.asr_modes.reuse.reason || '已有转写暂不能核验，未开始生成。'}不会自动重新识别。</p>}
             <FieldDescription>{confirmation?.context.asr_modes.fresh.reason || '重新识别需明确选择 ASR 和 LLM，并确认额外额度。'}</FieldDescription>
           </Field>
           <Field><FieldLabel id="summary-llm-mode">总结模型来源</FieldLabel>

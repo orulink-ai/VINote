@@ -139,7 +139,9 @@ describe("NoteEditor transcript evidence", () => {
     expect(screen.getAllByRole("heading", { name: "Meeting note", level: 1 })).toHaveLength(1);
     expect(screen.queryByRole("textbox", { name: "Meeting title" })).not.toBeInTheDocument();
     const primary = screen.getByRole("group", { name: "Primary content actions" });
-    expect(within(primary).getAllByRole("button")).toHaveLength(5);
+    expect(within(primary).getAllByRole("button")).toHaveLength(6);
+    expect(within(primary).getByRole("button", { name: "生成新版本" })).toBeVisible();
+    expect(within(primary).getByRole("button", { name: "生成新版本" }).closest('details')).toBeNull();
     expect(within(primary).getByRole("button", { name: "Edit" })).toBeInTheDocument();
     expect(within(primary).getByRole("button", { name: "发布到飞书" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "历史版本" })).not.toBeVisible();

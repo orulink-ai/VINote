@@ -39,6 +39,19 @@ it('uses one honest task-only entry with reuse/inherit selected and fresh unavai
   expect(screen.getByRole('combobox', { name: '本次总结模型' })).toHaveValue(context.original_llm.model_name)
 })
 
+it('explains unavailable reusable material without selecting fresh ASR or submitting', async () => {
+  mock.mockResolvedValue({ ...context, asr_modes: {
+    reuse: { available: false, reason: '原始画面材料尚不能核验。' },
+    fresh: { available: true },
+  } })
+  show(); await open()
+  expect(screen.getByRole('status')).toHaveTextContent('原始画面材料尚不能核验。不会自动重新识别。')
+  expect(screen.getByRole('radio', { name: '复用已有转写（默认）' })).toHaveAttribute('aria-checked', 'true')
+  expect(screen.getByRole('radio', { name: '重新识别 ASR' })).toHaveAttribute('aria-checked', 'false')
+  expect(screen.getByRole('button', { name: '确认生成新版本' })).toBeDisabled()
+  expect(mock.mock.calls.map(([path]) => path)).toEqual(['/api/task/parent/meeting-version-context'])
+})
+
 it('requires explicit real ASR and LLM choices plus extra allowance consent for injected fresh mode', async () => {
   const freshContext = { ...context, asr_modes: { reuse: { available: true }, fresh: { available: true,
     context_revision: 'd'.repeat(64), presentation_options: { text: { available: true } } } } }

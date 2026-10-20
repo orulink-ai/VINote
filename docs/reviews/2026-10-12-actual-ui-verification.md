@@ -268,3 +268,10 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 实际点击“导出 HTML”，系统“另存为”对话框选择唯一私有目标，保存后反馈“HTML 纪要已保存到所选位置”。文件 `.desktop-build/meeting-delivery-20261020/exports/A-html-detailed-01.html`，4353字节，SHA256 `aeeb2ad6d67362ad788f924bfbb026ea9a7e04a34d2c0561dc1513bd10efb63f`；包含完整正文与 default-src none 等 CSP。没有覆盖原件或导出播放派生缓存。
 - 系统对话框的 AX focused_element 报告停留搜索框，实际截图显示文件名控件；按可见文件名选择后输入并刷新确认路径，再保存。未按失效 AX 索引盲点或将初始按钮等待当作失败。
 - 原生预览和导出通过不代表正文达到100分。独立音画对照评分为84/100；实际 LLM 有型号/数值/关系错误和遗漏，保留原稿，不人工修稿冒充模型结果。
+
+### 2026-10-20 · 生成新版本入口与未就绪原因
+
+- 1280×822 原生详情展开“内容操作”后，底部生成入口被内部高度和阅读区边界遮住。将同一个 RegenerateMeetingSummary 实例移到顶部主要操作栏，不添加第二个入口或更改提交逻辑；HMR 后实际可见，点击后系统读取来源，出现完整确认弹窗。
+- 实际弹窗保持“复用已有转写”和“沿用所选纪要模型”默认，显示原版本 codex/gpt-6-luna；详略和五种呈现形式可见。未点击确认生成、未提交新任务或ASR。
+- 此次实际暴露后续版本 bug：HTML 新子任务的视频证据未能沿用，GET 返回 summary_visual_evidence_unavailable，外层提供 fresh capability 导致 reuse=false。保留原件和126076字节转写。主线正在修复来源绑定；未改为自动 fresh 或读取旧纪要正文。
+- UI补充复用不可用原因及“不会自动重新识别”，避免只有disabled确认按钮。组件与详情组合83 passed，TypeScript通过；不据此宣称上述后端关联bug已修复。
