@@ -3,6 +3,7 @@ import type { FormattingReceipt } from './feishuFormatting';
 import { useAuthStore } from '@/stores/authStore';
 import { publishScope, markPublishAttempt, type PublishAttempt } from './feishuPublishReceipt';
 import { createConnectorPluginStore } from './connectorPlugins';
+import { feishuVerificationUnavailable } from './feishuConnectionState';
 
 export type FeishuDestination =
   | { kind: "personal" }
@@ -20,6 +21,10 @@ export type DestinationCheck = FeishuDestination & {
   error_code: string;
 };
 export type FeishuStatus = {
+  automatic_delivery_protocol?: number;
+  automatic_delivery?: { policy_id: string | null; enabled: boolean };
+  device_auto_enabled?: boolean;
+  contacts?: FeishuPreferenceContact[];
   publish_receipt_protocol?: number;
   contact_selection_protocol?: number;
   recipient_access_protocol?: number;
@@ -43,6 +48,23 @@ export type FeishuStatus = {
 export type FeishuAuthorization = { url: string; qr_data_url: string; expires_at: number };
 export type FeishuGroup = { chat_id: string; name: string };
 export type FeishuContact = { open_id: string; selection_token: string; name?: string; expiresAt?: number };
+export type FeishuPreferenceContact = { open_id: string; name: string; selection_token?: string; expiresAt?: number };
+// Preferences are a separate contract from one-shot manual publication proofs.
+export function preferenceContacts(contacts: FeishuPreferenceContact[], saved: FeishuPreferenceContact[]) {
+  const known = new Set(saved.map(contact => contact.open_id));
+  return contacts.map(contact => {
+    if (!/^ou_[A-Za-z0-9_-]+$/.test(contact.open_id)) throw new Error('联系人未核验，请重新搜索并选择');
+    if (known.has(contact.open_id)) return { open_id: contact.open_id };
+    if (!contact.selection_token || !contact.name?.trim() || !contact.expiresAt || contact.expiresAt <= Date.now()) throw new Error('新联系人选择已过期，请重新搜索并选择后保存');
+    return { open_id: contact.open_id, selection_token: contact.selection_token };
+  });
+}
+type AutomaticTarget = Pick<FeishuStatus, 'auto_publish' | 'notify_self' | 'groups' | 'contacts' | 'destination_config' | 'permission_policy'>;
+export function automaticConsentNeeded(next: AutomaticTarget, saved?: AutomaticTarget) {
+  const target = (value: AutomaticTarget) => JSON.stringify([value.destination_config || { kind: 'personal' }, value.permission_policy || 'private', value.notify_self, [...value.groups].sort(), (value.contacts || []).map(contact => contact.open_id).sort()]);
+  const contactIds = (value?: AutomaticTarget) => JSON.stringify([...new Set((value?.contacts || []).map(contact => contact.open_id))].sort());
+  return contactIds(next) !== contactIds(saved) || next.auto_publish && (!saved?.auto_publish || target(next) !== target(saved));
+}
 export type FeishuContactPage = { items: FeishuContact[]; has_more: boolean; page_token: string; selection_expires_in: number };
 export const contactRecipients = (contacts: FeishuContact[]) => contacts.map(({ open_id, selection_token }) => ({ open_id, selection_token }));
 export const contactsValid = (contacts: FeishuContact[]) => contacts.every(item => !!item.name?.trim() && !!item.selection_token && !!item.expiresAt && item.expiresAt > Date.now());
@@ -82,9 +104,47 @@ export const recoverDeliveryDocument = (id: string, url: string) =>
     { method: "POST", body: JSON.stringify({ url }) },
   );
 export const feishuStatus = () => apiJson<FeishuStatus>("/api/feishu/status", { cache: "no-store" });
+export async function disableDeviceAutomaticDelivery(owner: string): Promise<{ legacy: boolean }> {
+  const guard = publishScope(owner);
+  try {
+    await apiJson('/api/feishu/automatic-deliveries/device-disable', {
+      method: 'POST', cache: 'no-store', body: JSON.stringify({ expected_user_id: owner }),
+    });
+    guard(); return { legacy: false };
+  } catch (cause) {
+    guard();
+    if (!cause || typeof cause !== 'object' || !('status' in cause) || cause.status !== 404) throw cause;
+    const status = await feishuStatus();
+    guard();
+    if (!status || typeof status.configured !== 'boolean' || typeof status.connected !== 'boolean' || typeof status.auto_publish !== 'boolean' || !Array.isArray(status.groups) || feishuVerificationUnavailable(status) || status.automatic_delivery_protocol !== undefined) throw new Error('设备自动交付关闭接口不可用，插件仍保持原状态，请重试。');
+    return { legacy: true };
+  }
+}
 export const feishuGroups = () => apiJson<FeishuGroup[]>("/api/feishu/groups");
 export const deliveryStatus = (key: string) =>
   apiJson<Delivery | null>("/api/feishu/deliveries/" + encodeURIComponent(key));
+export type AutomaticDeliveryLocal = {
+  status: 'queued' | 'submitting' | 'unknown' | 'accepted' | 'failed' | 'cancelled';
+  error?: string; job_id?: string | null; operation_id?: string; can_check?: boolean;
+};
+async function automaticDeliveryLocal(noteId: string, check: boolean): Promise<AutomaticDeliveryLocal | null> {
+  const owner = useAuthStore.getState().user?.id;
+  if (!owner || !noteId) throw new Error('请登录后核验原纪要的交付状态');
+  const guard = publishScope(owner);
+  try {
+    const result = await apiJson<AutomaticDeliveryLocal>('/api/feishu/automatic-deliveries/local/' + encodeURIComponent(noteId) + (check ? '/check' : ''), { cache: 'no-store', ...(check ? { method: 'POST' } : {}) });
+    guard();
+    if (!result || !['queued', 'submitting', 'unknown', 'accepted', 'failed', 'cancelled'].includes(result.status) || (result.error != null && typeof result.error !== 'string') || (result.job_id != null && typeof result.job_id !== 'string') || (result.operation_id != null && typeof result.operation_id !== 'string') || (result.can_check != null && typeof result.can_check !== 'boolean')) throw new Error('自动交付状态未核验，请重新读取');
+    return result;
+  } catch (cause) {
+    guard();
+    if (!check && cause && typeof cause === 'object' && 'status' in cause && cause.status === 404) return null;
+    throw cause;
+  }
+}
+export const readAutomaticDelivery = (noteId: string) => automaticDeliveryLocal(noteId, false);
+// Queries only: the backend check must never create/replay a document or notification.
+export const checkAutomaticDelivery = (noteId: string) => automaticDeliveryLocal(noteId, true);
 export const deliveryById = (id: string, signal?: AbortSignal) => apiJson<Delivery>("/api/feishu/deliveries/by-id/" + encodeURIComponent(id), { cache: 'no-store', ...(signal ? { signal } : {}) });
 export const deliveryByOperation = (id: string) => apiJson<Delivery>("/api/feishu/deliveries/by-operation/" + encodeURIComponent(id));
 // The POST triggers only external permission GETs and local evidence updates.
@@ -141,6 +201,12 @@ export const publishToFeishu = async (
       ...(options.contacts ? { contacts: contactRecipients(options.contacts) } : {}),
     });
     guard();
+    if (!automatic) {
+      if (attempt) markPublishAttempt(attempt, 'not_dispatched');
+      const pending = await readAutomaticDelivery(key);
+      guard();
+      if (pending && ['queued', 'submitting', 'unknown'].includes(pending.status)) throw new Error('自动交付正在等待或结果尚未确认，请先核验交付结果，不会重复发送');
+    }
   } catch (cause) {
     if (attempt) markPublishAttempt(attempt, 'not_dispatched');
     throw cause;

@@ -13,7 +13,8 @@ import { feishuGroups, feishuStatus } from "@/lib/feishu";
 import { apiJson } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 
-vi.mock("@/lib/feishu", () => ({
+vi.mock("@/lib/feishu", async importOriginal => ({
+  ...await importOriginal<typeof import('@/lib/feishu')>(),
   feishuStatus: vi.fn(),
   feishuGroups: vi.fn(async () => []),
   openExternal: vi.fn(),
