@@ -33,6 +33,35 @@ def test_meeting_returns_reviewed_content_and_supplies_original_evidence():
     assert progress
 
 
+@pytest.mark.parametrize("mode", ["default", "oneshot"])
+def test_review_preserves_supported_information_but_checks_draft_against_full_source(mode):
+    # This verifies prompt/dataflow, not that a mock proves factual quality.
+    sources = [
+        "The synthetic lamp uses 3 watts only while the lid is open.",
+        "The sample change is a proposal, not an approved decision.",
+    ]
+    draft = "The lamp always uses 3 watts. The sample change was approved."
+    llm = ReviewLLM([draft, "Reviewed synthetic output"])
+    assert llm.summarize(
+        "Synthetic meeting",
+        [TranscriptSegment(i * 2, i * 2 + 1, text) for i, text in enumerate(sources)],
+        style="meeting", summary_mode=mode,
+    ) == "Reviewed synthetic output"
+    assert len(llm.calls) == 2
+    for call in llm.calls:
+        assert all(text in call["user_prompt"] for text in sources)
+    review = llm.calls[1]
+    assert draft in review["user_prompt"]
+    rules = review["system_prompt"]
+    assert "Preserve important source-supported facts and their relationships" in rules
+    assert "correct errors locally and restore omissions from the source" in rules
+    assert "merely to polish the prose" in rules
+    assert "The draft is not evidence" in rules
+    assert "independently check the full original material" in rules
+    assert "Remove or correct unsupported claims and relationships" in rules
+    assert "Reconstruct supported conclusions rather than preserving its sentences" not in rules
+
+
 def test_empty_review_does_not_silently_accept_unreviewed_draft():
     llm = ReviewLLM(["An unchecked draft", " "])
     with pytest.raises(RuntimeError, match="事实复核"):
@@ -65,8 +94,8 @@ def test_hierarchical_meeting_reviews_chunks_before_merge_and_final_result():
     assert "verified two" in llm.calls[5]["user_prompt"]
 
 
-@pytest.mark.parametrize("available,expected", [(True, "reviewer"), (False, "primary")])
-def test_cloud_reviewer_uses_available_preference_without_changing_primary(available, expected):
+@pytest.mark.parametrize("available", [True, False])
+def test_cloud_reviewer_keeps_selected_model_even_when_other_preference_is_available(available):
     llm = VILabLLM("test-user", "primary")
     catalog = [{"id": "reviewer", "modelType": "llm",
                 "runtimeStatus": "available" if available else "unavailable"}]
@@ -81,6 +110,6 @@ def test_cloud_reviewer_uses_available_preference_without_changing_primary(avail
             patch.object(VILabLLM, "_complete", complete):
         assert llm._complete_review(system_prompt="system", user_prompt="evidence") == "reviewed"
         llm._complete_review(system_prompt="system", user_prompt="more evidence")
-    assert used == [expected, expected]
+    assert used == ['primary', 'primary']
     assert llm.model == "primary"
-    models.assert_called_once_with("test-user")
+    models.assert_not_called()

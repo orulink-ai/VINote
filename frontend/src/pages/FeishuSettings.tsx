@@ -1,9 +1,10 @@
 import { feishuVerificationUnavailable, feishuVerificationMessage } from '@/lib/feishuConnectionState'
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { FeishuDestinationPicker } from "@/components/Settings/FeishuDestinationPicker";
 import { apiJson } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
+import { publishScope } from '@/lib/feishuPublishReceipt';
 import {
   feishuGroups,
   feishuStatus,
@@ -55,6 +56,7 @@ export function FeishuSettings() {
   const owner = useAuthStore((state) => state.user?.id);
   const draftKey = owner ? `vinote:feishu-preferences:${owner}` : "";
   const [value, setValue] = useState<FeishuStatus | null>(null);
+  const valueOwner = useRef<string>();
   const [groups, setGroups] = useState<FeishuGroup[]>([]);
   const [groupPicker, setGroupPicker] = useState(false);
   const [groupError, setGroupError] = useState("");
@@ -74,13 +76,31 @@ export function FeishuSettings() {
   const [destinationCheck, setDestinationCheck] =
     useState<DestinationCheck | null>(null);
   const isCurrentOwner = () => useAuthStore.getState().user?.id === owner;
+  const statusRequest = useRef(0);
+  const groupRequest = useRef(0);
+  const groupPending = useRef(false);
+  const requestGuard = (sequence: { current: number }) => {
+    const request = ++sequence.current;
+    const scope = owner ? publishScope(owner) : null;
+    return () => {
+      if (!scope || !isCurrentOwner() || request !== sequence.current) return false;
+      try { scope(); return true; } catch { return false; }
+    };
+  };
   const load = async () => {
+    if (!owner || !isCurrentOwner()) return false;
+    const current = requestGuard(statusRequest);
+    // A fresh connection check invalidates in-flight group results from the earlier grant.
+    groupRequest.current++;
+    groupPending.current = false;
+    setGroupsLoading(false);
+    setGroupsLoaded(false);
     setBusy(true);
     setError("");
     setSaveFailed(false);
     try {
       const next = await feishuStatus();
-      if (!isCurrentOwner()) return false;
+      if (!current()) return false;
       let draft: Partial<FeishuStatus> | undefined;
       try {
         const stored = draftKey && sessionStorage.getItem(draftKey);
@@ -96,7 +116,7 @@ export function FeishuSettings() {
       } catch {
         /* Browser storage may be unavailable; the visible form still works. */
       }
-      if (!draft && dirty && value)
+      if (!draft && dirty && value && valueOwner.current === owner)
         draft = {
           notify_self: value.notify_self,
           auto_publish: value.auto_publish,
@@ -104,39 +124,52 @@ export function FeishuSettings() {
           destination_config: value.destination_config,
           permission_policy: value.permission_policy,
         };
+      valueOwner.current = owner;
       setValue({ ...next, ...draft });
       if (next.connected && !next.expired && !feishuVerificationUnavailable(next)) {
         setAuthUrl(''); setAuthorization(null); setAuthExpired(false);
       } else if (authUrl) setMessage(feishuVerificationUnavailable(next) ? feishuVerificationMessage : next.expired ? '需要重新授权，请使用新的授权链接。' : '尚未收到飞书授权，请完成后再次核验。');
       setDirty(!!draft);
       if (draft) setMessage("已恢复未保存的设置，请核对后保存。");
-      if (next.connected && !next.expired && !feishuVerificationUnavailable(next)) {
-        setGroupError("");
-        setGroupsLoading(true);
-        try {
-          const nextGroups = await feishuGroups();
-          if (!isCurrentOwner()) return false;
-          setGroups(nextGroups);
-          setGroupsLoaded(true);
-        } catch (cause) {
-          if (!isCurrentOwner()) return false;
-          setGroupError(
-            cause instanceof Error ? cause.message : "读取群列表失败",
-          );
-        } finally {
-          if (isCurrentOwner()) setGroupsLoading(false);
-        }
-      } else setGroups([]);
+      setGroupError("");
+      if (!next.connected || next.expired || feishuVerificationUnavailable(next)) {
+        setGroups([]);
+        setGroupPicker(false);
+      }
       return true;
     } catch (cause) {
-      if (!isCurrentOwner()) return false;
+      if (!current()) return false;
       setError(cause instanceof Error ? cause.message : "读取失败，请重试");
       return false;
     } finally {
-      if (isCurrentOwner()) setBusy(false);
+      if (current()) setBusy(false);
+    }
+  };
+  const loadGroups = async () => {
+    if (groupPending.current || busy || !owner || !isCurrentOwner() || !value?.connected || value.expired || verificationUnavailable) return;
+    const current = requestGuard(groupRequest);
+    groupPending.current = true;
+    setGroupsLoading(true);
+    setGroupError("");
+    try {
+      const nextGroups = await feishuGroups();
+      if (!current()) return;
+      setGroups(nextGroups);
+      setGroupsLoaded(true);
+    } catch (cause) {
+      if (current()) setGroupError(cause instanceof Error ? cause.message : "读取群列表失败");
+    } finally {
+      if (current()) {
+        groupPending.current = false;
+        setGroupsLoading(false);
+      }
     }
   };
   useEffect(() => {
+    if (groupPicker && !groupsLoaded && !groupError && !busy) void loadGroups();
+  }, [groupPicker, groupsLoaded, groupError, busy, value?.connected, value?.expired, verificationUnavailable]);
+  useEffect(() => {
+    valueOwner.current = undefined;
     setValue(null);
     setGroups([]);
     setDirty(false);
@@ -148,8 +181,15 @@ export function FeishuSettings() {
     setGroupError("");
     setGroupsLoading(false);
     setGroupsLoaded(false);
+    setQuery("");
+    setDestinationCheck(null);
     setDisconnect(false);
     void load();
+    return () => {
+      statusRequest.current++;
+      groupRequest.current++;
+      groupPending.current = false;
+    };
   }, [owner]);
   useEffect(() => {
     if (!authorization) return;
@@ -289,6 +329,7 @@ export function FeishuSettings() {
                   disabled={busy || !value.configured}
                   onClick={async () => {
                     if (verificationUnavailable) { await load(); return; }
+                    const current = requestGuard(statusRequest);
                     setBusy(true);
                     setError("");
                     setSaveFailed(false);
@@ -297,14 +338,14 @@ export function FeishuSettings() {
                         "/api/feishu/authorize",
                         { method: "POST" },
                       );
-                      if (!isCurrentOwner()) return;
+                      if (!current()) return;
                       setAuthUrl(auth.url);
                       setAuthorization(auth);
                       setAuthExpired(false);
                     } catch (cause) {
-                      if (isCurrentOwner()) setError((cause as Error).message);
+                      if (current()) setError((cause as Error).message);
                     } finally {
-                      if (isCurrentOwner()) setBusy(false);
+                      if (current()) setBusy(false);
                     }
                   }}
                 >
@@ -478,6 +519,7 @@ export function FeishuSettings() {
                   !destinationCheck?.can_attempt_create)
               }
               onClick={async () => {
+                const current = requestGuard(statusRequest);
                 setBusy(true);
                 setError("");
                 setSaveFailed(false);
@@ -495,7 +537,7 @@ export function FeishuSettings() {
                       }),
                     },
                   );
-                  if (!isCurrentOwner()) return;
+                  if (!current()) return;
                   setValue(saved);
                   setDirty(false);
                   try {
@@ -505,12 +547,12 @@ export function FeishuSettings() {
                   }
                   setMessage("设置已保存，将用于下一份纪要。");
                 } catch (cause) {
-                  if (isCurrentOwner()) {
+                  if (current()) {
                     setSaveFailed(true);
                     setError((cause as Error).message);
                   }
                 } finally {
-                  if (isCurrentOwner()) setBusy(false);
+                  if (current()) setBusy(false);
                 }
               }}
             >
@@ -600,24 +642,7 @@ export function FeishuSettings() {
                   <Button
                     variant="outline"
                     disabled={busy || groupsLoading}
-                    onClick={async () => {
-                      if (busy || groupsLoading) return;
-                      setBusy(true);
-                      setGroupsLoading(true);
-                      setGroupError("");
-                      try {
-                        const nextGroups = await feishuGroups();
-                        if (!isCurrentOwner()) return;
-                        setGroups(nextGroups);
-                        setGroupsLoaded(true);
-                        setError("");
-                      } catch (cause) {
-                        if (isCurrentOwner())
-                          setGroupError((cause as Error).message);
-                      } finally {
-                        if (isCurrentOwner()) { setBusy(false); setGroupsLoading(false); }
-                      }
-                    }}
+                    onClick={() => void loadGroups()}
                   >
                     {groupsLoading ? "正在刷新…" : "刷新群列表"}
                   </Button>
@@ -645,15 +670,16 @@ export function FeishuSettings() {
             <AlertDialogAction
               disabled={busy}
               onClick={async () => {
+                const current = requestGuard(statusRequest);
                 setBusy(true);
                 try {
                   await apiJson("/api/feishu/connection", { method: "DELETE" });
-                  if (!isCurrentOwner()) return;
+                  if (!current()) return;
                   await load();
                 } catch (cause) {
-                  if (isCurrentOwner()) setError((cause as Error).message);
+                  if (current()) setError((cause as Error).message);
                 } finally {
-                  if (isCurrentOwner()) setBusy(false);
+                  if (current()) setBusy(false);
                 }
               }}
             >

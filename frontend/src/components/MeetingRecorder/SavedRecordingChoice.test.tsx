@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from '@testing-library/react'
+import { act, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -38,16 +38,17 @@ describe('SavedRecordingChoice', () => {
     expect(processSavedMeeting).not.toHaveBeenCalled()
     await userEvent.click(screen.getByRole('button', { name: '生成会议纪要' }))
     expect(processSavedMeeting).not.toHaveBeenCalled()
-    expect(await screen.findByRole('button', { name: '确认模型并生成' })).toBeEnabled()
+    const confirmation = await screen.findByRole('dialog', { name: '确认本次生成' })
+    expect(within(confirmation).getByRole('button', { name: '确认模型并开始生成' })).toBeEnabled()
     await waitFor(() => expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument())
-    await userEvent.click(screen.getByRole('button', { name: '确认模型并生成' }))
+    await userEvent.click(screen.getByRole('button', { name: '确认模型并开始生成' }))
     expect(processSavedMeeting).toHaveBeenCalledExactlyOnceWith(recording, 'zh-CN', undefined, expect.objectContaining({ selection: expect.objectContaining({ asr: 'asr-confirmed', llm: 'llm-confirmed' }) }))
   })
   it('opens the actual confirmation component directly from the source-details route', async () => {
     render(<MemoryRouter initialEntries={['/meetings?recordingConfirm=recording-1']}><SavedRecordingChoice /></MemoryRouter>)
     expect(await screen.findByText('真实详情中的现有模型选择入口')).toBeInTheDocument()
     expect(processSavedMeeting).not.toHaveBeenCalled()
-    await userEvent.click(screen.getByRole('button', { name: '确认模型并生成' }))
+    await userEvent.click(screen.getByRole('button', { name: '确认模型并开始生成' }))
     expect(processSavedMeeting).toHaveBeenCalledOnce()
   })
   it('shows a retryable read failure without exposing a false empty or starting generation', async () => {
@@ -55,27 +56,31 @@ describe('SavedRecordingChoice', () => {
     render(<MemoryRouter initialEntries={['/meetings?recordingConfirm=recording-1']}><SavedRecordingChoice /></MemoryRouter>)
     expect(await screen.findByRole('alert')).toHaveTextContent('读取失败')
     await userEvent.click(screen.getByRole('button', { name: '重新读取原录制' }))
-    expect(await screen.findByRole('button', { name: '确认模型并生成' })).toBeInTheDocument()
+    expect(await screen.findByRole('button', { name: '确认模型并开始生成' })).toBeInTheDocument()
     expect(processSavedMeeting).not.toHaveBeenCalled()
   })
   it('rejects a direct link for another account before mounting model confirmation', async () => {
     vi.mocked(getPendingMeeting).mockResolvedValue({ ...recording, ownerId: 'other' })
     render(<MemoryRouter initialEntries={['/meetings?recordingConfirm=recording-1']}><SavedRecordingChoice /></MemoryRouter>)
     expect(await screen.findByRole('alert')).toHaveTextContent('不属于当前账号')
-    expect(screen.queryByRole('button', { name: '确认模型并生成' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '确认模型并开始生成' })).not.toBeInTheDocument()
     expect(processSavedMeeting).not.toHaveBeenCalled()
   })
   it('refreshes the source after confirmed generation and exposes the saved minutes', async () => {
     vi.mocked(processSavedMeeting).mockImplementationOnce(async () => { vi.mocked(getPendingMeeting).mockResolvedValue({ ...recording, processingStatus: 'completed', noteId: 'saved-note' }) })
     render(<MemoryRouter initialEntries={['/meetings?recordingConfirm=recording-1']}><SavedRecordingChoice /><LocationProbe /></MemoryRouter>)
-    await userEvent.click(await screen.findByRole('button', { name: '确认模型并生成' }))
+    await userEvent.click(await screen.findByRole('button', { name: '确认模型并开始生成' }))
     await userEvent.click(await screen.findByRole('button', { name: '查看会议纪要' }))
     expect(screen.getByLabelText('当前路径')).toHaveTextContent('/note/saved-note')
   })
   it('returns to the validated original content path', async () => {
     render(<MemoryRouter initialEntries={['/meetings?recordingConfirm=recording-1&returnTo=%2Fnote%2Fnote-1%3Ftab%3Dsummary']}><SavedRecordingChoice /><LocationProbe /></MemoryRouter>)
-    await screen.findByRole('button', { name: '确认模型并生成' })
+    const confirmation = await screen.findByRole('dialog', { name: '确认本次生成' })
+    expect(processSavedMeeting).not.toHaveBeenCalled()
+    await userEvent.click(within(confirmation).getByRole('button', { name: '暂不生成' }))
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: '确认本次生成' })).not.toBeInTheDocument())
     await userEvent.click(screen.getByRole('button', { name: '返回来源页面' }))
+    expect(processSavedMeeting).not.toHaveBeenCalled()
     expect(screen.getByLabelText('当前路径')).toHaveTextContent('/note/note-1?tab=summary')
   })
   it('dismisses without uploading or processing when notes are declined', async () => {

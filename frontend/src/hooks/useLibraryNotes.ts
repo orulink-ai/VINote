@@ -97,6 +97,7 @@ export function useLibraryNotes() {
                 : "保存于",
             localId: resolvedLocalId,
             taskId: source?.taskId,
+            meetingSource: source?.meetingSource,
             sourceIds: ids,
             // Keep local-only history reachable even when the list uses a shared
             // representative. Projection does not migrate or delete versions.
@@ -127,7 +128,7 @@ export function useLibraryNotes() {
             tags: Array.isArray(metadata.tags)
               ? metadata.tags.filter((t): t is string => typeof t === "string")
               : [],
-            status: "done",
+            status: source?.status || "done",
             scope: "personal" as const,
             createdAt:
               typeof metadata.source_created_at === "string"

@@ -35,6 +35,13 @@ def delta(text="", finish=None, **extra):
     return {"choices": [{"index": 0, "delta": {"content": text, **extra}, "finish_reason": finish}]}
 
 
+def direct_stream(client):
+    def stream(*args, **kwargs):
+        assert kwargs.pop('trust_env') is False
+        return client.stream(*args, **kwargs)
+    return stream
+
+
 def test_collects_content_usage_and_ignores_reasoning_and_heartbeats():
     r = response([None, delta(reasoning_content="private reasoning"), delta("会议"),
                   delta("结论", "stop"), {"choices": [], "usage": {"total_tokens": 123}}, "[DONE]"])
@@ -69,8 +76,9 @@ def test_cloud_request_actually_uses_streaming_transport(isolated_preferences):
         seen.append(request)
         return response([delta("done", "stop"), "[DONE]"])
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
-        with patch("app.services.vilab_cloud_service.settings") as settings, patch("app.services.vilab_cloud_service.httpx.stream", side_effect=client.stream):
+        with patch("app.services.vilab_cloud_service.settings") as settings, patch("app.services.vilab_cloud_service.httpx.stream", side_effect=direct_stream(client)):
             settings.vilab_server_url = "https://example.test"
+            settings.content_cloud_runtime = False
             settings.cloud_auth_url = ""
             settings.vilab_api_key = "test-key"
             result = VILabCloudService().request("user", "POST", "/openai/v1/chat/completions", json={"stream": True})
@@ -93,9 +101,10 @@ def test_interrupted_stream_never_replays_inference_or_retains_partial_content(c
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client, \
             patch("app.services.vilab_cloud_service.settings") as settings, \
-            patch("app.services.vilab_cloud_service.httpx.stream", side_effect=client.stream), \
+            patch("app.services.vilab_cloud_service.httpx.stream", side_effect=direct_stream(client)), \
             patch("app.services.vilab_cloud_service.time.sleep"):
         settings.vilab_server_url = "https://example.test"
+        settings.content_cloud_runtime = False
         settings.cloud_auth_url = ""
         settings.vilab_api_key = "test-key"
         with pytest.raises(HTTPException) as error:
@@ -117,8 +126,9 @@ def test_stream_http_and_completion_errors_are_not_transport_retried(status, eve
 
     with httpx.Client(transport=httpx.MockTransport(handler)) as client, \
             patch("app.services.vilab_cloud_service.settings") as settings, \
-            patch("app.services.vilab_cloud_service.httpx.stream", side_effect=client.stream):
+            patch("app.services.vilab_cloud_service.httpx.stream", side_effect=direct_stream(client)):
         settings.vilab_server_url = "https://example.test"
+        settings.content_cloud_runtime = False
         settings.cloud_auth_url = ""
         settings.vilab_api_key = "test-key"
         with pytest.raises(HTTPException):

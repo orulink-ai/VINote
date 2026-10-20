@@ -119,9 +119,11 @@ export function RecordingRetryBar({ note, onUpdated }: RecordingRetryBarProps) {
   if (!isFailed) return null
 
   const isWorking = status === 'working'
+  const taskPath = note.taskId ? '/generate?' + new URLSearchParams({ meeting: '1', task: note.taskId, returnTo: location.pathname + location.search + location.hash }).toString() : null
 
   return (
-    <span className="inline-flex items-center gap-1.5">
+    <span className="inline-flex min-w-0 flex-wrap items-center gap-1.5">
+      {taskPath && <Button variant="outline" size="sm" asChild><Link to={taskPath}>{language.startsWith('zh') ? '查看原任务状态' : 'View original task'}</Link></Button>}
       {sourceId ? <><span role="status" className="text-xs text-muted-foreground">{message}</span><Button variant="outline" size="sm" asChild><Link to={'/meetings?' + new URLSearchParams({ recordingConfirm: sourceId, returnTo: location.pathname + location.search + location.hash }).toString()}>原录制详情 · 确认模型</Link></Button></> : <>
       <Tooltip><TooltipTrigger asChild><Button
         type="button" variant="outline" size="icon"

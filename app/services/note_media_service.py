@@ -10,9 +10,9 @@ from app.models.transcript import TranscriptSegment
 from app.services.video_link_service import build_video_jump_url, format_timestamp_label
 
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(.*\S)\s*$")
-_SCREENSHOT_RE = re.compile(r"\[\[Screenshot:(\d{1,2}):(\d{2})\]\]")
-_TIMESTAMP_RE = re.compile(r"(?<!\!)\[(\d{1,2}):(\d{2})(?:-(\d{1,2}):(\d{2}))?\](?!\()")
-_LINKED_TIMESTAMP_RE = re.compile(r"\[(\d{1,2}):(\d{2})(?:-(\d{1,2}):(\d{2}))?\]\([^)]*\)")
+_SCREENSHOT_RE = re.compile(r"\[\[Screenshot:(\d{1,4}):([0-5]\d)\]\]")
+_TIMESTAMP_RE = re.compile(r"(?<!\!)\[(\d{1,4}):([0-5]\d)(?:-(\d{1,4}):([0-5]\d))?\](?!\()")
+_LINKED_TIMESTAMP_RE = re.compile(r"\[(\d{1,4}):([0-5]\d)(?:-(\d{1,4}):([0-5]\d))?\]\([^)]*\)")
 _MULTI_BLANK_RE = re.compile(r"\n{3,}")
 _SUMMARY_TITLE_RE = re.compile(r"\b(summary|takeaways?|wrap ?up|closing)\b", re.IGNORECASE)
 _MAX_KEY_MOMENTS = 5
@@ -180,11 +180,10 @@ class NoteMediaService:
             if linked_timestamp:
                 return int(linked_timestamp.group(1)) * 60 + int(linked_timestamp.group(2))
 
-        if not transcript_segments:
-            return None
-
-        target_index = round(section_order * (len(transcript_segments) - 1) / max(1, section_count - 1))
-        return max(0, int(transcript_segments[target_index].start))
+        # Dynamic thematic headings need not follow the recording's order.
+        # Ordinal interpolation fabricated source alignment for unrelated topics.
+        # Only a source citation explicitly present in the section anchors it.
+        return None
 
     def _build_key_moment_block(self, seconds: int) -> list[str]:
         label = format_timestamp_label(seconds)

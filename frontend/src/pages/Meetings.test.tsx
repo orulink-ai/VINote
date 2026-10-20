@@ -48,7 +48,7 @@ beforeEach(() => {
   state.notes = [note('正在使用'), note('已归档纪要', true), note('录屏纪要', true, 'meeting_video'), note('普通文档', true, 'document'), note('名称不是类型', true, 'meeting_unknown')]
   state.recordings = [recording('尚未生成的原录制')]
   state.list.mockImplementation(async () => state.recordings)
-  state.api.mockResolvedValue({ diarization: { available: true } })
+  state.api.mockImplementation(async (path: string) => path.startsWith('/api/task/') ? { status: 'success', result: { title: 'Synthetic completed meeting', markdown: 'Synthetic saved minutes' } } : { diarization: { available: true } })
 })
 afterEach(() => { cleanup(); sessionStorage.clear() })
 
@@ -96,7 +96,7 @@ it('groups stable history before archive filtering and preserves history without
   state.notes = [old, current]; mount('/meetings?archived=1')
   await screen.findByText('还没有归档会议纪要')
   await userEvent.click(screen.getByRole('tab', { name: '未归档' }))
-  expect(screen.getByRole('button', { name: '当前会议 · 已完成' })).toBeInTheDocument()
+  expect(await screen.findByRole('button', { name: '当前会议 · 已完成' })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: '较早归档历史 · 已完成' })).not.toBeInTheDocument()
   expect(screen.getByText('关联纪要（2条）')).toBeInTheDocument()
   await userEvent.click(screen.getByText('关联纪要（2条）'))
@@ -109,7 +109,7 @@ it('keeps every history in one archived entity while excluding its retained orig
   state.recordings = [{ ...recording('保留原件'), taskId: 'same-task', noteId: current.id }]
   const before = JSON.stringify({ notes: state.notes, recordings: state.recordings })
   mount('/meetings?archived=1'); await waitFor(() => expect(state.list).toHaveBeenCalled())
-  expect(screen.getAllByRole('button', { name: '当前归档会议 · 已完成' })).toHaveLength(1)
+  expect(await screen.findAllByRole('button', { name: '当前归档会议 · 已完成' })).toHaveLength(1)
   expect(screen.queryByRole('button', { name: '较早活动历史 · 已完成' })).not.toBeInTheDocument()
   await userEvent.click(screen.getByText('关联纪要（2条）'))
   expect(screen.getByRole('button', { name: /查看纪要 · 较早活动历史/ })).toBeInTheDocument()
@@ -176,4 +176,16 @@ it.each(['', '设计审查'])('starts only on confirmation with the exact option
   } finally {
     window.removeEventListener(START_MEETING_EVENT, started)
   }
+})
+
+
+it('renders a default-done retained placeholder from its failed task rather than claiming completed minutes', async () => {
+  state.notes = [{ ...note('Synthetic capture', false, 'meeting_video', 'failed-capture'), content: '原始媒体已保存，正在进行会后处理。' }]
+  state.recordings = []
+  state.api.mockImplementation(async (path: string) => path === '/api/task/failed-capture' ? { task_id: 'failed-capture', status: 'failed', failed_stage: 'transcribing', retryable: false } : { diarization: { available: true } })
+  mount()
+  await screen.findByRole('button', { name: 'Synthetic capture · 需处理' })
+  expect(screen.queryByText('· 纪要已完成')).toBeNull()
+  expect(state.api).toHaveBeenCalledWith('/api/task/failed-capture', expect.objectContaining({ signal: expect.any(AbortSignal) }))
+  expect(state.api.mock.calls.every(([, init]) => !init?.method)).toBe(true)
 })

@@ -9,7 +9,7 @@ from app.models.note import LocalFileRequest
 from app.models.source_request import SourceInput, SourceSubmission
 from app.services.source_request_service import SourceRequestService
 from app.services.task_artifact_service import TaskArtifactService
-from app.services.task_generation_context import frozen_generation_context, _read_json, _unavailable
+from app.services.task_generation_context import _frozen_generation_context, _read_json, _unavailable
 from app.services.task_model_source import SNAPSHOT_FILE, validate_source
 from app.services.task_original_service import TaskOriginalService
 from app.services.retained_task_source import SOURCE_LOCK
@@ -22,6 +22,7 @@ class NewGenerationConfirmation(BaseModel):
     confirmed: Literal[True]
     context_revision: str = Field(pattern=r'^[0-9a-f]{64}$')
     source_version: str = Field(pattern=r'^[0-9a-f]{64}$')
+    canonical_task_id: UUID | None = None
 
     @field_validator('confirmed', mode='before')
     @classmethod
@@ -32,16 +33,35 @@ class NewGenerationConfirmation(BaseModel):
 
 
 def _submission(parent, confirmation):
+    if confirmation.canonical_task_id is not None:
+        from app.services.parent_asr_prefix import prefix_submission
+        return prefix_submission(_intent(parent, confirmation))
     return SourceSubmission(source=SourceInput(kind='retained_file',
         retained_file_id='task:' + parent, retained_file_version=confirmation.source_version),
         options={'contract': 'independent-frozen-generation-v1',
                  'parent_task_id': parent, 'context_revision': confirmation.context_revision})
 
 
+def _intent(parent, confirmation, *, parent_prefix=None):
+    link = {'version': 1, 'operation_id': str(confirmation.operation_id), 'parent_task_id': parent,
+            'context_revision': confirmation.context_revision, 'source_version': confirmation.source_version}
+    if confirmation.canonical_task_id is not None:
+        link.update(version=2, canonical_task_id=str(confirmation.canonical_task_id))
+        if parent_prefix is not None:
+            link['parent_prefix'] = parent_prefix
+    return link
+
+
 class NewGenerationService:
     def __init__(self, receipts=None):
         self.receipts = receipts or SourceRequestService()
         self.artifacts = TaskArtifactService(settings.output_dir)
+
+    def preflight_parent(self, owner, parent, normalized_wav):
+        """Offline internal check; neither reserves an operation nor queues work."""
+        from app.services.parent_asr_prefix import preflight_parent_prefix
+        return preflight_parent_prefix(self.receipts, self.artifacts, owner=owner,
+            parent_task_id=parent, normalized_wav=normalized_wav)
 
     def accept(self, owner, parent, confirmation, background, dispatch, *, active=False):
         operation = str(confirmation.operation_id)
@@ -56,12 +76,15 @@ class NewGenerationService:
         else:
             return self.receipts.reserve(owner, operation, submission)
         with SOURCE_LOCK:
-            context = frozen_generation_context(owner, parent, active=active)
+            context, parent_prefix = _frozen_generation_context(owner, parent, active=active, receipts=self.receipts)
             if (context['context_revision'] != confirmation.context_revision
-                    or context['source']['version'] != confirmation.source_version):
+                    or context['source']['version'] != confirmation.source_version
+                    or context.get('canonical_task_id') != (
+                        str(confirmation.canonical_task_id) if confirmation.canonical_task_id else None)):
                 _unavailable('frozen_context_changed', '原文件或冻结设置已变化，请重新核验并确认。')
             folder = self.artifacts.find_task_dir(parent)
-            _, source = TaskOriginalService().get(owner, 'task:' + parent)
+            canonical = context.get('canonical_task_id', parent)
+            _, source = TaskOriginalService().get(owner, 'task:' + canonical)
             snapshot = validate_source(_read_json(folder / SNAPSHOT_FILE), owner)
             saved_request = _read_json(folder / 'request.json')
             request = saved_request['request']
@@ -81,10 +104,21 @@ class NewGenerationService:
                 self.artifacts.write_text(child / 'recording_owner', owner)
                 self.artifacts.write_text(child / '.task_id', claim.task_id)
                 self.artifacts.write_json(child / 'source_reference.json', {
-                    'version': 1, 'owner': owner, 'parent_task_id': parent,
+                    'version': 1, 'owner': owner, 'parent_task_id': canonical,
                     'source_version': confirmation.source_version})
+                # The speaker service rechecks source/model signature and exact
+                # duration; retaining this hint never authorizes ASR execution.
+                speaker = folder / 'speaker_evidence.json'
+                if speaker.is_file() and not speaker.is_symlink():
+                    try:
+                        cached_speaker = _read_json(speaker)
+                    except HTTPException:
+                        cached_speaker = None
+                    if cached_speaker is not None:
+                        self.artifacts.write_json(child / 'speaker_evidence.json', cached_speaker)
                 self.artifacts.write_json(child / SNAPSHOT_FILE, snapshot)
-                self.artifacts.write_json(child / 'source_media.json', _read_json(folder / 'source_media.json'))
+                self.artifacts.write_json(child / 'source_media.json', _read_json(
+                    self.artifacts.find_task_dir(canonical) / 'source_media.json'))
                 # Only documented generation fields survive. Path and temporary
                 # credentials/profile overrides cannot supersede the snapshot.
                 options = {key: request[key] for key in (
@@ -93,9 +127,8 @@ class NewGenerationService:
                 req = LocalFileRequest(file_path=str(source), **options)
                 self.artifacts.write_json(child / 'request.json', {
                     'request': req.model_dump(exclude={'api_key', 'base_url', 'model_name'}), 'trace': saved_request.get('trace')})
-                self.artifacts.write_json(child / 'new_generation.json', {
-                    'version': 1, 'operation_id': operation, 'parent_task_id': parent,
-                    'context_revision': confirmation.context_revision, 'source_version': confirmation.source_version})
+                self.artifacts.write_json(child / 'new_generation.json', _intent(
+                    parent, confirmation, parent_prefix=parent_prefix))
                 origin = folder / 'generation_client'
                 if origin.is_file() and not origin.is_symlink():
                     from app.services.note_origin_service import record_origin
@@ -138,7 +171,8 @@ class NewGenerationService:
             snapshot = validate_source(_read_json(folder / SNAPSHOT_FILE), owner)
             link = _read_json(folder / 'new_generation.json')
             reference = _read_json(folder / 'source_reference.json')
-            if link['parent_task_id'] != reference['parent_task_id'] or link['source_version'] != reference['source_version']:
+            if (link.get('canonical_task_id', link['parent_task_id']) != reference['parent_task_id']
+                    or link['source_version'] != reference['source_version']):
                 raise HTTPException(409, '原件引用不一致')
             source = self.artifacts.resolve_source_media(folder)
             if not source or self.artifacts._sha256(source) != reference['source_version']:

@@ -91,3 +91,20 @@ def test_meeting_summary_receives_recognition_gaps_without_fabricated_speech(tmp
     assert len(call['segments']) == 1
     assert '会议事实' in call['extras'] and '"start": 60' in call['extras']
     assert '不代表确定静音' in call['extras'] and '不得推断缺失发言' in call['extras']
+
+
+def test_saved_transcript_summary_never_claims_or_calls_asr(tmp_path):
+    from types import SimpleNamespace
+    from unittest.mock import Mock, patch
+    from app.services.note_service import NoteService
+    from app.models.transcript import TranscriptResult, TranscriptSegment
+
+    transcript = TranscriptResult('zh', '已确认的发言', [TranscriptSegment(0, 3, '已确认的发言')])
+    context = SimpleNamespace(preloaded_transcript=transcript, task_dir=tmp_path, step_timings={})
+    service = object.__new__(NoteService)
+    service.artifact_service = SimpleNamespace(update_status=Mock(), save_transcript=Mock())
+    with patch('app.services.asr_execution_binding.require_task_execution',
+               side_effect=AssertionError('ASR must not be claimed')) as claim:
+        assert service._transcribe_audio(context) is transcript
+    claim.assert_not_called()
+    assert context.step_timings['transcribe'] == 0

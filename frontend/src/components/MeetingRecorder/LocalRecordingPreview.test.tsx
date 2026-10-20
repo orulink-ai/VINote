@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 
@@ -8,7 +8,7 @@ vi.mock('../../lib/meetingProcessing', () => ({ processSavedMeeting: storage.pro
 vi.mock('../Settings/ModelSourcePanel', () => ({ ModelSourcePanel: () => <div>现有转写与总结选择组件</div> }))
 vi.mock('../../lib/i18n', () => ({ useI18n: () => ({ locale: 'zh' }) }))
 vi.mock('./RecordingTitleEditor', () => ({ RecordingTitleEditor: () => null }))
-vi.mock('../../lib/recordingDownload', () => ({ downloadRecording: vi.fn() }))
+vi.mock('../../lib/recordingDownload', async importOriginal => ({ ...await importOriginal<typeof import('../../lib/recordingDownload')>(), downloadRecording: vi.fn() }))
 import { LocalRecordingPreview } from './LocalRecordingPreview'
 import type { PendingMeeting } from '../../lib/audioStorage'
 import { useAppModeStore } from '../../stores/appModeStore'
@@ -27,10 +27,11 @@ beforeEach(() => {
 it('opens model confirmation without starting a worker, and cancellation retains the recording', async () => {
   render(<LocalRecordingPreview recording={recording} onDeleted={vi.fn()} />)
   await userEvent.click(screen.getByRole('button', { name: '生成会议纪要' }))
+  expect(screen.getByRole('dialog', { name: '确认本次生成' })).toBeVisible()
   expect(screen.getByText('现有转写与总结选择组件')).toBeInTheDocument()
   expect(storage.process).not.toHaveBeenCalled()
   await userEvent.click(screen.getByRole('button', { name: '暂不生成' }))
-  expect(screen.queryByRole('region', { name: '确认生成模型' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   expect(storage.remove).not.toHaveBeenCalled()
 })
 
@@ -38,7 +39,7 @@ it('submits only the explicitly confirmed model selection', async () => {
   storage.pending.mockResolvedValue({ ...recording, processingStatus: 'completed' })
   render(<LocalRecordingPreview recording={recording} onDeleted={vi.fn()} />)
   await userEvent.click(screen.getByRole('button', { name: '生成会议纪要' }))
-  await userEvent.click(screen.getByRole('button', { name: '确认模型并生成' }))
+  await userEvent.click(screen.getByRole('button', { name: '确认模型并开始生成' }))
   expect(storage.process).toHaveBeenCalledWith(recording, 'zh', undefined, expect.objectContaining({ selection: expect.objectContaining({ asr: 'asr-confirmed', llm: 'llm-confirmed' }) }))
 })
 
@@ -46,9 +47,9 @@ it('keeps failed confirmation available for retry and shows the storage error', 
   storage.process.mockRejectedValueOnce(new Error('选择保存失败'))
   render(<LocalRecordingPreview recording={recording} onDeleted={vi.fn()} />)
   await userEvent.click(screen.getByRole('button', { name: '生成会议纪要' }))
-  await userEvent.click(screen.getByRole('button', { name: '确认模型并生成' }))
+  await userEvent.click(screen.getByRole('button', { name: '确认模型并开始生成' }))
   expect(await screen.findByText('选择保存失败')).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: '确认模型并生成' })).toBeEnabled()
+  expect(screen.getByRole('button', { name: '确认模型并开始生成' })).toBeEnabled()
 })
 
 it('restores a known task without exposing new global choices', async () => {
@@ -65,7 +66,7 @@ it('requires explicit new-operation confirmation for an expired task', async () 
   await userEvent.click(screen.getByRole('button', { name: '重试会后处理' }))
   expect(screen.getByText('确认另建生成操作')).toBeInTheDocument()
   expect(storage.process).not.toHaveBeenCalled()
-  await userEvent.click(screen.getByRole('button', { name: '确认模型并生成' }))
+  await userEvent.click(screen.getByRole('button', { name: '确认模型并开始生成' }))
   expect(storage.process).toHaveBeenCalledWith(expired, 'zh', undefined, expect.objectContaining({ previousTaskId: 'expired-task', previousOperationId: 'original-operation' }))
 })
 
@@ -73,7 +74,7 @@ it('blocks confirmation when concrete model choices are missing', async () => {
   useAppModeStore.setState({ config: { mode: 'cloud', configured: true, asr_model: '', llm_model: '' } })
   render(<LocalRecordingPreview recording={recording} onDeleted={vi.fn()} />)
   await userEvent.click(screen.getByRole('button', { name: '生成会议纪要' }))
-  expect(screen.getByRole('button', { name: '确认模型并生成' })).toBeDisabled()
+  expect(screen.getByRole('button', { name: '确认模型并开始生成' })).toBeDisabled()
   expect(storage.process).not.toHaveBeenCalled()
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
@@ -100,4 +101,31 @@ it('recovers a player failure by reloading the original on demand', async () => 
   await userEvent.click(screen.getByRole('button', { name: '重新加载并回放' }))
   expect(await screen.findByLabelText('录音回放')).toBeInTheDocument()
   expect(storage.read).toHaveBeenCalledTimes(2)
+})
+
+
+it('keeps confirmation pending and prevents a second worker while models remain frozen', async () => {
+  let finish!: () => void
+  storage.process.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve }))
+  storage.pending.mockResolvedValueOnce({ ...recording, processingStatus: 'completed', noteId: 'saved-note' })
+  render(<LocalRecordingPreview recording={recording} onDeleted={vi.fn()} />)
+  await userEvent.click(screen.getByRole('button', { name: '生成会议纪要' }))
+  const confirm = screen.getByRole('button', { name: '确认模型并开始生成' })
+  fireEvent.click(confirm); fireEvent.click(confirm)
+  expect(confirm).toBeDisabled()
+  expect(screen.getByRole('button', { name: '收起处理进度' })).toBeEnabled()
+  expect(screen.getByRole('status')).toHaveTextContent('正在处理，原录制保留')
+  expect(storage.process).toHaveBeenCalledOnce()
+  act(() => useAppModeStore.setState({ config: { mode: 'cloud', configured: true, asr_model: 'new-asr', llm_model: 'new-llm' } }))
+  expect(screen.getByText('语音转写：asr-confirmed；内容总结：llm-confirmed')).toBeVisible()
+  expect(screen.queryByText(/语音转写：new-asr/)).toBeNull()
+  expect(storage.process.mock.calls[0][3].selection).toMatchObject({ asr: 'asr-confirmed', llm: 'llm-confirmed' })
+  await userEvent.click(screen.getByRole('button', { name: '关闭模型确认' }))
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(screen.getByRole('button', { name: '正在处理会议资料' })).toBeDisabled()
+  expect(screen.getByText('正在处理会议资料，原录制保留…')).toBeVisible()
+  finish()
+  expect(await screen.findByText('会议纪要已完成，可在会议列表查看。')).toBeVisible()
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(storage.process).toHaveBeenCalledOnce()
 })

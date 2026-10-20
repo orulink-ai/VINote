@@ -1,4 +1,7 @@
 """Content-free failure classification for task recovery, never provider text."""
+from app.services.summary_failure import (
+    SummaryResultUnconfirmed, SUMMARY_UNCONFIRMED_CODE, SUMMARY_UNCONFIRMED_COPY,
+)
 from app.services.asr_stream_service import (
     ASRServiceError,
     _TRANSIENT_CODES,
@@ -9,6 +12,7 @@ from app.services.asr_stream_service import (
 
 UNKNOWN_MESSAGE = "转写服务未能确认最终识别结果，请检查原任务后重试当前模型"
 UNKNOWN_COPY = "转写结果尚未确认，原文件已保留。请查看原任务结果，不要重复提交。"
+EMPTY_RESULT_COPY = "转写服务返回空结果，尚未确认该区间的完整识别结果。原文件已保留，请查看原任务，不要重复提交。"
 
 def safe_asr_failure_context(value):
     """Private artifact projection, never arbitrary exception metadata."""
@@ -57,6 +61,8 @@ def safe_asr_failure_context(value):
 
 
 def failure_details(error):
+    if isinstance(error, SummaryResultUnconfirmed):
+        return {'error_code': SUMMARY_UNCONFIRMED_CODE, 'retryable': False}
     if isinstance(error, ASRServiceError):
         code = error.code
         if error.sent_all and code in _TRANSIENT_CODES:
@@ -82,6 +88,9 @@ def failure_details(error):
 def recovery_status(status):
     result = dict(status)
     code = result.get("error_code")
+    if code == SUMMARY_UNCONFIRMED_CODE:
+        result.update(retryable=False, message=SUMMARY_UNCONFIRMED_COPY)
+        return result
     if code not in _KNOWN_CODES:
         code = None
     # Older artifacts discarded the typed failure. This exact generic ASR copy
@@ -94,4 +103,6 @@ def recovery_status(status):
             result["retryable"] = False
         if code in {"unknown_result", "unknown_error", "asr_incomplete_result"}:
             result["message"] = UNKNOWN_COPY
+        elif code in {"asr_empty_result", "empty_result_unverified"}:
+            result["message"] = EMPTY_RESULT_COPY
     return result

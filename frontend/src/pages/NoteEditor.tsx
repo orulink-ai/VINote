@@ -1,5 +1,7 @@
-import { resolvePageParent, pageParentLabel } from '@/lib/navigation';
+import { RegenerateMeetingSummary } from '@/components/Notes/RegenerateMeetingSummary';
+import { contextualPageParent, pageParentLabel } from '@/lib/navigation';
 import { noteOrigin } from "@/lib/noteOrigin";
+import { useNoteMediaPlayback } from '@/hooks/useNoteMediaPlayback';
 import { sourceVideoUrl } from "@/lib/sourceInput";
 import { FeishuDelivery } from "@/components/Notes/FeishuDelivery";
 import { FeishuDocumentFooter } from "@/components/Notes/FeishuDocumentFooter";
@@ -43,6 +45,7 @@ import { MarkdownContent } from "../components/Markdown/MarkdownContent";
 import { KeyMomentsRail } from "../components/Notes/KeyMomentsRail";
 import { VideoReferencePanel } from "../components/Notes/VideoReferencePanel";
 import { SavedRecordingActions } from "../components/Notes/SavedRecordingActions";
+import { NoteDetailTitle } from '@/components/Notes/NoteDetailTitle';
 import { RecordingRetryBar } from "../components/Notes/RecordingRetryBar";
 import { TranscriptEvidencePanel } from "../components/Notes/TranscriptEvidencePanel";
 import { apiJson } from "../lib/api";
@@ -240,8 +243,7 @@ export function NoteEditor() {
   const navigate = useNavigate();
   const location = useLocation();
   const [searchParams, setSearchParams] = useSearchParams();
-  const origin = (location.state as { returnTo?: unknown } | null)?.returnTo ?? searchParams.get("returnTo");
-  const returnTo = resolvePageParent(origin);
+  const explicitParent = contextualPageParent(location.pathname, location.search, (location.state as { returnTo?: unknown } | null)?.returnTo);
   const { copy, locale } = useI18n();
   const {
     loadNoteById,
@@ -284,7 +286,17 @@ export function NoteEditor() {
   const [sharePanelOpen, setSharePanelOpen] = useState(false);
   const [error, setError] = useState("");
   const [currentNote, setCurrentNote] = useState<NoteRecord | null>(null);
-  const isMeetingContent = !!currentNote?.sourceType?.startsWith('meeting_');
+  const [loadedFor, setLoadedFor] = useState<{ owner?: string; id: string } | null>(null);
+  const loadEpoch = useRef(0);
+  useEffect(() => useAuthStore.subscribe((next, previous) => { if (next.user?.id !== previous.user?.id) loadEpoch.current++ }), []);
+  const identityLoaded = !!loadedFor && loadedFor.id === id && loadedFor?.owner === owner && currentNote?.id === id;
+  const isMeetingContent = !!identityLoaded && !!currentNote?.sourceType?.startsWith('meeting_');
+  const parentKey = JSON.stringify([owner, id, explicitParent]);
+  const boundParent = useRef<{ key: string; parent: string | null }>({ key: parentKey, parent: explicitParent });
+  if (boundParent.current.key !== parentKey) boundParent.current = { key: parentKey, parent: explicitParent };
+  if (!boundParent.current.parent && identityLoaded) boundParent.current.parent = isMeetingContent ? '/meetings' : '/notes';
+  // Unknown loading has no bound default. Resolve once after verified content kind.
+  const returnTo = boundParent.current.parent || '/tasks';
   const hasMediaTranscript = !!taskId && !['file', 'text', 'document', 'transcript'].includes(currentNote?.sourceType || '');
   const hasUnsavedChanges =
     !!currentNote &&
@@ -297,8 +309,6 @@ export function NoteEditor() {
     currentNote?.updatedAt,
   );
   const [leaveOpen, setLeaveOpen] = useState(false);
-  const [mediaError, setMediaError] = useState("");
-  const [mediaAttempt, setMediaAttempt] = useState(0);
   const [currentTimestamp, setCurrentTimestamp] = useState(0);
   const [jumpRequestId, setJumpRequestId] = useState(0);
   const [keyMoments, setKeyMoments] = useState<KeyMoment[]>([]);
@@ -320,6 +330,7 @@ export function NoteEditor() {
   detailParams.set("returnTo", returnTo);
   const detailReturnTo = location.pathname + "?" + detailParams.toString() + location.hash;
   const sourceFilesPath = id ? `/files?${new URLSearchParams({ note: id, returnTo: detailReturnTo }).toString()}` : '';
+  const sourceTaskPath = taskId ? '/generate?' + new URLSearchParams({ task: taskId, returnTo: detailReturnTo, ...(isMeetingContent ? { meeting: '1' } : {}) }).toString() : '';
   // Merge only an exactly matching first H1 while reading. Saved/exported text is unchanged.
   const previewContent = workspaceMode === "preview"
     ? content.replace(/^#[ \t]+([^\r\n]+)(?:\r?\n|$)/, (heading, title: string) =>
@@ -335,6 +346,8 @@ export function NoteEditor() {
     (currentNote?.mediaKind ? currentNote.mediaKind === "audio" : ["audio", "meeting_recording"].includes(sourceType));
   const isVideoNote =
     Boolean(localMediaUrl) && (currentNote?.mediaKind ? currentNote.mediaKind === "video" : ["video", "meeting_video"].includes(sourceType));
+  const playbackUrl = localMediaUrl ? `${localMediaUrl}${isVideoNote ? '?playback=true' : ''}` : undefined;
+  const mediaPlayback = useNoteMediaPlayback(playbackUrl ? resolveContentUrl(playbackUrl) : undefined, `${owner || ''}:${id || ''}`, isVideoNote, zh);
   const originalSourceUrl = (() => {
     try { return videoUrl ? sourceVideoUrl(videoUrl) : undefined; }
     catch { return undefined; }
@@ -378,10 +391,17 @@ export function NoteEditor() {
   };
 
   useEffect(() => {
-    let active = true;
+    let mounted = true;
+    const epoch = ++loadEpoch.current;
+    const active = () => mounted && epoch === loadEpoch.current && owner === useAuthStore.getState().user?.id;
 
     async function loadNote() {
       setLoading(true);
+      setLoadedFor(null);
+      setCurrentNote(null);
+      setContent("");
+      setLocalTitle("");
+      setTaskId("");
       setError("");
       if (!id) {
         setError(copy.noteEditor.missingId);
@@ -390,11 +410,11 @@ export function NoteEditor() {
       }
 
       const note = await loadNoteById(id);
-      if (!active) {
+      if (!active()) {
         return;
       }
 
-      if (!note) {
+      if (!note || note.id !== id) {
         setError(copy.noteEditor.notFound);
         setLoading(false);
         return;
@@ -416,11 +436,12 @@ export function NoteEditor() {
       setNoteScope(note.scope);
       setNoteWorkspaceName(note.teamName || "");
       setCurrentNote(note);
+      setLoadedFor({ owner, id });
       setError("");
       setLoading(false);
 
       const existingShare = await getShareLink(note.id);
-      if (!active || !existingShare) {
+      if (!active() || !existingShare) {
         return;
       }
 
@@ -428,7 +449,7 @@ export function NoteEditor() {
     }
 
     void loadNote().catch((cause) => {
-      if (active) {
+      if (active()) {
         setError(
           cause instanceof Error ? cause.message : copy.noteEditor.notFound,
         );
@@ -437,13 +458,14 @@ export function NoteEditor() {
     });
 
     return () => {
-      active = false;
+      mounted = false;
     };
   }, [
     copy.noteEditor.missingId,
     copy.noteEditor.notFound,
     getShareLink,
     id,
+    owner,
     loadNoteById,
     loadAttempt,
   ]);
@@ -663,10 +685,10 @@ export function NoteEditor() {
     );
   };
 
-  if (loading) {
+  if (loading || (!identityLoaded && !error)) {
     return (
       <div className="flex h-full items-center justify-center">
-        <Button variant="ghost" onClick={() => navigate(returnTo)}><ArrowLeft data-icon="inline-start" />返回上级</Button>
+        {boundParent.current.parent && <Button variant="ghost" onClick={() => navigate(returnTo)}><ArrowLeft data-icon="inline-start" />{pageParentLabel(returnTo)}</Button>}
         <LoadingState label="正在读取笔记…" />
       </div>
     );
@@ -684,7 +706,7 @@ export function NoteEditor() {
           onClick={() => navigate(returnTo)}
           variant="outline"
         >
-          {copy.noteEditor.backToLibrary}
+          {zh ? pageParentLabel(returnTo) : "Return to list"}
         </Button>
       </div>
     );
@@ -706,14 +728,14 @@ export function NoteEditor() {
           {zh ? pageParentLabel(returnTo) : 'Return to list'}
         </Button>
       </div>
-      <header className="shrink-0 px-6 pt-5 lg:px-8">
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto]">
+      <header className="min-w-0 shrink-0 px-6 pt-5 lg:px-8">
+        <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,auto)]">
           <div className="min-w-0 flex-1">
             <p className="mb-2 text-xs text-muted-foreground">{zh ? isMeetingContent ? '会议纪要' : '笔记' : isMeetingContent ? 'Meeting notes' : 'Note'}</p>
-            {workspaceMode === 'preview' ? <h1 className="break-words text-2xl font-medium">{localTitle || copy.noteEditor.untitled}</h1> : <div className="grid gap-2"><Label htmlFor="note-detail-title">{zh ? isMeetingContent ? '会议名称' : '笔记标题' : isMeetingContent ? 'Meeting title' : 'Note title'}</Label><Input id="note-detail-title" type="text" value={localTitle} disabled={saving} onChange={event => setLocalTitle(event.target.value)} placeholder={copy.noteEditor.untitled} className="w-full min-w-0 text-base" /></div>}
+            {workspaceMode === 'preview' ? <NoteDetailTitle key={id} title={localTitle || copy.noteEditor.untitled} zh={zh} /> : <div className="grid min-w-0 gap-2"><Label htmlFor="note-detail-title">{zh ? isMeetingContent ? '会议名称' : '笔记标题' : isMeetingContent ? 'Meeting title' : 'Note title'}</Label><Input id="note-detail-title" type="text" value={localTitle} disabled={saving} onChange={event => setLocalTitle(event.target.value)} placeholder={copy.noteEditor.untitled} className="w-full min-w-0 text-base" /></div>}
             <p className="mt-2 text-xs leading-5 text-muted-foreground">{[currentNote ? `${zh ? '已保存：' : 'Saved: '}${new Date(currentNote.createdAt).toLocaleString()}` : '', ['desktop', 'mobile', 'web'].includes(generationClient || '') ? noteOrigin(generationClient, zh) : '', workspaceBadge].filter(Boolean).join(' · ')}</p>
           </div>
-          <div role="group" aria-label={zh ? '主要内容操作' : 'Primary content actions'} className="flex flex-wrap items-start gap-2">
+          <div role="group" aria-label={zh ? '主要内容操作' : 'Primary content actions'} className="flex min-w-0 max-w-full flex-wrap items-start gap-2 xl:justify-end">
             {hasUnsavedChanges ? <Button onClick={() => void handleSave()} size="sm" disabled={saving || !localTitle.trim()} aria-label={saving ? copy.noteEditor.saving : copy.noteEditor.save}><Save className="size-4" />{saving ? copy.noteEditor.saving : copy.noteEditor.save}</Button> : <Button variant="outline" size="sm" onClick={() => { setNoteView('summary'); setWorkspaceMode(workspaceMode === 'preview' ? 'write' : 'preview'); }} disabled={saving}><Edit3 />{workspaceMode === 'preview' ? zh ? '编辑' : 'Edit' : zh ? '返回阅读' : 'Back to reading'}</Button>}
             <ExportPanel title={currentNote?.title || localTitle} content={currentNote?.content || ''} version={`保存于 ${currentNote?.updatedAt || ''}`} transcript={transcriptEvidence ? renderTranscriptMarkdown(transcriptEvidence, transcriptTextMode) : undefined} />
             <Button variant="outline" size="sm" disabled={hasUnsavedChanges || saving} onClick={() => { setSharePanelOpen(true); setShareMessage(''); setShareError(''); }}><Share2 />{zh ? '分享' : 'Share'}</Button>
@@ -730,7 +752,7 @@ export function NoteEditor() {
               <section aria-label={zh ? '版本与来源' : 'Versions and source'} className="grid content-start gap-2"><h2 className="text-xs font-medium text-muted-foreground">{zh ? '版本与来源' : 'Versions and source'}</h2><div className="flex flex-wrap items-center gap-2">{id && <><div><span className="mr-2 text-xs text-muted-foreground">{zh ? '历史版本' : 'Version history'}</span><NoteVersions noteId={id} revision={currentNote?.updatedAt} currentContent={content} onRestore={(title, body) => { setLocalTitle(title); setContent(body); setWorkspaceMode('write'); }} /></div><Button variant="ghost" size="sm" disabled={hasUnsavedChanges || saving} asChild><Link to={sourceFilesPath} state={{ returnTo: detailReturnTo }} aria-disabled={hasUnsavedChanges || saving || undefined} aria-describedby={hasUnsavedChanges || saving ? 'source-file-save-help' : undefined} tabIndex={hasUnsavedChanges || saving ? -1 : undefined} onClick={event => { if (hasUnsavedChanges || saving) event.preventDefault(); }}>{zh ? '查看原文件' : 'View original file'}</Link></Button></>}{sharedKey && <><Button variant="ghost" size="sm" disabled={hasUnsavedChanges || saving} asChild><Link to={`/workspace/${encodeURIComponent(sharedKey)}`} state={{ returnTo: detailReturnTo }} aria-disabled={hasUnsavedChanges || saving || undefined} tabIndex={hasUnsavedChanges || saving ? -1 : undefined} onClick={event => { if (hasUnsavedChanges || saving) event.preventDefault(); }}>{zh ? '查看保存版本' : 'View saved versions'}</Link></Button></>}</div>{(hasUnsavedChanges || saving) && <p id="source-file-save-help" className="text-xs leading-5 text-muted-foreground">{saving ? zh ? '正在保存修改，完成后可查看原文件。' : 'Saving changes. You can view the original file once saving finishes.' : zh ? '请先保存修改后查看原文件。' : 'Save your changes before viewing the original file.'}</p>}<p className="text-xs leading-5 text-muted-foreground">{zh ? '查看历史正文、保存记录和可核验的来源文件。查看不会修改当前内容。' : 'View content history, saved records and verified source files without changing the current content.'}</p></section>
 
               <section aria-label={zh ? '内容工具' : 'Content tools'} className="grid content-start gap-2"><h2 className="text-xs font-medium text-muted-foreground">{zh ? '内容工具' : 'Content tools'}</h2><div className="flex flex-wrap items-center gap-2">{sharedKey && <><Button variant="outline" size="sm" disabled={hasUnsavedChanges || saving} asChild><Link to={`/settings/mcp?mode=translation&note=${encodeURIComponent(sharedKey)}`} state={{ returnTo: detailReturnTo }} aria-disabled={hasUnsavedChanges || saving || undefined} tabIndex={hasUnsavedChanges || saving ? -1 : undefined} onClick={event => { if (hasUnsavedChanges || saving) event.preventDefault(); }}>{zh ? '全文翻译 · MCP' : 'Full-text translation · MCP'}</Link></Button></>}{!sharedKey && <><Button variant="outline" size="sm" disabled>{zh ? '全文翻译 · MCP' : 'Full-text translation · MCP'}</Button><Button variant="ghost" size="sm" asChild><Link to="/settings/mcp" state={{ returnTo: detailReturnTo }}>{zh ? '配置 MCP 工具' : 'Configure MCP tools'}</Link></Button></>}</div><p className="text-xs leading-5 text-muted-foreground">{sharedKey ? zh ? '工具使用所选已保存正文；确认发送范围后执行。核对结果后另存，保留原文。' : 'Tools use the selected saved text after you confirm what to send. Review results before saving a new version.' : zh ? '此工具尚未接入这份内容的已保存版本。正文与历史保留，可先配置工具。' : 'This tool does not yet support this saved content. Text and history remain available; you can configure tools first.'}</p></section>
-              <section aria-label={zh ? '更多内容操作' : 'Additional content actions'} className="flex flex-wrap items-center gap-2 border-t pt-3 lg:col-span-2">{keyMoments.length > 0 && <Button variant="ghost" size="sm" onClick={() => setMomentsOpen(true)}><ListVideo />{zh ? '关键片段' : 'Key moments'}</Button>}</section>
+              <section aria-label={zh ? '更多内容操作' : 'Additional content actions'} className="flex min-w-0 flex-wrap items-center gap-2 border-t pt-3 lg:col-span-2">{id && taskId && isMeetingContent && currentNote?.id === id && <RegenerateMeetingSummary noteId={id} taskId={taskId} workspace={currentNote.scope === 'team' && currentNote.teamId ? { scope: 'team', teamId: currentNote.teamId } : { scope: 'personal' }} returnTo={detailReturnTo} disabled={hasUnsavedChanges || saving} />}{sourceTaskPath && !['failed', 'transcribing_failed', 'generation_failed'].includes(currentNote?.status || '') && <Button variant="ghost" size="sm" disabled={hasUnsavedChanges || saving} asChild><Link to={sourceTaskPath} aria-disabled={hasUnsavedChanges || saving || undefined} tabIndex={hasUnsavedChanges || saving ? -1 : undefined} onClick={event => { if (hasUnsavedChanges || saving) event.preventDefault(); }}>{zh ? '查看处理任务' : 'View processing task'}</Link></Button>}{keyMoments.length > 0 && <Button variant="ghost" size="sm" onClick={() => setMomentsOpen(true)}><ListVideo />{zh ? '关键片段' : 'Key moments'}</Button>}</section>
             </div>
           </details>
         </div>
@@ -854,18 +876,17 @@ export function NoteEditor() {
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       ) : null}
-      {mediaError && (
-        <Alert variant="destructive">
+      {mediaPlayback.message && (
+        <Alert variant={mediaPlayback.phase === 'warming' ? 'default' : 'destructive'}>
           <AlertDescription className="flex flex-wrap items-center justify-between gap-3">
-            <span>{mediaError}</span>
+            <span className="min-w-0 [overflow-wrap:anywhere]">{mediaPlayback.message}</span>
             <Button
               variant="outline"
               onClick={() => {
-                setMediaError("");
-                setMediaAttempt((n) => n + 1);
+                mediaPlayback.reload(isVideoNote ? videoRef.current : audioRef.current);
               }}
             >
-              重新加载原音
+              {zh ? isVideoNote ? '重新加载视频' : '重新加载音频' : isVideoNote ? 'Reload video' : 'Reload audio'}
             </Button>
           </AlertDescription>
         </Alert>
@@ -975,7 +996,7 @@ export function NoteEditor() {
         </SheetContent>
       </Sheet>
 
-      <div className="relative flex min-h-0 flex-1 flex-col-reverse overflow-hidden lg:flex-row">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col-reverse overflow-hidden lg:flex-row">
         {id && (
           <div
             className={
@@ -1029,9 +1050,9 @@ export function NoteEditor() {
                     >
                       <MarkdownContent
                         content={content ? previewContent : copy.noteEditor.previewEmpty}
-                        className="prose mx-auto w-full max-w-4xl break-words px-6 py-6 dark:prose-invert lg:px-8"
+                        className="prose mx-auto min-w-0 w-full max-w-4xl px-6 py-6 [overflow-wrap:anywhere] dark:prose-invert lg:px-8"
                         videoUrl={videoUrl || undefined}
-                        mediaUrl={localMediaUrl}
+                        mediaUrl={playbackUrl}
                         onVideoJump={(seconds) => {
                           jumpToTimestamp(seconds);
                         }}
@@ -1124,7 +1145,7 @@ export function NoteEditor() {
             className={
               videoExpanded
                 ? "absolute inset-0 z-10 flex min-h-0 flex-col bg-card"
-                : "flex max-h-[40%] min-h-0 w-full shrink-0 flex-col border-b bg-card lg:max-h-none lg:order-first lg:w-[42%] lg:border-b-0 lg:border-r"
+                : "flex h-[32vh] min-h-[180px] w-full shrink-0 flex-col border-b bg-card lg:h-auto lg:min-h-0 lg:order-first lg:w-[42%] lg:border-b-0 lg:border-r"
             }
           >
             <div className="flex shrink-0 items-center justify-between gap-2 border-b px-3 py-2">
@@ -1147,36 +1168,28 @@ export function NoteEditor() {
                     : "Expand video"}
               </Button>
             </div>
-            {id && isMeetingContent && (
-              <SavedRecordingActions
-                key={id}
-                noteId={id}
-                title={localTitle}
-                onDeleted={() => setRecordingDeleted(true)}
-              />
-            )}
             <div className="flex min-h-0 flex-1 flex-col overflow-auto p-3">
+              {mediaPlayback.status && <p role="status" className="mb-2 text-xs text-muted-foreground">{mediaPlayback.status}</p>}
               <video
-                key={mediaAttempt}
                 ref={videoRef}
                 data-testid="source-video"
                 controls
                 preload="metadata"
-                src={resolveContentUrl(localMediaUrl)}
+                src={resolveContentUrl(playbackUrl!)}
                 className={
                   videoExpanded
                     ? "min-h-0 w-full flex-1 bg-black object-contain"
                     : "aspect-video max-h-full w-full shrink-0 bg-black object-contain"
                 }
-                onTimeUpdate={(event) =>
-                  setCurrentTimestamp(event.currentTarget.currentTime)
-                }
-                onError={() =>
-                  setMediaError(
-                    "原视频不可播放，可能已移除、缺少权限或格式不支持。可检查原文件并重试，正文仍可阅读。",
-                  )
-                }
+                onTimeUpdate={event => { setCurrentTimestamp(event.currentTarget.currentTime); mediaPlayback.remember(event.currentTarget); }}
+                onLoadedMetadata={event => mediaPlayback.metadata(event.currentTarget)}
+                onCanPlay={mediaPlayback.ready}
+                onEnded={mediaPlayback.ready}
+                onWaiting={mediaPlayback.waiting}
+                onStalled={mediaPlayback.waiting}
+                onError={event => void mediaPlayback.failed(event.currentTarget)}
               />
+              {id && isMeetingContent && <details className="mt-2 shrink-0 text-sm"><summary className="cursor-pointer py-2">{zh ? '原视频文件' : 'Original video file'}</summary><SavedRecordingActions key={id} noteId={id} title={localTitle} mediaKind="video" onDeleted={() => setRecordingDeleted(true)} /></details>}
               {!videoExpanded && (
                 <p className="mt-3 text-xs text-muted-foreground">
                   {zh
@@ -1190,26 +1203,24 @@ export function NoteEditor() {
       </div>
       {isAudioNote && localMediaUrl ? (
         <div className="shrink-0 border-t border-border bg-card px-4 py-3 dark:border-border ">
+          {mediaPlayback.status && <p role="status" className="mb-2 text-xs text-muted-foreground">{mediaPlayback.status}</p>}
           <div className="mx-auto flex max-w-6xl items-center gap-3">
             <span className="shrink-0 text-sm font-medium">
               {zh ? "原声" : "Audio"}
             </span>
             <audio
-              key={mediaAttempt}
               ref={audioRef}
               data-testid="source-audio"
               controls
               preload="metadata"
               src={resolveContentUrl(localMediaUrl)}
               className="h-10 min-w-0 flex-1"
-              onTimeUpdate={(event) =>
-                setCurrentTimestamp(event.currentTarget.currentTime)
-              }
-              onError={() =>
-                setMediaError(
-                  "原音不可播放，可能已移除、缺少权限或格式不支持。可检查原文件并重试，正文仍可阅读。",
-                )
-              }
+              onTimeUpdate={event => { setCurrentTimestamp(event.currentTarget.currentTime); mediaPlayback.remember(event.currentTarget); }}
+              onLoadedMetadata={event => mediaPlayback.metadata(event.currentTarget)}
+              onCanPlay={mediaPlayback.ready}
+              onEnded={mediaPlayback.ready}
+              onWaiting={mediaPlayback.waiting}
+              onError={event => void mediaPlayback.failed(event.currentTarget)}
             />
             {originalSourceUrl && <Button variant="outline" asChild>
               <a href={originalSourceUrl} target="_blank" rel="noreferrer">{zh ? "打开来源" : "Open source"}</a>

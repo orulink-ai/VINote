@@ -70,6 +70,7 @@ class FakeSummarizer:
         extras=None,
         output_language="zh-CN",
         progress_callback=None,
+        video_evidence=None,
     ):
         self.calls.append(
             {
@@ -79,6 +80,7 @@ class FakeSummarizer:
                 "summary_mode": summary_mode,
                 "extras": extras,
                 "output_language": output_language,
+                "video_evidence": video_evidence,
             }
         )
         return f"# {title}\n\n## Key moment\n\n{segments[0].text} [00:01]\n\n[[Screenshot:00:01]]"
@@ -195,7 +197,7 @@ class NoteServiceTest(unittest.TestCase):
             self.assertEqual(stages, ["preparing", "transcribing", "transcript_ready", "summarizing",
                                       "enriching_media", "saving_result", "success"])
 
-    def test_uploaded_meeting_video_retains_original_without_visual_generation(self):
+    def test_uploaded_meeting_video_supplies_original_evidence_without_generated_illustrations(self):
         with tempfile.TemporaryDirectory() as root:
             artifacts = TaskArtifactService(Path(root))
             folder = artifacts.create_task_dir("screen-test")
@@ -214,10 +216,14 @@ class NoteServiceTest(unittest.TestCase):
                 self.assertEqual(artifacts.get_status("screen-test")["stage"], "summarizing")
                 return summarize(**kwargs)
 
-            with patch.object(service.llm_service.summarizer, "summarize", side_effect=check_summary_stage), patch.object(screenshots, "prepare_local_video", side_effect=AssertionError("Must not download")), patch("app.services.meeting_video_analysis_service.MeetingVideoAnalysisService.analyze", return_value="视觉证据：进度表") as vision:
+            from unittest.mock import Mock
+            evidence = Mock()
+            evidence.align.return_value = evidence
+            with patch.object(service.llm_service.summarizer, "summarize", side_effect=check_summary_stage), patch.object(screenshots, "prepare_local_video", side_effect=AssertionError("Must not download")), patch("app.services.video_evidence_service.VideoEvidenceService.collect", return_value=evidence) as collect, patch("app.services.meeting_video_analysis_service.MeetingVideoAnalysisService.analyze", return_value="视觉证据：进度表") as vision:
                 result = service.generate_from_file(str(video), "screen-test", title="Screen meeting")
-            # Visualization generation was cancelled. Reusing retained media
-            # must not silently spend another model call on visual analysis.
+            collect.assert_called_once()
+            assert service.llm_service.summarizer.calls[0]['video_evidence'] is evidence
+            # No generated illustrations or separate hidden analysis model.
             vision.assert_not_called()
             assert "![Screenshot" not in result.markdown
             assert "[[Screenshot:" not in result.markdown

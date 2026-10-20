@@ -14,6 +14,10 @@ from app.services.tracing_service import (generation_name, record_model_paramete
 from app.llm.anthropic_compat import post_anthropic_compatible
 from app.llm.base import LLMSummarizer, SummaryProgressCallback
 from app.llm.meeting_review import build_meeting_review_prompts
+from app.llm.meeting_draft import build_meeting_draft_prompts
+from app.llm.video_material import bind_video_material, video_user_content, anthropic_user_content
+from app.llm.source_references import (bind_source_references, record_working_draft,
+                                      segment_reference, without_internal_references)
 from app.llm.prompts import (
     build_chunk_system_prompt,
     build_chunk_user_prompt,
@@ -49,9 +53,10 @@ class _BasePromptLLM(LLMSummarizer):
                 output_language=output_language, intermediate=intermediate,
                 source_is_reviewed_notes=source_is_reviewed_notes,
             ))
-        if not result or not result.strip():
+        result = (result or '').strip() if intermediate else without_internal_references(result or '')
+        if not result:
             raise RuntimeError("会议纪要事实复核未返回内容，请重试。")
-        return result.strip()
+        return result
 
     @staticmethod
     def _format_time(seconds: float) -> str:
@@ -63,9 +68,9 @@ class _BasePromptLLM(LLMSummarizer):
 
     def _build_segment_text(self, segments: List[TranscriptSegment]) -> str:
         rendered = []
-        for seg in segments:
+        for index, seg in enumerate(segments):
             rendered.append(
-                f"{self._format_time(seg.start)}–{self._format_time(seg.end)} - "
+                f"{segment_reference(seg, index)} {self._format_time(seg.start)}–{self._format_time(seg.end)} - "
                 f"{('[' + (seg.speaker_label or seg.speaker_id) + '] ') if seg.speaker_id else ''}{seg.text}")
             if seg.speaker_evidence:
                 rendered.append("独立说话人时间轴（录音偏移，编号非实名）：")
@@ -138,16 +143,22 @@ class _BasePromptLLM(LLMSummarizer):
         output_language: str,
         progress_callback: SummaryProgressCallback | None = None,
     ) -> str:
-        user_prompt = self._build_user_prompt(title, segments, style, extras, output_language)
+        prompts = (build_meeting_draft_prompts(
+            title=title, source=self._build_segment_text(segments), extras=extras,
+            output_language=output_language,
+        ) if style == 'meeting' else {
+            'system_prompt': build_system_prompt(output_language),
+            'user_prompt': self._build_user_prompt(title, segments, style, extras, output_language),
+        })
         draft = self._complete_stage(
             stage="LLM｜生成会议纪要" if style == "meeting" else "LLM｜生成笔记",
-            system_prompt=build_system_prompt(output_language),
-            user_prompt=user_prompt,
+            **prompts,
         )
         if style != "meeting":
             return draft
+        record_working_draft(draft)
         if progress_callback:
-            progress_callback("正在对照转写核对会议结论与行动事项…")
+            progress_callback("正在核对音视频材料并组织会议纪要…")
         return self._review_meeting_note(
             source=self._build_segment_text(segments), draft=draft,
             extras=extras, output_language=output_language,
@@ -240,6 +251,26 @@ class _BasePromptLLM(LLMSummarizer):
         extras: str | None = None,
         output_language: str = "zh-CN",
         progress_callback: SummaryProgressCallback | None = None,
+        video_evidence=None,
+    ) -> str:
+        if video_evidence is not None and normalize_summary_mode(summary_mode) == 'accurate':
+            raise ValueError('视频证据需要完整来源总结，请明确选择 default 或 oneshot')
+        capabilities = getattr(self, '_video_capabilities', {})
+        if getattr(self, '_video_capability_model', None) != getattr(self, 'model', None):
+            capabilities = {}  # Verification never transfers to another model.
+        with bind_source_references(segments), bind_video_material(video_evidence, capabilities):
+            return self._summarize(title, segments, style, summary_mode, extras,
+                                   output_language, progress_callback)
+
+    def _summarize(
+        self,
+        title: str,
+        segments: List[TranscriptSegment],
+        style: str = "detailed",
+        summary_mode: str = "default",
+        extras: str | None = None,
+        output_language: str = "zh-CN",
+        progress_callback: SummaryProgressCallback | None = None,
     ) -> str:
         mode = normalize_summary_mode(summary_mode)
         # Default and explicit oneshot always submit the complete source.
@@ -275,7 +306,7 @@ class OpenAILLM(_BasePromptLLM):
     ):
         self.model = model
         self.temperature = temperature
-        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=300.0)
+        self.client = OpenAI(api_key=api_key, base_url=base_url, timeout=300.0, max_retries=0)
         logger.info("[LLM] init openai-compatible model=%s base_url=%s", model, base_url)
 
     @traced_generation
@@ -285,7 +316,7 @@ class OpenAILLM(_BasePromptLLM):
             model=self.model,
             messages=[
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
+                {"role": "user", "content": video_user_content(user_prompt)},
             ],
             temperature=self.temperature,
         )
@@ -326,7 +357,7 @@ class AnthropicLLM(_BasePromptLLM):
                 "model": self.model,
                 "max_tokens": 8192,
                 "system": system_prompt,
-                "messages": [{"role": "user", "content": [{"type": "text", "text": user_prompt}]}],
+                "messages": [{"role": "user", "content": anthropic_user_content(user_prompt)}],
                 "temperature": self.temperature,
             },
             timeout=300.0,
@@ -376,7 +407,7 @@ class AzureOpenAILLM(_BasePromptLLM):
             json={
                 "messages": [
                     {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
+                    {"role": "user", "content": video_user_content(user_prompt)},
                 ],
                 "max_tokens": 8192,
                 "temperature": self.temperature,

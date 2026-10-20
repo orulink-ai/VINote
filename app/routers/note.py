@@ -82,7 +82,8 @@ from app.services.task_generation_context import frozen_generation_context
 @router.get("/task/{task_id}/new-generation-context")
 def new_generation_context(task_id: str, response: Response, user=Depends(get_current_user)):
     response.headers["Cache-Control"] = "private, no-store"
-    return frozen_generation_context(user.user_id, task_id, active=task_id in _ACTIVE_FILE_TASKS)
+    return frozen_generation_context(user.user_id, task_id, active=task_id in _ACTIVE_FILE_TASKS,
+                                     receipts=_source_requests)
 
 
 @router.post("/task/{task_id}/new-generation", response_model=SourceRequestReceipt)
@@ -678,6 +679,9 @@ def retry_media_task(task_id: str, background_tasks: BackgroundTasks, user=Depen
             return {"task_id": task_id, "status": status["status"]}
         from app.services.task_failure import recovery_status
         status = recovery_status(status)
+        if status.get('failed_stage') == 'summarizing':
+            raise HTTPException(409, {'code': status.get('error_code') or 'summary_retry_requires_confirmation',
+                'message': '总结阶段失败须明确确认新的独立总结操作，完整材料已保留。'})
         if status.get("retryable") is False:
             raise HTTPException(409, {"code": status.get("error_code") or "retry_not_confirmed",
                 "message": "原任务尚不能安全重试，请查询原结果；原文件已保留。"})
@@ -705,29 +709,44 @@ def retry_media_task(task_id: str, background_tasks: BackgroundTasks, user=Depen
 
 
 @router.get("/task/{task_id}/artifacts/{asset_path:path}", include_in_schema=False)
-def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | None = Depends(get_optional_current_user)):
+def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | None = Depends(get_optional_current_user), playback: bool = False):
     _require_recording_access(task_id, user)
     task_dir = _note_service.artifact_service.find_task_dir(task_id)
     if not task_dir:
         raise HTTPException(status_code=404, detail="Task not found")
 
-    normalized_parts = Path(asset_path).parts
-    if not normalized_parts or normalized_parts[0] not in {"screenshots", "media"}:
+    normalized_parts = asset_path.split('/')
+    if (len(normalized_parts) < 2 or normalized_parts[0] not in {"screenshots", "media"}
+            or '\\' in asset_path or ':' in asset_path or '\x00' in asset_path
+            or any(not part or part.startswith('.') for part in normalized_parts)):
         raise HTTPException(status_code=404, detail="Artifact not found")
 
     if (task_dir / "source_reference.json").exists() and normalized_parts[0] == "media":
         source = _note_service.artifact_service.resolve_source_media(task_dir)
         if source and asset_path == "media/" + source.name:
+            if playback:
+                from app.services.media_playback_service import playback_file
+                return FileResponse(playback_file(source), headers={"Cache-Control": "private, no-store"})
             return FileResponse(source)
         raise HTTPException(404, "Artifact not found")
 
     requested_path = (task_dir / asset_path).resolve()
     task_root = task_dir.resolve()
-    if task_root not in requested_path.parents and requested_path != task_root:
+    media_root = task_dir / normalized_parts[0]
+    if (media_root.is_symlink() or getattr(media_root, 'is_junction', lambda: False)()
+            or media_root.resolve().parent != task_root or media_root.resolve() not in requested_path.parents):
         raise HTTPException(status_code=404, detail="Artifact not found")
+    current_path = task_dir
+    for part in normalized_parts:
+        current_path = current_path / part
+        if current_path.is_symlink() or getattr(current_path, 'is_junction', lambda: False)():
+            raise HTTPException(status_code=404, detail="Artifact not found")
     if not requested_path.exists() or not requested_path.is_file():
         raise HTTPException(status_code=404, detail="Artifact not found")
 
+    if playback and normalized_parts[0] == "media":
+        from app.services.media_playback_service import playback_file
+        return FileResponse(playback_file(requested_path), headers={"Cache-Control": "private, no-store"})
     return FileResponse(Path(requested_path))
 
 

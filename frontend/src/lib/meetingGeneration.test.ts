@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { apiJson } from './api'
 import {
   MEETING_NOTE_SOURCE_TYPE,
   buildMeetingRecordingFile,
@@ -6,9 +7,42 @@ import {
   createMeetingRecordingTitle,
   submitMeetingRecording,
   waitForMeetingTaskCompletion,
+  resumeMeetingTask,
 } from './meetingGeneration'
 
+vi.mock('./api', () => ({ apiJson: vi.fn() }))
+
 describe('meetingGeneration', () => {
+  beforeEach(() => vi.mocked(apiJson).mockReset())
+
+  it.each(['unknown_error', 'asr_empty_result', 'empty_result_unverified'])('reads non-retryable %s without POST and preserves the server failure stage/message on repeated recovery', async error_code => {
+    const message = error_code === 'unknown_error' ? '转写结果尚未确认，原文件已保留。' : '转写服务返回空结果，尚未确认该区间的完整识别结果。原文件已保留，请查看原任务，不要重复提交。'
+    vi.mocked(apiJson).mockResolvedValue({ status: 'failed', failed_stage: 'transcribing', retryable: false, error_code, message })
+    for (let attempt = 0; attempt < 2; attempt++) {
+      await expect(resumeMeetingTask('original-task')).rejects.toMatchObject({
+        name: 'MeetingGenerationError', stage: 'transcribing', message,
+      })
+    }
+    expect(vi.mocked(apiJson).mock.calls).toEqual([['/api/task/original-task'], ['/api/task/original-task']])
+  })
+
+  it.each([true, undefined])('retains the original task retry contract when retryable=%s', async retryable => {
+    vi.mocked(apiJson).mockResolvedValueOnce({ status: 'failed', failed_stage: 'summarizing', retryable, message: 'Summary failed' }).mockResolvedValueOnce({ task_id: 'original-task' })
+    await expect(resumeMeetingTask('original-task')).resolves.toEqual({ task_id: 'original-task' })
+    expect(vi.mocked(apiJson).mock.calls).toEqual([['/api/task/original-task'], ['/api/task/original-task/retry', { method: 'POST' }]])
+  })
+
+  it('preserves the failed stage if a formerly retryable task is rejected during retry', async () => {
+    vi.mocked(apiJson).mockResolvedValueOnce({ status: 'failed', failed_stage: 'aligning', retryable: true, message: 'Alignment failed' }).mockRejectedValueOnce(new Error('原任务尚不能安全重试'))
+    await expect(resumeMeetingTask('original-task')).rejects.toMatchObject({ stage: 'aligning', message: '原任务尚不能安全重试' })
+  })
+
+  it.each(['transcribing', 'success'])('only queries %s tasks without submitting retry', async status => {
+    vi.mocked(apiJson).mockResolvedValue({ status, message: status })
+    await expect(resumeMeetingTask('original-task')).resolves.toEqual({ task_id: 'original-task' })
+    expect(apiJson).toHaveBeenCalledExactlyOnceWith('/api/task/original-task')
+  })
+
   it('keeps MP4 screen recordings named as video files', () => {
     expect(buildMeetingRecordingFile(new Blob(['video'], { type: 'video/mp4' })).name).toMatch(/\.mp4$/)
   })

@@ -186,3 +186,15 @@ it.each([undefined, NaN, Infinity, -1, 1.2])('does not invent a speaker percenta
   expect(screen.getByRole('progressbar', { name: '发言区间检测进度' })).not.toHaveAttribute('aria-valuenow');
   expect(screen.queryByText(/\d+%/)).not.toBeInTheDocument();
 });
+
+it('shows video verification after ready ASR without inventing a video percentage or completing the minutes', () => {
+  render(<GenerateProgress meeting videoSource status="processing" currentStep="analyzing_video" processedSeconds={900} totalSeconds={900} receivedSeconds={900} speakersReady progress={80} />)
+  expect(screen.getByRole('heading', { name: '核对共享画面与发言' })).toBeVisible()
+  expect(screen.getByRole('listitem', { name: '核对共享画面与发言：进行中' })).toHaveAttribute('aria-current', 'step')
+  expect(screen.getByRole('listitem', { name: '转写与说话人分析：已完成' })).toBeVisible()
+  expect(screen.getByRole('listitem', { name: '生成并核对会议纪要：待开始' })).toBeVisible()
+  expect(screen.getByRole('listitem', { name: '保存会议纪要：待开始' })).toBeVisible()
+  expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow')
+  expect(screen.queryByText(/100%|80%/)).toBeNull()
+  expect(screen.getByRole('status')).toHaveTextContent('逐字稿已就绪不代表纪要已完成')
+})

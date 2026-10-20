@@ -1,3 +1,4 @@
+import { useAppModeStore } from '../stores/appModeStore'
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
@@ -256,10 +257,10 @@ describe('NoteGenerator failed generation recovery', () => {
     expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true)
   })
 
-  const frozenContext = { protocol: 1, parent_task_id: 'selected-task', workflow: 'meeting', context_revision: 'a'.repeat(64), source: { title: '保留视频', version: 'b'.repeat(64) }, frozen_models: { mode: 'cloud', origin: 'https://original.invalid', asr_model: 'original-asr', llm_model: 'original-llm' }, can_confirm_new_operation: true }
-  const openFrozenSheet = async () => {
+  const frozenContext = { protocol: 1, parent_task_id: 'selected-task', workflow: 'meeting', context_revision: 'a'.repeat(64), source: { title: '保留视频', version: 'b'.repeat(64), type: 'meeting_video' }, frozen_models: { mode: 'cloud', origin: 'https://original.invalid', asr_model: 'original-asr', llm_model: 'original-llm' }, can_confirm_new_operation: true }
+  const openFrozenSheet = async (context: typeof frozenContext & { canonical_task_id?: unknown } = frozenContext) => {
     queryMock.value = 'meeting=1&task=selected-task'
-    apiMock.apiJson.mockImplementation((path: string) => path.endsWith('/new-generation-context') ? Promise.resolve(frozenContext) : Promise.resolve({ task_id: 'selected-task', status: 'failed', message: '上次未完成', error_code: 'unknown_result', retryable: false }))
+    apiMock.apiJson.mockImplementation((path: string) => path.endsWith('/new-generation-context') ? Promise.resolve(context) : Promise.resolve({ task_id: 'selected-task', status: 'failed', message: '上次未完成', error_code: 'unknown_result', retryable: false }))
     renderGenerator('/files?purpose=meeting&file=task%3Aselected-task')
     await screen.findByText('上次未完成')
     await userEvent.click(screen.getByRole('button', { name: '确认原模型，开始新的处理' }))
@@ -310,6 +311,136 @@ describe('NoteGenerator failed generation recovery', () => {
     expect(navigateMock.mock.calls.at(-1)![0]).toContain(`operation=${body.operation_id}`)
     expect(localStorage.getItem('vinote:import-receipt:import-owner:meeting')).toBe(old)
     expect(JSON.parse(localStorage.getItem('vinote:source-task-receipt:import-owner:selected-task')!).id).toBe('selected-task')
+  })
+  it.each(['lost', 'accepted'])('v2 explicitly confirms one operation with canonical id and preserves frozen context for %s response', async outcome => {
+    const context = { ...frozenContext, protocol: 2, canonical_task_id: '2bfa5300-a102-45a8-89cf-123456789abc' }
+    const dialog = await openFrozenSheet(context)
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+    apiMock.apiJson.mockImplementation((_path: string, init?: RequestInit) => {
+      const body = JSON.parse(init!.body as string)
+      const pending = JSON.parse(localStorage.getItem(`vinote:source-receipt:import-owner:${body.operation_id}`)!)
+      expect(pending.frozenContext).toEqual(context)
+      expect(pending.sourceType).toBe('meeting_video')
+      expect(pending.submissionState).toBe('unknown')
+      return outcome === 'lost' ? Promise.reject(new Error('lost response')) : Promise.resolve({ operation_id: body.operation_id, task_id: 'new-independent-child', state: 'accepted' })
+    })
+    await userEvent.dblClick(within(dialog).getByRole('button', { name: '确认原模型并开始新的处理' }))
+    await waitFor(() => expect(navigateMock).toHaveBeenCalled())
+    const writes = apiMock.apiJson.mock.calls.filter(([, init]) => init?.method === 'POST')
+    expect(writes).toHaveLength(1)
+    expect(writes[0][0]).toBe('/api/task/selected-task/new-generation')
+    expect(JSON.parse(writes[0][1].body)).toEqual({ operation_id: expect.any(String), confirmed: true, canonical_task_id: context.canonical_task_id, context_revision: context.context_revision, source_version: context.source.version })
+    expect(navigateMock.mock.calls.at(-1)![0]).toContain('operation=')
+  })
+  it.each([
+    ['meeting_video', 'meeting_video', 5],
+    ['video', 'meeting_video', 5],
+    ['meeting_audio', 'meeting_recording', 4],
+    ['meeting_recording', 'meeting_recording', 4],
+    ['audio', 'meeting_recording', 4],
+    ['unrecognized.webm', 'unknown', 4],
+  ] as const)('v2 verified source %s survives confirmation, recovery and saving as %s', async (type, classified, steps) => {
+    const context = { ...frozenContext, protocol: 2, canonical_task_id: '2bfa5300-a102-45a8-89cf-123456789abc', source: { ...frozenContext.source, title: 'Synthetic-video.webm', type } }
+    const dialog = await openFrozenSheet(context)
+    apiMock.apiJson.mockImplementation(async (_path: string, init?: RequestInit) => {
+      const body = JSON.parse(init!.body as string)
+      expect(JSON.parse(localStorage.getItem(`vinote:source-receipt:import-owner:${body.operation_id}`)!).sourceType).toBe(classified)
+      return { operation_id: body.operation_id, task_id: 'classified-child', state: 'accepted', source_type: 'audio' }
+    })
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认原模型并开始新的处理' }))
+    await waitFor(() => expect(navigateMock).toHaveBeenCalled())
+    const route = navigateMock.mock.calls.at(-1)![0] as string
+    const operation = new URL(route, 'https://fixture.invalid').searchParams.get('operation')!
+    const key = `vinote:source-receipt:import-owner:${operation}`
+    expect(JSON.parse(localStorage.getItem(key)!).sourceType).toBe(classified)
+    cleanup(); queryMock.value = 'meeting=1&operation=' + operation
+    apiMock.apiJson.mockResolvedValue({ task_id: 'classified-child', status: 'transcribing', processed_seconds: 10, total_seconds: 30 })
+    renderGenerator()
+    const list = await screen.findByRole('list', { name: '会议纪要处理步骤' })
+    expect(within(list).getAllByRole('listitem')).toHaveLength(steps)
+    expect(screen.queryByRole('listitem', { name: /核对共享画面与发言/ }) !== null).toBe(classified === 'meeting_video')
+    cleanup()
+    libraryMock.saveNote.mockResolvedValue({ id: 'saved-classified' })
+    apiMock.apiJson.mockResolvedValue({ task_id: 'classified-child', status: 'success', result: { task_id: 'classified-child', title: '2026-10-19 15:41 | Source topic', markdown: '# Synthetic summary' } })
+    renderGenerator()
+    await waitFor(() => expect(libraryMock.saveNote).toHaveBeenCalled())
+    expect(libraryMock.saveNote.mock.calls[0][5]).toBe(classified === 'unknown' ? 'meeting_unknown' : classified)
+    expect(libraryMock.saveNote.mock.calls[0][0]).toBe('2026-10-19 15:41｜Synthetic summary')
+    expect(apiMock.apiJson.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+  })
+  it.each(['verified', 'missing', 'mismatch'] as const)('v2 restored %s source identity never selects the independent parent or child as its original', async kind => {
+    const parent = '11111111-1111-4111-8111-111111111111'
+    const canonical = '2bfa5300-a102-45a8-89cf-123456789abc'
+    const child = '33333333-3333-4333-8333-333333333333'
+    const context = { ...frozenContext, protocol: 2, parent_task_id: parent, canonical_task_id: canonical, source: { ...frozenContext.source, file_id: kind === 'verified' ? `task:${canonical}` : kind === 'mismatch' ? `task:${parent}` : undefined } }
+    const pending = { id: child, operationId: 'v2-source', independentGeneration: true, parentTaskId: parent, frozenContext: context, localFileId: `task:${parent}`, meeting: true, workspace: { scope: 'personal' }, submissionState: 'accepted' }
+    localStorage.setItem('vinote:source-receipt:import-owner:v2-source', JSON.stringify(pending))
+    queryMock.value = 'meeting=1&operation=v2-source'
+    apiMock.apiJson.mockResolvedValue({ task_id: child, status: 'failed', error_code: 'unknown_result', message: '本次未完成', retryable: false })
+    renderGenerator('/tasks?tab=generation')
+    const link = await screen.findByRole('link', { name: '返回资料与原文件' })
+    const target = new URL(link.getAttribute('href')!, 'https://fixture.invalid')
+    expect(target.pathname).toBe('/files')
+    expect(target.searchParams.get('purpose')).toBe('meeting')
+    expect(target.searchParams.get('file')).toBe(kind === 'verified' ? `task:${canonical}` : null)
+    expect(target.searchParams.get('returnTo')).toBe('/tasks?tab=generation')
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === `/api/task/${child}` && !init?.method)).toBe(true)
+  })
+  it('v2 confirmation persists the exact canonical source.file_id before POST, not the selected parent', async () => {
+    const canonical = '2bfa5300-a102-45a8-89cf-123456789abc'
+    const context = { ...frozenContext, protocol: 2, canonical_task_id: canonical, source: { ...frozenContext.source, file_id: `task:${canonical}` } }
+    const dialog = await openFrozenSheet(context)
+    let persisted: { localFileId?: string; frozenContext?: unknown } | undefined
+    apiMock.apiJson.mockImplementation(async (_path: string, init?: RequestInit) => {
+      const body = JSON.parse(init!.body as string)
+      persisted = JSON.parse(localStorage.getItem(`vinote:source-receipt:import-owner:${body.operation_id}`)!)
+      throw new Error('lost response')
+    })
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认原模型并开始新的处理' }))
+    await waitFor(() => expect(navigateMock).toHaveBeenCalled())
+    expect(persisted?.localFileId).toBe(`task:${canonical}`)
+    expect(persisted?.frozenContext).toEqual(context)
+    expect(apiMock.apiJson.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+  })
+  it.each([undefined, null, 'bad-id', '2BFA5300-A102-45A8-89CF-123456789ABC', '11111111-1111-4111-8111-111111111111'])('v2 invalid canonical %s cannot open confirmation or POST', async canonical => {
+    const parent = '11111111-1111-4111-8111-111111111111'
+    const context = { ...frozenContext, protocol: 2, parent_task_id: parent, canonical_task_id: canonical }
+    queryMock.value = `meeting=1&task=${parent}`
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path.endsWith('/new-generation-context') ? context : { task_id: parent, status: 'failed', message: '上次未完成', retryable: false }))
+    renderGenerator(); await screen.findByText('上次未完成')
+    await userEvent.click(screen.getByRole('button', { name: '确认原模型，开始新的处理' }))
+    await screen.findByText('原文件与冻结模型尚不能完整核验，未使用当前默认模型。')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+    expect(localStorage.length).toBe(0)
+  })
+  it('v1 rejects an unexpected canonical field instead of upgrading the request implicitly', async () => {
+    queryMock.value = 'meeting=1&task=selected-task'
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path.endsWith('/new-generation-context') ? { ...frozenContext, canonical_task_id: '2bfa5300-a102-45a8-89cf-123456789abc' } : { task_id: 'selected-task', status: 'failed', message: '上次未完成', retryable: false }))
+    renderGenerator(); await screen.findByText('上次未完成')
+    await userEvent.click(screen.getByRole('button', { name: '确认原模型，开始新的处理' }))
+    await screen.findByText('原文件与冻结模型尚不能完整核验，未使用当前默认模型。')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+  it('v2 unknown operation recovery only queries the exact receipt and never replays its canonical submission', async () => {
+    const context = { ...frozenContext, protocol: 2, canonical_task_id: '2bfa5300-a102-45a8-89cf-123456789abc' }
+    const pending = { operationId: 'v2-unknown', independentGeneration: true, parentTaskId: 'selected-task', frozenContext: context, meeting: true, workspace: { scope: 'personal' }, submissionState: 'unknown' }
+    localStorage.setItem('vinote:source-receipt:import-owner:v2-unknown', JSON.stringify(pending))
+    queryMock.value = 'meeting=1&operation=v2-unknown'
+    apiMock.apiJson.mockResolvedValue({ operation_id: 'v2-unknown', task_id: 'reserved-child', state: 'reserved' })
+    renderGenerator()
+    expect(within(await screen.findByRole('alert')).getByText(/提交已登记，尚未确认排队/)).toBeVisible()
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/source-requests/v2-unknown' && !init?.method)).toBe(true)
+    expect(JSON.parse(localStorage.getItem('vinote:source-receipt:import-owner:v2-unknown')!).frozenContext).toEqual(context)
+    expect(libraryMock.saveNote).not.toHaveBeenCalled()
+  })
+  it('v2 account ABA invalidates the open confirmation before any POST', async () => {
+    await openFrozenSheet({ ...frozenContext, protocol: 2, canonical_task_id: '2bfa5300-a102-45a8-89cf-123456789abc' })
+    act(() => { useAuthStore.setState({ user: { id: 'other', email: 'other@example.invalid' } }); useAuthStore.setState({ user: { id: 'import-owner', email: 'import@example.invalid' } }) })
+    expect(screen.queryByRole('button', { name: '确认原模型并开始新的处理' })).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+    expect(localStorage.length).toBe(0)
   })
   it('double confirmation accepts one distinct operation without changing the global receipt', async () => {
     const old = JSON.stringify({ id: 'different-task', meeting: true, workspace: { scope: 'personal' } })
@@ -377,7 +508,7 @@ describe('NoteGenerator failed generation recovery', () => {
     let resolve!: (value: unknown) => void
     apiMock.apiJson.mockReturnValue(new Promise(done => { resolve = done }))
     renderGenerator('/files?purpose=meeting&q=kept')
-    expect(screen.getByRole('heading', { level: 1, name: meeting ? '会议处理记录' : '笔记处理记录' })).toBeInTheDocument()
+    expect(screen.getByRole('heading', { level: 1, name: meeting ? '会议处理记录' : '处理记录' })).toBeInTheDocument()
     expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1)
     expect(screen.getByText('查看本次处理的进度、结果与来源。')).toBeInTheDocument()
     expect(screen.queryByText('从已有录制生成会议纪要')).not.toBeInTheDocument()
@@ -385,7 +516,8 @@ describe('NoteGenerator failed generation recovery', () => {
     expect(source.querySelector('details')).not.toHaveAttribute('open')
     await act(async () => resolve({ task_id: 'selected-task', status: 'failed', message: '此次处理未完成', error_code: 'unknown_result', retryable: false }))
     expect(await screen.findByRole('button', { name: '查看原任务状态' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '确认原模型，开始新的处理' })).toBeInTheDocument()
+    if (meeting) expect(screen.getByRole('button', { name: '确认原模型，开始新的处理' })).toBeInTheDocument()
+    else expect(screen.queryByRole('button', { name: '确认原模型，开始新的处理' })).toBeNull()
     expect(screen.queryByRole('button', { name: '更换来源，开始新任务' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: '查看处理历史与恢复' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '返回文件库' })).toHaveAttribute('href', '/files?purpose=meeting&q=kept')
@@ -448,6 +580,57 @@ describe('NoteGenerator failed generation recovery', () => {
     } finally { vi.unstubAllEnvs() }
   })
 
+  it('keeps a bare running task neutral without inventing note workflow, six steps or a media lookup', async () => {
+    queryMock.value = 'task=selected-task'
+    apiMock.apiJson.mockResolvedValue({ task_id: 'selected-task', status: 'transcribing', processed_seconds: 1200, total_seconds: 1536, message: '正在处理原任务' })
+    renderGenerator()
+    await screen.findByRole('heading', { name: '正在处理任务' })
+    expect(screen.getByRole('heading', { level: 1, name: '处理记录' })).toBeVisible()
+    expect(screen.getByRole('link', { name: '返回任务与恢复' })).toHaveAttribute('href', '/tasks?tab=generation')
+    expect(screen.queryByText('笔记处理记录')).toBeNull()
+    expect(screen.queryByText('正在生成笔记')).toBeNull()
+    expect(screen.queryByRole('list', { name: '笔记处理步骤' })).toBeNull()
+    expect(screen.queryByRole('progressbar')).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/selected-task' && !init?.method)).toBe(true)
+    expect(libraryMock.saveNote).not.toHaveBeenCalled()
+    expect(localStorage.length).toBe(0)
+  })
+  it('does not infer meeting workflow from media type or a foreign-owner task context', async () => {
+    queryMock.value = 'task=selected-task'
+    apiMock.apiJson.mockResolvedValue({ task_id: 'selected-task', status: 'transcribing', message: '' })
+    render(<MemoryRouter initialEntries={[{ pathname: '/generate', search: '?task=selected-task', state: { readOnlyTask: { id: 'selected-task', owner: 'different-owner', meeting: true, sourceType: 'meeting_video' } } }]}><I18nProvider><NoteGenerator /></I18nProvider></MemoryRouter>)
+    await screen.findByRole('heading', { name: '正在处理任务' })
+    expect(screen.getByRole('heading', { level: 1, name: '处理记录' })).toBeVisible()
+    expect(screen.queryByRole('list')).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/selected-task' && !init?.method)).toBe(true)
+  })
+  it('preserves a valid return context but rejects an unsafe parent for bare task records', async () => {
+    queryMock.value = 'task=selected-task'
+    apiMock.apiJson.mockResolvedValue({ task_id: 'selected-task', status: 'transcribing', message: '' })
+    const first = renderGenerator('/files?q=kept')
+    await screen.findByRole('heading', { name: '正在处理任务' })
+    expect(screen.getByRole('link', { name: '返回文件库' })).toHaveAttribute('href', '/files?q=kept')
+    first.unmount()
+    renderGenerator('https://outside.invalid/')
+    await screen.findByRole('heading', { name: '正在处理任务' })
+    expect(screen.getByRole('link', { name: '返回任务与恢复' })).toHaveAttribute('href', '/tasks?tab=generation')
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/selected-task' && !init?.method)).toBe(true)
+  })
+  it.each(['unknown_result', 'typed_terminal'])('bare failed %s can only query or return, never confirm a new note operation or save', async errorCode => {
+    queryMock.value = 'task=selected-task'
+    apiMock.apiJson.mockResolvedValue({ task_id: 'selected-task', status: 'failed', message: '此次处理未完成', error_code: errorCode, retryable: true })
+    renderGenerator()
+    await screen.findByRole('alert')
+    expect(screen.getByRole('heading', { level: 1, name: '处理记录' })).toBeVisible()
+    expect(screen.queryByRole('button', { name: '确认原模型，开始新的处理' })).toBeNull()
+    expect(screen.queryByRole('button', { name: /恢复保存|更换来源|开始整理/ })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: '查看原任务状态' }))
+    await screen.findByRole('alert')
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/selected-task' && !init?.method)).toBe(true)
+    expect(libraryMock.saveNote).not.toHaveBeenCalled()
+    expect(localStorage.length).toBe(0)
+    expect(screen.getByRole('link', { name: '返回任务与恢复' })).toHaveAttribute('href', '/tasks?tab=generation')
+  })
   it('read-only first query failure remains unconfirmed and only offers another read', async () => {
     queryMock.value = 'task=selected-task'
     apiMock.apiJson.mockRejectedValue(new TypeError('network failure'))
@@ -869,4 +1052,244 @@ it('structured unknown result never posts retry even if legacy retryable is true
     expect(JSON.parse(localStorage.getItem('vinote:import-receipt:import-owner:note')!)).toEqual(receipt);
   });
 
+})
+
+
+describe('summary-only operation recovery', () => {
+  beforeEach(() => {
+    vi.clearAllMocks(); apiMock.apiJson.mockReset(); localStorage.clear(); sessionStorage.clear()
+    useNoteGenerationStore.getState().reset()
+    useAuthStore.setState({ user: { id: 'import-owner', email: 'import@example.invalid' } })
+    libraryMock.notes = []; libraryMock.saveNote.mockReset()
+  })
+  afterEach(() => { cleanup(); localStorage.clear(); useAppModeStore.getState().reset() })
+  const config = { configured: true, mode: 'cloud' as const, llm_model: 'exact-choice', asr_model: 'unused', server_url: 'https://summary.invalid' }
+  function receipt(origin = config.server_url) {
+    queryMock.value = 'meeting=1&operation=summary-op'
+    localStorage.setItem('vinote:source-receipt:import-owner:summary-op', JSON.stringify({ operationId: 'summary-op', summaryOnly: true, independentGeneration: true, origin, meeting: true, workspace: { scope: 'personal' }, submissionState: 'unknown' }))
+    useAppModeStore.setState({ config })
+  }
+  it('queries the exact source receipt and child task without resubmission', async () => {
+    receipt()
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path === '/api/source-requests/summary-op' ? { operation_id: 'summary-op', task_id: 'summary-child', state: 'accepted' } : { task_id: 'summary-child', status: 'failed', message: 'summary pending review', retryable: false }))
+    renderGenerator()
+    await screen.findByText('summary pending review')
+    expect(apiMock.apiJson).toHaveBeenCalledWith('/api/source-requests/summary-op')
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+  it('refuses recovery on a different model service Origin', async () => {
+    receipt('https://original.invalid')
+    renderGenerator()
+    await screen.findByText(/无法读取本机任务回执/)
+    expect(apiMock.apiJson).not.toHaveBeenCalled()
+  })
+  it('keeps summary child recovery query-only even if a status claims retryable', async () => {
+    receipt()
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path.includes('source-requests') ? { operation_id: 'summary-op', task_id: 'summary-child', state: 'accepted' } : { task_id: 'summary-child', status: 'failed', message: 'summary stopped', retryable: true }))
+    renderGenerator(); await screen.findByText('summary stopped')
+    await userEvent.click(screen.getByRole('button', { name: '查看原任务状态' }))
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+  it('saves the original 15:41 source clock with the LLM topic rather than the 19:35 operation time', async () => {
+    receipt()
+    const key = 'vinote:source-receipt:import-owner:summary-op'
+    localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), createdAt: '2026-10-19T19:35:00+08:00' }))
+    libraryMock.saveNote.mockResolvedValue({ id: 'saved-title' })
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path.includes('source-requests') ? { operation_id: 'summary-op', task_id: 'summary-child', state: 'accepted' } : { task_id: 'summary-child', status: 'success', result: { task_id: 'summary-child', title: '2026-10-19 15:41 | Synthetic source topic', markdown: '# Synthetic LLM topic' } }))
+    renderGenerator()
+    await waitFor(() => expect(libraryMock.saveNote).toHaveBeenCalled())
+    expect(libraryMock.saveNote.mock.calls[0][0]).toBe('2026-10-19 15:41｜Synthetic LLM topic')
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+  it('does not substitute summary-operation creation time when a source timestamp is absent', async () => {
+    receipt()
+    const key = 'vinote:source-receipt:import-owner:summary-op'
+    localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), createdAt: '2026-10-19T19:35:00+08:00' }))
+    libraryMock.saveNote.mockResolvedValue({ id: 'saved-title' })
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path.includes('source-requests') ? { operation_id: 'summary-op', task_id: 'summary-child', state: 'accepted' } : { task_id: 'summary-child', status: 'success', result: { task_id: 'summary-child', title: 'Synthetic source topic', markdown: '# Synthetic LLM topic' } }))
+    renderGenerator()
+    await waitFor(() => expect(libraryMock.saveNote).toHaveBeenCalled())
+    expect(libraryMock.saveNote.mock.calls[0][0]).toBe('Time unknown｜Synthetic LLM topic')
+  })
+  it('clears the original-detail pending pointer only after saving the new summary is acknowledged', async () => {
+    receipt()
+    const key = 'vinote:source-receipt:import-owner:summary-op'
+    localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), summaryNoteId: 'note', parentTaskId: 'parent' }))
+    const pointer = `vinote:summary-operation:import-owner:${config.server_url}:note:parent`
+    localStorage.setItem(pointer, 'summary-op')
+    libraryMock.saveNote.mockResolvedValue({ id: 'saved-child' })
+    apiMock.apiJson.mockImplementation((path: string) => Promise.resolve(path.includes('source-requests') ? { operation_id: 'summary-op', task_id: 'summary-child', state: 'accepted' } : { task_id: 'summary-child', status: 'success', result: { task_id: 'summary-child', title: 'Synthetic summary', markdown: 'Synthetic body' } }))
+    renderGenerator()
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/note/saved-child', expect.anything()))
+    expect(localStorage.getItem(pointer)).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+
+})
+
+
+describe('meeting shared-video verification stage', () => {
+  beforeEach(() => {
+    vi.clearAllMocks(); apiMock.apiJson.mockReset(); localStorage.clear(); sessionStorage.clear()
+    useNoteGenerationStore.getState().reset(); useAuthStore.setState({ user: { id: 'import-owner', email: 'import@example.invalid' } })
+    queryMock.value = 'meeting=1&task=video-task'
+    apiMock.apiJson.mockResolvedValue({ task_id: 'video-task', status: 'transcribing', stage: 'analyzing_video', processed_seconds: 900, total_seconds: 900, speaker_analysis_ready: true })
+  })
+  afterEach(() => { cleanup(); localStorage.clear(); queryMock.value = '' })
+  it('honors analyzing_video substage ahead of a retained transcribing status and only reads the task', async () => {
+    renderGenerator()
+    await screen.findByRole('heading', { name: '核对共享画面与发言' })
+    expect(useNoteGenerationStore.getState().currentStep).toBe('analyzing_video')
+    expect(useNoteGenerationStore.getState().status).toBe('processing')
+    expect(screen.getByRole('listitem', { name: '保存会议纪要：待开始' })).toBeVisible()
+    expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow')
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+})
+
+
+describe('failed meeting task summary-only entrance', () => {
+  const config = { configured: true, mode: 'cloud' as const, llm_model: 'explicit-selected-summary', asr_model: 'never-run', server_url: 'https://summary.invalid' }
+  const context = { parent_task_id: 'failed-summary-parent', context_revision: 'a'.repeat(64), source: { version: 'b'.repeat(64), type: 'meeting_video', title: 'Verified synthetic meeting source' }, can_regenerate_summary: true }
+  const pointer = 'vinote:summary-operation:import-owner:https://summary.invalid:task:failed-summary-parent'
+  beforeEach(() => {
+    vi.clearAllMocks(); apiMock.apiJson.mockReset(); localStorage.clear(); sessionStorage.clear()
+    queryMock.value = 'meeting=1&task=failed-summary-parent'; languageMock.value = 'en'
+    useNoteGenerationStore.getState().reset(); useAuthStore.setState({ user: { id: 'import-owner', email: 'import@example.invalid' } })
+    useAppModeStore.setState({ config, saving: false })
+    libraryMock.notes = []; libraryMock.saveNote.mockReset()
+    apiMock.apiJson.mockImplementation(async (path: string) => path === '/api/vilab/config' ? config : path.endsWith('/summary-context') ? context : { task_id: 'failed-summary-parent', status: 'failed', failed_stage: 'summarizing', error_code: 'llm_failed', message: '总结服务未完成', retryable: false })
+  })
+  afterEach(() => { cleanup(); localStorage.clear(); queryMock.value = ''; useAppModeStore.getState().reset() })
+  async function prepare() {
+    await screen.findByRole('button', { name: '仅重新生成纪要' })
+    await userEvent.click(screen.getByRole('button', { name: '仅重新生成纪要' }))
+    return screen.findByRole('dialog', { name: '确认仅重新生成纪要' })
+  }
+  it.each(['accepted', 'lost'])('real task component prepare/confirm for %s response posts only regenerate-summary and saves the child', async outcome => {
+    let operation = ''
+    apiMock.apiJson.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path === '/api/vilab/config') return config
+      if (path.endsWith('/summary-context')) return context
+      if (path.endsWith('/regenerate-summary')) {
+        const body = JSON.parse(init!.body as string); operation = body.operation_id
+        expect(body.model_name).toBe(config.llm_model)
+        expect(localStorage.getItem(pointer)).toBe(operation)
+        if (outcome === 'lost') throw new Error('lost response')
+        return { operation_id: operation, task_id: 'summary-child', state: 'accepted' }
+      }
+      return { task_id: 'failed-summary-parent', status: 'failed', failed_stage: 'summarizing', message: '总结服务未完成', retryable: false }
+    })
+    localStorage.setItem('vinote:import-receipt:import-owner:meeting', JSON.stringify({ id: 'old-intake', sourceTitle: 'Old intake title', meeting: true, workspace: { scope: 'personal' } }))
+    renderGenerator('/tasks?tab=generation')
+    const dialog = await prepare()
+    expect(dialog).toHaveTextContent('不重新转录')
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认，仅重新总结' }))
+    await waitFor(() => expect(navigateMock).toHaveBeenCalled())
+    const pending = JSON.parse(localStorage.getItem(`vinote:source-receipt:import-owner:${operation}`)!)
+    expect(pending).toMatchObject({ parentTaskId: 'failed-summary-parent', summaryOnly: true, sourceType: 'meeting_video' })
+    expect(pending.summaryNoteId).toBeUndefined()
+    expect(pending.summaryContext).toEqual(context)
+    expect(pending.sourceTitle).toBe(context.source.title)
+    expect(pending.sourceTitle).not.toBe('Old intake title')
+    cleanup(); queryMock.value = 'meeting=1&operation=' + operation
+    libraryMock.saveNote.mockResolvedValue({ id: 'saved-summary' })
+    apiMock.apiJson.mockImplementation(async path => path.startsWith('/api/source-requests/') ? { operation_id: operation, task_id: 'summary-child', state: 'accepted' } : { task_id: 'summary-child', status: 'success', result: { task_id: 'summary-child', title: '2026-10-19 15:41 | Source', markdown: '# Synthetic LLM summary' } })
+    renderGenerator('/tasks?tab=generation')
+    await waitFor(() => expect(libraryMock.saveNote).toHaveBeenCalled())
+    expect(libraryMock.saveNote.mock.calls[0][0]).toBe('2026-10-19 15:41｜Synthetic LLM summary')
+    expect(libraryMock.saveNote.mock.calls[0][5]).toBe('meeting_video')
+    expect(localStorage.getItem(pointer)).toBeNull()
+    const writes = apiMock.apiJson.mock.calls.filter(([, init]) => init?.method === 'POST')
+    expect(writes).toHaveLength(1)
+    expect(writes[0][0]).toBe('/api/task/failed-summary-parent/regenerate-summary')
+    expect(apiMock.apiJson.mock.calls.some(([path]) => /retry|new-generation|generate_from/.test(path))).toBe(false)
+  })
+  it.each([true, false])('legacy receipt summaryOnly=%s keeps honest source disclosure without inventing any source id', async summaryOnly => {
+    queryMock.value = 'meeting=1&operation=legacy-title'
+    localStorage.setItem('vinote:source-receipt:import-owner:legacy-title', JSON.stringify({ operationId: 'legacy-title', id: 'legacy-child', summaryOnly, origin: config.server_url, meeting: true, workspace: { scope: 'personal' }, submissionState: 'accepted' }))
+    apiMock.apiJson.mockResolvedValue({ task_id: 'legacy-child', status: 'failed', failed_stage: 'summarizing', message: '总结未完成', retryable: false })
+    renderGenerator()
+    const disclosure = await screen.findByRole('region', { name: '任务来源' })
+    expect(disclosure).toHaveTextContent(summaryOnly ? '已保留的会议资料' : '来源信息不完整')
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/legacy-child' && !init?.method)).toBe(true)
+  })
+  it('blocks incomplete-ASR summary-context 409 with no confirmation and no POST', async () => {
+    apiMock.apiJson.mockImplementation(async path => {
+      if (path.endsWith('/summary-context')) throw new ApiError('Incomplete ASR', 409, {})
+      return path === '/api/vilab/config' ? config : { task_id: 'failed-summary-parent', status: 'failed', message: '处理未完成', retryable: false }
+    })
+    renderGenerator(); await screen.findByRole('button', { name: '仅重新生成纪要' })
+    await userEvent.click(screen.getByRole('button', { name: '仅重新生成纪要' }))
+    await screen.findByText('当前资料不可重新生成纪要，请保留原文件与已有处理记录。')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+    expect(localStorage.length).toBe(0)
+  })
+  it('reopening an unknown task-summary operation navigates to exact GET recovery without resubmitting', async () => {
+    localStorage.setItem(pointer, 'unknown-summary')
+    localStorage.setItem('vinote:source-receipt:import-owner:unknown-summary', JSON.stringify({ operationId: 'unknown-summary', parentTaskId: 'failed-summary-parent', summaryOnly: true, independentGeneration: true, origin: config.server_url, meeting: true, workspace: { scope: 'personal' }, submissionState: 'unknown' }))
+    renderGenerator('/tasks?tab=generation')
+    await screen.findByRole('button', { name: '仅重新生成纪要' })
+    await userEvent.click(screen.getByRole('button', { name: '仅重新生成纪要' }))
+    expect(navigateMock.mock.calls.at(-1)![0]).toContain('operation=unknown-summary')
+    expect(apiMock.apiJson.mock.calls.some(([path]) => path.endsWith('/summary-context'))).toBe(false)
+    cleanup(); queryMock.value = 'meeting=1&operation=unknown-summary'
+    apiMock.apiJson.mockRejectedValue(new ApiError('Not yet found', 404, {}))
+    renderGenerator()
+    await screen.findByRole('button', { name: '核验原提交' })
+    await userEvent.click(screen.getByRole('button', { name: '核验原提交' }))
+    expect(apiMock.apiJson.mock.calls.filter(([path]) => path === '/api/source-requests/unknown-summary').length).toBeGreaterThanOrEqual(2)
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+  it('account ABA discards a task-summary confirmation without POST', async () => {
+    renderGenerator(); await prepare()
+    act(() => useAuthStore.setState({ user: { id: 'other', email: 'other@example.invalid' } }))
+    act(() => useAuthStore.setState({ user: { id: 'import-owner', email: 'import@example.invalid' } }))
+    expect(screen.queryByRole('button', { name: '确认，仅重新总结' })).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+    expect(localStorage.length).toBe(0)
+  })
+  it.each(['unknown_error', 'legacy_http_error'])('legacy summarizing failure %s overrides retryable true and only offers GET or summary-only', async code => {
+    queryMock.value = 'meeting=1'
+    localStorage.setItem('vinote:import-receipt:import-owner:meeting', JSON.stringify({ id: 'legacy-summary', meeting: true, workspace: { scope: 'personal' }, submissionState: 'accepted' }))
+    apiMock.apiJson.mockResolvedValue({ task_id: 'legacy-summary', status: 'failed', failed_stage: 'summarizing', error_code: code, message: 'Legacy provider failed', retryable: true })
+    renderGenerator()
+    await screen.findByRole('button', { name: '查看原任务状态' })
+    expect(screen.queryByRole('button', { name: '重试处理原任务' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '确认原模型，开始新的处理' })).toBeNull()
+    expect(screen.getByRole('button', { name: '仅重新生成纪要' })).toBeVisible()
+    expect(screen.getByRole('alert')).not.toHaveTextContent('此次转写未完成')
+    await userEvent.click(screen.getByRole('button', { name: '查看原任务状态' }))
+    await screen.findByRole('button', { name: '查看原任务状态' })
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/legacy-summary' && !init?.method)).toBe(true)
+    expect(libraryMock.saveNote).not.toHaveBeenCalled()
+  })
+  it('a fresh summarizing failure blocks retry even when the earlier verified failure was retryable transcription', async () => {
+    queryMock.value = 'meeting=1'
+    localStorage.setItem('vinote:import-receipt:import-owner:meeting', JSON.stringify({ id: 'legacy-summary', meeting: true, workspace: { scope: 'personal' }, submissionState: 'accepted' }))
+    let reads = 0
+    apiMock.apiJson.mockImplementation(async () => ({ task_id: 'legacy-summary', status: 'failed', failed_stage: ++reads === 1 ? 'transcribing' : 'summarizing', error_code: 'legacy_error', message: 'Legacy failure', retryable: true }))
+    renderGenerator()
+    await screen.findByRole('button', { name: '重试处理原任务' })
+    await userEvent.click(screen.getByRole('button', { name: '重试处理原任务' }))
+    await screen.findByRole('button', { name: '查看原任务状态' })
+    expect(screen.queryByRole('button', { name: '确认原模型，开始新的处理' })).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/legacy-summary' && !init?.method)).toBe(true)
+    expect(reads).toBeGreaterThanOrEqual(3)
+  })
+  it('late context from the previous task route cannot open confirmation on another task', async () => {
+    let resolve!: (value: unknown) => void
+    apiMock.apiJson.mockImplementation(path => path.endsWith('/summary-context') ? new Promise(done => { resolve = done }) : Promise.resolve(path === '/api/vilab/config' ? config : { task_id: 'failed-summary-parent', status: 'failed', message: '处理未完成', retryable: false }))
+    const first = renderGenerator()
+    await screen.findByRole('button', { name: '仅重新生成纪要' })
+    await userEvent.click(screen.getByRole('button', { name: '仅重新生成纪要' }))
+    first.unmount(); queryMock.value = 'meeting=1&task=other-task'
+    apiMock.apiJson.mockResolvedValue({ task_id: 'other-task', status: 'failed', message: '其他任务未完成', retryable: false })
+    renderGenerator()
+    await act(async () => resolve(context))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
 })

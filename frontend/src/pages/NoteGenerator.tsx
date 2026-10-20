@@ -1,3 +1,4 @@
+import { RegenerateMeetingSummary, summaryOperationKey } from '@/components/Notes/RegenerateMeetingSummary'
 import { FrozenModelDisplay } from '@/components/NoteGenerator/FrozenModelDisplay'
 import { taskRecoveryView, type RecoveryTask } from '@/lib/taskRecoveryView'
 import { sourceRecoveryCopy } from '@/lib/sourceRecoveryCopy'
@@ -28,13 +29,40 @@ import { Label } from '../components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select'
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle, SheetTrigger } from '../components/ui/sheet'
 
-type FrozenNewContext = { protocol: number; parent_task_id: string; workflow: string; context_revision: string; source: { title: string; version: string }; frozen_models: { mode: string; origin: string; asr_model: string; llm_model: string }; can_confirm_new_operation: boolean }
+type FrozenNewContext = { protocol: number; canonical_task_id?: string; parent_task_id: string; workflow: string; context_revision: string; source: { title: string; version: string; type?: string; file_id?: string }; frozen_models: { mode: string; origin: string; asr_model: string; llm_model: string }; can_confirm_new_operation: boolean }
+/** Only the verified source classification selects playback/workflow UI; never filenames. */
+function frozenSourceType(context: FrozenNewContext): string {
+  const type = context.source.type
+  if (type === 'video' || type === 'meeting_video') return context.workflow === 'meeting' ? 'meeting_video' : 'video'
+  if (type === 'audio' || type === 'meeting_audio' || type === 'meeting_recording') return context.workflow === 'meeting' ? 'meeting_recording' : 'audio'
+  if (type === 'transcript') return 'transcript'
+  if (type === 'file' || type === 'document') return 'file'
+  return 'unknown'
+}
+
+function validFrozenProtocol(context: FrozenNewContext, parentTask: string) {
+  if (context.protocol === 1) return context.canonical_task_id === undefined
+  return context.protocol === 2 && typeof context.canonical_task_id === 'string'
+    && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(context.canonical_task_id)
+    && context.canonical_task_id !== parentTask && context.canonical_task_id !== context.parent_task_id
+}
+
+/** Bind an original selection to the verified context; independent parents/children are not originals. */
+function frozenOriginalFile(context: FrozenNewContext, parentTask: string): string | undefined {
+  if (context.parent_task_id !== parentTask || !validFrozenProtocol(context, parentTask)) return undefined
+  const originalTask = context.protocol === 2 ? context.canonical_task_id : parentTask
+  if (!originalTask || !/^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/.test(originalTask)) return undefined
+  const expected = `task:${originalTask}`
+  return context.source?.file_id === expected ? expected : undefined
+}
+
 type TaskResponse = { task_id: string; source_type?: string; operation_id?: string; state?: 'reserved' | 'accepted' }
-type ImportReceipt = { id?: string; operationId?: string; createdAt?: string; submissionState?: 'registering' | 'unknown' | 'reserved' | 'accepted'; workspace: WorkspaceSelection; sourceUrl?: string; sourceType?: string; sourceTitle?: string; mode?: UploadMode; meeting: boolean; localFileId?: string; independentGeneration?: boolean; parentTaskId?: string; frozenContext?: FrozenNewContext }
+type ImportReceipt = { id?: string; operationId?: string; createdAt?: string; submissionState?: 'registering' | 'unknown' | 'reserved' | 'accepted'; workspace: WorkspaceSelection; sourceUrl?: string; sourceType?: string; sourceTitle?: string; mode?: UploadMode; meeting: boolean; localFileId?: string; independentGeneration?: boolean; summaryOnly?: boolean; summaryNoteId?: string; origin?: string; parentTaskId?: string; frozenContext?: FrozenNewContext }
 type TaskStatusResponse = {
   task_id?: string
   error_code?: string
   retryable?: boolean
+  failed_stage?: string
   stage?: string
   status: string
   message: string
@@ -52,9 +80,16 @@ type TaskStatusResponse = {
 
 export function NoteGenerator() {
   const [searchParams] = useSearchParams()
-  const isMeeting = searchParams.get('meeting') === '1'
   const location = useLocation()
-  const parent = resolvePageParent(location.state?.returnTo, isMeeting ? '/meetings' : '/notes')
+  const owner = useAuthStore(s => s.user?.id)
+  const taskParam = searchParams.get('task') || ''
+  const selection = (location.state as { readOnlyTask?: Partial<ImportReceipt> & { owner?: string } } | null)?.readOnlyTask
+  const knownSelection = !!owner && selection?.owner === owner && selection.id === taskParam && typeof selection.meeting === 'boolean'
+  const isMeeting = searchParams.get('meeting') === '1' || !!taskParam && knownSelection && selection?.meeting === true
+  // The current task GET does not expose workflow. Absence of a meeting flag is
+  // not evidence of note workflow; only the exact owner/task route context counts.
+  const unknownTaskWorkflow = !!taskParam && !isMeeting && !knownSelection
+  const parent = resolvePageParent(location.state?.returnTo, unknownTaskWorkflow ? '/tasks?tab=generation' : isMeeting ? '/meetings' : '/notes')
   const [videoUrl, setVideoUrl] = useState('')
   const [sourceError, setSourceError] = useState('')
   const sourceInput = useRef<HTMLInputElement>(null)
@@ -67,7 +102,6 @@ export function NoteGenerator() {
   const [transcriptionMeasure, setTranscriptionMeasure] = useState<{ processed: number; total: number } | null>(null)
   const [analysisMeasure, setAnalysisMeasure] = useState<{ received?: number; total?: number; detection?: number; speakersReady?: boolean }>({})
   const [taskId, setTaskId] = useState('')
-  const owner = useAuthStore(s => s.user?.id)
   const receiptKey = owner ? `vinote:import-receipt:${owner}:${isMeeting ? 'meeting' : 'note'}` : ''
   const [receipt, setReceipt] = useState<ImportReceipt | null>(null)
   const [receiptProtected, setReceiptProtected] = useState(true)
@@ -75,13 +109,14 @@ export function NoteGenerator() {
   const submissionLock = useRef(false)
   const recoveryLock = useRef<{ token: symbol; owner: string; epoch: number; operationId: string; route: string } | null>(null)
   const operationParam = searchParams.get('operation') || ''
-  const taskParam = searchParams.get('task') || ''
   const readOnlyTask = !!taskParam
-  const routeBinding = JSON.stringify([location.key, location.pathname, location.search, location.hash, operationParam, taskParam, isMeeting, parent])
+  const serviceOrigin = useAppModeStore(state => state.config?.server_url)
+  const routeBinding = JSON.stringify([serviceOrigin, location.key, location.pathname, location.search, location.hash, operationParam, taskParam, isMeeting, parent])
   const routeIdentity = useRef(routeBinding)
   routeIdentity.current = routeBinding
   const [taskRetryable, setTaskRetryable] = useState(false)
-  const [verifiedTask, setVerifiedTask] = useState<RecoveryTask | null>(null)
+  const [verifiedTask, setVerifiedTask] = useState<(RecoveryTask & { failedStage?: string }) | null>(null)
+  const summaryFailure = verifiedTask?.taskId === receipt?.id && ['failed', 'error'].includes(verifiedTask?.status || '') && verifiedTask?.failedStage === 'summarizing'
   const [modelConfirmation, setModelConfirmation] = useState<{ receipt: ImportReceipt; owner: string; epoch: number } | null>(null)
   const [newConfirmation, setNewConfirmation] = useState<{ context: FrozenNewContext; owner: string; epoch: number } | null>(null)
   const [newBusy, setNewBusy] = useState(false)
@@ -151,7 +186,9 @@ export function NoteGenerator() {
     } else if (receiptKey) {
       try {
         const key = operationParam && /^[A-Za-z0-9_-]{1,160}$/.test(operationParam) ? `vinote:source-receipt:${owner}:${operationParam}` : receiptKey
-        const saved = JSON.parse(localStorage.getItem(key) || 'null') as ImportReceipt | null
+        let saved = JSON.parse(localStorage.getItem(key) || 'null') as ImportReceipt | null
+        if (saved?.independentGeneration && saved.frozenContext) saved = { ...saved, sourceType: frozenSourceType(saved.frozenContext), localFileId: saved.parentTaskId ? frozenOriginalFile(saved.frozenContext, saved.parentTaskId) : undefined }
+        if (saved?.summaryOnly && (saved.origin !== serviceOrigin || useAppModeStore.getState().config?.mode !== 'cloud')) throw new Error('原总结服务已变化，只能在原服务核验操作回执')
         if (operationParam && (!saved || saved.operationId !== operationParam)) throw new Error('缺少原操作回执')
         if ((saved?.id || saved?.operationId) && saved?.workspace && saved.meeting === isMeeting) {
           setReceipt(saved); setTaskId(saved.id || '')
@@ -159,7 +196,7 @@ export function NoteGenerator() {
           if (saved.operationId && saved.submissionState !== 'accepted') {
             setStatus('failed'); void recoverSubmission(saved)
           } else if (saved.id) {
-            pollTaskStatus(saved.id, saved.workspace, saved.sourceUrl, saved.sourceType, saved.operationId, saved.createdAt)
+            pollTaskStatus(saved.id, saved.workspace, saved.sourceUrl, saved.sourceType, saved.operationId, saved.summaryOnly ? undefined : saved.createdAt)
           }
         }
       } catch { setRecoveryUnavailable(true); setStatus('failed'); setError('无法读取本机任务回执，请勿重复提交，先检查处理记录。') }
@@ -194,7 +231,7 @@ export function NoteGenerator() {
     pollingTask.current = id
     const epoch = recoveryEpoch.current
     const route = routeIdentity.current
-    const active = () => mounted.current && routeIdentity.current === route && recoveryEpoch.current === epoch && pollingTask.current === id && owner === useAuthStore.getState().user?.id
+    const active = () => serviceOrigin === useAppModeStore.getState().config?.server_url && mounted.current && routeIdentity.current === route && recoveryEpoch.current === epoch && pollingTask.current === id && owner === useAuthStore.getState().user?.id
     let inFlight = false
     let firstRead = true
     setReadingTask(true); setTaskRetryable(false); setVerifiedTask(null); setTaskMessage('')
@@ -208,7 +245,7 @@ export function NoteGenerator() {
         if (!data || typeof data.status !== 'string') throw new Error('任务进度响应无效')
         if (readOnlyTask && data.task_id !== id) throw new Error('指定任务响应身份尚未核验。')
         if (data.task_id && data.task_id !== id) throw new Error('响应与原任务不一致，请重新核验。')
-        setVerifiedTask({ taskId: data.task_id || data.result?.task_id || '', status: data.status, errorCode: data.error_code, hasCompleteResult: !!data.result?.markdown?.trim() && !!data.result?.title?.trim() })
+        setVerifiedTask({ taskId: data.task_id || data.result?.task_id || '', status: data.status, errorCode: data.error_code, failedStage: typeof data.failed_stage === 'string' ? data.failed_stage : undefined, hasCompleteResult: !!data.result?.markdown?.trim() && !!data.result?.title?.trim() })
         firstRead = false
         setReadingTask(false)
         setStatus('processing')
@@ -238,14 +275,22 @@ export function NoteGenerator() {
             sourceUrl || undefined,
             data.result?.task_id || id,
             workspace,
-            isMeeting ? (sourceType === 'video' || sourceType === 'meeting_video' ? 'meeting_video' : 'meeting_recording') : sourceType,
+            isMeeting ? (['video', 'meeting_video'].includes(sourceType || '') ? 'meeting_video' : sourceType === 'unknown' ? 'meeting_unknown' : 'meeting_recording') : sourceType,
           )
           if (!active()) return
           if (note) {
             const active = JSON.parse(localStorage.getItem(receiptKey) || 'null') as ImportReceipt | null
             if (active?.id === id) localStorage.removeItem(receiptKey)
             // The per-operation record remains until saving has been acknowledged.
-            if (operationId) localStorage.removeItem(`vinote:source-receipt:${owner}:${operationId}`)
+            if (operationId) {
+              const operationKey = `vinote:source-receipt:${owner}:${operationId}`
+              const completed = JSON.parse(localStorage.getItem(operationKey) || 'null') as ImportReceipt | null
+              if (completed?.summaryOnly && completed.parentTaskId) {
+                const pointer = summaryOperationKey(owner!, completed.origin, completed.parentTaskId, completed.summaryNoteId)
+                if (localStorage.getItem(pointer) === operationId) localStorage.removeItem(pointer)
+              }
+              localStorage.removeItem(operationKey)
+            }
             else if (active?.id === id && active.operationId) localStorage.removeItem(`vinote:source-receipt:${owner}:${active.operationId}`)
             setReceipt(null)
           setReceiptProtected(true)
@@ -257,7 +302,7 @@ export function NoteGenerator() {
           setStatus('failed')
           setError(copy.generator.saveFailed)
         } else if (['failed', 'error', 'not_found'].includes(data.status)) {
-          setTaskRetryable(!readOnlyTask && ['failed', 'error'].includes(data.status) && !!data.retryable && !['unknown_result', 'unknown_error', 'asr_incomplete_result'].includes(data.error_code || ''))
+          setTaskRetryable(!readOnlyTask && data.failed_stage !== 'summarizing' && ['failed', 'error'].includes(data.status) && !!data.retryable && !['unknown_result', 'unknown_error', 'asr_incomplete_result'].includes(data.error_code || ''))
           setReceiptProtected(true)
           clearInterval(pollRef.current!)
           pollRef.current = null
@@ -265,6 +310,8 @@ export function NoteGenerator() {
           setError(data.status === 'not_found'
             ? '任务记录不存在或已丢失。原回执已保留，请核验原提交，不重复生成。'
             : data.message || 'Generation failed')
+        } else if (data.stage === 'analyzing_video' || data.status === 'analyzing_video') {
+          setCurrentStep('analyzing_video')
         } else if (data.status === 'preparing') {
           setCurrentStep('preparing'); setProgress(15)
         } else if (data.status === 'transcribing') {
@@ -311,13 +358,13 @@ export function NoteGenerator() {
     }
     if (!value.id) throw new Error('尚未收到任务编号，原提交保留')
     setStatus('processing'); setCurrentStep('preparing'); setProgress(15)
-    pollTaskStatus(value.id, value.workspace, value.sourceUrl, value.sourceType, value.operationId, value.createdAt)
+    pollTaskStatus(value.id, value.workspace, value.sourceUrl, value.sourceType, value.operationId, value.summaryOnly ? undefined : value.createdAt)
   }
   const recoverSubmission = async (value: ImportReceipt) => {
     if (!owner || readOnlyTask || !value.operationId || recoveryLock.current || (operationParam && operationParam !== value.operationId)) return
     const request = { token: Symbol('receipt-read'), owner, epoch: recoveryEpoch.current, operationId: value.operationId, route: routeIdentity.current }
     recoveryLock.current = request
-    const active = () => mounted.current && request.owner === useAuthStore.getState().user?.id
+    const active = () => (!value.summaryOnly || value.origin === useAppModeStore.getState().config?.server_url) && mounted.current && request.owner === useAuthStore.getState().user?.id
       && recoveryEpoch.current === request.epoch && routeIdentity.current === request.route
       && recoveryLock.current?.token === request.token && recoveryLock.current.operationId === request.operationId
     setTaskMessage('正在核验上次提交…')
@@ -325,7 +372,7 @@ export function NoteGenerator() {
       const data = await apiJson<TaskResponse>(`/api/source-requests/${encodeURIComponent(request.operationId)}`)
       if (!active()) return
       if (data.operation_id !== request.operationId || !data.task_id || !['reserved', 'accepted'].includes(data.state || '')) throw new Error('回执与原操作不一致，请继续核验')
-      resumeReceipt({ ...value, id: data.task_id, sourceType: data.source_type || value.sourceType, submissionState: data.state })
+      resumeReceipt({ ...value, id: data.task_id, sourceType: value.independentGeneration && value.frozenContext ? frozenSourceType(value.frozenContext) : data.source_type || value.sourceType, submissionState: data.state })
     } catch (cause) {
       if (!active()) return
       setStatus('failed')
@@ -468,14 +515,14 @@ export function NoteGenerator() {
     const epoch = recoveryEpoch.current
     submissionLock.current = true
     try {
-      if (!readOnlyTask && taskRetryable) {
+      if (!readOnlyTask && !receipt.summaryOnly && !summaryFailure && taskRetryable) {
         const latest = await apiJson<TaskStatusResponse>(`/api/task/${receipt.id}`)
         if (!mounted.current || epoch !== recoveryEpoch.current || owner !== useAuthStore.getState().user?.id) return
-        if (['failed', 'error'].includes(latest.status) && latest.retryable && !['unknown_result', 'unknown_error', 'asr_incomplete_result'].includes(latest.error_code || '')) await apiJson(`/api/task/${receipt.id}/retry`, { method: 'POST' })
+        if (['failed', 'error'].includes(latest.status) && latest.failed_stage !== 'summarizing' && latest.retryable && !['unknown_result', 'unknown_error', 'asr_incomplete_result'].includes(latest.error_code || '')) await apiJson(`/api/task/${receipt.id}/retry`, { method: 'POST' })
       }
       if (!mounted.current || epoch !== recoveryEpoch.current || owner !== useAuthStore.getState().user?.id) return
       setTaskRetryable(false); setStatus('processing')
-      pollTaskStatus(receipt.id, receipt.workspace, receipt.sourceUrl, receipt.sourceType, receipt.operationId, receipt.createdAt)
+      pollTaskStatus(receipt.id, receipt.workspace, receipt.sourceUrl, receipt.sourceType, receipt.operationId, receipt.summaryOnly ? undefined : receipt.createdAt)
     } catch (cause) {
       if (mounted.current && epoch === recoveryEpoch.current && owner === useAuthStore.getState().user?.id) {
         setError((cause as Error).message)
@@ -486,7 +533,7 @@ export function NoteGenerator() {
   }
 
   const openNewGeneration = async () => {
-    if (!receipt?.id || !owner || newLock.current || !verifiedTask || verifiedTask.taskId !== receipt.id || !['failed', 'error'].includes(verifiedTask.status)) return
+    if (summaryFailure || unknownTaskWorkflow || !receipt?.id || !owner || newLock.current || !verifiedTask || verifiedTask.taskId !== receipt.id || !['failed', 'error'].includes(verifiedTask.status)) return
     const epoch = recoveryEpoch.current; const parentTask = receipt.id
     const active = () => mounted.current && epoch === recoveryEpoch.current && owner === useAuthStore.getState().user?.id
     newLock.current = true; setNewBusy(true)
@@ -494,7 +541,7 @@ export function NoteGenerator() {
       const context = await apiJson<FrozenNewContext>(`/api/task/${encodeURIComponent(parentTask)}/new-generation-context`)
       if (!active()) return
       const origin = new URL(context.frozen_models.origin)
-      if (context.protocol !== 1 || context.parent_task_id !== parentTask || !context.can_confirm_new_operation || context.workflow !== (isMeeting ? 'meeting' : 'note_organization') || context.frozen_models.mode !== 'cloud' || !context.frozen_models.asr_model?.trim() || !context.frozen_models.llm_model?.trim() || !/^[0-9a-f]{64}$/.test(context.context_revision) || !/^[0-9a-f]{64}$/.test(context.source.version) || !['https:', 'http:'].includes(origin.protocol) || origin.username || origin.password || origin.search || origin.hash) throw new Error('原文件与冻结模型尚不能完整核验，未使用当前默认模型。')
+      if (!validFrozenProtocol(context, parentTask) || context.parent_task_id !== parentTask || !context.can_confirm_new_operation || context.workflow !== (isMeeting ? 'meeting' : 'note_organization') || context.frozen_models.mode !== 'cloud' || !context.frozen_models.asr_model?.trim() || !context.frozen_models.llm_model?.trim() || !/^[0-9a-f]{64}$/.test(context.context_revision) || !/^[0-9a-f]{64}$/.test(context.source.version) || !['https:', 'http:'].includes(origin.protocol) || origin.username || origin.password || origin.search || origin.hash) throw new Error('原文件与冻结模型尚不能完整核验，未使用当前默认模型。')
       setNewConfirmation({ context, owner, epoch })
     } catch (cause) { if (active()) setError(cause instanceof Error ? cause.message : '无法读取冻结模型，请返回处理记录。') }
     finally { newLock.current = false; if (active()) setNewBusy(false) }
@@ -504,9 +551,10 @@ export function NoteGenerator() {
     if (!confirmed || !receipt?.id || newLock.current) return
     const active = () => mounted.current && confirmed.epoch === recoveryEpoch.current && confirmed.owner === useAuthStore.getState().user?.id && confirmed.context.parent_task_id === receipt.id
     if (!active()) { setNewConfirmation(null); return }
+    if (!validFrozenProtocol(confirmed.context, receipt.id)) { setNewConfirmation(null); setError('原文件与冻结模型尚不能完整核验，未使用当前默认模型。'); return }
     newLock.current = true; setNewBusy(true)
     const operationId = crypto.randomUUID()
-    const pending: ImportReceipt = { operationId, createdAt: new Date().toISOString(), submissionState: 'unknown', workspace: readOnlyTask ? currentWorkspace : receipt.workspace, sourceTitle: confirmed.context.source.title, sourceType: receipt.sourceType, localFileId: receipt.localFileId || `task:${receipt.id}`, mode: 'file', meeting: isMeeting, independentGeneration: true, parentTaskId: receipt.id, frozenContext: confirmed.context }
+    const pending: ImportReceipt = { operationId, createdAt: new Date().toISOString(), submissionState: 'unknown', workspace: readOnlyTask ? currentWorkspace : receipt.workspace, sourceTitle: confirmed.context.source.title, sourceType: frozenSourceType(confirmed.context), localFileId: frozenOriginalFile(confirmed.context, receipt.id), mode: 'file', meeting: isMeeting, independentGeneration: true, parentTaskId: receipt.id, frozenContext: confirmed.context }
     const key = `vinote:source-receipt:${owner}:${operationId}`
     let protectedOperation = false
     const route = `/generate?${new URLSearchParams({ ...(isMeeting ? { meeting: '1' } : {}), operation: operationId })}`
@@ -518,10 +566,10 @@ export function NoteGenerator() {
       if (localStorage.getItem(key) !== JSON.stringify(pending)) throw new Error('无法保护本次提交记录，未开始处理。')
       protectedOperation = true
       if (!active()) return
-      const result = await apiJson<TaskResponse>(`/api/task/${encodeURIComponent(receipt.id)}/new-generation`, { method: 'POST', body: JSON.stringify({ operation_id: operationId, confirmed: true, context_revision: confirmed.context.context_revision, source_version: confirmed.context.source.version }) })
+      const result = await apiJson<TaskResponse>(`/api/task/${encodeURIComponent(receipt.id)}/new-generation`, { method: 'POST', body: JSON.stringify({ operation_id: operationId, confirmed: true, context_revision: confirmed.context.context_revision, source_version: confirmed.context.source.version, ...(confirmed.context.protocol === 2 ? { canonical_task_id: confirmed.context.canonical_task_id } : {}) }) })
       if (!active()) return
       if (result.operation_id !== operationId || !result.task_id || result.task_id === receipt.id || !['reserved', 'accepted'].includes(result.state || '')) throw new Error('本次提交结果尚未确认，只能查询本次操作。')
-      localStorage.setItem(key, JSON.stringify({ ...pending, id: result.task_id, submissionState: result.state, sourceType: result.source_type || pending.sourceType }))
+      localStorage.setItem(key, JSON.stringify({ ...pending, id: result.task_id, submissionState: result.state, sourceType: pending.sourceType }))
       setNewConfirmation(null); navigate(route, { state: { returnTo: parent } })
     } catch (cause) {
       if (!active()) return
@@ -532,7 +580,7 @@ export function NoteGenerator() {
   }
 
   const handleEditInput = () => {
-    if (readOnlyTask || recoveryUnavailable || receipt && (!taskRetryable || receipt.submissionState !== 'accepted')) return;
+    if (readOnlyTask || receipt?.summaryOnly || recoveryUnavailable || receipt && (!taskRetryable || receipt.submissionState !== 'accepted')) return;
     if (receiptKey && receipt) localStorage.removeItem(receiptKey);
     setReceipt(null);
     setTaskRetryable(false);
@@ -567,15 +615,15 @@ export function NoteGenerator() {
     ? uploadMode !== 'url' && uploadMode !== 'document' && Boolean(selectedFile) && !/\.(pdf|docx|doc|md)$/i.test(selectedFile?.name || '')
     : uploadMode === 'url' ? Boolean(videoUrl.trim()) : Boolean(selectedFile)
   const restoringSource = !!receipt || recoveryUnavailable
-  const originalSource = receipt?.sourceUrl || receipt?.sourceTitle || '来源信息不完整'
+  const originalSource = receipt?.sourceUrl || receipt?.sourceTitle || (receipt?.summaryOnly ? '已保留的会议资料' : '来源信息不完整')
   const originalSourceType = receipt?.sourceUrl || receipt?.mode === 'url' ? '网页或视频链接'
     : receipt?.mode === 'document' || ['file', 'document'].includes(receipt?.sourceType || '') ? '导入文档'
       : receipt?.mode === 'transcript' || receipt?.sourceType === 'transcript' ? '文字或逐字稿文件'
         : ['video', 'meeting_video'].includes(receipt?.sourceType || '') ? '视频文件' : ['audio', 'meeting_recording'].includes(receipt?.sourceType || '') ? '音频文件'
           : receipt?.mode === 'file' ? '导入文件' : '来源类型待核验'
   const originalWorkspace = readOnlyTask ? '当前只查看处理记录' : receipt ? getWorkspaceLabel(receipt.workspace, teams, language === 'zh-CN' ? '个人空间' : 'Personal workspace') : '保存位置尚未核验'
-  const recoveryView = taskRecoveryView(receipt, verifiedTask, taskRetryable)
-  const originalState = readOnlyTask && !verifiedTask ? '原任务状态待核验' : verifiedTask?.status === 'success' ? '原任务已完成' : recoveryView.kind === 'failed_unknown' ? '任务已接收，此次转写未完成'
+  const recoveryView = summaryFailure ? { kind: 'failed_terminal' as const, action: '查看原任务状态', explanation: '此次总结未完成。可查询状态，或明确确认仅重新生成纪要；不会重试原任务或重新转录。' } : taskRecoveryView(receipt, verifiedTask, !receipt?.summaryOnly && taskRetryable)
+  const originalState = readOnlyTask && !verifiedTask ? '原任务状态待核验' : verifiedTask?.status === 'success' ? '原任务已完成' : recoveryView.kind === 'failed_unknown' ? unknownTaskWorkflow ? '任务已接收，此次处理未完成' : '任务已接收，此次转写未完成'
     : recoveryView.kind === 'failed_terminal' ? '任务已接收，此次处理未完成'
     : receipt?.submissionState === 'accepted' ? '服务已接收任务'
     : receipt?.submissionState === 'reserved' ? '提交已登记，排队尚未确认'
@@ -597,8 +645,10 @@ export function NoteGenerator() {
     next: '请重新查询本次状态，确认前不会重新处理。',
   }
   const historyPath = `/tasks?tab=generation&returnTo=${encodeURIComponent(parent)}`
-  const originalFile = receipt?.localFileId || (receipt?.id && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(receipt.id) ? `task:${receipt.id}` : undefined)
-  const materialsPath = `/files?${new URLSearchParams({ purpose: isMeeting ? "meeting" : "note", ...(originalFile ? { file: originalFile } : {}), returnTo: parent })}`
+  const originalFile = receipt?.independentGeneration
+    ? receipt.frozenContext && receipt.parentTaskId ? frozenOriginalFile(receipt.frozenContext, receipt.parentTaskId) : undefined
+    : receipt?.localFileId || (receipt?.id && /^[0-9a-f]{8}-(?:[0-9a-f]{4}-){3}[0-9a-f]{12}$/i.test(receipt.id) ? `task:${receipt.id}` : undefined)
+  const materialsPath = `/files?${new URLSearchParams({ purpose: unknownTaskWorkflow ? "unknown" : isMeeting ? "meeting" : "note", ...(originalFile ? { file: originalFile } : {}), returnTo: parent })}`
 
   const generationSettings = <div className="grid gap-6">
     <div className="border-b pb-4"><Label>{copy.generator.saveTargetWorkspace}</Label><p className="mt-2 text-sm font-medium">{workspaceLabel}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{isMeeting ? copy.generator.saveTargetMeetingHint : copy.generator.saveTargetWorkspaceHint}</p></div>
@@ -630,7 +680,7 @@ export function NoteGenerator() {
     {status === 'uploading' && <Button variant="ghost" disabled>正在提交来源，完成后可返回上级</Button>}
     {(readOnlyTask || !running) && <>
     <header className="max-w-2xl">
-      <h1 className="text-2xl font-medium text-balance">{readOnlyTask ? (isMeeting ? '会议处理记录' : '笔记处理记录') : isMeeting ? '从已有录制生成会议纪要' : '链接或文件转笔记'}</h1>
+      <h1 className="text-2xl font-medium text-balance">{readOnlyTask ? (unknownTaskWorkflow ? '处理记录' : isMeeting ? '会议处理记录' : '笔记处理记录') : isMeeting ? '从已有录制生成会议纪要' : '链接或文件转笔记'}</h1>
       <p className="mt-2 text-[15px] leading-6 text-muted-foreground">{readOnlyTask ? '查看本次处理的进度、结果与来源。' : isMeeting ? '选择音频、视频或逐字稿。系统会完成转写、说话人整理和纪要生成。' : '选择来源并确认保存位置。完成后直接进入编辑器继续修改和分享。'}</p>
     </header>
 
@@ -652,7 +702,11 @@ export function NoteGenerator() {
     {readingTask ? <section role="status" aria-live="polite" aria-busy="true" className="rounded-xl border p-6">
       {readOnlyTask ? <h2 className="text-lg font-medium text-balance">正在读取处理进度</h2> : <h1 className="text-lg font-medium text-balance">正在读取处理进度</h1>}
       <p className="mt-2 text-sm text-muted-foreground text-pretty">正在查询原任务，读取后显示实际阶段和处理结果。</p>
-    </section> : running ? <GenerateProgress status={status} progress={progress} processedSeconds={transcriptionMeasure?.processed} totalSeconds={transcriptionMeasure?.total ?? analysisMeasure.total} receivedSeconds={analysisMeasure.received} speakerDetectionProgress={analysisMeasure.detection} speakersReady={analysisMeasure.speakersReady} currentStep={currentStep} error={sourceRecoveryCopy(error)} message={sourceRecoveryCopy(taskMessage)} meeting={isMeeting} audioOnlySource={receipt?.sourceType === 'audio' || isBilibiliSourceUrl(receipt?.sourceUrl || videoUrl)} documentSource={receipt?.sourceType === 'file' || uploadMode === 'document'} /> : <>
+    </section> : running && unknownTaskWorkflow ? <section className="grid gap-3 rounded-xl border p-6" aria-label="任务处理状态">
+      <h2 className="text-lg font-medium text-balance">正在处理任务</h2>
+      <p role="status" className="text-sm leading-6 text-muted-foreground">{sourceRecoveryCopy(taskMessage) || '正在读取原任务状态，请稍候。'}</p>
+      <p className="text-sm leading-6 text-muted-foreground">任务用途尚未核验，暂不展示处理步骤。这里只查询本次任务，不会重新提交。</p>
+    </section> : running ? <GenerateProgress videoSource={['video', 'meeting_video'].includes(receipt?.sourceType || '')} status={status} progress={progress} processedSeconds={transcriptionMeasure?.processed} totalSeconds={transcriptionMeasure?.total ?? analysisMeasure.total} receivedSeconds={analysisMeasure.received} speakerDetectionProgress={analysisMeasure.detection} speakersReady={analysisMeasure.speakersReady} currentStep={currentStep} error={sourceRecoveryCopy(error)} message={sourceRecoveryCopy(taskMessage)} meeting={isMeeting} audioOnlySource={['audio', 'meeting_recording', 'meeting_audio'].includes(receipt?.sourceType || '') || isBilibiliSourceUrl(receipt?.sourceUrl || videoUrl)} documentSource={receipt?.sourceType === 'file' || uploadMode === 'document'} /> : <>
       {!restoringSource && <section className="border-b py-3">
         <div className="mb-3 flex items-start justify-between gap-4"><div className="flex items-start gap-3"><div><h2 className="text-lg font-semibold">{isMeeting ? '选择会议文件' : '选择笔记来源'}</h2><p className="mt-1 text-sm leading-6 text-muted-foreground">{isMeeting ? '支持音频、视频和已有逐字稿。' : '粘贴网页或视频链接，或上传 PDF、Word、音视频和文字文件。PDF、Word 上限 20 MB，PDF 上限 200 页。'}</p></div></div></div>
         <fieldset disabled={!!receipt || recoveryUnavailable}><FileUploader videoUrl={videoUrl} urlError={visibleSourceError} urlInputRef={sourceInput} onVideoUrlChange={value => { if (!receipt) { setVideoUrl(value); setSourceError('') } }} onFileSelect={value => { if (!receipt) setSelectedFile(value) }} onModeChange={value => { if (!receipt) { setUploadMode(value); setSourceError('') } }} fileUploadEnabled initialMode={uploadMode} file={selectedFile} urlEnabled={!isMeeting} meetingOnly={isMeeting} /></fieldset>
@@ -667,7 +721,7 @@ export function NoteGenerator() {
       </section>}
 
       {import.meta.env.DEV && (receipt || error) && <details className="text-xs text-muted-foreground" aria-label="开发诊断"><summary>开发诊断</summary><div className="mt-2 grid gap-2">{receipt?.operationId && <p>提交编号：{receipt.operationId}</p>}{(receipt?.id || taskId) && <p>任务编号：{receipt?.id || taskId}</p>}<p>网页和 PDF/DOCX 支持提交去重；媒体、逐字稿与首次原件注册尚未覆盖。</p>{error && (readOnlyTask && recordFailure?.outcome !== sourceRecoveryCopy(error) || error !== sourceRecoveryCopy(error)) && <p className="whitespace-pre-wrap">{error}</p>}</div></details>}
-      {status === 'failed' ? <Alert variant="destructive"><AlertDescription><p>{recordFailure?.outcome ?? sourceRecoveryCopy(error)}</p><p className="mt-2">{recordFailure?.next ?? (receipt ? recoveryView.explanation : copy.generator.failedRecoveryHint)}</p></AlertDescription><div className="mt-4 flex flex-wrap gap-3"><Button onClick={() => void resumeOriginal()} disabled={recoveryUnavailable || !!recoveryLock.current || (!receipt && !sourceReady)}>{receipt ? recoveryView.action : copy.generator.retryGeneration}</Button>{!readOnlyTask && <Button variant="outline" disabled={readOnlyTask || recoveryUnavailable || !!receipt && (!taskRetryable || receipt.submissionState !== 'accepted')} onClick={handleEditInput}>{receipt ? '更换来源，开始新任务' : copy.generator.editInput}</Button>}{!receipt?.independentGeneration && verifiedTask?.taskId === receipt?.id && ['failed', 'error'].includes(verifiedTask?.status || '') && <Button variant="outline" disabled={newBusy} onClick={() => void openNewGeneration()}>确认原模型，开始新的处理</Button>}{(!readOnlyTask || originalNeedsAttention) && <Button variant="ghost" asChild><Link to={materialsPath} state={{ returnTo: parent }}>返回资料与原文件</Link></Button>}<Button variant="ghost" asChild><Link to={historyPath}>查看处理历史与恢复</Link></Button></div></Alert> : null}
+      {status === 'failed' ? <Alert variant="destructive"><AlertDescription><p>{recordFailure?.outcome ?? sourceRecoveryCopy(error)}</p><p className="mt-2">{recordFailure?.next ?? (receipt ? recoveryView.explanation : copy.generator.failedRecoveryHint)}</p></AlertDescription><div className="mt-4 flex flex-wrap gap-3"><Button onClick={() => void resumeOriginal()} disabled={recoveryUnavailable || !!recoveryLock.current || (!receipt && !sourceReady)}>{receipt ? recoveryView.action : copy.generator.retryGeneration}</Button>{!readOnlyTask && <Button variant="outline" disabled={readOnlyTask || recoveryUnavailable || !!receipt && (!taskRetryable || receipt.submissionState !== 'accepted')} onClick={handleEditInput}>{receipt ? '更换来源，开始新任务' : copy.generator.editInput}</Button>}{isMeeting && !unknownTaskWorkflow && !recoveryUnavailable && !!receipt?.id && verifiedTask?.taskId === receipt.id && ['failed', 'error'].includes(verifiedTask.status) && <RegenerateMeetingSummary taskId={receipt.id} workspace={readOnlyTask ? currentWorkspace : receipt.workspace} returnTo={parent} disabled={readingTask} />}{!summaryFailure && !unknownTaskWorkflow && !receipt?.independentGeneration && verifiedTask?.taskId === receipt?.id && ['failed', 'error'].includes(verifiedTask?.status || '') && <Button variant="outline" disabled={newBusy} onClick={() => void openNewGeneration()}>确认原模型，开始新的处理</Button>}{(!readOnlyTask || originalNeedsAttention) && <Button variant="ghost" asChild><Link to={materialsPath} state={{ returnTo: parent }}>返回资料与原文件</Link></Button>}<Button variant="ghost" asChild><Link to={historyPath}>查看处理历史与恢复</Link></Button></div></Alert> : null}
 
       {status !== 'failed' && !restoringSource && <div className="flex flex-col items-start justify-between gap-4 border-t bg-background py-4 sm:flex-row sm:items-center" style={{ animationDelay: '170ms' }}><div><p className="font-medium">{visibleSourceError ? '请修正来源链接' : sourceReady ? (isMeeting ? '会议文件已准备好' : '来源已准备好') : (isMeeting ? '先选择一个会议文件' : '先提供链接或文件')}</p><p className="mt-1 text-sm text-muted-foreground">{visibleSourceError ? '当前输入已保留，修改链接后再开始整理。' : sourceReady ? '开始后会显示真实处理阶段和失败恢复入口。' : '选好来源后即可开始，模型设置可在上方调整。'}</p></div><Button onClick={() => void handleGenerate()} disabled={status !== 'idle' || !sourceReady} size="lg" className="min-w-52"><Wand2 />{language === 'zh-CN' ? (isMeeting ? '生成会议纪要' : '开始整理') : (isMeeting ? 'Generate meeting minutes' : 'Organize notes')}</Button></div>}
     </>}

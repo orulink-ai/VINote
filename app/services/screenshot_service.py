@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import logging
 import re
+import subprocess
 from pathlib import Path
 
 from app.downloaders.base import Downloader
 from app.services.task_artifact_service import TaskArtifactService
 from app.services.video_link_service import build_video_jump_url, format_timestamp_label
+from app.services.video_evidence_service import VideoEvidenceService, VideoEvidenceError
 
 logger = logging.getLogger(__name__)
 
@@ -44,33 +46,31 @@ class ScreenshotService:
         media_url: str,
         local_video_path: Path | None = None,
     ) -> str:
-        pattern = r"\[\[Screenshot:(\d{1,2}):(\d{2})\]\]"
+        pattern = r"\[\[Screenshot:(\d{1,4}):([0-5]\d)\]\]"
         matches = re.findall(pattern, markdown)
         if not matches:
             return markdown
 
-        if not local_video_path:
-            local_video = self.prepare_local_video(video_url=video_url, task_dir=task_dir, task_id=task_id)
-            if local_video:
-                local_video_path = local_video[0]
-
-        if not local_video_path:
+        # A generated marker never authorizes downloading another original.
+        if not local_video_path or not Path(local_video_path).is_file():
             return re.sub(pattern, "", markdown)
 
         timestamps = [int(minutes) * 60 + int(seconds) for minutes, seconds in matches]
         unique_timestamps = list(dict.fromkeys(timestamps))
 
         try:
-            frame_paths = self.downloader.extract_frames(
-                video_path=str(local_video_path),
-                timestamps=unique_timestamps,
-                output_dir=str(task_dir / "screenshots"),
-            )
-            frame_by_timestamp = {
-                seconds: frame_paths[index]
-                for index, seconds in enumerate(unique_timestamps)
-                if index < len(frame_paths)
-            }
+            output_dir = task_dir / 'screenshots'
+            output_dir.mkdir(exist_ok=True)
+            frame_by_timestamp = {}
+            for timestamp in unique_timestamps[:32]:
+                destination = output_dir / f'frame-{timestamp:08d}.jpg'
+                try:
+                    VideoEvidenceService._extract_frame(Path(local_video_path).resolve(), timestamp, destination)
+                    frame_by_timestamp[timestamp] = destination
+                except (VideoEvidenceError, OSError, ValueError, subprocess.SubprocessError):
+                    # Missing one frame must not move the next successful image
+                    # onto this timestamp (downloaders historically compact lists).
+                    continue
             for index, (minutes, seconds) in enumerate(matches):
                 marker = f"[[Screenshot:{minutes}:{seconds}]]"
                 timestamp = timestamps[index]

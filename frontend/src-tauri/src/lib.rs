@@ -1,3 +1,4 @@
+mod original_download;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -38,6 +39,7 @@ impl RecorderRuntimeState {
 pub fn run() {
     let app = tauri::Builder::default()
         .manage(RecorderRuntimeState::default())
+        .manage(original_download::Downloads::default())
         .plugin(tauri_plugin_opener::init())
         .setup(|_app| {
             #[cfg(not(debug_assertions))]
@@ -45,6 +47,10 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            original_download::choose_original_destination,
+            original_download::append_original_bytes,
+            original_download::finish_original_download,
+            original_download::cancel_original_download,
             request_microphone_access,
             open_external_url,
             open_recorder_window,
@@ -264,6 +270,9 @@ fn handle_run_event(app: &AppHandle, event: RunEvent) {
             }
         }
         RunEvent::WindowEvent { label, event, .. } => {
+            if matches!(&event, WindowEvent::Destroyed) {
+                app.state::<original_download::Downloads>().discard_window(&label);
+            }
             let recorder_active = app.state::<RecorderRuntimeState>().is_active();
             if !should_protect_window_close(&label, recorder_active) {
                 return;

@@ -50,6 +50,99 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
+it('loads groups only on demand and keeps personal preferences usable while the group request is pending', async () => {
+  vi.mocked(feishuGroups).mockImplementationOnce(() => new Promise(() => {}));
+  vi.mocked(apiJson).mockResolvedValueOnce({ kind: 'personal', can_attempt_create: true, path: ['个人云文档'] }).mockResolvedValueOnce({ ...status, notify_self: false });
+  render(<MemoryRouter><FeishuSettings /></MemoryRouter>);
+  const self = await screen.findByRole('checkbox', { name: '发给我本人' });
+  await waitFor(() => expect(self).toBeEnabled());
+  expect(feishuGroups).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole('button', { name: '选择群' }));
+  await screen.findByText('正在读取群列表，已选群继续保留…');
+  expect(screen.getByRole('button', { name: '完成选择' })).toBeEnabled();
+  fireEvent.click(screen.getByRole('button', { name: '完成选择' }));
+  expect(self).toBeEnabled();
+  fireEvent.click(self);
+  fireEvent.click(screen.getByRole('button', { name: '核验位置与权限' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: '保存设置' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
+  await screen.findAllByText('设置已保存，将用于下一份纪要。');
+  expect(feishuGroups).toHaveBeenCalledTimes(1);
+  expect(apiJson).toHaveBeenLastCalledWith('/api/feishu/preferences', expect.objectContaining({ method: 'PUT' }));
+});
+
+it('ignores group results/finally from an earlier account visit even after switching back to that owner', async () => {
+  let finishOld!: (groups: { chat_id: string; name: string }[]) => void;
+  let finishNew!: (groups: { chat_id: string; name: string }[]) => void;
+  vi.mocked(feishuGroups).mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; })).mockImplementationOnce(() => new Promise(resolve => { finishNew = resolve; }));
+  render(<MemoryRouter><FeishuSettings /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: '选择群' }));
+  await waitFor(() => expect(feishuGroups).toHaveBeenCalledTimes(1));
+  act(() => useAuthStore.setState({ user: { id: 'other-owner', email: 'other@example.invalid' } }));
+  await waitFor(() => expect(feishuStatus).toHaveBeenCalledTimes(2));
+  act(() => useAuthStore.setState({ user: { id: 'draft-owner', email: 'owner@example.invalid' } }));
+  await waitFor(() => expect(feishuStatus).toHaveBeenCalledTimes(3));
+  fireEvent.click(await screen.findByRole('button', { name: '选择群' }));
+  await waitFor(() => expect(feishuGroups).toHaveBeenCalledTimes(2));
+  await act(async () => finishOld([{ chat_id: 'old', name: '过期群结果' }]));
+  expect(screen.queryByText('过期群结果')).toBeNull();
+  expect(screen.getByRole('button', { name: '正在刷新…' })).toBeDisabled();
+  await act(async () => finishNew([{ chat_id: 'new', name: '当前群结果' }]));
+  expect(await screen.findByRole('checkbox', { name: '当前群结果' })).toBeVisible();
+});
+
+it('keeps the newest expired authorization status when an older same-owner verification finishes late', async () => {
+  let finishOld!: (value: typeof status) => void;
+  let finishNew!: (value: typeof status) => void;
+  vi.mocked(feishuStatus).mockResolvedValueOnce(status).mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; })).mockImplementationOnce(() => new Promise(resolve => { finishNew = resolve; }));
+  vi.mocked(apiJson).mockResolvedValue({ url: 'https://example.invalid/authorize', expires_at: Date.now() / 1000 + 600 });
+  render(<MemoryRouter><FeishuSettings /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: '重新连接' }));
+  fireEvent.click(await screen.findByRole('button', { name: '我已完成授权' }));
+  await waitFor(() => expect(feishuStatus).toHaveBeenCalledTimes(2));
+  fireEvent(window, new Event('focus'));
+  await waitFor(() => expect(feishuStatus).toHaveBeenCalledTimes(3));
+  await act(async () => finishNew({ ...status, expired: true, name: '最新授权状态' }));
+  await act(async () => finishOld({ ...status, name: '过期核验返回' }));
+  expect(screen.queryByText('过期核验返回')).toBeNull();
+  expect(screen.getByText('最新授权状态')).toBeVisible();
+  expect(screen.queryByRole('checkbox', { name: '发给我本人' })).toBeNull();
+});
+
+it('discards pending groups after the grant expires and reads fresh groups after re-verification', async () => {
+  let finishOld!: (groups: { chat_id: string; name: string }[]) => void;
+  vi.mocked(feishuGroups).mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; })).mockResolvedValueOnce([{ chat_id: 'new', name: '重新核验后的群' }]);
+  vi.mocked(feishuStatus).mockResolvedValueOnce(status).mockResolvedValueOnce({ ...status, expired: true }).mockResolvedValue(status);
+  vi.mocked(apiJson).mockResolvedValue({ url: 'https://example.invalid/authorize', expires_at: Date.now() / 1000 + 600 });
+  render(<MemoryRouter><FeishuSettings /></MemoryRouter>);
+  fireEvent.click(await screen.findByRole('button', { name: '选择群' }));
+  await waitFor(() => expect(feishuGroups).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole('button', { name: '完成选择' }));
+  fireEvent.click(screen.getByRole('button', { name: '重新连接' }));
+  fireEvent.click(await screen.findByRole('button', { name: '我已完成授权' }));
+  await screen.findByText('飞书授权已过期。重新连接后可在会议详情继续交付。');
+  await act(async () => finishOld([{ chat_id: 'old', name: '过期授权群' }]));
+  fireEvent.click(screen.getByRole('button', { name: '我已完成授权' }));
+  fireEvent.click(await screen.findByRole('button', { name: '选择群' }));
+  expect(await screen.findByRole('checkbox', { name: '重新核验后的群' })).toBeVisible();
+  expect(screen.queryByText('过期授权群')).toBeNull();
+  expect(feishuGroups).toHaveBeenCalledTimes(2);
+});
+
+it('does not copy unsaved preferences from the previous owner into an account without a draft', async () => {
+  render(<MemoryRouter><FeishuSettings /></MemoryRouter>);
+  const self = await screen.findByRole('checkbox', { name: '发给我本人' });
+  await waitFor(() => expect(self).toBeEnabled());
+  fireEvent.click(self);
+  expect(self).not.toBeChecked();
+  act(() => useAuthStore.setState({ user: { id: 'next-owner', email: 'next@example.invalid' } }));
+  await waitFor(() => expect(feishuStatus).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(screen.getByRole('checkbox', { name: '发给我本人' })).toBeEnabled());
+  expect(screen.getByRole('checkbox', { name: '发给我本人' })).toBeChecked();
+  expect(JSON.parse(sessionStorage.getItem('vinote:feishu-preferences:draft-owner')!).notify_self).toBe(false);
+  expect(sessionStorage.getItem('vinote:feishu-preferences:next-owner')).toBeNull();
+});
+
 it('does not claim an empty group list during refresh or allow duplicate reads, and keeps selections', async () => {
   vi.mocked(feishuStatus).mockResolvedValue({ ...status, groups: ['existing-group'] });
   let finish!: (value: []) => void;
@@ -203,9 +296,10 @@ it("keeps an initial group failure separate from connection state and supports a
     </MemoryRouter>,
   );
   await screen.findByText("测试账号");
+  expect(feishuGroups).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: "选择群" }));
   await screen.findByText("群服务暂不可用，已选群继续保留，请重试刷新。");
   expect(screen.queryByRole("button", { name: "重新加载" })).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "选择群" }));
   fireEvent.click(screen.getByRole("button", { name: "刷新群列表" }));
   await waitFor(() =>
     expect(
@@ -223,5 +317,5 @@ it.each([{ connection_state: 'service_unavailable' }, { grant_state: 'unavailabl
   await waitFor(() => expect(feishuStatus).toHaveBeenCalledTimes(2));
   expect(apiJson).not.toHaveBeenCalled();
   expect(screen.queryByText(/需重新授权/)).toBeNull();
-  expect(feishuGroups).toHaveBeenCalledTimes(1);
+  expect(feishuGroups).not.toHaveBeenCalled();
 });

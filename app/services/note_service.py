@@ -7,7 +7,8 @@ import math
 import re
 import os
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Optional
 
@@ -51,6 +52,7 @@ class PipelineContext:
     diarize: bool = False
     speaker_count: int | None = None
     preloaded_transcript: TranscriptResult | None = None
+    video_evidence: object | None = None
 
 
 class NoteService:
@@ -420,7 +422,34 @@ class NoteService:
             from app.services.vilab_cloud_service import VILabCloudService
 
             with VILabCloudService().task_snapshot(user_id):
-                transcript = self._transcribe_audio(context)
+                source = self.artifact_service.resolve_source_media(context.task_dir)
+                is_video = source is not None and source.suffix.lower() in {'.webm', '.mp4', '.mkv', '.mov', '.m4v', '.avi'}
+                # Audio-only WebM is disambiguated by the retained source manifest.
+                if is_video and source.suffix.lower() == '.webm':
+                    manifest = context.task_dir / 'source_media.json'
+                    if manifest.exists():
+                        is_video = json.loads(manifest.read_text(encoding='utf-8')).get('media_kind') == 'video'
+                    else:
+                        reference = context.task_dir / 'source_reference.json'
+                        parent = (json.loads(reference.read_text(encoding='utf-8')).get('parent_task_id')
+                                  if reference.exists() else None)
+                        canonical = self.artifact_service.find_task_dir(parent) if parent else None
+                        manifest = canonical / 'source_media.json' if canonical else None
+                        is_video = bool(manifest and manifest.is_file() and
+                            json.loads(manifest.read_text(encoding='utf-8')).get('media_kind') == 'video')
+                if context.style == 'meeting' and is_video:
+                    from app.services.video_evidence_service import VideoEvidenceService
+                    with ThreadPoolExecutor(max_workers=1, thread_name_prefix='meeting-video') as pool:
+                        video = pool.submit(VideoEvidenceService().collect, local_video_path=source,
+                                            task_dir=context.task_dir, transcript_segments=[],
+                                            owner_id=context.user_id)
+                        transcript = self._transcribe_audio(context)
+                        self.artifact_service.update_status(context.task_dir, 'summarizing',
+                            '正在核对共享画面与发言…', stage='analyzing_video')
+                        context.video_evidence = video.result().align(
+                            transcript.segments, transcript.metadata.get('speaker_evidence', []))
+                else:
+                    transcript = self._transcribe_audio(context)
                 markdown = self._summarize_audio(context, transcript)
             markdown = self._enrich_markdown_with_media(context, transcript, markdown)
             result = self._build_result(context, transcript, markdown)
@@ -443,7 +472,12 @@ class NoteService:
             return result
         except Exception as exc:
             from app.services.task_failure import failure_details
-            self.artifact_service.update_status(final_dir, "failed", str(exc), **failure_details(exc))
+            previous = self.artifact_service.get_status(task_id)
+            details = failure_details(exc)
+            failed_stage = previous.get('stage')
+            if failed_stage not in {'failed', 'error', 'success', None}:
+                details['failed_stage'] = failed_stage
+            self.artifact_service.update_status(final_dir, "failed", str(exc), **details)
             raise
 
     @staticmethod
@@ -467,7 +501,6 @@ class NoteService:
     @traced("语音转写", as_type="chain")
     def _transcribe_audio(self, context: PipelineContext):
         from app.services.asr_execution_binding import require_task_execution
-        require_task_execution(context.user_id, context.task_id, context.task_dir, context.audio_meta.file_path)
         if context.preloaded_transcript is not None:
             update_current(
                 input={"source": "uploaded_transcript", "stt_skipped": True},
@@ -480,6 +513,7 @@ class NoteService:
             context.step_timings["transcribe"] = 0.0
             return context.preloaded_transcript
 
+        require_task_execution(context.user_id, context.task_id, context.task_dir, context.audio_meta.file_path)
         step_start = time.time()
         update_current(input={"audio_duration_seconds": context.audio_meta.duration,
                               "diarization": context.diarize,
@@ -529,38 +563,60 @@ class NoteService:
             base_url=context.base_url,
         )
         summary_extras = context.extras
-        # Meeting visualization generation was cancelled. Preserve historical
-        # media, but do not run a new visual-analysis/illustration pipeline.
+        # The user cancelled generated illustrations, not original-video evidence.
         if context.style == "meeting" and transcript.metadata.get("unrecognized_segments"):
             coverage = json.dumps(transcript.metadata["unrecognized_segments"], ensure_ascii=False)
             summary_extras = "\n\n".join(filter(None, [summary_extras,
                 "【识别覆盖缺口，时间为录音偏移秒数】" + coverage +
                 "\n这些区间未识别出文字，不代表确定静音；不得推断缺失发言、决定或行动。只依据已有转写和独立视觉证据总结。"
+                "这是内部处理信息，不要在纪要正文附加识别缺口、静音或技术报告。"
             ]))
         summary_segments = transcript.segments
         if context.style == "meeting" and transcript.metadata.get("asr_evidence"):
             # Supply independent evidence rather than estimated sentence attribution.
-            raw = transcript.metadata["asr_evidence"]
+            from app.services.meeting_evidence import original_asr_evidence
+            raw = original_asr_evidence(transcript.metadata["asr_evidence"])
             turns = transcript.metadata.get("speaker_evidence", [])
             summary_segments = [TranscriptSegment(**segment) for segment in raw["segments"]] or [
                 TranscriptSegment(0, context.audio_meta.duration, raw["full_text"])]
             for segment in summary_segments:
-                segment.timestamp_estimated = raw.get("metadata", {}).get("timestamp_granularity") != "segment"
+                segment.timestamp_estimated = (segment.timestamp_estimated or
+                    raw.get("metadata", {}).get("timestamp_granularity") != "segment")
                 segment.speaker_evidence = [turn for turn in turns
                                            if turn["end"] > segment.start and turn["start"] < segment.end]
-        markdown = llm.summarize(
-            title=context.audio_meta.title,
-            segments=summary_segments,
-            style=context.style,
-            summary_mode=context.summary_mode,
-            extras=summary_extras,
-            output_language=context.output_language,
-            progress_callback=lambda message: self.artifact_service.update_status(
-                context.task_dir,
-                "summarizing",
-                message,
-            ),
-        )
+        video_kwargs = {}
+        if getattr(context, 'video_evidence', None) is not None:
+            from app.services.video_model_capability import verify_image_input
+            model = getattr(llm, 'model', None)
+            if context.user_id and getattr(llm, 'user_id', None) == context.user_id:
+                from app.services.vilab_cloud_service import VILabCloudService
+                entry = next((row for row in VILabCloudService().models(context.user_id)
+                              if row.get('id') == model and row.get('modelType') == 'llm'), None)
+                if entry is None:
+                    raise ValueError('所选模型不在当前服务目录，未提交画面')
+                verified = verify_image_input(context.user_id, model, catalog_entry=entry)
+                llm.configure_video_capabilities(entry.get('capabilities'), image_input_verified=verified)
+            video_kwargs['video_evidence'] = context.video_evidence.align(
+                summary_segments, transcript.metadata.get('speaker_evidence', []))
+        from app.llm.source_references import capture_working_draft
+        from app.services.meeting_draft_artifact import save_working_draft
+        # Diagnostic working material only: never a saved result, a checkpoint
+        # authorizing another model call, or evidence of a successful review.
+        with capture_working_draft(lambda text: save_working_draft(self.artifact_service, context.task_dir, text)):
+            markdown = llm.summarize(
+                title=context.audio_meta.title,
+                segments=summary_segments,
+                style=context.style,
+                summary_mode=context.summary_mode,
+                extras=summary_extras,
+                output_language=context.output_language,
+                progress_callback=lambda message: self.artifact_service.update_status(
+                    context.task_dir,
+                    "summarizing",
+                    message,
+                ),
+                **video_kwargs,
+            )
         context.step_timings["summarize"] = time.time() - step_start
         update_current(
             input={"title": context.audio_meta.title, "summary_mode": context.summary_mode,
@@ -636,10 +692,25 @@ class NoteService:
 
     def _build_result(self, context: PipelineContext, transcript, markdown: str) -> NoteResult:
         context.step_timings["total"] = time.time() - context.task_start_time
+        audio_meta = context.audio_meta
+        video_duration = getattr(getattr(context, 'video_evidence', None), 'duration', None)
+        if (context.style == 'meeting' and type(video_duration) in (int, float)
+                and math.isfinite(video_duration) and video_duration > 0):
+            # A transcript may end before the retained video. Display its actual
+            # media duration without changing the source or ASR coverage clock.
+            audio_meta = replace(audio_meta, duration=video_duration)
+        if context.style == 'meeting':
+            heading = re.search(r'^#\s+([^\n]+)', markdown, re.M)
+            if heading:
+                topic = re.sub(r'[*_`]', '', heading.group(1)).strip().strip('#').strip()
+                source_time = re.match(r'^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*[|｜]', audio_meta.title or '')
+                if topic:
+                    title = f'{source_time.group(1)} | {topic}' if source_time and not topic.startswith(source_time.group(1)) else topic
+                    audio_meta = replace(audio_meta, title=title[:180].rstrip())
         return NoteResult(
             markdown=markdown,
             transcript=transcript,
-            audio_meta=context.audio_meta,
+            audio_meta=audio_meta,
             summary_mode=context.summary_mode,
             output_dir=str(context.task_dir),
         )

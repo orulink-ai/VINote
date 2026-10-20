@@ -8,6 +8,13 @@ from fastapi import HTTPException
 from app.services.vilab_cloud_service import VILabCloudService
 
 
+def direct_call(method):
+    def call(*args, **kwargs):
+        assert kwargs.pop('trust_env') is False
+        return method(*args, **kwargs)
+    return call
+
+
 @pytest.mark.parametrize('stream', [False, True])
 @pytest.mark.parametrize('status,error,category,copy', [
     (401, {'type': 'vilab_error', 'code': 'unauthorized'}, 'caller_auth', '当前身份'),
@@ -29,9 +36,10 @@ def test_chat_rejections_use_protocol_and_safe_projection(stream, status, error,
     with httpx.Client(transport=httpx.MockTransport(handler)) as client, \
             patch.object(service, 'status', return_value={'server_url': 'https://unused.test'}), \
             patch('app.services.vilab_cloud_service.settings') as settings, \
-            patch('app.services.vilab_cloud_service.httpx.stream', side_effect=client.stream), \
-            patch('app.services.vilab_cloud_service.httpx.request', side_effect=client.request):
+            patch('app.services.vilab_cloud_service.httpx.stream', side_effect=direct_call(client.stream)), \
+            patch('app.services.vilab_cloud_service.httpx.request', side_effect=direct_call(client.request)):
         settings.vilab_server_url = 'https://unused.test'
+        settings.content_cloud_runtime = False
         settings.cloud_auth_url = ''
         settings.vilab_api_key = 'header-secret'
         with pytest.raises(HTTPException) as caught:
@@ -39,6 +47,8 @@ def test_chat_rejections_use_protocol_and_safe_projection(stream, status, error,
                             json={'model': 'frozen-model', 'stream': stream})
     assert len(seen) == 1 and json.loads(seen[0].content)['model'] == 'frozen-model'
     assert copy in caught.value.detail
+    from app.services.task_failure import failure_details
+    assert failure_details(caught.value) == {}  # Explicit rejection retains its existing retry policy.
     diagnostic = caught.value.cloud_failure_context
     assert diagnostic['category'] == category and diagnostic['http_status'] == status
     assert set(diagnostic) <= {'category', 'http_status', 'error_type', 'error_code'}

@@ -3,6 +3,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter, Route, Routes, Link, useLocation } from "react-router-dom";
 import { I18nProvider } from "../lib/i18n";
 import { NoteEditor } from "./NoteEditor";
+import { useAuthStore } from "../stores/authStore";
 import { useWorkspaceStore } from "../stores/workspaceStore";
 
 const noteStoreMock = vi.hoisted(() => ({
@@ -16,9 +17,10 @@ const noteStoreMock = vi.hoisted(() => ({
 
 const apiMock = vi.hoisted(() => ({
   apiJson: vi.fn(),
+  apiFetch: vi.fn(),
 }));
 
-vi.mock("../lib/api", () => ({ apiJson: apiMock.apiJson }));
+vi.mock("../lib/api", () => ({ apiJson: apiMock.apiJson, apiFetch: apiMock.apiFetch }));
 vi.mock("../stores/languageStore", () => ({
   useLanguageStore: () => ({
     language: "en",
@@ -76,6 +78,7 @@ function renderEditor(
         <Route path="/settings/mcp" element={<ContextDestination />} />
         <Route path="/files" element={<ContextDestination />} />
         <Route path="/notes" element={<div>Notes</div>} />
+        <Route path="/meetings" element={<div>Meetings</div>} />
         <Route path="/" element={<div>Recording workbench</div>} />
         <Route path="/assistant" element={<div>Meeting assistant</div>} />
       </Routes>
@@ -96,16 +99,21 @@ async function openDeleteAction() {
 describe("NoteEditor transcript evidence", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    localStorage.clear();
+    useAuthStore.setState({ user: null });
     useWorkspaceStore.setState({ mappings: {}, items: [], changeDeleted: vi.fn(async key => ({ key, deleted: true }) as never) });
     Object.defineProperty(window.HTMLMediaElement.prototype, "play", {
       configurable: true,
       value: vi.fn().mockResolvedValue(undefined),
     });
+    Object.defineProperty(window.HTMLMediaElement.prototype, 'load', { configurable: true, value: vi.fn() });
+    apiMock.apiFetch.mockResolvedValue(new Response(null, { status: 206 }));
     Object.defineProperty(window.HTMLElement.prototype, "scrollIntoView", {
       configurable: true,
       value: vi.fn(),
     });
     apiMock.apiJson.mockImplementation((path: string, init?: RequestInit) => {
+      if (path.endsWith('/recording')) return Promise.resolve({ available: true, deleted: false, can_delete: false, filename: 'sample.webm', size_bytes: 1000 });
       if (path.endsWith("/speakers") && init?.method === "PATCH") {
         return Promise.resolve({ aliases: { speaker_01: "Susan Wang" } });
       }
@@ -258,9 +266,53 @@ describe("NoteEditor transcript evidence", () => {
     renderEditor("/note/note-1?returnTo=https%3A%2F%2Funtrusted.invalid");
     await screen.findByText("Minutes only.");
     fireEvent.click(screen.getByRole("button", { name: "Return to list" }));
-    expect(await screen.findByText("Notes")).toBeInTheDocument();
+    expect(await screen.findByText("Meetings")).toBeInTheDocument();
   });
 
+  it.each(['meeting_video', 'document'])('waits for verified %s kind before binding a direct deep-link return', async sourceType => {
+    let resolve!: (value: unknown) => void
+    noteStoreMock.loadNoteById.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    renderEditor()
+    expect(screen.queryByRole('button', { name: '返回上级' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '返回笔记' })).toBeNull()
+    await act(async () => resolve({ id: 'note-1', title: 'Synthetic note', content: '# Synthetic content', sourceType, status: 'done', scope: 'personal', createdAt: '', updatedAt: '' }))
+    await screen.findByRole('heading', { name: 'Synthetic note' })
+    fireEvent.click(screen.getByRole('button', { name: 'Return to list' }))
+    expect(await screen.findByText(sourceType === 'meeting_video' ? 'Meetings' : 'Notes')).toBeVisible()
+  })
+  it('validates query and state parents independently before kind is known and preserves the selected parent', async () => {
+    let resolve!: (value: unknown) => void
+    noteStoreMock.loadNoteById.mockReturnValueOnce(new Promise(done => { resolve = done }))
+    renderEditor({ pathname: '/note/note-1', search: '?returnTo=https%3A%2F%2Foutside.invalid', state: { returnTo: '/files?q=kept' } })
+    expect(screen.getByRole('button', { name: '返回文件库' })).toBeVisible()
+    await act(async () => resolve({ id: 'note-1', title: 'Synthetic meeting', content: '# Body', sourceType: 'meeting_video', status: 'done', scope: 'personal', createdAt: '', updatedAt: '' }))
+    await screen.findByRole('heading', { name: 'Synthetic meeting' })
+    fireEvent.click(screen.getByRole('button', { name: 'Return to list' }))
+    expect(await screen.findByLabelText('Destination')).toHaveTextContent('/files?q=kept')
+  })
+  it('ignores the previous id late meeting response when binding the next note parent', async () => {
+    let resolve!: (value: unknown) => void
+    noteStoreMock.loadNoteById.mockImplementation((id: string) => id === 'note-1' ? new Promise(done => { resolve = done }) : Promise.resolve({ id: 'note-2', title: 'Second note', content: '# Second content', sourceType: 'document', status: 'done', scope: 'personal', createdAt: '', updatedAt: '' }))
+    render(<MemoryRouter initialEntries={['/note/note-1']}><Routes><Route path="/note/:id" element={<><Link to="/note/note-2">Next note</Link><I18nProvider><NoteEditor /></I18nProvider></>} /><Route path="/notes" element={<div>Notes</div>} /><Route path="/meetings" element={<div>Meetings</div>} /></Routes></MemoryRouter>)
+    fireEvent.click(screen.getByRole('link', { name: 'Next note' }))
+    await screen.findByRole('heading', { name: 'Second note' })
+    await act(async () => resolve({ id: 'note-1', title: 'Stale meeting', content: '# Stale content', sourceType: 'meeting_video', status: 'done', scope: 'personal', createdAt: '', updatedAt: '' }))
+    expect(screen.queryByRole('heading', { name: 'Stale meeting' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Return to list' }))
+    expect(await screen.findByText('Notes')).toBeVisible()
+  })
+  it('ignores an old-account late meeting response when resolving the new account note parent', async () => {
+    useAuthStore.setState({ user: { id: 'old-owner' } as never })
+    let resolve!: (value: unknown) => void
+    noteStoreMock.loadNoteById.mockReturnValueOnce(new Promise(done => { resolve = done })).mockResolvedValue({ id: 'note-1', title: 'New owner note', content: '# New content', sourceType: 'document', status: 'done', scope: 'personal', createdAt: '', updatedAt: '' })
+    renderEditor()
+    act(() => useAuthStore.setState({ user: { id: 'new-owner' } as never }))
+    await screen.findByRole('heading', { name: 'New owner note' })
+    await act(async () => resolve({ id: 'note-1', title: 'Old owner meeting', content: '# Old content', sourceType: 'meeting_video', status: 'done', scope: 'personal', createdAt: '', updatedAt: '' }))
+    expect(screen.queryByRole('heading', { name: 'Old owner meeting' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Return to list' }))
+    expect(await screen.findByText('Notes')).toBeVisible()
+  })
   it("does not invent a synced object for content with no acknowledged mapping", async () => {
     renderEditor();
     await screen.findByText("Minutes only.");
@@ -295,9 +347,9 @@ describe("NoteEditor transcript evidence", () => {
   });
 
   it.each([
-    ["/", "Notes"],
-    ["/assistant", "Notes"],
-    ["https://untrusted.invalid", "Notes"],
+    ["/", "Meetings"],
+    ["/assistant", "Meetings"],
+    ["https://untrusted.invalid", "Meetings"],
   ])("returns to the supported entry point %s", async (returnTo, expected) => {
     renderEditor({ pathname: "/note/note-1", state: { returnTo } });
     await screen.findByText("Minutes only.");
@@ -349,6 +401,7 @@ describe("NoteEditor transcript evidence", () => {
   it("retries only the failed transcript load and keeps the summary and shared player", async () => {
     let failed = false;
     apiMock.apiJson.mockImplementation((path: string) => {
+      if (path.endsWith('/recording')) return Promise.resolve({ available: true, deleted: false, can_delete: false, filename: 'sample.webm', size_bytes: 1000 });
       if (path.endsWith("/transcript") && !failed) {
         failed = true;
         return Promise.reject(new Error("offline"));
@@ -377,7 +430,7 @@ describe("NoteEditor transcript evidence", () => {
     expect(noteStoreMock.deleteNote).not.toHaveBeenCalled();
     await openDeleteAction();
     fireEvent.click(screen.getByRole("button", { name: "Confirm deletion" }));
-    expect(await screen.findByText("Notes")).toBeInTheDocument();
+    expect(await screen.findByText("Meetings")).toBeInTheDocument();
     expect(useWorkspaceStore.getState().changeDeleted).toHaveBeenCalledWith("note-1", true);
     expect(noteStoreMock.deleteNote).not.toHaveBeenCalled();
   });
@@ -510,12 +563,67 @@ describe("NoteEditor transcript evidence", () => {
     renderEditor("/note/note-1?view=transcript");
     const turn = await screen.findByText("We agreed to activate Sortformer.");
     const audio = screen.getByTestId("source-audio") as HTMLAudioElement;
+    expect(audio).toHaveAttribute('src', '/api/notes/note-1/media');
     expect(screen.queryByTestId("source-video")).not.toBeInTheDocument();
     expect(screen.queryByText("从笔记跳回录制现场")).not.toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Open source" })).toHaveAttribute("href", "https://www.bilibili.com/video/BV1234567890/");
     expect(apiMock.apiJson.mock.calls.some(([path]) => String(path).endsWith('/recording'))).toBe(false);
     fireEvent.click(turn);
     expect(audio.currentTime).toBe(62);
+  });
+
+  it('exposes the exact processing task as a read-only entrance while preserving detail return context', async () => {
+    renderEditor('/note/note-1?view=transcript&returnTo=%2Fnotes%3Fq%3Dreview');
+    await screen.findByText('We agreed to activate Sortformer.');
+    openContentActions();
+    const link = screen.getByRole('link', { name: 'View processing task' });
+    const target = new URL(link.getAttribute('href')!, 'https://example.invalid');
+    expect(target.searchParams.get('task')).toBe('task-1');
+    expect(target.searchParams.get('meeting')).toBe('1');
+    expect(target.searchParams.get('returnTo')).toContain('/note/note-1?');
+    expect(target.searchParams.get('returnTo')).toContain('view=transcript');
+    expect(apiMock.apiJson.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+  });
+
+  it('uses the playback derivative for video only and reloads the same element at its retained position/rate', async () => {
+    noteStoreMock.loadNoteById.mockResolvedValue({ id: 'note-1', title: 'Video', content: '# Review', sourceType: 'video', mediaKind: 'video', taskId: 'task-1', status: 'done', scope: 'personal', createdAt: '2026-07-01T00:00:00Z', updatedAt: '2026-07-01T00:00:00Z' });
+    renderEditor();
+    const video = await screen.findByTestId('source-video') as HTMLVideoElement;
+    expect(video.getAttribute('src')).toBe('/api/notes/note-1/media?playback=true');
+    video.currentTime = 93;
+    video.playbackRate = 1.5;
+    fireEvent.timeUpdate(video);
+    apiMock.apiFetch.mockResolvedValueOnce(new Response(null, { status: 503, headers: { 'Retry-After': '2' } }));
+    fireEvent.error(video);
+    expect(await screen.findByRole('button', { name: 'Reload video' })).toBeEnabled();
+    expect(screen.getByRole('alert')).not.toHaveTextContent(/deleted|removed|not found/i);
+    fireEvent.click(screen.getByRole('button', { name: 'Reload video' }));
+    expect(screen.getByTestId('source-video')).toBe(video);
+    expect(video.load).toHaveBeenCalled();
+    video.currentTime = 0;
+    fireEvent.loadedMetadata(video);
+    expect(video.currentTime).toBe(93);
+    expect(video.playbackRate).toBe(1.5);
+    fireEvent.canPlay(video);
+    expect(screen.queryByRole('button', { name: 'Reload video' })).toBeNull();
+    expect(noteStoreMock.loadNoteById).toHaveBeenCalledTimes(1);
+    expect(apiMock.apiFetch).toHaveBeenCalledWith('/api/notes/note-1/media?playback=true', expect.objectContaining({ headers: { Range: 'bytes=0-0' } }));
+  });
+
+  it.each([404, 500, 401])('distinguishes media HTTP %s without replacing the note or restarting generation', async status => {
+    apiMock.apiFetch.mockResolvedValueOnce(new Response(null, { status }));
+    renderEditor();
+    const audio = await screen.findByTestId('source-audio');
+    fireEvent.error(audio);
+    const reload = await screen.findByRole('button', { name: 'Reload audio' });
+    expect(reload).toBeEnabled();
+    const message = reload.closest('[role="alert"]')!.textContent;
+    if (status === 404) expect(message).toMatch(/unavailable/i);
+    else expect(message).not.toMatch(/removed|deleted|missing|not found/i);
+    if (status === 401) expect(message).toMatch(/sign in|permission/i);
+    expect(await screen.findByText('Minutes only.')).toBeVisible();
+    expect(screen.getByTestId('source-audio')).toBe(audio);
+    expect(apiMock.apiJson.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
   });
 
   it("keeps one shared local video player available from the transcript view", async () => {

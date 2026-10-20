@@ -226,16 +226,23 @@ class NoteRepository:
             return {}
         return value if isinstance(value, dict) else {}
 
-    def delete_note(self, user_id: str, note_id: str) -> bool:
+    def delete_note(self, user_id: str, note_id: str, *, personal_only: bool = False) -> bool:
         with session_scope() as db:
             source = self._get_accessible_record(db, user_id=user_id, note_id=note_id)
-            if not source:
+            if not source or (personal_only and (source.scope != 'personal' or source.created_by != user_id)):
                 return False
             db.expunge(source)
         from app.services.local_file_service import LocalFileService
         LocalFileService().retain_note_original(user_id, source)
         with session_scope() as db:
-            record = self._get_accessible_record(db, user_id=user_id, note_id=note_id)
+            if personal_only:
+                record = db.scalar(select(NoteDB).where(
+                    NoteDB.id == note_id,
+                    NoteDB.created_by == user_id,
+                    NoteDB.scope == 'personal',
+                ).with_for_update())
+            else:
+                record = self._get_accessible_record(db, user_id=user_id, note_id=note_id)
             if not record:
                 return False
             from sqlalchemy import delete
