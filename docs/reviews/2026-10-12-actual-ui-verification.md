@@ -308,3 +308,11 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 新模块及两依赖在项目venv核验；最终helper临时副本SHA256与源码 `c76a6d2c999d6e79105b17bdf68203ce3be148d6b4ac5762923ce8c7ec27ab76` 一致，独立PyInstaller helper冻结运行 `FROZEN_FOOTNOTE_OK`。这证明该helper及静态依赖可冻结，不是VINote完整安装包或发行验收。完整代码指纹更新为23文件，旧真实run的指纹不改。
 - 新模型批次仍未产生新的完整最终复核，评分不因结构修复而上调；保留连接中断/502及raw失败证据。最终目标知识库交付与全部形式100分仍未完成，PR保持草稿。
 - 最后脚注补丁后，主线程将同七文件组合重新执行，394 passed、1条既有警告，15.69秒；项目venv `pip check` 无依赖冲突。该最终组合结果不改写此前全仓基线或实际模型成绩。随后以全新操作开展两场受控候选验收，旧不确定任务不重放，结果另记。
+
+### 2026-10-20 21:49 +08:00 · 修复后真实模型复验未达标
+
+- 448ae9b冻结23文件后，新建A详细文字14（65364a91-9e45-480e-ba79-1f57b1d4bf21）和B精简信息图06（d862bfab-4c3d-40cf-82c1-fa88fd658933）两场独立操作并行；这是实际MeetingVersionService默认reuse/inherit执行，不称原生UI提交或完整端到端通过。
+- A耗时193.835秒，单次ReadError、headers=false、传输171秒；无draft/review，无最终分。B耗时183.338秒，返回raw4后invalid_final_evidence，无note/result。两项needs_stt=false、ASR请求0，child转写与selected parent字节一致，无ASR checkpoint；无旧unknown重放、自动重试、换模型或飞书写入。
+- B独评raw正文61/90，真实呈现及总分N/A：27/35事实、13/25关系、13/20覆盖、8/10可读；不是归一化100，也不是保存成品分。主线程重算正文SHA256 `28b171861d7fd9822559bb6bc7fd03a8865ceaeb2751a20c1cad1939b58ae1be` 与typed记录一致。原稿、原件、旧分全部保留。
+- 首个失败C6删除原句重复内容，C15错引窗口且quote全文不存在，22条ASR evidence中20条通过/2条失败；独审未发现本次源码误拒。正文仍有价格/人数、航班方向和条件关系错误；图计划五个标签不满足原文绑定，无成品图。独评实际读131段/22个raw窗口、看27帧，34帧未看，耗时8分45秒；不能把来源hash或OCR完成当作全视频视觉核验。
+- 本轮代码修复与真实LLM内容质量分开：所有形式100、目标知识库实际交付、全链路/安装包验收仍未完成。PR保持草稿，未合并或发布，当前未追加新的模型调用。
