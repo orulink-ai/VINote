@@ -243,3 +243,20 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 18:19原生返回复验通过：点击“返回文件库”恢复同一source_video.webm详情Sheet，purpose=meeting/type=all/q及原file身份保留。跳转、定位/展开、返回三段真实跑通；未调用生成或飞书发送。
 
 - 18:22原生“另存为…”复验：确实打开OS保存路径选择框，默认文件名source_video.webm；Esc取消后返回原Sheet，按钮恢复可用，提示“已取消导出，原文件保留”。没有选择目标、没有写副本；不能将取消验收称为实际副本字节保存验收。阶段提交0251565已推送同一功能分支，尚未合并。
+
+### 2026-10-20 · B 文件库视频失败诊断（只读，Native 未操作）
+
+- 使用既有 acceptance bootstrap 的原账号身份，仅请求 B 原件／播放媒体和 Range，并本地 ffprobe；未修改 Note/Task/来源数据，未调用 ASR、LLM 或飞书，未操作原生 UI。
+- 实际原件 `/api/notes/e98dd637-c3df-51a6-ba8f-6b582376e7aa/media` 为 159877976 字节 VP8 1920×1080＋Opus WebM，原容器缺 duration；既有 159860789 字节播放缓存具有 1585.276 秒时长。播放 GET 头部／尾部 Range 为 206，越界为 416，匿名请求为 401；原件大小／mtime 未变，缓存未被重做。首次进程内缓存核验约 2.8 秒，后续 tail 请求约 15ms。
+- 现有 headless Edge 仅访问该已授权媒体：经 3189 同源前端代理，加载元数据、1920×1080 解码和约 1 秒实际播放成功；这不代表全程播放或 Native 播放已验收。绕过代理跨端口访问 8919 被 Edge Local Network Access 拒绝，CDP 记录 `LocalNetworkAccessPermissionDenied`，媒体表面报 code=4 Format error、NaN duration、0 秒。
+- 当前 Vite 默认未定义 API base，FileLibrary 源码应走相对地址／同源代理。尚未取得失败 Native 元素的 currentSrc/error.message，不能据 headless 跨端口反例直接认定 Native 根因，也不能声称已修复。没有推测性重编码、清空缓存或产品代码改动。若 Native 实际使用 8919 跨 Origin 地址，同源代理是可验证的最小方向；需主线程提供实际媒体 URL／错误或失败 HTTP 状态继续核对。
+- 证据：`.desktop-build/meeting-delivery-20261020/diagnose-b-playback-readonly.json`、`probe-b-browser-media-readonly.json`。令牌只在进程内传递，报告未含 Cookie／密钥。
+
+### 2026-10-20 · A/B 同源媒体 seek 解码复验（只读 headless Edge）
+
+- 主线程更正前述 Native 失败判断：`preload="none"` 的初始 AX disabled／0 秒不是播放失败。主线程实际点 Play 后 B 已出现真实变化画面，没有 onError 提示；Native seek 另由主线程验收。
+- 本次仅用现有 Edge、原 acceptance 身份和 3189 同源媒体 GET／Range，先确认 A/B 缓存已存在；未操作 Native、未重建缓存、未复制原视频、未截图采样／OCR／ASR／LLM／飞书。两份原件及缓存的 size、mtime 均未变化。
+- A duration=1712.530 秒；50% target/seeked=856.265/856.265，实际解码帧 mediaTime=856.301；90%=1541.277/1541.277，帧=1541.298；near-end（尾前2秒）=1710.530/1710.530，帧=1710.567。
+- B duration=1585.276 秒；50% target/seeked=792.638/792.638，帧=792.690；90%=1426.7484/1426.7484，帧=1426.768；near-end=1583.276/1583.353924，帧=1583.348。
+- 六点均收到 requestVideoFrameCallback 的 1920×1080 真实帧、解码计数增加、readyState=4、media.error=null；全部观察到的媒体 HTTP 响应为 206，无 pageerror。B near-end 计数显示1帧 dropped，其余五点为0；仍有成功帧与播放推进。浏览器 seek／关闭页面期间各有3个 net::ERR_ABORTED 取消请求，原始事件保留；初始过严的“任何 requestfailed 均失败”汇总被单独保留，最终按解码、媒体错误及非取消网络错误分类，未隐去原始取消。
+- 证据：`.desktop-build/meeting-delivery-20261020/probe-ab-seek-readonly.json`（duration、target、seekedAt、frame.mediaTime、actualTime、error、Range、文件 stamp），同名 `.mjs` 及 `probe-ab-seek-inventory.py`。本项是六个指定位置解码证据，不等于整段观看或 Native 全程播放验收。无产品代码变更、无 commit。
