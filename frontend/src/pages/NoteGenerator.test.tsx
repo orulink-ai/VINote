@@ -10,6 +10,7 @@ import { useNoteGenerationStore } from '../stores/noteGenerationStore'
 import { NoteGenerator } from './NoteGenerator'
 import { ApiError } from '../lib/api'
 import { meetingVersionOperationKey } from '../lib/meetingVersion'
+import { versionRejectionKey } from '../lib/meetingVersionRecovery'
 
 const apiMock = vi.hoisted(() => ({
   apiJson: vi.fn(),
@@ -1199,6 +1200,58 @@ describe('meeting version host integration', () => {
     renderGenerator(); await screen.findByText(/无法读取原任务进度/)
     expect(libraryMock.saveNote).not.toHaveBeenCalled()
     expect(localStorage.getItem(pointer)).toBe('version-operation'); expect(localStorage.getItem(key)).not.toBeNull()
+  })
+
+  it.each([true, false])('opens a confirmed nonacceptance audit without task/provider reads and returns to its source (note=%s)', async savedNote => {
+    const parent = '/meetings?q=kept&project=active'
+    const detail = (savedNote ? '/note/selected-note?' : '/generate?meeting=1&task=selected-parent&')
+      + new URLSearchParams({ view: 'transcript', returnTo: parent })
+    const pending = JSON.stringify(receipt('reuse', { submissionState: 'unknown',
+      summaryNoteId: savedNote ? 'selected-note' : undefined,
+      sourceDetailUrl: detail, sourceParentUrl: parent }))
+    const auditKey = versionRejectionKey('import-owner', 'version-operation')
+    const audit = JSON.stringify({ pending, rejection: { protocol: 1, status: 409, code: 'meeting_version_context_changed', message: '重新核验。' } })
+    localStorage.setItem(key, pending); localStorage.setItem(auditKey, audit)
+    renderGenerator('/tasks?tab=generation')
+    const action = await screen.findByRole('button', { name: '返回来源重新核验' })
+    expect(screen.getByRole('alert')).toHaveTextContent('本次未受理，未创建任务')
+    expect(apiMock.apiJson).not.toHaveBeenCalled()
+    expect(libraryMock.saveNote).not.toHaveBeenCalled()
+    await userEvent.click(action)
+    expect(navigateMock).toHaveBeenCalledWith(detail, { state: { returnTo: parent } })
+    expect(localStorage.getItem(key)).toBe(pending)
+    expect(localStorage.getItem(auditKey)).toBe(audit)
+  })
+
+  it.each(['accepted', 'reserved'])('keeps a real %s operation queryable despite an older independent rejection audit', async state => {
+    const pending = JSON.stringify(receipt('reuse', { submissionState: 'unknown' }))
+    const current = JSON.stringify(receipt('reuse', { id: 'version-child', submissionState: state }))
+    localStorage.setItem(key, current)
+    localStorage.setItem(versionRejectionKey('import-owner', 'version-operation'), JSON.stringify({ pending,
+      rejection: { protocol: 1, status: 409, code: 'meeting_version_context_changed', message: 'changed' } }))
+    apiMock.apiJson.mockImplementation(async path => path.includes('source-requests')
+      ? { operation_id: 'version-operation', task_id: 'version-child', state: 'reserved' }
+      : { task_id: 'version-child', status: 'summarizing', message: '正在核对音视频材料并组织会议纪要…' })
+    renderGenerator()
+    await waitFor(() => expect(apiMock.apiJson).toHaveBeenCalledWith(state === 'reserved'
+      ? '/api/source-requests/version-operation' : '/api/task/version-child'))
+    expect(screen.queryByRole('button', { name: '返回来源重新核验' })).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+    expect(libraryMock.saveNote).not.toHaveBeenCalled()
+    // The normal receipt GET may refresh derived source display fields.
+    expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({ id: 'version-child', submissionState: state })
+  })
+
+  it('passes summary reuse and safe review feedback from the actual operation route to the progress UI', async () => {
+    localStorage.setItem(key, JSON.stringify(receipt('reuse', { id: 'version-child', submissionState: 'accepted' })))
+    apiMock.apiJson.mockResolvedValue({ task_id: 'version-child', status: 'summarizing',
+      message: '正在核对音视频材料并组织会议纪要…' })
+    renderGenerator()
+    await screen.findByText('正在核对事实与来源，尚未保存完成稿。')
+    expect(screen.getByText('本次复用已有转写与说话人资料，不重新识别。')).toBeVisible()
+    expect(screen.queryByText('转写与说话人分析')).toBeNull()
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/task/version-child' && !init?.method)).toBe(true)
+    expect(libraryMock.saveNote).not.toHaveBeenCalled()
   })
 })
 

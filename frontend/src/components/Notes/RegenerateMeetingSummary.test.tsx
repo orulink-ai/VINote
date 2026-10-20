@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useAppModeStore } from '@/stores/appModeStore'
 import { apiJson, ApiError } from '@/lib/api'
 import { presentationLabels } from '@/lib/summaryPresentation'
+import { readVersionReceipt, versionRejectionKey } from '@/lib/meetingVersionRecovery'
 vi.mock('@/lib/api', async original => ({ ...await original<typeof import('@/lib/api')>(), apiJson: vi.fn() }))
 const config = { configured: true, mode: 'cloud' as const, llm_model: 'selected-exact-model', asr_model: 'unchanged', server_url: 'https://model.invalid' }
 const models = [{ id: config.llm_model, modelType: 'llm', runtimeStatus: 'available' }, { id: 'another-task-model', modelType: 'llm', runtimeStatus: 'available' }, { id: 'speech-only', modelType: 'asr', runtimeStatus: 'available' }, { id: 'unavailable-model', modelType: 'llm', runtimeStatus: 'not_available' }]
@@ -29,6 +30,220 @@ beforeEach(() => {
   mock.mockImplementation(async path => path.includes('/meeting-version-models?') ? catalog : path === '/api/vilab/config' ? config : context)
 })
 afterEach(cleanup)
+it.each(['meeting_version_context_changed', 'meeting_version_selection_changed'])(
+  'retains a %s audit, leaves execution state untouched, and requires a fresh explicit confirmation', async code => {
+    let attempts = 0
+    mock.mockImplementation(async (path, init) => {
+      if (path.includes('/meeting-version-models?')) return catalog
+      if (init?.method === 'POST') {
+        const body = JSON.parse(init.body as string)
+        if (++attempts === 1) throw new ApiError('请重新核验。', 409, { code, message: '请重新核验。' })
+        return { operation_id: body.operation_id, task_id: 'new-child', state: 'accepted' }
+      }
+      return context
+    })
+    show(); await open()
+    fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+    expect(await screen.findByRole('alert')).toHaveTextContent('本次未受理，未创建任务')
+    const first = JSON.parse(mock.mock.calls.find(([, init]) => init?.method === 'POST')![1]!.body as string)
+    const auditKey = versionRejectionKey('owner', first.operation_id)
+    const audit = localStorage.getItem(auditKey)
+    expect(JSON.parse(audit!)).toMatchObject({ rejection: { protocol: 1, status: 409, code } })
+    expect(readVersionReceipt(localStorage, 'owner', first.operation_id)).toMatchObject({ submissionState: 'not_accepted' })
+    expect(JSON.parse(localStorage.getItem(`vinote:source-receipt:owner:${first.operation_id}`)!)).toMatchObject({ submissionState: 'unknown' })
+    expect(localStorage.getItem('vinote:meeting-version-operation:owner:note:parent')).toBe(first.operation_id)
+    expect(screen.getByTestId('route')).not.toHaveTextContent('operation=')
+    expect(attempts).toBe(1)
+    await open()
+    expect(attempts).toBe(1)
+    fireEvent.click(screen.getByRole('radio', { name: '更换总结模型' }))
+    await screen.findByRole('option', { name: 'another-task-model' })
+    fireEvent.change(screen.getByRole('combobox', { name: '本次总结模型' }), { target: { value: 'another-task-model' } })
+    fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+    await waitFor(() => expect(attempts).toBe(2))
+    const posts = mock.mock.calls.filter(([, init]) => init?.method === 'POST')
+    const next = JSON.parse(posts[1][1]!.body as string)
+    expect(next.operation_id).not.toBe(first.operation_id)
+    expect(next).toMatchObject({ model_name: 'another-task-model', llm_mode: 'select', asr_mode: 'reuse' })
+    expect(localStorage.getItem(auditKey)).toBe(audit)
+    expect(localStorage.getItem('vinote:meeting-version-operation:owner:note:parent')).toBe(first.operation_id)
+    // The accepted successor is found without overwriting the retained pointer.
+    await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent(next.operation_id))
+    fireEvent.click(screen.getByRole('button', { name: '生成新版本' }))
+    await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent(next.operation_id))
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(attempts).toBe(2)
+  })
+
+it.each([
+  new Error('network'), new ApiError('missing', 404, {}),
+  new ApiError('unknown', 409, { code: 'meeting_version_operation_changed', message: 'unknown' }),
+  new ApiError('after reserve', 409, { code: 'source_changed', message: 'after reserve' }),
+  new ApiError('bad shape', 409, { code: 'meeting_version_context_changed' }),
+])('keeps ambiguous rejection query-only without releasing its pointer: %j', async error => {
+  mock.mockImplementation(async (path, init) => { if (init?.method === 'POST') throw error; return context })
+  show(); await open(); fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+  await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('operation='))
+  const post = JSON.parse(mock.mock.calls.find(([, init]) => init?.method === 'POST')![1]!.body as string)
+  expect(localStorage.getItem('vinote:meeting-version-operation:owner:note:parent')).toBe(post.operation_id)
+  expect(JSON.parse(localStorage.getItem(`vinote:source-receipt:owner:${post.operation_id}`)!)).toMatchObject({ submissionState: 'unknown' })
+  expect(mock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+})
+
+it.each(['accepted', 'reserved'])('never downgrades a concurrently %s record on a preflight-shaped error', async state => {
+  mock.mockImplementation(async (_path, init) => {
+    if (init?.method === 'POST') {
+      const body = JSON.parse(init.body as string)
+      const key = `vinote:source-receipt:owner:${body.operation_id}`
+      localStorage.setItem(key, JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), id: 'bound-child', submissionState: state }))
+      throw new ApiError('changed', 409, { code: 'meeting_version_context_changed', message: 'changed' })
+    }
+    return context
+  })
+  show(); await open(); fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+  await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('operation='))
+  const body = JSON.parse(mock.mock.calls.find(([, init]) => init?.method === 'POST')![1]!.body as string)
+  expect(localStorage.getItem('vinote:meeting-version-operation:owner:note:parent')).toBe(body.operation_id)
+  expect(JSON.parse(localStorage.getItem(`vinote:source-receipt:owner:${body.operation_id}`)!)).toMatchObject({ id: 'bound-child', submissionState: state })
+})
+
+it('keeps a structurally invalid accepted response protected instead of interpreting its code as nonacceptance', async () => {
+  mock.mockImplementation(async (_path, init) => {
+    if (init?.method === 'POST') return { operation_id: JSON.parse(init.body as string).operation_id,
+      state: 'accepted', code: 'meeting_version_context_changed' } // Missing task_id is ambiguity.
+    return context
+  })
+  show(); await open(); fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+  await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('operation='))
+  const pointer = localStorage.getItem('vinote:meeting-version-operation:owner:note:parent')
+  expect(pointer).toBeTruthy()
+  expect(JSON.parse(localStorage.getItem(`vinote:source-receipt:owner:${pointer}`)!)).toMatchObject({ submissionState: 'unknown' })
+  expect(mock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+})
+
+it('preserves a newer operation pointer while keeping the rejected operation audit', async () => {
+  const pointer = 'vinote:meeting-version-operation:owner:note:parent'
+  mock.mockImplementation(async (_path, init) => {
+    if (init?.method === 'POST') {
+      localStorage.setItem(pointer, 'newer-operation')
+      throw new ApiError('changed', 409, { code: 'meeting_version_selection_changed', message: 'changed' })
+    }
+    return context
+  })
+  show(); await open(); fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+  await screen.findByRole('alert')
+  expect(localStorage.getItem(pointer)).toBe('newer-operation')
+})
+
+it.each(['accepted', 'reserved'])('does not mutate execution state when another window becomes %s after getItem returns its snapshot', async state => {
+  const read = Storage.prototype.getItem
+  const write = Storage.prototype.setItem
+  let armed = false, injected = false, receiptKey = ''
+  const spy = vi.spyOn(Storage.prototype, 'getItem').mockImplementation(function(key) {
+    const snapshot = read.call(this, key)
+    if (armed && !injected && key === receiptKey) {
+      injected = true
+      write.call(this, key, JSON.stringify({ ...JSON.parse(snapshot!), id: 'other-window-child', submissionState: state }))
+    }
+    return snapshot
+  })
+  try {
+    mock.mockImplementation(async (_path, init) => {
+      if (init?.method === 'POST') {
+        receiptKey = `vinote:source-receipt:owner:${JSON.parse(init.body as string).operation_id}`
+        armed = true
+        throw new ApiError('changed', 409, { code: 'meeting_version_context_changed', message: 'changed' })
+      }
+      return context
+    })
+    show(); await open(); fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+    await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('operation='))
+    expect(injected).toBe(true)
+    expect(JSON.parse(localStorage.getItem(receiptKey)!)).toMatchObject({ id: 'other-window-child', submissionState: state })
+    expect(screen.queryByRole('alert')).toBeNull()
+    expect(mock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+  } finally { spy.mockRestore() }
+})
+
+it('writes only an independent audit after rejection even if a newer pointer arrives during that write', async () => {
+  const pointer = 'vinote:meeting-version-operation:owner:note:parent'
+  const write = Storage.prototype.setItem
+  const mutations: string[] = []
+  let rejected = false
+  const setter = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function(key, value) {
+    if (rejected) mutations.push(key)
+    if (key.startsWith('vinote:version-rejection:')) write.call(this, pointer, 'newer-operation')
+    return write.call(this, key, value)
+  })
+  const remover = vi.spyOn(Storage.prototype, 'removeItem')
+  try {
+    mock.mockImplementation(async (_path, init) => {
+      if (init?.method === 'POST') {
+        rejected = true
+        throw new ApiError('changed', 409, { code: 'meeting_version_context_changed', message: 'changed' })
+      }
+      return context
+    })
+    show(); await open(); fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+    await screen.findByRole('alert')
+    expect(localStorage.getItem(pointer)).toBe('newer-operation')
+    expect(mutations).toHaveLength(1)
+    expect(mutations[0]).toMatch(/^vinote:version-rejection:owner:/)
+    expect(remover).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByRole('button', { name: '生成新版本' }))
+    await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('newer-operation'))
+    expect(mock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+  } finally { setter.mockRestore(); remover.mockRestore() }
+})
+
+it('freezes the verified full source detail and its filtered parent before submission', async () => {
+  const parent = '/meetings?q=kept&project=active'
+  const detail = '/note/note?' + new URLSearchParams({ view: 'transcript', returnTo: parent })
+  mock.mockImplementation(async (_path, init) => {
+    if (init?.method === 'POST') throw new ApiError('changed', 409, { code: 'meeting_version_context_changed', message: 'changed' })
+    return context
+  })
+  show({ returnTo: detail }); await open(); fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+  await screen.findByRole('alert')
+  const body = JSON.parse(mock.mock.calls.find(([, init]) => init?.method === 'POST')![1]!.body as string)
+  expect(readVersionReceipt(localStorage, 'owner', body.operation_id)).toMatchObject({ sourceDetailUrl: detail, sourceParentUrl: parent })
+})
+
+it('rechecks a rejected operation before an explicitly confirmed replacement and protects a newly accepted record', async () => {
+  mock.mockImplementation(async (_path, init) => {
+    if (init?.method === 'POST') throw new ApiError('changed', 409, { code: 'meeting_version_context_changed', message: 'changed' })
+    return context
+  })
+  show(); await open(); fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+  await screen.findByRole('alert')
+  const body = JSON.parse(mock.mock.calls.find(([, init]) => init?.method === 'POST')![1]!.body as string)
+  await open()
+  const key = `vinote:source-receipt:owner:${body.operation_id}`
+  const accepted = JSON.stringify({ ...JSON.parse(localStorage.getItem(key)!), id: 'other-window-child', submissionState: 'accepted' })
+  localStorage.setItem(key, accepted)
+  fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+  await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent(body.operation_id))
+  expect(localStorage.getItem(key)).toBe(accepted)
+  expect(mock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+})
+
+it('keeps operation protection if the nonacceptance audit cannot be saved', async () => {
+  const write = Storage.prototype.setItem
+  const spy = vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function(key, value) {
+    if (key.startsWith('vinote:version-rejection:')) throw new Error('audit blocked')
+    return write.call(this, key, value)
+  })
+  try {
+    mock.mockImplementation(async (_path, init) => {
+      if (init?.method === 'POST') throw new ApiError('changed', 409, { code: 'meeting_version_context_changed', message: 'changed' })
+      return context
+    })
+    show(); await open(); fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+    await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('operation='))
+    expect(localStorage.getItem('vinote:meeting-version-operation:owner:note:parent')).toBeTruthy()
+  } finally { spy.mockRestore() }
+})
+
 it('uses one honest task-only entry with reuse/inherit selected and fresh unavailable', async () => {
   show({ noteId: undefined }); await open()
   expect(screen.getByRole('dialog', { name: '确认生成新版本' })).toBeInTheDocument()

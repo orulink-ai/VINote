@@ -13,7 +13,8 @@ class LLMSummarizer(ABC):
     """Base interface for transcript-to-note summarizers."""
 
     def configure_video_capabilities(self, capabilities: dict | None,
-                                     *, image_input_verified: bool = False) -> None:
+                                     *, image_input_verified: bool = False,
+                                     webp_input_verified: bool = False) -> None:
         """Use metadata/test evidence for this exact instance's selected model.
 
         image_input_verified may be set only after an explicitly authorized actual
@@ -21,8 +22,11 @@ class LLMSummarizer(ABC):
         catalog request is initiated here; names never imply image support.
         """
         self._video_capabilities = dict(capabilities or {})
+        self._video_capabilities.pop('_vinote_webp_verified', None)
         if image_input_verified is True:
             self._video_capabilities['vision'] = True
+            if webp_input_verified is True:
+                self._video_capabilities['_vinote_webp_verified'] = True
         self._video_capability_model = getattr(self, 'model', None)
 
     @abstractmethod

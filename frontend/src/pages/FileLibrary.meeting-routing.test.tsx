@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom';
 import type { ReactNode } from 'react';
 import type { LibraryNote } from '@/hooks/useLibraryNotes';
 import type { PendingMeeting } from '@/lib/audioStorage';
+import type { DownloadProgressCallback } from '@/lib/recordingDownload';
 
 const state = vi.hoisted(() => ({ owner: 'owner', notes: [] as LibraryNote[], recordings: [] as PendingMeeting[],
   api: vi.fn(), load: vi.fn(), list: vi.fn(), update: vi.fn(), publish: vi.fn(), download: vi.fn(), reveal: vi.fn(), native: false,
@@ -161,11 +162,22 @@ it('resolves IndexedDB recording identity without changing its original task or 
 
 it('uses derived playback only in the player while native download and reveal retain the original URL', async () => {
   state.native = true;
+  let finish!: (result: 'saved') => void;
+  state.download.mockImplementationOnce(() => new Promise<'saved'>(resolve => { finish = resolve; }));
   mount('/files?purpose=meeting&file=note%3Asaved-a');
   const dialog = await screen.findByRole('dialog');
   expect(within(dialog).getByLabelText('原文件视频回放')).toHaveAttribute('src', '/api/notes/saved-a/media?playback=true');
   await userEvent.click(within(dialog).getByRole('button', { name: '另存为…' }));
-  await waitFor(() => expect(state.download).toHaveBeenCalledWith('/api/notes/saved-a/media', 'capture.webm', expect.any(Function), expect.any(AbortSignal)));
+  await waitFor(() => expect(state.download).toHaveBeenCalledWith('/api/notes/saved-a/media', 'capture.webm', expect.any(Function), expect.any(AbortSignal), expect.any(Function)));
+  const [, , current, signal, progress] = state.download.mock.calls[0] as [string, string, () => boolean, AbortSignal, DownloadProgressCallback];
+  expect(current()).toBe(true); expect(signal.aborted).toBe(false);
+  act(() => progress({ stage: 'writing', writtenBytes: 1024, totalBytes: 2048 }));
+  expect(within(dialog).getByRole('status')).toHaveTextContent('正在写入原文件：1.0 KB / 2.0 KB');
+  expect(within(dialog).getByRole('button', { name: '正在保存…' })).toBeDisabled();
+  expect(within(dialog).queryByText('原文件已保存到所选位置。')).toBeNull();
+  await act(async () => finish('saved'));
+  expect(within(dialog).getByRole('status')).toHaveTextContent('原文件已保存到所选位置。');
+  expect(within(dialog).getByLabelText('原文件视频回放')).toHaveAttribute('src', '/api/notes/saved-a/media?playback=true');
   await userEvent.click(within(dialog).getByRole('button', { name: '在文件夹中显示' }));
   await waitFor(() => expect(state.reveal).toHaveBeenCalledWith('/api/notes/saved-a/media', expect.any(Function), expect.any(AbortSignal)));
   noWrites();

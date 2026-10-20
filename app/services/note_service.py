@@ -604,7 +604,7 @@ class NoteService:
                                            if turn["end"] > segment.start and turn["start"] < segment.end]
         video_kwargs = {}
         if getattr(context, 'video_evidence', None) is not None:
-            from app.services.video_model_capability import verify_image_input
+            from app.services.video_model_capability import verify_image_input, verify_optional_webp_input
             model = getattr(llm, 'model', None)
             if context.user_id and getattr(llm, 'user_id', None) == context.user_id:
                 from app.services.vilab_cloud_service import VILabCloudService
@@ -613,7 +613,10 @@ class NoteService:
                 if entry is None:
                     raise ValueError('所选模型不在当前服务目录，未提交画面')
                 verified = verify_image_input(context.user_id, model, catalog_entry=entry)
-                llm.configure_video_capabilities(entry.get('capabilities'), image_input_verified=verified)
+                webp_verified = verify_optional_webp_input(context.user_id, model,
+                    image_input_verified=verified, catalog_entry=entry)
+                llm.configure_video_capabilities(entry.get('capabilities'), image_input_verified=verified,
+                                                 webp_input_verified=webp_verified)
             video_kwargs['video_evidence'] = context.video_evidence.align(
                 summary_segments, transcript.metadata.get('speaker_evidence', []))
         from app.llm.source_references import capture_working_draft
@@ -638,9 +641,27 @@ class NoteService:
                     **video_kwargs,
                 )
             finally:
+                import sys
+                original_failure = sys.exc_info()[0] is not None
                 if presentation_state.raw_review is not None:
-                    self.artifact_service.write_json(context.task_dir / 'meeting_fact_review.json', {
-                        'protocol': 1, 'raw_response': presentation_state.raw_review})
+                    try:
+                        self.artifact_service.write_json(context.task_dir / 'meeting_fact_review.json', {
+                            'protocol': 1, 'raw_response': presentation_state.raw_review})
+                    except Exception as error:
+                        if not original_failure:
+                            raise
+                        logger.warning('Raw review could not be persisted: kind=%s', type(error).__name__)
+                visual = video_kwargs.get('video_evidence')
+                if visual is not None:
+                    prepared_input = visual.input_receipt()
+                    if prepared_input is not None:
+                        try:
+                            self.artifact_service.write_json(context.task_dir / 'video_model_input.json', {
+                                **prepared_input, 'task_id': context.task_id, 'model_name': getattr(llm, 'model', None)})
+                        except Exception as error:
+                            if not original_failure:
+                                raise
+                            logger.warning('Video input metadata could not be persisted: kind=%s', type(error).__name__)
             if getattr(context, 'presentation', None) == 'illustrated':
                 context.presentation_figures = presentation_state.figures
             if getattr(context, 'presentation', None) in {'comic', 'infographic'}:

@@ -26,6 +26,7 @@ interface GenerateProgressProps {
   meeting?: boolean;
   audioOnlySource?: boolean;
   videoSource?: boolean;
+  reuseTranscript?: boolean;
 }
 
 export function GenerateProgress({
@@ -37,10 +38,12 @@ export function GenerateProgress({
   speakersReady,
   currentStep,
   error,
+  message,
   documentSource = false,
   meeting = false,
   audioOnlySource = false,
   videoSource = false,
+  reuseTranscript = false,
 }: GenerateProgressProps) {
   const { copy } = useI18n();
   const videoStep = videoSource || currentStep === 'analyzing_video' ? [{ key: 'analyzing_video', label: '核对共享画面与发言' }] : [];
@@ -49,8 +52,8 @@ export function GenerateProgress({
     { key: "summarizing", label: "生成总结笔记" },
     { key: "saving", label: "保存笔记" },
   ] : meeting ? [
-    { key: 'preparing', label: '准备会议文件' },
-    { key: 'transcribing', label: '转写与说话人分析' },
+    { key: 'preparing', label: reuseTranscript ? '核验已有会议资料' : '准备会议文件' },
+    ...(!reuseTranscript ? [{ key: 'transcribing', label: '转写与说话人分析' }] : []),
     ...videoStep,
     { key: 'summarizing', label: '生成并核对会议纪要' },
     { key: 'saving', label: '保存会议纪要' },
@@ -66,7 +69,8 @@ export function GenerateProgress({
     }] : []),
     { key: "saving", label: "保存笔记" },
   ];
-  const phase = meeting && ['parallel_analysis', 'diarizing', 'aligning', 'transcript_ready'].includes(currentStep) ? 'transcribing'
+  const phase = meeting && reuseTranscript && ['transcribing', 'parallel_analysis', 'diarizing', 'aligning', 'transcript_ready'].includes(currentStep) ? 'preparing'
+    : meeting && ['parallel_analysis', 'diarizing', 'aligning', 'transcript_ready'].includes(currentStep) ? 'transcribing'
     : (meeting || documentSource) && currentStep === 'uploading' ? 'preparing'
     : !meeting && !documentSource && currentStep === 'preparing' ? 'uploading' : currentStep;
   const stepLabels = Object.fromEntries(
@@ -116,6 +120,16 @@ export function GenerateProgress({
     : phase === 'saving' ? '正在保存生成内容，请稍候。'
     : phase === 'summarizing' ? meeting ? '正在整理并核对会议纪要。' : '正在整理笔记。'
     : '正在准备来源，完成后继续处理。';
+  // Unknown model/provider/chunk messages stay diagnostic, not reader copy.
+  const safeMessages: Record<string, string> = {
+    '正在核对音视频材料并组织会议纪要…': '正在核对事实与来源，尚未保存完成稿。',
+    '正在核对共享画面与发言…': '正在核对共享画面与发言。',
+    '正在核对会议画面文字…': '正在核对会议画面文字。',
+    '正在整理正文与媒体引用…': '正在整理正文与画面引用。',
+    '正在保存生成结果…': '正在保存生成内容，请稍候。',
+    '暂时无法获取任务进度，正在重试；请勿重复提交。': '暂时无法获取任务进度，正在重新查询；请勿重复提交。',
+  };
+  const safeMessage = Object.prototype.hasOwnProperty.call(safeMessages, message || '') ? safeMessages[message!] : undefined;
 
   const getStepStatus = (stepKey: string) => {
     if (status === "success") return "completed";
@@ -168,7 +182,8 @@ export function GenerateProgress({
           {renderBar(progressLabel, percentage)}
           <p className="text-sm tabular-nums text-muted-foreground">{status === 'success' ? `100% · ${meeting ? '会议纪要已保存' : '笔记已完成'}` : status === 'failed' ? '处理已停止' : '进度待更新'}</p>
         </>}
-        {running && <p role="status" className="text-pretty text-sm leading-6 text-muted-foreground">{statusCopy}</p>}
+        {meeting && reuseTranscript && <p className="text-pretty text-sm text-muted-foreground">本次复用已有转写与说话人资料，不重新识别。</p>}
+        {running && <p role="status" className="text-pretty text-sm leading-6 text-muted-foreground">{safeMessage || statusCopy}</p>}
 
         <div role="list" aria-label={meeting ? '会议纪要处理步骤' : '笔记处理步骤'} className="grid gap-2 sm:grid-cols-2">
           {steps.map((step) => {

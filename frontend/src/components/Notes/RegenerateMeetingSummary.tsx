@@ -13,6 +13,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { modelEligibility, type ModelEligibilityInput } from '@/lib/modelEligibility'
 import { depthLabels, presentationLabels } from '@/lib/summaryPresentation'
 import { meetingVersionOperationKey, isMeetingVersionReceipt, type MeetingVersionContext, type MeetingVersionModels, type ContentDepth, type Presentation } from '@/lib/meetingVersion'
+import { isRejectedVersionReceipt, readVersionReceipt, versionRejectionKey, versionSourceLocation, versionPreflightRejection, versionNotAcceptedCopy } from '@/lib/meetingVersionRecovery'
 
 type Receipt = { operation_id: string; task_id: string; state: string; source_type?: string }
 type FailedOperation = { operationId: string; taskId: string; record: string }
@@ -33,7 +34,8 @@ export function RegenerateMeetingSummary(props: Props) {
 
 function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }: Props & { owner?: string }) {
   const navigate = useNavigate()
-  const [confirmation, setConfirmation] = useState<{ context: MeetingVersionContext; replaces?: FailedOperation } | null>(null)
+  const location = useLocation()
+  const [confirmation, setConfirmation] = useState<{ context: MeetingVersionContext; replaces?: FailedOperation; rejectedOperation?: string } | null>(null)
   const [catalog, setCatalog] = useState<MeetingVersionModels | null>(null)
   const [loadingModels, setLoadingModels] = useState(false)
   const [llmMode, setLlmMode] = useState<'inherit' | 'select'>('inherit')
@@ -98,6 +100,27 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
 
   const sameFailure = (a: FailedOperation, b: FailedOperation) => a.operationId === b.operationId && a.taskId === b.taskId && a.record === b.record
 
+  function rejectedOperation(operation: string) {
+    const value = readVersionReceipt(localStorage, owner!, operation)
+    return isRejectedVersionReceipt(value, owner) && value.parentTaskId === taskId && value.summaryNoteId === noteId
+  }
+
+  // Rejected pointers stay untouched. Any later execution record for this same
+  // source protects itself even when another window retained the old pointer.
+  function activeSuccessor(rejected: string): string | undefined {
+    for (let index = 0; index < localStorage.length; index++) {
+      const key = localStorage.key(index)
+      if (!key?.startsWith(`vinote:source-receipt:${owner}:`)) continue
+      const operation = key.slice(`vinote:source-receipt:${owner}:`.length)
+      if (operation === rejected) continue
+      try {
+        const value = readVersionReceipt(localStorage, owner!, operation) as Record<string, unknown> | null
+        if (isMeetingVersionReceipt(value, owner) && value?.parentTaskId === taskId
+            && value.summaryNoteId === noteId && !isRejectedVersionReceipt(value, owner)) return operation
+      } catch { return operation } // Unread execution state cannot authorize a new submission.
+    }
+  }
+
   async function prepare(replaces?: FailedOperation, trigger?: HTMLButtonElement) {
     if (!owner || disabled || lock.current) return
     if (trigger) opener.current = trigger
@@ -107,7 +130,12 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
       pointerReadKey.current = readKey
       const previous = localStorage.getItem(readKey)
       if (replaces && previous !== replaces.operationId) { openOperation(previous || replaces.operationId); return }
-      if (previous) {
+      const rejected = previous && rejectedOperation(previous) ? previous : undefined
+      if (rejected) {
+        const successor = activeSuccessor(rejected)
+        if (successor) { openOperation(successor); return }
+      }
+      if (previous && !rejected) {
         const state = await inspectOperation(previous)
         if (!active()) return
         if (localStorage.getItem(readKey) !== previous) { openOperation(localStorage.getItem(readKey) || previous); return }
@@ -122,7 +150,7 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
       const context = await apiJson<MeetingVersionContext>(`/api/task/${encodeURIComponent(taskId)}/meeting-version-context`, { cache: 'no-store' })
       if (!active()) return
       if (context.protocol !== 1 || context.parent_task_id !== taskId || !context.original_llm?.model_name || !context.original_llm.server_url || !/^[0-9a-f]{64}$/.test(context.context_revision) || !/^[0-9a-f]{64}$/.test(context.source?.version)) throw new Error('当前没有可核验的纪要来源。')
-      setConfirmation({ context, replaces })
+      setConfirmation({ context, replaces, rejectedOperation: rejected })
       ++catalogSequence.current; setCatalog(null); setLoadingModels(false)
       setLlmMode('inherit'); setAsrMode('reuse'); setAsrModel(''); setAsrConsent(false)
       setModelName(context.original_llm.model_name)
@@ -159,12 +187,20 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
     const operationId = crypto.randomUUID()
     const key = `vinote:source-receipt:${owner}:${operationId}`
     const modelConnection = llmMode === 'inherit' ? confirmation.context.original_llm : catalog!.connection
-    const pending = { operationId, owner, createdAt: new Date().toISOString(), submissionState: 'unknown', workspace, meeting: true, meetingVersion: true, mode: 'file', independentGeneration: true, summaryOnly: asrMode === 'reuse', summaryNoteId: noteId, parentTaskId: taskId, sourceType: confirmation.context.source.type, sourceTitle: typeof confirmation.context.source.title === 'string' ? confirmation.context.source.title.trim() || undefined : undefined, meetingVersionContext: confirmation.context, modelConnection, asrMode, modelName, contentDepth, presentation, origin: modelConnection.server_url }
+    const sourceLocation = versionSourceLocation(noteId, taskId, [returnTo, location.pathname + location.search + location.hash], location.state?.returnTo)
+    const pending = { operationId, owner, createdAt: new Date().toISOString(), submissionState: 'unknown', workspace, meeting: true, meetingVersion: true, mode: 'file', independentGeneration: true, summaryOnly: asrMode === 'reuse', summaryNoteId: noteId, parentTaskId: taskId, sourceType: confirmation.context.source.type, sourceTitle: typeof confirmation.context.source.title === 'string' ? confirmation.context.source.title.trim() || undefined : undefined, meetingVersionContext: confirmation.context, modelConnection, asrMode, modelName, contentDepth, presentation, origin: modelConnection.server_url, ...sourceLocation }
+    const serialized = JSON.stringify(pending)
     let protectedOperation = false
     try {
       const readKey = pointerReadKey.current
       const existing = localStorage.getItem(pointerKey) || localStorage.getItem(readKey)
-      if (confirmation.replaces) {
+      if (confirmation.rejectedOperation) {
+        const rejected = confirmation.rejectedOperation
+        const successor = activeSuccessor(rejected)
+        if (existing !== rejected || !rejectedOperation(rejected) || successor) {
+          openOperation(successor || existing || rejected); return
+        }
+      } else if (confirmation.replaces) {
         const previous = confirmation.replaces
         if (existing !== previous.operationId) { openOperation(existing || previous.operationId); return }
         const state = await inspectOperation(existing)
@@ -173,11 +209,12 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
           openOperation(localStorage.getItem(pointerKey) || localStorage.getItem(readKey) || previous.operationId); return
         }
       } else if (existing) { openOperation(existing); return }
-      const serialized = JSON.stringify(pending)
       localStorage.setItem(key, serialized)
-      localStorage.setItem(pointerKey, operationId)
-      if (readKey !== pointerKey) localStorage.setItem(readKey, operationId)
-      if (localStorage.getItem(key) !== serialized || localStorage.getItem(pointerKey) !== operationId) throw new Error('无法保存本次操作记录，未开始处理。')
+      if (!confirmation.rejectedOperation) {
+        localStorage.setItem(pointerKey, operationId)
+        if (readKey !== pointerKey) localStorage.setItem(readKey, operationId)
+      }
+      if (localStorage.getItem(key) !== serialized || !confirmation.rejectedOperation && localStorage.getItem(pointerKey) !== operationId) throw new Error('无法保存本次操作记录，未开始处理。')
       protectedOperation = true
       if (!active()) return
       const result = await apiJson<Receipt>(`/api/task/${encodeURIComponent(taskId)}/meeting-versions`, { method: 'POST', body: JSON.stringify({ operation_id: operationId, confirmed: true, context_revision: confirmation.context.context_revision, source_version: confirmation.context.source.version, asr_mode: asrMode, llm_mode: llmMode, content_depth: contentDepth, presentation,
@@ -189,6 +226,19 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
       openOperation(operationId)
     } catch (cause) {
       if (!active()) return
+      const rejected = versionPreflightRejection(cause)
+      if (protectedOperation && rejected) {
+        try {
+          const auditKey = versionRejectionKey(owner, operationId)
+          const audit = JSON.stringify({ pending: serialized, rejection: rejected })
+          localStorage.setItem(auditKey, audit)
+          if (localStorage.getItem(auditKey) !== audit) throw new Error('Audit storage unavailable')
+          if (rejectedOperation(operationId)) {
+            setFailedOperation(null); setError(versionNotAcceptedCopy)
+            return // Another context/POST requires another explicit user action.
+          }
+        } catch { /* Failed local protection stays on the query-only route. */ }
+      }
       if (protectedOperation) openOperation(operationId)
       else setError(cause instanceof Error ? cause.message : '无法保护操作记录，未开始处理。')
     } finally { lock.current = false; if (active()) { setBusy(false); setConfirmation(null) } }

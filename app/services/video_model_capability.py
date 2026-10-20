@@ -3,6 +3,7 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import math
 import os
 import re
@@ -18,6 +19,7 @@ from PIL import Image, ImageDraw
 _LOCK = threading.Lock()
 _TTL = 7 * 86400
 _RECEIPT_PROTOCOL = 2  # Completed requires a checked, non-refusal stop response.
+_logger = logging.getLogger(__name__)
 
 
 def _probe_answer(payload):
@@ -113,7 +115,7 @@ def _completed_receipt(path, identity):
 
 
 def verify_image_input(owner: str, model: str, *, root: Path | None = None, cloud=None,
-                       catalog_entry: dict | None = None) -> bool:
+                       catalog_entry: dict | None = None, image_format: str = 'png') -> bool:
     """Never infer multimodal support from a model name or replay an unknown probe.
 
     Only a synthetic image is sent. Meeting media is not used for capability
@@ -122,6 +124,8 @@ def verify_image_input(owner: str, model: str, *, root: Path | None = None, clou
     from app.config import settings
     from app.services.vilab_cloud_service import VILabCloudService
     from app.services.video_evidence_service import supports_images
+    if image_format not in {'png', 'webp'}:
+        raise ValueError('不支持的图片核验格式')
     cloud = cloud or VILabCloudService()
     entry = catalog_entry or next((row for row in cloud.models(owner)
                   if row.get('id') == model and row.get('modelType') == 'llm'), None)
@@ -131,9 +135,15 @@ def verify_image_input(owner: str, model: str, *, root: Path | None = None, clou
     vision = capabilities.get('vision')
     if (isinstance(vision, bool) or isinstance(vision, dict) and
             (isinstance(vision.get('supported'), bool) or vision.get('status') in {'supported', 'unsupported'})):
-        return supports_images(capabilities)
+        # General image support does not establish acceptance of another MIME.
+        if image_format == 'png' or not supports_images(capabilities):
+            return supports_images(capabilities)
     origin = cloud.status(owner)['server_url'].rstrip('/')
-    identity = hashlib.sha256(json.dumps([owner, origin, model], ensure_ascii=False).encode()).hexdigest()
+    parts = [owner, origin, model]
+    if image_format != 'png':
+        parts.append('image/' + image_format)
+    # Preserve every existing PNG receipt identity and its query-only outcome.
+    identity = hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
     folder = Path(root) if root is not None else Path(settings.data_dir) / 'image-input-checks'
     if folder.is_symlink() or getattr(folder, 'is_junction', lambda: False)():
         raise ValueError('画面能力核验位置异常')
@@ -162,8 +172,8 @@ def verify_image_input(owner: str, model: str, *, root: Path | None = None, clou
         draw.ellipse((30, 30, 150, 150), fill=(220, 30, 30))
         draw.rectangle((260, 30, 380, 150), fill=(20, 70, 220))
         buffer = io.BytesIO()
-        picture.save(buffer, format='PNG')
-        image = 'data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode()
+        picture.save(buffer, format=image_format.upper(), **({'quality': 80, 'method': 4} if image_format == 'webp' else {}))
+        image = f'data:image/{image_format};base64,' + base64.b64encode(buffer.getvalue()).decode()
         payload = cloud.request(owner, 'POST', '/openai/v1/chat/completions', timeout=180,
             json={'model': model, 'stream': False, 'messages': [{'role': 'user', 'content': [
                 {'type': 'text', 'text': 'Describe only the color and shape on the LEFT and RIGHT of this image. Answer in English. Do not guess if image input is unavailable.'},
@@ -178,3 +188,23 @@ def verify_image_input(owner: str, model: str, *, root: Path | None = None, clou
         temporary.write_text(json.dumps(record), encoding='utf-8')
         os.replace(temporary, path)
         return supported
+
+
+def verify_optional_webp_input(owner: str, model: str, *, image_input_verified: bool,
+                               root: Path | None = None, cloud=None,
+                               catalog_entry: dict | None = None) -> bool:
+    """Optional wire encoding never overrides the required image-input check.
+
+    A separate MIME-bound synthetic check can authorize WebP. Its pending/error
+    receipt remains untouched and is never replayed; using the already-admitted
+    original JPEG representation is not a probe retry or model fallback.
+    """
+    if image_input_verified is not True:
+        return False
+    try:
+        return verify_image_input(owner, model, root=root, cloud=cloud,
+                                  catalog_entry=catalog_entry, image_format='webp')
+    except Exception as error:
+        _logger.info('Optional WebP check unconfirmed; retaining original image encoding: kind=%s',
+                     type(error).__name__)
+        return False
