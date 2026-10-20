@@ -6,13 +6,13 @@
 
 | 路径 | 实际行为 | 不能据此声称 |
 | --- | --- | --- |
-| [prepare_meeting_audio](../../app/services/audio_preprocessing_service.py) | 高通 80Hz、低通 7600Hz、`afftdn=nr=8:nf=-35:tn=1`；输出 16kHz mono float PCM，保留原件。 | 没有全局响度归一化/显式自动增益，也没有主会议/背景语义分类。降噪不等于背景发言过滤。 |
-| [说话人编排](../../app/services/speaker_diarization_service.py) | diarize 分支调用该降噪；mmap float 文件，分块 clip 到有效范围并写 s16 WAV；ASR 与说话人分析在同一派生时间轴运行。 | 不是所有非 diarize ASR 都经过该降噪。clip 是限幅，不是提响；不证明所有瞬态、相位或弱语音不受影响。 |
-| [音频 normalizer](../../app/services/audio_normalizer.py) | 可读性检查；可读直接返回，失败尝试恢复重编码。 | “normalize”不是响度均衡或 VAD。 |
-| [VILab 转写](../../app/transcribers/vilab_transcriber.py) | 转成 16kHz mono s16，再按保存/执行契约处理。 | 该转码命令没有显式增益，不能由此推断服务商内部无任何信号处理。 |
-| [自适应切点](../../app/services/adaptive_asr_policy.py) | 20ms hop 能量、240ms 安静资格，按服务字节预算寻找切点，每个样本仍属于一个请求。 | 不是静音裁剪，不是主讲话筛选；相对安静不是语义无效。 |
-| [说话人 worker](../../app/services/speaker_worker.py) / [聚类](../../app/services/speaker_clustering_service.py) | 模型检测活动区间，聚类依据有界的声音 embedding；向量 L2 归一化不改变音频波形。 | 活动区间不能证明属于主会话；说话人占比不能决定文字是否有效。模型二进制内部处理需单独核实。 |
-| [faster-whisper](../../app/transcribers/faster_whisper_transcriber.py) | 该本地适配器显式设置 `vad_filter=True`。 | 不能把此行为套到另一个云端/本地适配器。 |
+| [prepare_meeting_audio](https://github.com/orulink-ai/VINote/blob/cbaca4c00bb9c65dff9b3fbdd910a91b561ce83a/app/services/audio_preprocessing_service.py) | 高通 80Hz、低通 7600Hz、`afftdn=nr=8:nf=-35:tn=1`；输出 16kHz mono float PCM，保留原件。 | 没有全局响度归一化/显式自动增益，也没有主会议/背景语义分类。降噪不等于背景发言过滤。 |
+| [说话人编排](https://github.com/orulink-ai/VINote/blob/cbaca4c00bb9c65dff9b3fbdd910a91b561ce83a/app/services/speaker_diarization_service.py) | diarize 分支调用该降噪；mmap float 文件，分块 clip 到有效范围并写 s16 WAV；ASR 与说话人分析在同一派生时间轴运行。 | 不是所有非 diarize ASR 都经过该降噪。clip 是限幅，不是提响；不证明所有瞬态、相位或弱语音不受影响。 |
+| [音频 normalizer](https://github.com/orulink-ai/VINote/blob/cbaca4c00bb9c65dff9b3fbdd910a91b561ce83a/app/services/audio_normalizer.py) | 可读性检查；可读直接返回，失败尝试恢复重编码。 | “normalize”不是响度均衡或 VAD。 |
+| [VILab 转写](https://github.com/orulink-ai/VINote/blob/cbaca4c00bb9c65dff9b3fbdd910a91b561ce83a/app/transcribers/vilab_transcriber.py) | 转成 16kHz mono s16，再按保存/执行契约处理。 | 该转码命令没有显式增益，不能由此推断服务商内部无任何信号处理。 |
+| [自适应切点](https://github.com/orulink-ai/VINote/blob/cbaca4c00bb9c65dff9b3fbdd910a91b561ce83a/app/services/adaptive_asr_policy.py) | 20ms hop 能量、240ms 安静资格，按服务字节预算寻找切点，每个样本仍属于一个请求。 | 不是静音裁剪，不是主讲话筛选；相对安静不是语义无效。 |
+| [说话人 worker](https://github.com/orulink-ai/VINote/blob/cbaca4c00bb9c65dff9b3fbdd910a91b561ce83a/app/services/speaker_worker.py) / [聚类](https://github.com/orulink-ai/VINote/blob/cbaca4c00bb9c65dff9b3fbdd910a91b561ce83a/app/services/speaker_clustering_service.py) | 模型检测活动区间，聚类依据有界的声音 embedding；向量 L2 归一化不改变音频波形。 | 活动区间不能证明属于主会话；说话人占比不能决定文字是否有效。模型二进制内部处理需单独核实。 |
+| [faster-whisper](https://github.com/orulink-ai/VINote/blob/cbaca4c00bb9c65dff9b3fbdd910a91b561ce83a/app/transcribers/faster_whisper_transcriber.py) | 该本地适配器显式设置 `vad_filter=True`。 | 不能把此行为套到另一个云端/本地适配器。 |
 | [录制采集](../../frontend/src/lib/meetingCapture.ts) / [录制器](../../frontend/src/hooks/useAudioRecorder.ts) | 麦克风为 audio=true 或设备选择约束；屏幕 audio=false，仅取屏幕视频；音量表缩放仅改变显示。 | 未显式指定浏览器 AGC、降噪或回声消除参数，不等于这些默认处理必定关闭或开启。 |
 | [浏览器音频重编码](../../frontend/src/lib/audioNormalizer.ts) | OfflineAudioContext 重采样/单声道编码，没有显式 GainNode。 | 不证明设备/浏览器捕获阶段无自动增益；也不应将整 Blob 解码路径误称为流式处理。 |
 
@@ -43,7 +43,7 @@
 1. 对同一保留原件顺序运行“仅目标重采样”和“当前完整滤波后重采样”，明确选取音轨。通过 stdout 管道按小块聚合，不加载整场 PCM；限制 worker/线程和运行时间，结果只记数值、版本与身份。
 2. 核对样本数、原件 hash/size/mtime、非有限值、峰值、越界计数、短窗 RMS 分布。相同样本数只证明没有时长裁剪，不证明瞬态无延迟。RMS 不是 SNR，不是文字准确率。
 3. 合成反例至少覆盖低频 rumble、弱语音/近似语音噪声、轻声主发言与较响背景、爆音、安静中的短有效发言、立体声反相/分离轨道。新方案必须保护轻声，不用总体能量作为唯一通过条件。
-4. 现有 [test_audio_preprocessing.py](../../tests/test_audio_preprocessing.py) 覆盖固定正弦组合的低频抑制、时长和原件保持；它不能证明人声保真、背景排除或真实 ASR 改善。冻结期间不修改或重跑测试。
+4. 现有 [test_audio_preprocessing.py](https://github.com/orulink-ai/VINote/blob/cbaca4c00bb9c65dff9b3fbdd910a91b561ce83a/tests/test_audio_preprocessing.py) 覆盖固定正弦组合的低频抑制、时长和原件保持；它不能证明人声保真、背景排除或真实 ASR 改善。冻结期间不修改或重跑测试。
 5. 后续若实现缓存身份修复，先写反例：原件不变而预处理配置变化不得读旧 turns；相同配置可复用；历史缺失 fingerprint 不得伪装新策略；未知/已确认 ASR 不得被顺带重放。
 6. 后续若实现来源背景注记，验证源/任务/owner 变更失效、跨边界原始窗、背景中有人声、轻声主发言、独立视觉证据保留。注记不改原始音频/ASR，不让诊断污染最终正文。
 

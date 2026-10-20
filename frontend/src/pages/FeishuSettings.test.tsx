@@ -2,7 +2,7 @@ import {
   act,
   cleanup,
   fireEvent,
-  render,
+  render as renderView,
   screen,
   waitFor,
 } from "@testing-library/react";
@@ -13,7 +13,8 @@ import { feishuGroups, feishuStatus } from "@/lib/feishu";
 import { apiJson } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 
-vi.mock("@/lib/feishu", () => ({
+vi.mock("@/lib/feishu", async importOriginal => ({
+  ...await importOriginal<typeof import('@/lib/feishu')>(),
   feishuStatus: vi.fn(),
   feishuGroups: vi.fn(async () => []),
   openExternal: vi.fn(),
@@ -22,6 +23,8 @@ vi.mock("@/lib/api", () => ({ apiJson: vi.fn() }));
 // These tests exercise account/preferences/group reads. Application credential
 // management has its own component and must not consume preference-response mocks.
 vi.mock('@/components/Settings/FeishuApplicationSetup', () => ({ FeishuApplicationSetup: () => null }));
+const tab = (name: string) => fireEvent.mouseDown(screen.getByRole('tab', { name }));
+const render = (ui: Parameters<typeof renderView>[0]) => { const view = renderView(ui); tab('会议纪要发送设置'); return view };
 const status = {
   configured: true,
   connected: true,
@@ -97,6 +100,7 @@ it('keeps the newest expired authorization status when an older same-owner verif
   vi.mocked(feishuStatus).mockResolvedValueOnce(status).mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; })).mockImplementationOnce(() => new Promise(resolve => { finishNew = resolve; }));
   vi.mocked(apiJson).mockResolvedValue({ url: 'https://example.invalid/authorize', expires_at: Date.now() / 1000 + 600 });
   render(<MemoryRouter><FeishuSettings /></MemoryRouter>);
+  tab('授权');
   fireEvent.click(await screen.findByRole('button', { name: '重新连接' }));
   fireEvent.click(await screen.findByRole('button', { name: '我已完成授权' }));
   await waitFor(() => expect(feishuStatus).toHaveBeenCalledTimes(2));
@@ -112,17 +116,25 @@ it('keeps the newest expired authorization status when an older same-owner verif
 it('discards pending groups after the grant expires and reads fresh groups after re-verification', async () => {
   let finishOld!: (groups: { chat_id: string; name: string }[]) => void;
   vi.mocked(feishuGroups).mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve; })).mockResolvedValueOnce([{ chat_id: 'new', name: '重新核验后的群' }]);
-  vi.mocked(feishuStatus).mockResolvedValueOnce(status).mockResolvedValueOnce({ ...status, expired: true }).mockResolvedValue(status);
+  // An incidental focus read must not manufacture a refreshed grant. Keep it
+  // expired until the test explicitly supplies the re-verification result.
+  vi.mocked(feishuStatus).mockResolvedValueOnce(status).mockResolvedValue({ ...status, expired: true });
   vi.mocked(apiJson).mockResolvedValue({ url: 'https://example.invalid/authorize', expires_at: Date.now() / 1000 + 600 });
   render(<MemoryRouter><FeishuSettings /></MemoryRouter>);
   fireEvent.click(await screen.findByRole('button', { name: '选择群' }));
   await waitFor(() => expect(feishuGroups).toHaveBeenCalledTimes(1));
   fireEvent.click(screen.getByRole('button', { name: '完成选择' }));
+  tab('授权');
   fireEvent.click(screen.getByRole('button', { name: '重新连接' }));
-  fireEvent.click(await screen.findByRole('button', { name: '我已完成授权' }));
+  const complete = await screen.findByRole('button', { name: '我已完成授权' });
+  await waitFor(() => expect(complete).toBeEnabled());
+  fireEvent.click(complete);
+  await waitFor(() => expect(vi.mocked(feishuStatus).mock.calls.length).toBeGreaterThanOrEqual(2));
   await screen.findByText('飞书授权已过期。重新连接后可在会议详情继续交付。');
   await act(async () => finishOld([{ chat_id: 'old', name: '过期授权群' }]));
+  vi.mocked(feishuStatus).mockResolvedValue(status);
   fireEvent.click(screen.getByRole('button', { name: '我已完成授权' }));
+  tab('会议纪要发送设置');
   fireEvent.click(await screen.findByRole('button', { name: '选择群' }));
   expect(await screen.findByRole('checkbox', { name: '重新核验后的群' })).toBeVisible();
   expect(screen.queryByText('过期授权群')).toBeNull();
@@ -177,6 +189,7 @@ it("ignores a late response from the previous account", async () => {
       <FeishuSettings />
     </MemoryRouter>,
   );
+  tab('授权');
   act(() =>
     useAuthStore.setState({
       user: { id: "next-owner", email: "next@example.invalid" },
@@ -295,7 +308,7 @@ it("keeps an initial group failure separate from connection state and supports a
       <FeishuSettings />
     </MemoryRouter>,
   );
-  await screen.findByText("测试账号");
+  await screen.findByRole('button', { name: '选择群' });
   expect(feishuGroups).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("button", { name: "选择群" }));
   await screen.findByText("群服务暂不可用，已选群继续保留，请重试刷新。");
@@ -312,6 +325,7 @@ it("keeps an initial group failure separate from connection state and supports a
 it.each([{ connection_state: 'service_unavailable' }, { grant_state: 'unavailable' }])('temporary grant verification retries status without authorizing or losing the saved destination %j', async unavailable => {
   vi.mocked(feishuStatus).mockResolvedValueOnce({ ...status, connected: false, ...unavailable, capabilities: { folder: false, wiki: false, contact_search: false } }).mockResolvedValue(status);
   render(<MemoryRouter><FeishuSettings /></MemoryRouter>);
+  tab('授权');
   fireEvent.click(await screen.findByRole('button', { name: '重新核验飞书连接' }));
   await screen.findByText('测试账号');
   await waitFor(() => expect(feishuStatus).toHaveBeenCalledTimes(2));

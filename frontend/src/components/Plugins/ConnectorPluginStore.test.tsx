@@ -1,8 +1,8 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { MemoryRouter } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
-const api = vi.hoisted(() => ({ status: vi.fn(), catalog: vi.fn(), runs: vi.fn(), run: vi.fn(), preview: vi.fn(), retry: vi.fn(), detail: vi.fn() }))
-vi.mock('@/lib/feishu', () => ({ feishuStatus: api.status }))
+const api = vi.hoisted(() => ({ disable: vi.fn(), status: vi.fn(), catalog: vi.fn(), runs: vi.fn(), run: vi.fn(), preview: vi.fn(), retry: vi.fn(), detail: vi.fn() }))
+vi.mock('@/lib/feishu', () => ({ feishuStatus: api.status, disableDeviceAutomaticDelivery: api.disable }))
 vi.mock('@/stores/authStore', async () => {
   const { create } = await import('zustand')
   return { useAuthStore: create(() => ({ user: { id: 'a' } })) }
@@ -17,7 +17,7 @@ import { Connections } from '@/pages/Connections'
 import { useAuthStore } from '@/stores/authStore'
 import { ConnectorPluginStore } from './ConnectorPluginStore'
 import { connectorPluginKey } from '@/lib/connectorPlugins'
-beforeEach(() => { localStorage.clear(); api.status.mockResolvedValue({ connected: true }); useAuthStore.setState({ user: { id: 'a' } } as never) })
+beforeEach(() => { vi.clearAllMocks(); localStorage.clear(); api.disable.mockResolvedValue({ legacy: false }); api.status.mockResolvedValue({ connected: true }); useAuthStore.setState({ user: { id: 'a' } } as never) })
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 function mount(owner = 'a') { return render(<MemoryRouter><ConnectorPluginStore owner={owner} returnTo="/connections?note=original" /></MemoryRouter>) }
 it('installs only on successful persistence, disables, returns with durable state and searches', async () => {
@@ -42,6 +42,61 @@ it('retains uninstalled state when storage fails and retries the same installati
   expect(screen.getByText('未安装')).toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: '重试', exact: true }))
   await screen.findByText('已启用')
+})
+it('stops device automatic delivery before persisting disabled plugin state', async () => {
+  localStorage.setItem(connectorPluginKey('a'), JSON.stringify({ version: 1, feishu: { installed: true, enabled: true } }))
+  let finish!: (value: { legacy: boolean }) => void
+  api.disable.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  mount(); await screen.findByText('已启用'); fireEvent.click(screen.getByRole('button', { name: '停用', exact: true }))
+  expect(api.disable).toHaveBeenCalledExactlyOnceWith('a')
+  expect(JSON.parse(localStorage.getItem(connectorPluginKey('a'))!).feishu.enabled).toBe(true)
+  await act(async () => finish({ legacy: false })); await screen.findByText('已停用')
+  expect(JSON.parse(localStorage.getItem(connectorPluginKey('a'))!).feishu.enabled).toBe(false)
+})
+it('device-stop failure keeps plugin enabled and retries without claiming it stopped', async () => {
+  localStorage.setItem(connectorPluginKey('a'), JSON.stringify({ version: 1, feishu: { installed: true, enabled: true } }))
+  api.disable.mockRejectedValueOnce(new Error('设备关闭接口暂不可用')).mockResolvedValueOnce({ legacy: false })
+  mount(); await screen.findByText('已启用'); fireEvent.click(screen.getByRole('button', { name: '停用', exact: true }))
+  await screen.findByText(/设备关闭接口暂不可用/)
+  expect(JSON.parse(localStorage.getItem(connectorPluginKey('a'))!).feishu.enabled).toBe(true)
+  fireEvent.click(screen.getByRole('button', { name: '重试', exact: true })); await screen.findByText('已停用')
+})
+it('old-owner device stop acknowledgement cannot persist state after an account switch', async () => {
+  localStorage.setItem(connectorPluginKey('a'), JSON.stringify({ version: 1, feishu: { installed: true, enabled: true } }))
+  let finish!: (value: { legacy: boolean }) => void
+  api.disable.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const view = mount(); await screen.findByText('已启用'); fireEvent.click(screen.getByRole('button', { name: '停用', exact: true }))
+  act(() => useAuthStore.setState({ user: { id: 'b' } } as never))
+  view.rerender(<MemoryRouter><ConnectorPluginStore owner="b" returnTo="/connections" /></MemoryRouter>)
+  await act(async () => finish({ legacy: false })); await screen.findByText('未安装')
+  expect(localStorage.getItem(connectorPluginKey('b'))).toBeNull()
+  expect(JSON.parse(localStorage.getItem(connectorPluginKey('a'))!).feishu.enabled).toBe(true)
+})
+it('uninstall also stops device delivery and keeps authorization and documents untouched', async () => {
+  localStorage.setItem(connectorPluginKey('a'), JSON.stringify({ version: 1, feishu: { installed: true, enabled: true } }))
+  mount(); await screen.findByText('已启用'); fireEvent.click(screen.getByRole('button', { name: '卸载', exact: true })); await screen.findByText('未安装')
+  expect(api.disable).toHaveBeenCalledExactlyOnceWith('a'); expect(JSON.parse(localStorage.getItem(connectorPluginKey('a'))!).feishu).toEqual({ installed: false, enabled: false })
+  expect(screen.getByText(/服务已受理的原任务继续保留/)).toBeVisible()
+})
+it('ordinary plugin installation does not enable automatic delivery', async () => {
+  mount(); await screen.findByText('未安装'); fireEvent.click(screen.getByRole('button', { name: '安装', exact: true })); await screen.findByText('已启用')
+  expect(api.disable).not.toHaveBeenCalled(); expect(JSON.parse(localStorage.getItem(connectorPluginKey('a'))!).feishu).toEqual({ installed: true, enabled: true })
+})
+it('legacy fallback can disable the plugin but does not claim device stop was confirmed', async () => {
+  localStorage.setItem(connectorPluginKey('a'), JSON.stringify({ version: 1, feishu: { installed: true, enabled: true } }))
+  api.disable.mockResolvedValueOnce({ legacy: true }); mount(); await screen.findByText('已启用')
+  fireEvent.click(screen.getByRole('button', { name: '停用', exact: true })); await screen.findByText('已停用')
+  expect(screen.getByText(/当前服务未提供自动交付协议，未确认设备关闭接口/)).toBeVisible()
+  expect(screen.queryByText(/新的设备自动交付已停止/)).toBeNull()
+})
+it('a late ABA stop response cannot overwrite the current visit installation state', async () => {
+  localStorage.setItem(connectorPluginKey('a'), JSON.stringify({ version: 1, feishu: { installed: true, enabled: true } }))
+  let finish!: (value: { legacy: boolean }) => void
+  api.disable.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  mount(); await screen.findByText('已启用'); fireEvent.click(screen.getByRole('button', { name: '停用', exact: true }))
+  act(() => { useAuthStore.setState({ user: { id: 'b' } } as never); useAuthStore.setState({ user: { id: 'a' } } as never) })
+  await act(async () => finish({ legacy: false })); await screen.findByText('已启用')
+  expect(JSON.parse(localStorage.getItem(connectorPluginKey('a'))!).feishu.enabled).toBe(true)
 })
 it('does not treat unreadable installation data as an empty installed list', async () => {
   localStorage.setItem(connectorPluginKey('a'), '{invalid')

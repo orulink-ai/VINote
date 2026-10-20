@@ -34,6 +34,7 @@ class Settings:
     # Tracing is required for desktop source/test/release runtimes only.
     langfuse_enabled: bool = True
     desktop_runtime: bool = os.getenv("VINOTE_DESKTOP_RUNTIME", "false").lower() == "true"
+    feishu_transport: str = os.getenv("VINOTE_FEISHU_TRANSPORT", "cli").strip()
     langfuse_base_url: str = os.getenv("LANGFUSE_BASE_URL", "http://192.168.1.118:3000").rstrip("/")
     langfuse_public_key: str = os.getenv("LANGFUSE_PUBLIC_KEY", "")
     langfuse_secret_key: str = os.getenv("LANGFUSE_SECRET_KEY", "")
