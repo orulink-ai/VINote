@@ -33,6 +33,7 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Switch } from "@/components/ui/switch";
 import {
   Field,
+  FieldContent,
   FieldDescription,
   FieldGroup,
   FieldLabel,
@@ -359,6 +360,7 @@ export function FeishuSettings() {
   };
   const closingAutomaticOnly = !!value && !!savedValue.current?.auto_publish && !value.auto_publish && !automaticConsentNeeded({ ...value, auto_publish: true }, savedValue.current);
   return (
+    <div className="min-h-full bg-muted/60">
     <div className="workspace-page min-w-0 max-w-5xl">
       <div>
         <PageReturn to="/connections" label="返回插件" />
@@ -535,18 +537,13 @@ export function FeishuSettings() {
           {(!value.connected || value.expired || verificationUnavailable) && <Alert><AlertDescription>请先在授权页签连接飞书并核验权限，再设置会议纪要发送。</AlertDescription></Alert>}
           {value.connected && !value.expired && !verificationUnavailable && <><section
             aria-labelledby="delivery-preferences-heading"
-            className="grid min-w-0 overflow-hidden rounded-2xl border border-border/80 bg-background lg:grid-cols-2"
+            className="flex min-w-0 flex-col gap-4"
           >
-            <header className="border-b bg-muted/40 px-5 py-4 lg:col-span-2">
-              <h2 id="delivery-preferences-heading" className="font-semibold">
+              <h2 id="delivery-preferences-heading" className="sr-only">
                 发布偏好
               </h2>
-              <p className="mt-1 text-xs leading-5 text-muted-foreground">
-                设置文档位置和通知对象。自动交付需在这台桌面单独确认启用，手动发布仍在详情确认。
-              </p>
-            </header>
-            <section className="flex min-w-0 flex-col gap-3 border-b p-5 lg:border-r">
-              <h3 className="text-sm font-medium">文档存放位置</h3>
+            <section aria-label="文档存放位置" className="min-w-0 rounded-xl border bg-card">
+              <div className="flex min-w-0 flex-col gap-2 p-4 [&>[data-slot=field-group]]:gap-2">
               <FeishuDestinationPicker
                 key={JSON.stringify([owner, identityVisit, 'connection_binding_hash' in value ? value.connection_binding_hash : null])}
                 connectionKey={'connection_binding_hash' in value && typeof value.connection_binding_hash === 'string' ? value.connection_binding_hash : undefined}
@@ -562,23 +559,28 @@ export function FeishuSettings() {
                   })
                 }
               />
-              <p className="text-sm text-muted-foreground">
+              <details className="text-sm text-muted-foreground">
+                <summary className="w-fit cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">文档权限说明</summary>
+              <p className="text-pretty mt-2">
                 {value.destination_config?.kind &&
                 value.destination_config.kind !== "personal"
                   ? "权限沿用目标目录或知识库，无法在此缩窄继承权限。"
                   : "关闭链接及组织外分享；组织内部访问遵循飞书策略，通知前另行核验接收人阅读权限。"}
               </p>
+              </details>
               {value.capability_reason && (
                 <p className="text-xs text-muted-foreground">
                   {value.capability_reason}
                 </p>
               )}
+              </div>
             </section>
-            <section className="min-w-0 border-b p-5">
+            <section className="min-w-0 rounded-xl border bg-card">
               <FieldGroup>
-                <FieldSet disabled={busy || !value.connected || value.expired}>
-                  <FieldLegend>{cliMode ? '文档通知' : '机器人通知'}</FieldLegend>
-                  <Field orientation="horizontal">
+                <FieldSet className="gap-0" disabled={busy || !value.connected || value.expired}>
+                  <FieldLegend variant="label" className="mb-0 px-4 py-3">{cliMode ? '文档通知' : '机器人通知'}</FieldLegend>
+                  <Field orientation="horizontal" className="border-t px-4 py-3">
+                    <FieldLabel htmlFor="feishu-self">发给我本人</FieldLabel>
                     <Checkbox
                       id="feishu-self"
                       checked={value.notify_self}
@@ -586,28 +588,18 @@ export function FeishuSettings() {
                         change({ notify_self: checked === true })
                       }
                     />
-                    <FieldLabel htmlFor="feishu-self">发给我本人</FieldLabel>
                   </Field>
-                  <Field orientation="horizontal">
-                    <Checkbox id="feishu-participants" checked={value.notify_participants === true} onCheckedChange={checked => change({ notify_participants: checked === true })} />
+                  <Field orientation="horizontal" className="border-t px-4 py-3">
                     <FieldLabel htmlFor="feishu-participants">发给会议参会人</FieldLabel>
+                    <Checkbox id="feishu-participants" checked={value.notify_participants === true} onCheckedChange={checked => change({ notify_participants: checked === true })} />
                   </Field>
-                  <FieldDescription>仅通知已明确关联并核验的飞书参会人；不会按转写姓名猜测接收人。可同时通知本人。</FieldDescription>
-                  <Field orientation="horizontal">
-                    <Checkbox
-                      id="feishu-groups-enabled"
-                      checked={value.groups.length > 0}
-                      onCheckedChange={(checked) =>
-                        checked ? setGroupPicker(true) : change({ groups: [] })
-                      }
-                    />
-                    <FieldLabel htmlFor="feishu-groups-enabled">
-                      发给指定群
-                    </FieldLabel>
-                  </Field>
+                  <Field orientation="horizontal" className="border-t px-4 py-3">
+                    <FieldLabel htmlFor="feishu-groups-enabled">发给指定群</FieldLabel>
+                    <div className="flex min-w-0 items-center gap-3">
                   <Button
-                    className="w-full justify-between"
+                    className="max-w-48 justify-between"
                     variant="outline"
+                    size="sm"
                     aria-label="选择群"
                     onClick={() => setGroupPicker(true)}
                   >
@@ -624,12 +616,33 @@ export function FeishuSettings() {
                     </span>
                     <ChevronRight aria-hidden="true" />
                   </Button>
-                  <FieldDescription>
-                    {cliMode ? '列出当前授权账号可见的群，以你的身份发送通知。' : '仅列出你与机器人共同加入的群。'}交付前核验群的文档阅读权限，失败时保留文档。
-                  </FieldDescription>
+                    <Checkbox
+                      id="feishu-groups-enabled"
+                      checked={value.groups.length > 0}
+                      onCheckedChange={(checked) =>
+                        checked ? setGroupPicker(true) : change({ groups: [] })
+                      }
+                    />
+                    </div>
+                  </Field>
+                  <details open={!!value.contacts?.length} className="min-w-0 border-t px-4 py-3">
+                    <summary className="cursor-pointer rounded-sm text-sm font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+                      预设通知联系人
+                      <span className="ml-2 font-normal text-muted-foreground">{value.contacts?.length ? `已选 ${value.contacts.length} 位` : '未选择'}</span>
+                    </summary>
+                  <div className="mt-3 min-w-0 [&>[data-slot=field-group]]:gap-3">
                   {value.contact_selection_protocol === 1 ? <FeishuPresetContacts value={value.contacts || []} onChange={contacts => change({ contacts })} disabled={busy || !value.connected || value.expired || verificationUnavailable} connectionKey={statusRequest.current} connectionCurrent={() => displayedStatus === statusRequest.current && isCurrentOwner()} /> : <FieldDescription>当前服务暂不支持选择预设联系人；已保存的联系人继续保留。</FieldDescription>}
+                  </div>
+                  </details>
+                  <details className="border-t px-4 py-3 text-sm text-muted-foreground">
+                    <summary className="w-fit cursor-pointer rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">通知规则与阅读权限</summary>
+                    <div className="mt-2 flex flex-col gap-2">
+                      <p className="text-pretty">仅通知已明确关联并核验的飞书参会人；不会按转写姓名猜测接收人。可同时通知本人。</p>
+                      <p className="text-pretty">{cliMode ? '列出当前授权账号可见的群，以你的身份发送通知。' : '仅列出你与机器人共同加入的群。'}交付前核验群的文档阅读权限，失败时保留文档。</p>
+                    </div>
+                  </details>
                   {groupError && !groupPicker && (
-                    <Alert variant="destructive">
+                    <Alert variant="destructive" className="mb-4">
                       <AlertDescription>
                         {groupError}，已选群继续保留，请重试刷新。
                       </AlertDescription>
@@ -638,10 +651,18 @@ export function FeishuSettings() {
                 </FieldSet>
               </FieldGroup>
             </section>
-            <section className="min-w-0 bg-muted/20 p-5 lg:col-span-2">
-              <FieldSet disabled={busy || !value.connected || value.expired}>
-                <Field orientation="horizontal">
-                  <FieldLabel htmlFor="feishu-auto">自动交付新纪要</FieldLabel>
+            <section className="min-w-0 rounded-xl border bg-card">
+              <h3 className="text-balance px-4 py-3 text-sm font-medium">自动交付</h3>
+              <FieldSet className="gap-0" disabled={busy || !value.connected || value.expired}>
+                <Field orientation="horizontal" className="border-t px-4 py-3">
+                  <FieldContent>
+                    <FieldLabel htmlFor="feishu-auto">自动交付新纪要</FieldLabel>
+                    <FieldDescription>
+                      {canEnableAutomatic
+                        ? "仅这台桌面今后成功生成并保存的新个人会议纪要自动交付。历史稿、编辑稿和失败任务不发送；请保持应用运行。"
+                        : "当前服务暂不支持经确认的自动交付，可在详情页手动发布。"}
+                    </FieldDescription>
+                  </FieldContent>
                   <Switch
                     id="feishu-auto"
                     checked={value.auto_publish}
@@ -651,28 +672,27 @@ export function FeishuSettings() {
                     }
                   />
                 </Field>
-                <FieldDescription>
-                  {canEnableAutomatic
-                    ? "仅这台桌面今后成功生成并保存的新个人会议纪要自动交付。历史稿、编辑稿和失败任务不发送；请保持应用运行。"
-                    : "当前服务暂不支持经确认的自动交付，可在详情页手动发布。"}
-                </FieldDescription>
-                <Field orientation="horizontal">
+                <Field orientation="horizontal" className="border-t px-4 py-3">
+                  <FieldContent>
+                    <FieldLabel htmlFor="feishu-group-versions">按会议归组历史版本</FieldLabel>
+                    <FieldDescription>知识库中同一会议的后续纪要放在该会议容器下，保留每份历史稿；不会按相似标题合并不同会议。</FieldDescription>
+                  </FieldContent>
                   <Checkbox id="feishu-group-versions" checked={value.group_meeting_versions === true} disabled={!canEnableAutomatic && !value.group_meeting_versions} onCheckedChange={checked => change({ group_meeting_versions: checked === true })} />
-                  <FieldLabel htmlFor="feishu-group-versions">按会议归组历史版本</FieldLabel>
                 </Field>
-                <FieldDescription>知识库中同一会议的后续纪要放在该会议容器下，保留每份历史稿；不会按相似标题合并不同会议。</FieldDescription>
+                <div className="flex flex-col gap-1.5 border-t px-4 py-3">
                 <FieldDescription>{!value.notify_self && !value.notify_participants && !value.groups.length && !value.contacts?.length ? '未选择通知对象：自动交付只创建文档，不发送通知。' : '通知所选联系人和群时会授予文档阅读权限。'}</FieldDescription>
                 <FieldDescription>
                   当前服务不支持更新已有飞书链接；新修订发布为新文档，历史文档继续保留。
                 </FieldDescription>
+                </div>
               </FieldSet>
             </section>
           </section>
           <div
             aria-label="保存发布偏好"
-            className="sticky bottom-0 flex flex-wrap items-center justify-between gap-4 rounded-xl border bg-background/95 px-5 py-4 shadow-sm backdrop-blur-sm"
+            className="flex flex-col gap-3 rounded-xl border bg-card p-4 sm:flex-row sm:items-center sm:justify-between"
           >
-            <span className="text-sm text-muted-foreground">
+            <span className="text-pretty min-w-0 flex-1 text-sm text-muted-foreground">
               {saveFailed && dirty
                 ? "保存失败，修改已保留。"
                 : error && dirty
@@ -682,6 +702,7 @@ export function FeishuSettings() {
                     : message || "目的地和通知偏好随账号保存；自动交付需在这台桌面确认启用。"}
             </span>
             <Button
+              className="w-full shrink-0 sm:w-auto"
               disabled={
                 busy ||
                 !dirty ||
@@ -854,6 +875,7 @@ export function FeishuSettings() {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
     </div>
   );
 }
