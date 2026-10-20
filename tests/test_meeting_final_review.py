@@ -86,6 +86,16 @@ def test_all_new_hosts_keep_two_calls_full_source_raw4_and_real_rendering(case, 
             self.calls.append(prompts)
             assert SOURCE in prompts['user_prompt']
             assert self.model == 'frozen-selected-model'
+            # Capture the actual production host's two prompts, beyond builder-only checks.
+            for instruction in ('trace its tail continuously to its own arrowhead',
+                                'decimal/grouping signs and operators',
+                                'An explicitly continuing arrangement remains one event',
+                                'A listing title is not the configuration of its selected offer',
+                                'Evidence quotes remain unchanged'):
+                assert prompts['system_prompt'].count(instruction) == 1
+            self_contained = 'Never split an object and its values across independent nodes'
+            assert prompts['system_prompt'].count(self_contained) == (
+                1 if len(self.calls) == 2 and presentation == 'infographic' else 0)
             return raw3 if len(self.calls) == 1 else raw4
 
     automatic = Automatic()

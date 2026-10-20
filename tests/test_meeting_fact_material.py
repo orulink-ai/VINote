@@ -232,8 +232,8 @@ def test_both_calls_preserve_relational_dimensions_numeric_bindings_and_independ
         rules = call['system_prompt']
         assert 'trigger -> action -> outcome' in rules
         assert 'source endpoint -> relation -> target endpoint' in rules
-        assert 'value, unit, object, configuration, source state and time role' in rules
-        assert 'decimal point, digit grouping and sign' in rules
+        assert 'with its object, unit, configuration, state and time role' in rules
+        assert 'recheck exact characters, decimal/grouping signs and operators' in rules
         assert 'independently intelligible deadline' in rules
         assert 'compare the final sentence against both the original source and the working candidate' in rules
 
