@@ -1,11 +1,12 @@
 # Repository Guidelines
 
-## Branch and submodule contract (2026-10-17)
+## Branch and submodule contract (2026-10-20)
 
 - Desktop/backend changes start from the latest fetched `origin/dev`, use a `codex/` feature branch and target `dev` in pull requests. Do not target the historical `main` branch for this product workflow.
 - `VINote-app` is an independent Git submodule repository. App feature branches start from its latest fetched `origin/main` and target its `main`; desktop branch names do not select App branches.
-- Commit and merge App changes in the App repository first, then update the parent repository's gitlink to the reviewed App commit. `.gitmodules` tracks App `main`; ordinary submodule checkout still uses the exact committed gitlink, not a floating remote tip.
-- Preserve dirty runtime checkouts. Never reset or switch them merely to make a branch graph look tidy. Use the reviewed clean delivery checkout for branch preparation; open the App repository separately when inspecting its branch graph.
+- Develop the App at `VINote-app/` inside the current parent VINote checkout. Do not create a separate App worktree or temporary workspace unless the user explicitly requests it; inspect App branch state at this same submodule path.
+- Commit and merge App changes in the App repository first, then update the parent repository's gitlink to the reviewed App commit. Do not stage the parent gitlink until the App PR has merged normally. `.gitmodules` tracks App `main`; ordinary submodule checkout still uses the exact committed gitlink, not a floating remote tip.
+- Preserve dirty runtime checkouts. Never reset or switch them merely to make a branch graph look tidy. If migration conflicts with existing changes, inventory and migrate them before continuing; do not reset to force a clean destination.
 
 ## Current product direction (2026-10-12)
 

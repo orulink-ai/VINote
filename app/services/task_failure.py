@@ -12,6 +12,7 @@ from app.services.asr_stream_service import (
 
 UNKNOWN_MESSAGE = "转写服务未能确认最终识别结果，请检查原任务后重试当前模型"
 UNKNOWN_COPY = "转写结果尚未确认，原文件已保留。请查看原任务结果，不要重复提交。"
+EMPTY_RESULT_COPY = "转写服务返回空结果，尚未确认该区间的完整识别结果。原文件已保留，请查看原任务，不要重复提交。"
 
 def safe_asr_failure_context(value):
     """Private artifact projection, never arbitrary exception metadata."""
@@ -102,4 +103,6 @@ def recovery_status(status):
             result["retryable"] = False
         if code in {"unknown_result", "unknown_error", "asr_incomplete_result"}:
             result["message"] = UNKNOWN_COPY
+        elif code in {"asr_empty_result", "empty_result_unverified"}:
+            result["message"] = EMPTY_RESULT_COPY
     return result

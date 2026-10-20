@@ -38,6 +38,7 @@ def test_invalid_cached_limit_preserves_checkpoint_and_sends_nothing(tmp_path, v
 
 
 @pytest.mark.parametrize("code,expected", [("asr_timeout", "asr_timeout"),
+    ("asr_empty_result", "asr_empty_result"), ("empty_result_unverified", "empty_result_unverified"),
     ("asr_failed", "asr_failed"), ("Bearer private-key", "unknown_error")])
 def test_service_error_preserves_only_safe_classification_and_session(tmp_path, caplog, code, expected):
     from contextlib import contextmanager

@@ -140,3 +140,32 @@
 - 合并后的前端全量106文件994项全部通过，129.69秒；TypeScript及生产构建通过，既有警告保留。后端完整回归结果以下方实际命令完成为准。回收站和分组独立审查均无当前未关闭P1/P2。API8919/Vite3189/Metro8081监听仍在，原运行目录未reset/switch，父gitlink不提前更新。
 - 本次提交将代码修复、真实失败和实际验收边界一起记录在功能分支PR #61（目标dev）。自动总结尚未收口，仍保留草稿，不合并或发布，不把组件/隔离DB测试写成真实用户数据已清理。
 - 主线程最终完整后端命令：`python -B -m pytest -p no:cacheprovider tests -q --disable-warnings --maxfail=1`，**1841 passed、2 skipped、19 subtests passed**，361.45秒，退出0；包含两条并行修复的最终源码。最终审查后构建再确认，不新增付费调用。
+
+### 2026-10-20 Asia/Shanghai｜wugui / Codex：review 保全来源事实与关系的最小候选
+
+- 基线为主线程已提交的 5174fe2；本轮开始工作区干净。用户授权只修改 meeting_review.py 一段及对应测试/journal，针对后轮审核改写可能新增或损失事实关系的风险。此前实际模型失败与人工修订的证据边界不变，不将人工成稿当模型改进结果。
+- 移除 `Reconstruct supported conclusions rather than preserving its sentences`，替换为明确的审核行为：保全有来源的重要事实及其关系，局部纠错、从全文补漏，不因润色删信息、泛化或改变关系；无来源的说法/关系仍须纠正或删除，且不得连带丢弃周边有来源事实。draft 不是证据，仍独立核对完整原始资料。其他审核规则、自由 Markdown、完整 source/图片、同模型既有两次调用、预算及 ASR 均未改。
+- 新增 default/oneshot 两个离线反例：提供合成条件事实与提议状态，draft 故意丢条件并错误提升状态；检查两个请求都携带完整 source、第二请求携带待审核 draft、规则同时保全有来源信息及纠正无来源内容，且仅两次调用、不再包含旧冲突措辞。mock 输出仅用于验证提示词/数据流，不证明模型实际纠错或事实质量。
+- TDD：修改规则前，新增两项均失败，原六项通过；修改单段后执行 `python -B -m pytest -p no:cacheprovider tests/test_meeting_review.py tests/test_default_full_summary.py tests/test_summary_modes.py tests/test_meeting_source_references.py tests/test_video_summary_materials.py tests/test_summary_failure_recovery.py tests/test_meeting_summary_regeneration.py tests/test_anthropic_llm.py -q --tb=short`：108 passed、1 条既有 Starlette 弃用警告，11.56 秒，退出码 0。覆盖原有全文/视觉输入、source references、legacy accurate、同模型/两调用、失败无自动拆分重试及 summary-only 无 ASR。
+- 代码自审确认生产 diff 仅一段文字，测试仅增加两个参数化用例，无新增 JSON 契约/helper、样本答案、调用、模型切换、预算或其他路径；`git diff --check` 通过。未另行冒称独立 reviewer 或真实模型验收。
+- 待主线程决定是否做明确确认的受控 summary-only；当前仅检验行为约束是否消除审核重写冲突，尚不证明实际信息保全或关系准确率改善。未调用云端/ASR/LLM、未部署、未重启、未提交。
+- 冻结时间：2026-10-20 10:41:07 +08:00（Asia/Shanghai）。停止本轮所有产品 Python/tests/journal 写入，交主线程审查及决定是否受控实测。
+
+### 2026-10-20 Asia/Shanghai｜wugui / Codex：App 开发归回父仓库子模块
+
+- 用户明确规范：今后 App 在当前父仓库 `VINote-app/` 路径开发；除非用户明确要求，不另建独立 worktree 或临时 workspace。dirty 内容继续保留，若迁移目的地有冲突，先盘点并迁移，不 reset/switch 强制清空。已在 root AGENTS 的 Branch and submodule contract 最小更新，并移除与此规范冲突的另用交付 checkout 建议。
+- 用户确认 App 已完整迁入。本次只读核对：App Git 顶层确为当前父仓库的 `VINote-app`，HEAD 为 d297d03；当前子模块保留 NotesScreen 源码/测试、会议分组及来源 helper/测试、App AGENTS/journal 等 dirty 和新增文件。此处记录用户迁移完成事实与当前可见状态，不冒称本次另做了旧工作区逐字节比较或清理。
+- 父仓库当前 index 仍记录 gitlink f57c436；`git diff --cached -- VINote-app` 为空。当前 App HEAD 与已记录 gitlink 不同属正常待审状态，App PR 正常合并前不暂存 gitlink，不提前更新到未合并 feature head。
+- 本次仅编辑 root AGENTS 与本 journal；未改子模块源码、未 stage/commit、未新建工作区、未 reset/switch 或删除目录。review 候选的 108 passed 结果继续保留；所有产品 Python/tests 仍冻结，无新云端/ASR/LLM 调用。
+
+### 2026-10-20 Asia/Shanghai｜wugui / Codex：旧恢复分支语义选择性纳入与收口
+
+- 用户授权对 b94c9ec / 0e18025 逐项比对后，只补当前真实缺失，不整笔 cherry-pick、不切支、不覆盖其他改动。当前主功能工作树以 5174fe2 为基线；此前 meeting review 候选与两个用例保持原样，SHA-256 复核一致。
+- b94c9ec 的前端语义已纳入：meetingGeneration 源码/测试、meetingProcessing 测试、FeishuSettings 源码/测试这五个文件与当前 HEAD 的 Git blob 完全相同。不可重试任务仅查询、真实失败阶段保留、缺失任务不盲目重传；飞书群列表按需读取、个人设置不等待群服务、账号/请求/草稿隔离均已有。本提交不重复迁移，也未修改飞书发布终态或写入 receipt。
+- b94c9ec 的空终态错误码白名单已由当前实现覆盖；matching-session typed terminal proof、完整 LAST 发送、无发送错误、有效 deadline、供体/子缓存 proof 再验证及 owner/model/WAV/lease 安全门属于后续更严格实现，全部保留。本轮只在 task_failure.py 增加安全文案常量及两个错误码的 message 投影，共 3 行；不触碰 proof 判定、区间推进、summary_result_unconfirmed 分支或 retry 权限。
+- 已选择性补回该提交缺失的 10 个参数化后端反例：两项 transcriber 一次失败不重试、四项 sent_all 两种状态下保码与安全文案、两项真实隔离 GET/POST retry 路由返回不可重试并零 worker 派发，以及两项错误码/安全日志分类。未持有完整终态证明的错误仍为失败，不推断静音、识别完整或跳过授权。
+- TDD：先补测试，修复前 6 failed、45 passed；6 个失败均复现空终态返回原始/通用 message 而非安全空结果说明。补 3 行后执行 `python -B -m pytest -p no:cacheprovider tests/test_task_recovery_failures.py tests/test_asr_stream.py tests/test_asr_confirmed_empty.py tests/test_summary_failure_recovery.py tests/test_asr_transport_diagnostics.py tests/test_parent_asr_prefix.py tests/test_parent_asr_resume_integration.py -q --tb=short`：176 passed、1 条既有 Starlette 弃用警告，77.86 秒，退出码 0。既有严格 proof、父前缀不可变/lease/零 ASR 反例、summary 未确认禁止旧重播及安全诊断全部继续通过。
+- 0e18025 只有历史文档，没有 operational 恢复代码；其空区间恢复计划已由当前正式 typed-empty 和显式 v2 父前缀恢复合同覆盖，不将旧“未实施”时点或临时 VAD 处理当作今日产品功能，也不引入临时绕过方案。旧文档较宽泛的 legacy retry 描述不能覆盖当前 summarizing 失败必须新确认的更严格规则。
+- 两笔旧提交原始完整 patch 及五份 Markdown 快照已存入私有 Git 忽略目录，7 个文件逐一 SHA-256 读取校验通过，另有 manifest 记录来源提交与摘要；未将旧文档复制回当前产品文档或把历史安装验收状态冒充当前验收。旧两笔 commit 的源码修复语义已分别纳入/由更严格实现覆盖，历史证据完整保留，不再留下未评估的迁移项。
+- 自审确认生产 diff 只有上述 3 行，两个测试文件与 b94c9ec 对应版本一致；`git diff --check` 通过。未新增调用、模型变更、自动 retry、历史状态迁移或恢复授权；实际原件/checkpoint 未动。无云端/ASR/LLM 调用、无 stage/commit、无部署/重启；交主线程 root PR 最终独立复审及正常合并收口，不冒称已经合并。
+- 冻结时间：2026-10-20 11:04:44 +08:00（Asia/Shanghai）。停止本任务所有产品 Python、tests 与 journal 写入，等主线程审查。
