@@ -45,7 +45,7 @@ Keep offsets internal unless the user explicitly requests recording references. 
         from app.llm.meeting_presentation import depth_instructions
         rules += '\n' + depth_instructions()
         if state and state.depth:
-            from app.llm.meeting_fact_material import MATERIALITY_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
+            from app.llm.meeting_fact_material import REVIEW_MATERIALITY_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
             from app.llm.meeting_final_review import review_protocol
             rules = rules.replace('return only the corrected Markdown.', 'return protocol-4 report blocks and the final claim ledger.')
             rules = rules.replace('The report field contains Markdown facts only;', 'Report blocks[].markdown contain Markdown facts only;')
@@ -55,12 +55,7 @@ Keep offsets internal unless the user explicitly requests recording references. 
                 'Return only the report, without the internal ASR/FRAME references or an evidence ledger.',
                 'Keep the reader-facing blocks free of internal ASR/FRAME references and evidence ledgers; '
                 'return the machine-readable final claim ledger required below outside those blocks.')
-            materiality = MATERIALITY_RULE.replace(
-                'use empty coverage fact_ids with a source-grounded reason instead of manufacturing a fact or a section of transcription caveats.',
-                'do not manufacture a claim or a section of transcription caveats; reject an existing mistaken candidate only with a specific valid source-grounded reason.')
-            relations = RELATION_FIDELITY_RULE.replace('An included audit passage must retain',
-                'An included claim and its linked report blocks must retain')
-            rules += '\n\n' + materiality + SOURCE_SWEEP_RULE + relations + review_protocol(state.presentation)
+            rules += '\n\n' + REVIEW_MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + review_protocol(state.presentation)
             from app.llm.meeting_visual_review import visual_review_instructions
             rules += visual_review_instructions(state.presentation, protocol=4)
             if state.presentation == 'illustrated':

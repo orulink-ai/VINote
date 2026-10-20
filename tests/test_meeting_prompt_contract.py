@@ -32,3 +32,28 @@ def test_legacy_and_intermediate_requests_keep_the_original_markdown_envelope():
     for prompts in [draft, review]:
         assert prompts['system_prompt'].startswith(build_system_prompt('zh-CN'))
         assert 'exactly one JSON object' not in prompts['system_prompt']
+
+
+@pytest.mark.parametrize('language', ['zh-CN', 'en'])
+@pytest.mark.parametrize('depth', ['brief', 'concise', 'detailed'])
+@pytest.mark.parametrize('presentation', ['text', 'html', 'illustrated', 'comic', 'infographic'])
+def test_materiality_contract_is_specific_to_the_actual_stage(language, depth, presentation):
+    source = '[ASR:0001] Full synthetic source\nKeep punctuation,  2 spaces, and material_reason as source data.'
+    with presentation_scope(depth, presentation):
+        draft = build_meeting_draft_prompts(title='Synthetic', source=source, extras=None,
+                                            output_language=language)
+        review = build_meeting_review_prompts(source=source, draft='Fallible original claims',
+                                              extras=None, output_language=language)
+    for prompts in (draft, review):
+        assert source in prompts['user_prompt']
+        for obsolete in ('material_reason', 'fact_ids', 'included audit passage'):
+            assert obsolete not in prompts['system_prompt']
+        assert 'materiality is not certainty' in prompts['system_prompt']
+        assert 'No source window or frame is required to yield a business fact' in prompts['system_prompt']
+    assert 'Classify each unique draft claim' in draft['system_prompt']
+    assert 'Do not reclassify original.material' not in draft['system_prompt']
+    assert 'Classify each unique draft claim' not in review['system_prompt']
+    assert "Preserve every original claim's id, field and material exactly as frozen in the draft" in review['system_prompt']
+    assert 'Do not reclassify original.material' in review['system_prompt']
+    assert 'Classify material only for genuinely new source-supported claim IDs' in review['system_prompt']
+    assert 'specific valid source-grounded reason' in review['system_prompt']

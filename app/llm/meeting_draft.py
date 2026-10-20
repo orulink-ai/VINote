@@ -11,7 +11,7 @@ def build_meeting_draft_prompts(*, title: str, source: str, extras: str | None,
                                 output_language: str) -> dict[str, str]:
     language = normalize_output_language(output_language)
     from app.llm.meeting_presentation import presentation_state
-    from app.llm.meeting_fact_material import MATERIALITY_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
+    from app.llm.meeting_fact_material import DRAFT_MATERIALITY_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
     from app.llm.meeting_fact_protocol import DRAFT_PROTOCOL
     structured = bool(presentation_state() and presentation_state().depth)
     rules = """This is the source-preservation draft for a later whole-source review, not the final minutes.
@@ -25,7 +25,7 @@ These working notes do not impose headings, a table, field labels or a fixed num
     if structured:
         rules = rules.replace('Return concise source-grounded working notes, not an explanation of your reasoning.',
                               'Return complete structured source-grounded working material, not an explanation of your reasoning.')
-        rules += '\n\n' + MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + DRAFT_PROTOCOL
+        rules += '\n\n' + DRAFT_MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + DRAFT_PROTOCOL
     return {
         'system_prompt': meeting_system_base(language, structured=structured) + '\n\n' + rules,
         'user_prompt': (

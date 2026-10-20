@@ -93,10 +93,27 @@ def test_complete_original_ids_cannot_be_replaced_by_counts_or_new_ids(change):
 
 
 @pytest.mark.parametrize('disposition', ['included', 'rejected', 'omitted_for_depth'])
-def test_original_material_flag_cannot_be_lowered_for_any_disposition(disposition):
+@pytest.mark.parametrize('original_material', [True, False])
+def test_original_material_flag_cannot_change_for_any_disposition(disposition, original_material):
+    material = draft()
+    material['claims'][0]['material'] = original_material
     value = review()
-    value['claims'][0].update(material=False, disposition=disposition)
-    fails('changed_original_material', value)
+    value['claims'][0].update(material=not original_material, disposition=disposition)
+    fails('changed_original_material', value, material)
+
+
+@pytest.mark.parametrize('disposition', ['included', 'rejected', 'omitted_for_depth'])
+def test_obsolete_material_reason_is_not_a_final_claim_field(disposition):
+    value = review()
+    value['claims'][0].update(material_reason='Synthetic relevance explanation', disposition=disposition)
+    fails('invalid_claim_shape', value)
+
+
+def test_new_nonmaterial_claim_does_not_reclassify_original_claims():
+    value = review()
+    value['claims'].append(row('NEW1', field='deadline', text='Finish before the third bell', material=False))
+    result = run(value)
+    assert [claim['material'] for claim in result.claims] == [True, True, False]
 
 
 def test_original_field_cannot_be_relabelled_to_authorize_entity_rejection():
