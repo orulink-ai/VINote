@@ -368,3 +368,11 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - A V10原plan的两边原先反向共用50px路段，修复后为0。主线在原生热更新窗口实际另存 `A-info-v10-renderfix.svg` 和PNG，未覆盖原评分文件；独审确认SVG与候选逐字节一致、PNG逐像素一致，首卡三行且无顿号行首，原bodyhash和模型错误的边均保留。本项是新render-only复验，不倒改旧正文75或总82，也不宣称修好了LLM语义。
 - 独审又复现缺少Segmenter时ASCII＋ZWJ链被错误合成单字素、超236px裁字的P2。已按合法Extended_Pictographic上下文约束ZWJ连接，补反例；独审8项闭环及真实SVG/PNG通过，SSR保字/测宽、正常原生A保真，无残留本组P1/P2。初轮53项、修复后8项是不同审查阶段，不合算为全量。
 - 最终前端 **136文件／1583项通过**（66.23秒，maxWorkers=4），TypeScript和生产构建通过（Vite6.16秒）。前次并行构建时全量1576通过／1个连接设置测试5秒超时；原测试未改断言/超时，独立单文件10项通过（原失败case672ms）。保留两轮日志，不把单文件通过替代全套；最终全套在P2修复后重新执行。对应ignored日志 `v11-ui-full-tests.log`、`v11-model-connection-isolated.log`、`v11-ui-full-tests-r2.log`、`v11-ui-build-r2.log`。
+
+### 可信视觉数据的本机PNG渲染与字体打包
+
+- 新纯Pillow模块接收已验证的bound-v1数据和已验证截图bytes，不接受caller文件路径/URL，不执行SVG/HTML、不联网、不调用模型或ASR。画面分镜完整保留真实截图比例、顺序、时间与说明；信息图支持cards/comparison/flow/relationship，保留节点、边、方向、平行/反向/自环及完整编号图例。明确页数、字节、像素和帧限额，失败不返回部分结果，不把无图版本当图形成功。
+- 固定Noto Sans SC字体及OFL/来源说明一并随backend打包，校验字体hash，无系统字体替换或运行时下载。renderer身份绑定实际加载的本模块Python实现、defaults/不可变闭包、影响输出常量/limits以及声明的Python/Pillow/FreeType/zlib版本；不依赖包内不存在的.py/.pyc或loader重读源码，也不宣称哈希全部native二进制传递依赖。新受理与预检间实现变化应被发现，已冻结PNG恢复不重新渲染。
+- 实现者对三组真实accepted sidecar只读离线渲染：A分镜8 scenes/2页、A信息图4节点4边、B信息图8节点共四页；原稿/截图/相关DB行摘要不变，未改旧评分。独审实看四页及合成平行/反向/自环、原图两角，PNG字节/语义与增强前一致，未以renderer保真抵消模型错误。
+- 独审最终6项SHA匹配，89项renderer与4项旧PNG恢复测试通过；不同新进程/hash seed的identity一致，替换内存函数/常量会改变identity，恢复后复原。实际PyInstaller隔离探针再次执行，与source identity/PNG hash/semantic一致，font/OFL/README包内hash匹配，模块.py/.pyc不在包内。这只是隔离探针，**不是正式VINote安装包或实际飞书图片交付验收**。
+- 主线三份新测试联合 **221 passed、1 skipped**（99.06秒），跳过仅为无frame信息图不适用截图篡改组合；日志 `graphic-joint-final-tests.log`。结果早于正在修复的形式metadata权威性残留P2，不能据此放行完整飞书适配。适配源码独审仍在进行，未真实创建知识库节点或发通知；还需验证完整图片journal、回读、权限和最终交付。
