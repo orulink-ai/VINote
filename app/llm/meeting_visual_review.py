@@ -11,7 +11,12 @@ def visual_review_instructions(presentation, *, protocol=3):
         if presentation not in {'comic', 'infographic'}:
             raise ValueError('Unsupported visual review protocol')
         from app.llm.meeting_visual_projection6 import PARTS_RULE6, COMIC_RULE6, INFO_RULE6
-        return '\n' + PARTS_RULE6 + '\n' + (COMIC_RULE6 if presentation == 'comic' else INFO_RULE6)
+        layout = COMIC_RULE6 if presentation == 'comic' else INFO_RULE6
+        # P6 prompt examples only, including edge endpoints. Never transform
+        # raw model output, claim IDs or historical protocol instructions.
+        for original, prefixed in (('S1', 'VS1'), ('N1', 'VN1'), ('N2', 'VN2'), ('E1', 'VE1')):
+            layout = layout.replace('"' + original + '"', '"' + prefixed + '"')
+        return '\n' + PARTS_RULE6 + '\n' + layout
     if type(protocol) is int and protocol == 5:
         if presentation not in {'comic', 'infographic'}:
             raise ValueError('Unsupported visual review protocol')

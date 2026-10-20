@@ -129,9 +129,9 @@ def review_protocol(presentation, *, protocol=4):
             block['parts'] = [block.pop('markdown')]
         ref = {'block_id': 'B1', 'part_index': 0, 'claim_ids': ['C1']}
         example['visual'] = ({'protocol': 3, 'scenes': [
-            {'id': 'S1', 'frame_id': '[FRAME:0001]', 'label_ref': ref}], 'diagram': None}
+            {'id': 'VS1', 'frame_id': '[FRAME:0001]', 'label_ref': ref}], 'diagram': None}
             if presentation == 'comic' else {'protocol': 3, 'scenes': [], 'diagram': {
-                'kind': 'cards', 'nodes': [{'id': 'N1', 'label_ref': ref}], 'edges': []}})
+                'kind': 'cards', 'nodes': [{'id': 'VN1', 'label_ref': ref}], 'edges': []}})
         lines[0] = lines[0].replace('PROTOCOL 4', 'PROTOCOL 6')
         lines[1] = json.dumps(example, ensure_ascii=False, separators=(',', ':')) + '.'
         return '\n'.join(lines).replace('Markdown belongs only inside blocks[].markdown;',

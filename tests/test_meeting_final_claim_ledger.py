@@ -322,6 +322,8 @@ def test_legacy_v3_host_still_rejects_protocol_four_instead_of_dispatching_it():
 def test_prompt_example_is_one_ledger_without_independent_addition_accounting():
     example = json.loads(next(line for line in REVIEW_PROTOCOL.splitlines() if line.startswith('{')).rstrip('.'))
     assert set(example) == {'protocol', 'blocks', 'claims'} and example['protocol'] == 4
+    assert list(example) == ['protocol', 'claims', 'blocks']
+    assert REVIEW_PROTOCOL.count('Complete claims before blocks; their block_ids reference the report blocks that follow.') == 1
     assert all({'id', 'disposition', 'block_ids', 'evidence'} <= set(c) for c in example['claims'])
     assert 'complete original speech' in REVIEW_PROTOCOL
     assert 'end is exclusive' in REVIEW_PROTOCOL

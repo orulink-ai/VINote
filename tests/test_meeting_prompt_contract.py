@@ -25,6 +25,13 @@ def _assert_final_envelope(rules, presentation, expected_protocol):
     if presentation in {'comic', 'infographic'}:
         expected_fields.add('visual')
     assert set(example) == expected_fields
+    expected_order = ['protocol', 'claims', 'blocks']
+    if presentation == 'illustrated':
+        expected_order.append('figures')
+    elif presentation in {'comic', 'infographic'}:
+        expected_order.append('visual')
+    assert list(example) == expected_order
+    assert rules.count('Complete claims before blocks; their block_ids reference the report blocks that follow.') == 1
     for block in example['blocks']:
         if expected_protocol == 6:
             assert set(block) == {'id', 'parts'}
