@@ -8,6 +8,7 @@ from sqlalchemy import desc, select
 from sqlalchemy.exc import IntegrityError
 
 from app.db import session_scope
+from app.services import feishu_auto_outbox
 from app.db_models import NoteDB, TeamDB, TeamMemberDB
 from app.models.note_library import (
     NoteCreateRequest,
@@ -105,6 +106,13 @@ class NoteRepository:
 
     def create_note(self, user_id: str, payload: NoteCreateRequest, *, generation_client: str | None = None) -> NoteRecordResponse:
         with session_scope() as db:
+            # sqlite3 legacy transaction mode does not BEGIN for SELECT/SAVEPOINT.
+            # Releasing the insert savepoint must not commit the note before its
+            # outbox is durably bound by this same outer transaction.
+            connection = db.connection()
+            if (connection.dialect.name == "sqlite"
+                    and not connection.connection.driver_connection.in_transaction):
+                connection.exec_driver_sql("BEGIN")
             scope = payload.scope or "personal"
             team_id = None
             if scope == "team":
@@ -148,6 +156,7 @@ class NoteRepository:
                 if not existing or existing.created_by != user_id or existing.scope != scope or existing.team_id != team_id:
                     raise
                 return self._to_response(existing, team_name=self._get_team_name(db, team_id))
+            feishu_auto_outbox.register_new_meeting(db, record)
             return self._to_response(record, team_name=self._get_team_name(db, record.team_id))
 
     def update_note(self, user_id: str, note_id: str, payload: NoteUpdateRequest) -> NoteRecordResponse | None:
@@ -155,6 +164,7 @@ class NoteRepository:
             record = self._get_accessible_record(db, user_id=user_id, note_id=note_id)
             if not record:
                 return None
+            was_done = record.status == "done"
             if payload.content is not None and payload.content != record.content:
                 from app.db_models import NoteVersionDB
                 db.add(NoteVersionDB(note_id=record.id, title=record.title, content=record.content))
@@ -165,6 +175,8 @@ class NoteRepository:
             if payload.status:
                 record.status = payload.status
             db.flush()
+            if not was_done and record.status == "done":
+                feishu_auto_outbox.capture_saved_meeting(db, record)
             return self._to_response(record, team_name=self._get_team_name(db, record.team_id))
 
     def get_speaker_aliases(self, user_id: str, note_id: str) -> dict[str, str] | None:

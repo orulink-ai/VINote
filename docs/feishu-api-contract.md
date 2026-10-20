@@ -1,5 +1,15 @@
 # 飞书位置、权限与交付 API 契约
 
+## 2026-10-20 桌面新纪要自动交付补充
+
+新版通过 `automatic_delivery_protocol: 1` 与实际运行中的 `capabilities.background_delivery` 协商。旧服务或未具备保存入队能力的旧客户端继续禁用自动交付；以下历史示例中的 `background_delivery:false` 不再是新版固定值。新版桌面向集成服务的状态请求携带 `X-VINote-Automatic-Delivery: 1`，该头只影响显示协商，不参与鉴权。
+
+`PUT /preferences` 可增加 `contacts:[{open_id,selection_token?}]` 与显式 `automatic_delivery_consent:true`。新联系人必须持有当前连接绑定的搜索凭据；仅保留同一绑定的既存联系人时允许省略凭据。联系人集合改变、首次启用或启用期间目标变化需要确认，关闭自动功能仍可明确确认并保存联系人预设。自动策略固定账号、连接、目标及接收人，更改或撤销使旧策略失效。
+
+专用 `POST /automatic-deliveries` 只接收 `operation_id`、`policy_id`、`note_key`、`title`、`content`，服务端从原授权策略解析位置和对象，不信任调用者替换目标。设备在新纪要首次成功保存时同事务入队；不补发历史、编辑或失败内容。原 operation 的未知结果只能查询；新手动操作也不能绕过原未知交付。现有手动 `/deliveries` 的当次确认合同保留。
+
+生命周期、设备停用与只读回执接口见[会议纪要自动交付](feishu-auto-delivery.md)。本补充描述源码契约，部署与真实提供方验收另行记录；VILab-server 不参与本变更。
+
 ## 2026-10-16 显式阅读授权与未知结果核验
 
 仅新发布可携带 `recipient_access_policy: "grant_view_and_notify"`，要求手动确认及 operation_id；提交前核验实际服务 `/status` 的 `recipient_access_protocol === 1`，桌面 proxy 同样校验远端协议。该能力字段表示协议支持，不证明应用权限、具体文档可授权或机器人可送达。未传 groups/notify_self 时新 policy 不继承偏好中的通知对象。只处理本次选中的联系人和群，不修改组织、公开链接或应用 scope，不授予 edit/full_access，也不降低已有角色。

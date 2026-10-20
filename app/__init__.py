@@ -39,9 +39,13 @@ def create_app() -> FastAPI:
         if settings.workspace_cloud_runtime:
             from app.services.workspace_bootstrap import initialize_private_storage
             initialize_private_storage()
+        from app.services import feishu_auto_runtime
+        feishu_auto_runtime.start()
 
     @app.on_event("shutdown")
     def shutdown_tracing():
+        from app.services import feishu_auto_runtime
+        feishu_auto_runtime.stop()
         from app.services.tracing_service import shutdown
         shutdown()
 
@@ -79,6 +83,9 @@ def create_app() -> FastAPI:
         note_service=note._note_service,
         active=lambda task_id: task_id in note._ACTIVE_FILE_TASKS), prefix='/api')
     app.include_router(note_library.router, prefix="/api")
+    from app.routers import feishu_auto_local
+    app.include_router(feishu_auto_local.router, prefix="/api")
+    app.include_router(feishu_auto_local.device_router, prefix="/api")
     app.include_router(share.private_router, prefix="/api")
     app.include_router(preferences.router, prefix="/api")
     app.include_router(model_profiles.router, prefix="/api")
