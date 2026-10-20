@@ -64,6 +64,13 @@ def pipeline(c, monkeypatch, presentation, depth, *, invalid_quote=False):
     else:
         review['visual'] = {'scenes': [], 'diagram': {'kind': 'cards', 'edges': [],
             'nodes': [{'id': 'N1', 'block_ids': ['B1'], 'grounded_label': SOURCE}]}}
+    review['protocol'] = 5
+    review['blocks'] = [dict(id=row['id'], parts=[dict(id=f'P{i}', text=row['markdown'])])
+                        for i, row in enumerate(review['blocks'])]
+    ref = dict(part_id='P1', claim_ids=['C1'])
+    review['visual'] = (dict(protocol=2, scenes=[dict(id='S1', frame_id='[FRAME:0001]', label_ref=ref)], diagram=None)
+        if presentation == 'comic' else dict(protocol=2, scenes=[], diagram=dict(kind='cards', edges=[],
+            nodes=[dict(id='N1', label_ref=ref)])))
     if invalid_quote:
         review['claims'][0]['evidence'][0]['quote'] = 'This clause was never supplied.'
     raw3, raw4 = json.dumps(draft, indent=2), json.dumps(review, indent=2)
@@ -119,7 +126,7 @@ def test_real_slotted_context_hands_review_state_to_render_and_private_artifact(
     from app.llm.meeting_presentation import depth_instructions, final_depth_selection
     assert final_depth_selection(depth) in automatic.calls[1]['system_prompt']
     assert depth_instructions(depth).replace('The report field contains Markdown facts only;',
-        'Report blocks[].markdown contain Markdown facts only;') in automatic.calls[1]['system_prompt']
+        'Report blocks[].parts[].text contain Markdown facts only;') in automatic.calls[1]['system_prompt']
     assert final_depth_selection(depth) not in automatic.calls[0]['system_prompt']
     runner.llm_service.create_summarizer.assert_called_once_with(user_id=c.owner,
         model_profile_id=None, model_name=context.model_name, api_key=None, base_url=None)
@@ -140,7 +147,9 @@ def test_real_slotted_context_hands_review_state_to_render_and_private_artifact(
     assert payload['review_sha256'] == hashlib.sha256(review_bytes).hexdigest()
     assert payload['receipt']['snapshot_sha256'] == _digest(c.snapshot)
     assert wire['body_sha256'] == hashlib.sha256(markdown.encode('utf-8')).hexdigest()
-    assert wire['scenes'] == review['visual']['scenes'] and wire['diagram'] == review['visual']['diagram']
+    from app.llm.meeting_visual_projection import project_review5
+    _, projected = project_review5(review, presentation=presentation)
+    assert wire['scenes'] == projected['scenes'] and wire['diagram'] == projected['diagram']
     assert bool(wire['frames']) == (presentation == 'comic')
     if presentation == 'comic':
         assert (c.folder / 'screenshots/summary-source-0.jpg').read_bytes() == original

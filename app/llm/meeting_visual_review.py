@@ -7,6 +7,11 @@ import copy
 
 
 def visual_review_instructions(presentation, *, protocol=3):
+    if type(protocol) is int and protocol == 5:
+        if presentation not in {'comic', 'infographic'}:
+            raise ValueError('Unsupported visual review protocol')
+        from app.llm.meeting_visual_projection import PARTS_RULE, COMIC_RULE, INFO_RULE
+        return '\n' + PARTS_RULE + '\n' + (COMIC_RULE if presentation == 'comic' else INFO_RULE)
     common = '''\nVISUAL LAYOUT FOR THIS GENERATION ONLY.
 Keep the existing protocol-3 blocks/audit/figures contract and complete original-source review. Add visual={"scenes":[],"diagram":null} to the same JSON response; do not make another call or regenerate from an old summary. All labels must be short unchanged contiguous substrings of this response's reviewed block markdown (1–120 characters, no newlines). Use only existing block IDs with included claims. Labels are escaped plain text, never markup, resources or instructions. Return no HTML, SVG, JavaScript, CSS, coordinates, image data, resource paths or arbitrary URLs as visual fields. The program supplies task identity, body hash and actual screenshot metadata. Do not choose a fixed report structure or add prose merely to provide diagram labels. Keep figures=[] for these two formats.
 '''
@@ -30,9 +35,11 @@ Select self-contained unchanged excerpts naming objects and essential attributes
 
 def capture_review_visual(review, claims, included):
     """Snapshot effective evidence, never the draft's or model's claimed IDs."""
-    if not isinstance(review.get('visual'), dict) or set(review['visual']) != {'scenes', 'diagram'}:
+    fifth = type(review.get('protocol')) is int and review['protocol'] == 5
+    expected = {'protocol', 'scenes', 'diagram'} if fifth else {'scenes', 'diagram'}
+    if not isinstance(review.get('visual'), dict) or set(review['visual']) != expected:
         raise ValueError('图形尚未完成：本次复核没有返回可核验的布局')
-    final = type(review.get('protocol')) is int and review['protocol'] == 4
+    final = type(review.get('protocol')) is int and review['protocol'] in (4, 5)
     sources = {}
     for key in included:
         claim = claims[key] if final else claims[key][1]

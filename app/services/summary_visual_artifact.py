@@ -166,11 +166,14 @@ def build_summary_visual(*, task_id, presentation, markdown, blocks, frames, sce
 
 
 def reviewed_visual_blocks(review):
-    """Project validated legacy audit or v4 final ledger; never rewrite raw4.
+    """Project validated legacy audit or v4/v5 ledger; never rewrite raw.
 
     Call only after existing fact-protocol finalization succeeds. This function
     performs no evidence review and cannot turn a failed/raw draft into a final.
     """
+    if type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 5:
+        from app.llm.meeting_visual_projection import core_review5
+        review = core_review5(review)
     _need(type(review) is dict and type(review.get('protocol')) is int and review['protocol'] in (2, 3, 4))
     _rows(review.get('blocks'), 64, 1)
     final = review['protocol'] == 4
@@ -208,12 +211,15 @@ def reviewed_visual_blocks(review):
 
 
 def reviewed_claim_sources(review):
-    """Read v4's explicit final evidence, without OCR, donor reads or inference.
+    """Read explicit final evidence, without OCR, donor reads or inference.
 
     This is a projection after successful finalization, not fresh authorization
     or semantic validation. Saved reads additionally bind the original raw file
     hash and the accepted operation/Origin/model fingerprint.
     """
+    if type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 5:
+        from app.llm.meeting_visual_projection import core_review5
+        review = core_review5(review)
     _need(type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 4)
     reviewed_visual_blocks(review)
     result = {}
@@ -355,6 +361,23 @@ def _review_binding(folder, wire):
         text = text[7:-3].strip()
     review = _decode(text.encode('utf-8'))
     _need(wire['blocks'] == reviewed_visual_blocks(review))
+    if review['protocol'] == 5:
+        from app.llm.meeting_visual_projection import project_review5
+        _need(not fenced)
+        core, plan = project_review5(review, presentation=wire['presentation'])
+        body = '\n\n'.join(row['markdown'] for row in core['blocks']).strip()
+        _need(wire['body_sha256'] == _sha(body.encode('utf-8')))
+        _need(plan['scenes'] == wire['scenes'] and plan['diagram'] == wire['diagram'])
+        # Screenshot bytes/timestamps remain host metadata; all model-derived
+        # frame identity/order/captions must reconstruct from raw5 exactly.
+        selected = {}
+        for scene in plan['scenes']:
+            selected.setdefault(scene['frame_id'], scene['grounded_label'])
+        _need(len(wire['frames']) == len(selected))
+        for index, ((key, label), frame) in enumerate(zip(selected.items(), wire['frames'])):
+            _need(frame['id'] == key and frame['screenshot_index'] == index
+                  and frame['grounded_label'] == label)
+        reviewed_claim_sources(review)
     if review['protocol'] == 4:
         _need(not fenced and set(review) == {'protocol', 'blocks', 'claims', 'visual'})
         plan = review['visual']

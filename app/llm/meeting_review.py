@@ -46,6 +46,8 @@ Keep offsets internal unless the user explicitly requests recording references. 
         from app.llm.meeting_presentation import depth_instructions
         rules += '\n' + depth_instructions()
         if state and state.depth:
+            graphic_protocol = 5 if state.presentation in {'comic', 'infographic'} else 4
+            state.expected_review_protocol = graphic_protocol
             from app.llm.meeting_fact_material import REVIEW_MATERIALITY_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
             from app.llm.meeting_final_review import review_protocol
             rules = rules.replace('return only the corrected Markdown.', 'return protocol-4 report blocks and the final claim ledger.')
@@ -56,11 +58,14 @@ Keep offsets internal unless the user explicitly requests recording references. 
                 'Return only the report, without the internal ASR/FRAME references or an evidence ledger.',
                 'Keep the reader-facing blocks free of internal ASR/FRAME references and evidence ledgers; '
                 'return the machine-readable final claim ledger required below outside those blocks.')
-            rules += '\n\n' + REVIEW_MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + review_protocol(state.presentation)
+            if graphic_protocol == 5:
+                rules = rules.replace('protocol-4 report blocks', 'protocol-5 report parts')
+                rules = rules.replace('Report blocks[].markdown contain', 'Report blocks[].parts[].text contain')
+            rules += '\n\n' + REVIEW_MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + review_protocol(state.presentation, protocol=graphic_protocol)
             from app.llm.meeting_presentation import final_depth_selection
             rules += '\n' + final_depth_selection(state.depth)
             from app.llm.meeting_visual_review import visual_review_instructions
-            rules += visual_review_instructions(state.presentation, protocol=4)
+            rules += visual_review_instructions(state.presentation, protocol=graphic_protocol)
             if state.presentation == 'illustrated':
                 rules += ('\nIllustrated output: choose 1–8 genuinely relevant actual supplied frames during this review. '
                     'Use figures entries {"frame_ref":"[FRAME:0001]","claim_ids":["C1"],'

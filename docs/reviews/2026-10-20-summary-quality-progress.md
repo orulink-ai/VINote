@@ -243,3 +243,9 @@ B信息图完整账本验证通过，随后N1标签“所有人21到上海，开
 独立真实service加假CLI反例确认：画面分镜/信息图的sidecar只接入桌面预览与SVG/PNG/HTML导出；飞书交付当前只冻结正文，正文没有图片引用时进入文字writer。Wiki可按metadata显示相应形式，但实际不含sidecar视觉；`images_embedded=false`不足以让界面“已交付”说明这种差异。不能将illustrated原图上传能力冒充这两种sidecar适配。
 
 这是独立于LLM稿件分数的产品缺口。后续新operation须在远端创建前明确拒绝尚不支持的图形交付，保留纪要及历史accepted/unknown回执，避免静默变成文字；完整支持还需owner/task/body/sidecar/源帧绑定的确定性视觉资产与写入回读。当前未追加真实飞书发送，未将此缺口记为已完成修复。
+
+### v12 图形标签改为本次正文的显式片段引用
+
+仅新结构化画面分镜/信息图选择raw protocol5：正文parts按序原样拼接，标签只引用完整part及本次included claim IDs，不再生成第二份自由标签。host不复制claim.text、不截句、不模糊匹配或修复原稿；引用的确切位置须处于完整正文中可见的纯文本段落。每个分镜claim必须各自包含对应真实frame证据。纯投影转入原严格ledger4，raw5保持原字节，存取共用同一投影并比对bodyhash/图形；旧raw4及失败B不迁移或修复。文字、HTML、图文的完整请求及返回正文与V11逐字相同。
+
+独审核对39项runtime清单与6份源码/6份相关测试SHA，454项定向测试及10个独立反例通过，审后无漂移。实际adapter离线捕获A27窗/64帧、B22窗/61帧，两个阶段各自完整保留；125帧source/wire hash与V11一致。没有新增第三调用、ASR/OCR、改源图或放宽证据守卫。新清单SHA `d76e0d39c3b37e3b9c8ed24ca8ccbc38b07a0e71bbe8502c04a3d71f39f8f9c9`。这仅关闭协议接线审查，尚非模型实际接受或语义质量收益；新operation终态与独评分后续另记，不倒改V11。

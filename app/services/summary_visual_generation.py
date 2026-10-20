@@ -24,10 +24,14 @@ def render_review_visual(artifacts, context, markdown):
     _need(isinstance(snapshot, dict) and set(snapshot) == {'review', 'claim_sources'})
     review, sources = snapshot['review'], snapshot['claim_sources']
     blocks = reviewed_visual_blocks(review)
-    if review['protocol'] == 4:
+    if review['protocol'] in (4, 5):
         _need(sources == reviewed_claim_sources(review))
     _need('\n\n'.join(block['text'] for block in blocks).strip() == markdown)
-    plan = review.get('visual')
+    if review['protocol'] == 5:
+        from app.llm.meeting_visual_projection import project_review5
+        _, plan = project_review5(review, presentation=context.presentation)
+    else:
+        plan = review.get('visual')
     _need(type(plan) is dict and set(plan) == {'scenes', 'diagram'})
     scenes, frames, copies = plan['scenes'], [], []
     if context.presentation == 'comic':

@@ -68,6 +68,16 @@ def finalize(c, value, presentation='text', depth='detailed'):
 def test_all_new_hosts_keep_two_calls_full_source_raw4_and_real_rendering(case, monkeypatch, presentation, depth):
     c = case
     value = response(c, presentation)
+    if presentation in {'comic', 'infographic'}:
+        # Only new actual graphic calls use final5; the remaining direct-v4
+        # tests below continue to exercise the immutable historical contract.
+        value['protocol'] = 5
+        value['blocks'] = [{'id': 'B1', 'parts': [{'id': 'P1', 'text': SOURCE}]}]
+        ref = {'part_id': 'P1', 'claim_ids': ['C1']}
+        value['visual'] = ({'protocol': 2, 'scenes': [
+            {'id': 'S1', 'frame_id': '[FRAME:0001]', 'label_ref': ref}], 'diagram': None}
+            if presentation == 'comic' else {'protocol': 2, 'scenes': [], 'diagram': {
+                'kind': 'cards', 'nodes': [{'id': 'N1', 'label_ref': ref}], 'edges': []}})
     # A source omission is defined and accounted once, with no addition/audit table.
     value['claims'].append({**copy.deepcopy(value['claims'][0]), 'id': 'NEW1'})
     raw3, raw4 = json.dumps(c.material, indent=2), json.dumps(value, indent=2)
@@ -114,7 +124,7 @@ def test_all_new_hosts_keep_two_calls_full_source_raw4_and_real_rendering(case, 
         rendered = render_presentation(None, context, body)
     assert len(automatic.calls) == 2 and observed == [raw3] and c.material == before
     assert 'PROTOCOL 3' in automatic.calls[0]['system_prompt']
-    assert 'PROTOCOL 4' in automatic.calls[1]['system_prompt']
+    assert ('PROTOCOL 5' if presentation in {'comic', 'infographic'} else 'PROTOCOL 4') in automatic.calls[1]['system_prompt']
     assert hashlib.sha256(c.path.read_bytes()).hexdigest() == c.evidence._summary_frame_hashes[c.path]
     if presentation == 'illustrated':
         assert '![Displayed pressure condition' in rendered and '[FRAME:' not in rendered
