@@ -114,3 +114,11 @@
 - 18:22原生“另存为…”复验：确实打开OS保存路径选择框，默认文件名source_video.webm；Esc取消后返回原Sheet，按钮恢复可用，提示“已取消导出，原文件保留”。没有选择目标、没有写副本；不能将取消验收称为实际副本字节保存验收。阶段提交0251565已推送同一功能分支，尚未合并。
 
 - 为减少并行测试修改对用户桌面验收的打断，Vite开发watch忽略test/spec和__tests__；实际UI源码仍热更新。Vitest有独立vitest.config.ts，不继承这组忽略，不关闭测试watch。TypeScript通过；本项仅减少无关全页刷新，不作为动态模块加载失败根因修复。
+
+### 2026-10-20 18:39 +08:00｜主线程：来源命题候选及首次并发
+
+- 来源命题协议2由独立审查确认无剩余确定P1/P2阻塞；264项后端组合及主线程82项专项通过。完整原ASR/画面仍参与两次调用，不引入人工会议稿、额外修复调用或ASR。候选冻结15文件清单留档。
+- 按用户明确并发要求，同时启动独立A06/B02：A06 task14dec4a0-d7a7-4c56-a5c3-78a9125ed2d9在画面能力旧完成回执的OS独占锁竞争处提前失败，无draft/review；B02 taskb38b38fe-3ca7-4c2b-be50-1c4731dda7b1继续真实总结。两者均未创建ASR检查点。没有重放旧B01或A06；并发误阻塞单独修复，旧回执保持原样。
+- 当前目录真实只读核验：deepseek-v4.1-flash与codex/gpt-6-luna均available，但catalog没有vision或image_generation明确声明。已有同owner/Origin/Luna协议2完成回执supported=true，因此只可确认Luna图片输入已验证，不以目录缺字段断言DeepSeek不支持，也不把看图当生图。
+- 更正上一段预览判断：原生file video为preload=none，初始AX“无法播放媒体/0”不足以判失败。主线程实际点击播放后出现真实变化帧；UIA时间滑块可设1500秒。尚未据此声称已顺序看完全片。独立headless同源A/B各50%、90%、末尾前2秒六处均解码1920x1080帧、Range206，无media error，原件/缓存大小mtime不变；证据.desktop-build/meeting-delivery-20261020/probe-ab-seek-readonly.json。
+- 用户追加未来版本可明确重新ASR，默认复用原ASR+原LLM。此项正在独立调查，不将当前模型默认实现冒充满足；本轮真实验收继续禁止ASR调用。

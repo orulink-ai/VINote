@@ -88,8 +88,14 @@ REVIEW_ACCOUNTING_RULE = '''\nINDEPENDENT REVIEW AND FINAL-BODY ACCOUNTING.
 Before returning, independently compare the final report with the whole source and restore missing supported important details. In detailed mode a still-valid material fact cannot be omitted_for_depth: restore it, account for it as included in a merged passage, or reject a genuinely mistaken working candidate using a specific original-source reason. Do not relabel a real omission as rejection. This audit is an accountability record, not proof that the returned prose is factually correct.'''
 
 
-def prepare_fact_material(text, source):
+def prepare_fact_material(text, source, *, require_protocol=None):
     value = _json(text)
+    if require_protocol is not None:
+        _require(value.get('protocol') == require_protocol)
+    if value.get('protocol') == 2:
+        from app.llm.meeting_fact_protocol import prepare
+        return prepare(value)
+    _require(value.get('protocol', 1) == 1)
     topics = _ids(value.get('topics'), 'id')
     facts = _ids(value.get('facts'), 'id')
     refs = supplied_refs(source)
@@ -120,6 +126,10 @@ def finalize_fact_review(text, draft, source):
     if state:
         state.raw_review = text
     value, material = _json(text), _json(draft)
+    if material.get('protocol') == 2:
+        from app.llm.meeting_fact_protocol import finalize
+        return finalize(value, material)
+    _require(value.get('protocol', 1) == 1)
     markdown = value.get('markdown')
     _require(isinstance(markdown, str) and bool(markdown.strip()))
     proof_body = _proof_quote_text(markdown)

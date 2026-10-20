@@ -15,6 +15,19 @@ def video_reference_ids():
     return [frame_reference(index) for index in range(len(binding[0].frames))] if binding else []
 
 
+def visual_source_bindings():
+    """Input provenance only; a model's visual interpretation is not proof."""
+    from app.llm.source_references import frame_reference
+    from app.services.video_evidence_service import supports_images
+    binding = _material.get()
+    if binding is None:
+        return {}
+    evidence, capabilities = binding
+    return {frame_reference(index): {'image': supports_images(capabilities),
+            'ocr': frame.ocr_text if frame.ocr_status == 'recognized' else None}
+            for index, frame in enumerate(evidence.frames)}
+
+
 @contextmanager
 def bind_video_material(evidence, capabilities):
     if evidence is not None:

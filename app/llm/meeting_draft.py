@@ -10,7 +10,8 @@ def build_meeting_draft_prompts(*, title: str, source: str, extras: str | None,
                                 output_language: str) -> dict[str, str]:
     language = normalize_output_language(output_language)
     from app.llm.meeting_presentation import presentation_state
-    from app.llm.meeting_fact_material import DRAFT_PROTOCOL, COVERAGE_RULE, MATERIALITY_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
+    from app.llm.meeting_fact_material import MATERIALITY_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
+    from app.llm.meeting_fact_protocol import DRAFT_PROTOCOL
     rules = """This is the source-preservation draft for a later whole-source review, not the final minutes.
 Return concise source-grounded working notes, not an explanation of your reasoning.
 Before compressing or regrouping the meeting, retain the substantive propositions from the complete transcript and actual visual material. Each working note must keep its source address and the object's actual relationship to its value, time role, direction, condition, state and explicitly supported responsibility. Preserve clear wording and distinctions; do not replace a visible specification with a more familiar one. Missing fields stay absent, never filled from convention or an unrelated source.
@@ -22,7 +23,7 @@ These working notes do not impose headings, a table, field labels or a fixed num
     if presentation_state() and presentation_state().depth:
         rules = rules.replace('Return concise source-grounded working notes, not an explanation of your reasoning.',
                               'Return complete structured source-grounded working material, not an explanation of your reasoning.')
-        rules += '\n\n' + DRAFT_PROTOCOL + COVERAGE_RULE + MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE
+        rules += '\n\n' + MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + DRAFT_PROTOCOL
     return {
         'system_prompt': build_system_prompt(language) + '\n\n' + rules,
         'user_prompt': (

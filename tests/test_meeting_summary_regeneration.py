@@ -200,13 +200,12 @@ def test_second_version_uses_original_evidence_never_previous_summary_and_freeze
         def _complete(self, **prompts):
             self.calls.append(prompts)
             if len(self.calls) == 1:
-                return json.dumps({'topics': [{'id': 'T1', 'title': 'Synthetic source'}],
-                    'facts': [{'id': 'F1', 'topic_id': 'T1', 'subject': 'fixture', 'relation': 'states',
-                        'object': c.transcript['full_text'], 'status': 'statement', 'source_refs': ['[ASR:0001]'], 'material': True}],
-                    'coverage': [{'source_ref': '[ASR:0001]', 'fact_ids': ['F1'], 'reason': ''}]})
-            return json.dumps({'markdown': '# Synthetic source\n\n' + c.transcript['full_text'],
-                'audit': [{'fact_id': 'F1', 'disposition': 'included', 'passage': c.transcript['full_text'], 'reason': ''}],
-                'topic_audit': [{'topic_id': 'T1', 'passage': c.transcript['full_text'], 'reason': ''}], 'figures': []})
+                return json.dumps({'protocol': 2, 'topics': [{'id': 'T1', 'title': 'Synthetic source'}],
+                    'facts': [{'id': 'F1', 'topic_id': 'T1', 'entity': None, 'claims': [
+                        {'id': 'C1', 'field': 'relation', 'text': c.transcript['full_text'], 'anchor': c.transcript['full_text'],
+                         'material': True, 'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': c.transcript['full_text']}]}]}]})
+            return json.dumps({'protocol': 2, 'blocks': [{'id': 'B1', 'markdown': '# Synthetic source'}, {'id': 'B2', 'markdown': c.transcript['full_text']}],
+                'audit': [{'claim_id': 'C1', 'disposition': 'included', 'block_ids': ['B2']}], 'figures': []})
     llm = CaptureLLM()
     runner = object.__new__(NoteService)
     runner.artifact_service = c.artifacts

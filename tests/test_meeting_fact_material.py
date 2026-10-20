@@ -297,11 +297,14 @@ def test_automatic_two_call_pipeline_preserves_full_source_and_selects_a_real_fr
     frame = tmp_path / 'source.jpg'
     Image.new('RGB', (10, 10)).save(frame)
     evidence = VideoEvidence(10, [VideoFrameEvidence(0, frame, ['timeline'], [0, 9], 'panel proposal: 3 watts only while open', 'recognized')], 10, True)
-    facts, checked = material(), review()
-    facts['facts'][0]['source_refs'].append('[FRAME:0001]')
-    facts['coverage'].append({'source_ref': '[FRAME:0001]', 'fact_ids': ['F001'], 'reason': ''})
-    checked['figures'] = [{'frame_ref': '[FRAME:0001]', 'fact_ids': ['F001'],
-        'after_passage': checked['audit'][0]['passage'], 'caption': 'Panel power proposal'}]
+    passage = review()['audit'][0]['passage']
+    facts = {'protocol': 2, 'topics': material()['topics'], 'facts': [{'id': 'F001', 'topic_id': 'T001', 'entity': None,
+        'claims': [{'id': 'C1', 'field': 'quantity', 'text': passage, 'anchor': '3 watts', 'material': True,
+            'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': passage},
+                         {'kind': 'ocr_span', 'source_ref': '[FRAME:0001]', 'quote': evidence.frames[0].ocr_text}]}]}]}
+    checked = {'protocol': 2, 'blocks': [{'id': 'B1', 'markdown': passage}],
+        'audit': [{'claim_id': 'C1', 'disposition': 'included', 'block_ids': ['B1']}],
+        'figures': [{'frame_ref': '[FRAME:0001]', 'claim_ids': ['C1'], 'after_block_id': 'B1', 'caption': 'Panel power proposal'}]}
     class AutomaticLLM(_BasePromptLLM):
         def __init__(self): self.calls = []
         def _complete(self, **prompts):
@@ -312,6 +315,6 @@ def test_automatic_two_call_pipeline_preserves_full_source_and_selects_a_real_fr
         result = llm.summarize('Synthetic meeting', [TranscriptSegment(0, 10, 'The panel proposal uses 3 watts only while open.')],
             style='meeting', video_evidence=evidence)
     assert len(llm.calls) == 2 and len(state.figures) == 1
-    assert '[FRAME:0001]' in result and checked['audit'][0]['passage'] in result
+    assert '[FRAME:0001]' in result and passage in result
     assert all('3 watts only while open' in call['user_prompt'] for call in llm.calls)
     assert state.raw_review == json.dumps(checked)

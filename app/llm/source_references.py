@@ -4,6 +4,7 @@ from contextvars import ContextVar
 import re
 
 _indices = ContextVar('meeting_source_indices', default=None)
+_texts = ContextVar('meeting_original_asr_texts', default=None)
 _draft_observer = ContextVar('meeting_working_draft_observer', default=None)
 
 
@@ -28,10 +29,18 @@ def bind_source_references(segments):
     for index, segment in enumerate(segments):
         indices.setdefault(id(segment), index)
     token = _indices.set(indices)
+    texts = _texts.set({asr_reference(index): segment.text for index, segment in enumerate(segments)
+                       if indices[id(segment)] == index})
     try:
         yield
     finally:
+        _texts.reset(texts)
         _indices.reset(token)
+
+
+def original_asr_texts():
+    """Snapshot of raw ASR only, excluding rendered timing/speaker diagnostics."""
+    return dict(_texts.get() or {})
 
 
 def asr_reference(index: int) -> str:

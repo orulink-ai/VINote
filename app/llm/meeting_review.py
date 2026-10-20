@@ -43,15 +43,16 @@ Keep offsets internal unless the user explicitly requests recording references. 
         from app.llm.meeting_presentation import presentation_state
         state = presentation_state()
         if state and state.depth:
-            from app.llm.meeting_fact_material import REVIEW_PROTOCOL, COVERAGE_RULE, MATERIALITY_RULE, REVIEW_ACCOUNTING_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
-            rules = rules.replace('return only the corrected Markdown.', 'return the corrected report in the JSON markdown field.')
-            rules += '\n\n' + REVIEW_PROTOCOL + COVERAGE_RULE + MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + REVIEW_ACCOUNTING_RULE
+            from app.llm.meeting_fact_material import MATERIALITY_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
+            from app.llm.meeting_fact_protocol import REVIEW_PROTOCOL
+            rules = rules.replace('return only the corrected Markdown.', 'return protocol-2 report blocks and claim accounting.')
+            rules += '\n\n' + MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + REVIEW_PROTOCOL
             if state.presentation == 'illustrated':
                 rules += ('\nIllustrated output: choose 1–8 genuinely relevant actual supplied frames during this review. '
-                    'Use figures entries {"frame_ref":"[FRAME:0001]","fact_ids":["F001"],'
-                    '"after_passage":"unique exact report passage ending the relevant paragraph",'
+                    'Use figures entries {"frame_ref":"[FRAME:0001]","claim_ids":["C1"],'
+                    '"after_block_id":"B1",'
                     '"caption":"brief supported description of the actual frame"}. '
-                    'Each selected frame must be in the cited fact source_refs and independently support its object/relationship; '
+                    'Each selected frame must be in the cited included claim evidence and independently support its object/relationship; '
                     'timing proximity alone is insufficient. Return no arbitrary URL. No valid relevant frame means illustrated is incomplete, '
                     'never select opening frames or decorative screenshots just to fill a quota.')
     source_label = "Reviewed chunk notes" if source_is_reviewed_notes else "Original transcript"

@@ -167,3 +167,17 @@ TDD：扩充fact/topic对称用例，修前 **6 failed / 45 passed**；修后11�
 新增延迟GET测试，在按钮已disabled时显式模拟body焦点，验证取消/关闭/Escape三种关闭和失败版本二次prepare，另验证owner/route变化后不调用旧opener.focus且不夺走新表面焦点。首次测试中jsdom的disabled按钮blur行为不等于浏览器，修正模拟方式后，修前产品反例 **4 failed / 38 passed**；显式恢复修后专项 **42 passed**。随后5文件组合 **189 passed**，`tsc --noEmit`和diff-check通过；保留既有Router future flags/ABA act警告。原测试与新增测试分别在RegenerateMeetingSummary.test.tsx:232、:249、:269、:289，实际行号以当前源为准。
 
 backend-proof-layout-fix清单13文件全部匹配，本轮未修改任何后端或真实任务证据、未启动provider/ASR、未提交。焦点证据为组件测试，不扩大为全部浏览器/设备已实测。
+
+## 来源原样片段、命题部分拒绝与稳定正文块（2026-10-20）
+
+用户要求在主线程阶段commit后的同一分支继续最小通用机制优化；本轮不碰主线程UI/媒体/agents、不调用provider/ASR、不写人工会议稿。设计与读取说明见 [protocol 2审查文档](../../../../docs/reviews/2026-10-20-summary-source-claims-v2.md)。实际新增产品模块170行；其余产品变更为来源ContextVar、小型视觉来源描述、协议分派/提示接入及新候选严格protocol选择，无新API或数据库schema。
+
+协议2新增真正原始ASR窗口文本绑定，证据quote原样且唯一匹配，重复（包括重叠重复）须精确字符start/end消歧；不借用装饰文字，不规范化source/span。命题anchor在其实际来源文本/视觉observation内原样存在。命名实体有独立entity claim，未知可null，数值、条件、期限分别计账。rejected不再是整fact非空理由即放弃，须逐claim受控原因、具体理由及重新验证的来源；unclear_entity仅限entity claim。block IDs避免复抄正文，每claim完整引用或有据处置，完整来源review可用同样来源约束补additional facts。真实图文选帧转换为现renderer既有exact唯一段落接口，无OCR时的frame observation始终是模型视觉判断，不假装已验证OCR。
+
+严格区分边界：程序验证原样文字存在、来源类型/地址、命题计账和block引用，不证明ASR词义、拒绝理由蕴含、block语义覆盖或图片识别正确。完整两调用不变，不自动补调用/重试/切模型。新显式详略候选强制protocol2，不悄悄降级；旧v1 helper仍可读取旧结果，不迁移或重放旧operation。旧诊断外层协议不变；v2原始可评分正文仅按blocks顺序确定性组装，API成功结果仍返回Markdown。
+
+TDD：全新合成命题用例首次 **6 failed / 16 passed**，接入后 **22 passed**；四文件核心组合 **154 passed**。补视觉/插图/并发后首次组合3 failed/261 passed，原因是测试把pytest.raises放在会先拒绝的无vision/noOCR context之后，调整测试捕获范围，未修改该既有安全门槛。随后组合 **264 passed**。最后视觉observation附加伪quote字段绕过anchor的反例修前1 failed/30 passed，单行按真实kind选取锚定文本修后最终12文件组合 **264 passed**（31.76秒，1条既有Starlette警告）。整理测试分组后新协议专项 **31 passed**；没有新增产品变动。
+
+验证包括：来源窗口错配、原文数字/空白/片段篡改、metadata伪证据、start/end类型/范围、唯一/重叠消歧；未知实体与有据独立属性、整fact/无来源拒绝禁止、entity理由滥用于数字禁止；空facts/单topic/扩展及新增漏项、block错误/重复/缺项、v1降级拒绝；无OCR图像不冒充文本、真实frame关联/段落exact唯一；两个并发会议各一次draft一次review、原始来源/原响应/ContextVar不互串。既有第二版排除旧纪要、无ASR、模型冻结及恢复回归保持green。未改或重新解析实际会议原稿以修正其内容，未将私有评审答案作为提示或测试期望。
+
+候选现已冻结：[backend-source-claims-v2.sha256](backend-source-claims-v2.sha256)，15个后端文件，清单本身SHA-256 `222E248BF3D6DDAD909C09EB5C051D04DD4EA66A7528F527A2CA50D6346FEE19`。由主线程审查后明确新operation运行；本agent不调用。协议2真实provider接受性和真实质量分数仍未验证，不能以264 passed冒称100分或稳定产出。冻结后停止追加实现。

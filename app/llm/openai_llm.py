@@ -165,7 +165,7 @@ class _BasePromptLLM(LLMSummarizer):
         from app.llm.meeting_presentation import presentation_state
         if presentation_state() and presentation_state().depth:
             from app.llm.meeting_fact_material import prepare_fact_material
-            draft = prepare_fact_material(draft, self._build_segment_text(segments))
+            draft = prepare_fact_material(draft, self._build_segment_text(segments), require_protocol=2)
         if progress_callback:
             progress_callback("正在核对音视频材料并组织会议纪要…")
         return self._review_meeting_note(
