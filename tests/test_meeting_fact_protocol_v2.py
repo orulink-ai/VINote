@@ -206,7 +206,11 @@ def test_two_concurrent_meetings_each_use_exactly_two_calls_and_their_own_source
         draft = json.loads(json.dumps(candidate()).replace('43.875', number))
         review = json.loads(json.dumps(checked()).replace('43.875', number))
         draft = {'protocol': 3, 'topics': draft['topics'], 'claims': [{**claim, 'topic_id': fact['topic_id']} for fact in draft['facts'] for claim in fact['claims']]}
-        review['protocol'] = 3
+        by_id = {row['claim_id']: row for row in review['audit']}
+        review = {'protocol': 4, 'blocks': review['blocks'], 'claims': [
+            {key: value for key, value in claim.items() if key not in {'topic_id', 'anchor'}}
+            | {key: value for key, value in by_id[claim['id']].items() if key != 'claim_id'}
+            for claim in draft['claims']]}
         class Automatic(_BasePromptLLM):
             def __init__(self): self.calls = []
             def _complete(self, **prompts):

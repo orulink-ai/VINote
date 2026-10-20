@@ -24,6 +24,12 @@ def review():
             'audit': [{'claim_id': key, 'disposition': 'included', 'block_ids': ['B2']} for key in ('C1', 'C2', 'C3')], 'figures': []}
 
 
+def final_review():
+    return {'protocol': 4, 'blocks': review()['blocks'], 'claims': [
+        {key: value for key, value in claim.items() if key not in {'topic_id', 'anchor'}}
+        | {'disposition': 'included', 'block_ids': ['B2']} for claim in draft()['claims']]}
+
+
 def evaluate(material, result):
     with bind_source_references([TranscriptSegment(0, 9, SOURCE)]), presentation_scope('detailed', 'text'):
         checked = prepare_fact_material(json.dumps(material), 'annotated transcript', require_protocol=3)
@@ -90,14 +96,14 @@ def test_current_prompt_examples_are_valid_flat_json_and_quotes_stay_in_source_l
 
 
 @pytest.mark.parametrize('depth', ['brief', 'detailed'])
-def test_live_path_remains_two_calls_and_requires_protocol_three(depth):
+def test_live_path_remains_two_calls_with_draft_three_and_review_four(depth):
     from app.llm.openai_llm import _BasePromptLLM
     class Automatic(_BasePromptLLM):
         def __init__(self): self.calls = []
         def _complete(self, **prompts):
             self.calls.append(prompts)
             assert SOURCE in prompts['user_prompt']
-            return json.dumps(draft() if len(self.calls) == 1 else review())
+            return json.dumps(draft() if len(self.calls) == 1 else final_review())
     llm = Automatic()
     with presentation_scope(depth, 'text'):
         result = llm.summarize('Synthetic Vesper calibration', [TranscriptSegment(0, 9, SOURCE)], style='meeting')
@@ -194,10 +200,10 @@ def test_draft_source_mismatch_tolerance_does_not_accept_a_missing_evidence_cont
 def test_wrong_quote_reaches_second_call_with_original_response_preserved():
     from app.llm.openai_llm import _BasePromptLLM
     from app.llm.source_references import capture_working_draft
-    material, result = draft(), review()
+    material, result = draft(), final_review()
     material['claims'][0].pop('anchor')
     material['claims'][0]['evidence'][0]['source_ref'] = '[ASR:7777]'
-    result['audit'][0]['evidence'] = draft()['claims'][0]['evidence']
+    result['claims'][0]['evidence'] = draft()['claims'][0]['evidence']
     raw = json.dumps(material)
     class Automatic(_BasePromptLLM):
         def __init__(self): self.calls = []

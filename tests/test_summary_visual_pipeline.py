@@ -15,8 +15,10 @@ def test_actual_opt_in_layout_keeps_two_full_source_calls_and_original_responses
     draft = {'protocol': 3, 'topics': [{'id': 'T2', 'title': 'Zephrel'}], 'claims': [
         {'id': 'C8', 'topic_id': 'T2', 'field': 'condition', 'text': raw_source, 'material': True,
          'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': raw_source}]}]}
-    review = {'protocol': 3, 'blocks': [{'id': 'B6', 'markdown': raw_source}],
-        'audit': [{'claim_id': 'C8', 'disposition': 'included', 'block_ids': ['B6']}], 'figures': []}
+    review = {'protocol': 4, 'blocks': [{'id': 'B6', 'markdown': raw_source}],
+        'claims': [{'id': 'C8', 'field': 'condition', 'text': raw_source, 'material': True,
+            'disposition': 'included', 'block_ids': ['B6'],
+            'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': raw_source}]}]}
     if presentation == 'infographic':
         review['visual'] = {'scenes': [], 'diagram': {'kind': 'cards',
             'nodes': [{'id': 'N8', 'block_ids': ['B6'], 'grounded_label': '62.875 bar'}], 'edges': []}}

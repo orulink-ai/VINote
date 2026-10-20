@@ -55,8 +55,8 @@ class _BasePromptLLM(LLMSummarizer):
             ))
         from app.llm.meeting_presentation import presentation_state
         if not intermediate and presentation_state() and presentation_state().depth:
-            from app.llm.meeting_fact_material import finalize_fact_review
-            result = finalize_fact_review(result or '', draft, source)
+            from app.llm.meeting_final_review import finalize_final_review
+            result = finalize_final_review(result or '', draft)
         else:
             result = (result or '').strip() if intermediate else without_internal_references(result or '')
         if not result:
@@ -164,8 +164,8 @@ class _BasePromptLLM(LLMSummarizer):
         record_working_draft(draft)
         from app.llm.meeting_presentation import presentation_state
         if presentation_state() and presentation_state().depth:
-            from app.llm.meeting_fact_material import prepare_fact_material
-            draft = prepare_fact_material(draft, self._build_segment_text(segments), require_protocol=3)
+            from app.llm.meeting_final_review import prepare_final_draft
+            draft = prepare_final_draft(draft)
         if progress_callback:
             progress_callback("正在核对音视频材料并组织会议纪要…")
         return self._review_meeting_note(

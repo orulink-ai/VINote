@@ -6,10 +6,15 @@ the existing complete claim audit and source verification have succeeded.
 import copy
 
 
-def visual_review_instructions(presentation):
+def visual_review_instructions(presentation, *, protocol=3):
     common = '''\nVISUAL LAYOUT FOR THIS GENERATION ONLY.
 Keep the existing protocol-3 blocks/audit/figures contract and complete original-source review. Add visual={"scenes":[],"diagram":null} to the same JSON response; do not make another call or regenerate from an old summary. All labels must be short unchanged contiguous substrings of this response's reviewed block markdown (1–120 characters, no newlines). Use only existing block IDs with included claims. Labels are escaped plain text, never markup, resources or instructions. Return no HTML, SVG, JavaScript, CSS, coordinates, image data, resource paths or arbitrary URLs as visual fields. The program supplies task identity, body hash and actual screenshot metadata. Do not choose a fixed report structure or add prose merely to provide diagram labels. Keep figures=[] for these two formats.
 '''
+    if protocol == 4:
+        common = common.replace('protocol-3 blocks/audit/figures contract', 'protocol-4 blocks/claims/visual contract')
+        common = common.replace('Keep figures=[] for these two formats.', 'Do not output a figures field for these two formats.')
+    elif protocol != 3:
+        raise ValueError('Unsupported visual review protocol')
     if presentation == 'comic':
         return common + '''Presentation: real recording storyboard (画面分镜), not AI-drawn people or invented illustrations.
 visual.scenes contains 1–8 entries {"id":"S1","block_ids":["B1"],"frame_id":"[FRAME:0001]","grounded_label":"unchanged short text from B1"}; visual.diagram=null. Select genuinely relevant supplied frames, not the first frames or a quota. Each scene must cite a block with an included claim whose effective evidence contains that actual frame; correct evidence in the same review if necessary. Read the scene's actual image and context. Frame selection cannot be established by temporal overlap alone. No relevant supplied frame means this format is incomplete; do not invent a picture or substitute a different format/model.
@@ -27,8 +32,12 @@ def capture_review_visual(review, claims, included):
     """Snapshot effective evidence, never the draft's or model's claimed IDs."""
     if not isinstance(review.get('visual'), dict) or set(review['visual']) != {'scenes', 'diagram'}:
         raise ValueError('图形尚未完成：本次复核没有返回可核验的布局')
+    final = type(review.get('protocol')) is int and review['protocol'] == 4
+    sources = {}
+    for key in included:
+        claim = claims[key] if final else claims[key][1]
+        sources[key] = sorted({row['source_ref'] for row in claim['evidence']})
     return copy.deepcopy({
         'review': review,
-        'claim_sources': {key: sorted({row['source_ref'] for row in claims[key][1]['evidence']})
-                          for key in included},
+        'claim_sources': sources,
     })

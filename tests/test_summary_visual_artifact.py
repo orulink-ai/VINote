@@ -424,3 +424,102 @@ def test_boundary_projection_save_read_preserves_raw_review_bytes_and_hash(case)
     assert json.loads(original_bytes)['raw_response'] == raw
     assert review['blocks'][0]['markdown'].startswith('\n\t ')
     assert review['blocks'][-1]['markdown'].endswith('\n')
+
+
+def final_ledger_case(c, presentation='comic'):
+    """Prepare a real validated raw4 envelope in this fixture's accepted task."""
+    from app.llm.meeting_final_review import finalize_final_review
+    from app.llm.meeting_presentation import presentation_scope
+    from app.llm.video_material import bind_video_material
+    from app.services.source_request_service import _fingerprint
+    from app.services.video_evidence_service import VideoEvidence, VideoFrameEvidence
+    blocks = copy.deepcopy(c.review['blocks'])
+    blocks[0]['markdown'] = '\n\t ' + blocks[0]['markdown']
+    blocks[-1]['markdown'] += '\n'
+    evidence = [{'kind': 'frame_observation', 'source_ref': '[FRAME:0001]',
+                 'observation': 'Synthetic independent document comparison, still uncertain.'}]
+    material = {'protocol': 3, 'topics': [{'id': 'T1', 'title': 'Synthetic comparison'}], 'claims': [
+        {'id': 'C1', 'topic_id': 'T1', 'field': 'relation', 'text': blocks[-1]['markdown'],
+         'material': True, 'evidence': evidence}]}
+    claims = [{'id': 'C1', 'field': 'relation', 'text': blocks[-1]['markdown'], 'material': True,
+               'disposition': 'included', 'block_ids': ['B1'], 'evidence': evidence}]
+    frames = [{**c.wire['frames'][0], 'id': '[FRAME:0001]'}] if presentation == 'comic' else []
+    scenes = [{**c.wire['scenes'][0], 'frame_id': '[FRAME:0001]'}] if presentation == 'comic' else []
+    diagram = None if presentation == 'comic' else {'kind': 'cards', 'edges': [],
+        'nodes': [{'id': 'N1', 'block_ids': ['B1'], 'grounded_label': '尚待确认'}]}
+    value = {'protocol': 4, 'blocks': blocks, 'claims': claims,
+             'visual': {'scenes': scenes, 'diagram': diagram}}
+    raw = json.dumps(value, ensure_ascii=False, indent=2)
+    video = VideoEvidence(5, [VideoFrameEvidence(1.25, c.screenshot, ['timeline'], [1.25])], 5, True)
+    with presentation_scope('brief', presentation) as state, bind_video_material(video, {'vision': True}):
+        markdown = finalize_final_review(raw, json.dumps(material))
+        assert state.raw_review == raw and state.visual_review['review']['protocol'] == 4
+    # A separate confirmed presentation choice needs its own accepted fingerprint.
+    body = c.body.model_copy(update={'presentation': presentation})
+    c.write('new_generation.json', {'contract': 'meeting-summary-only-v1', 'parent_task_id': c.parent,
+                                   **body.model_dump(mode='json')})
+    metadata = json.loads((c.folder / 'summary_presentation.json').read_bytes())
+    c.write('summary_presentation.json', {**metadata, 'presentation': presentation})
+    with c.sessions() as db:
+        db.get(SourceRequestDB, (c.owner, str(body.operation_id))).fingerprint = _fingerprint(_submission(c.parent, body))
+    c.write('meeting_fact_review.json', {'protocol': 1, 'raw_response': raw})
+    c.write('result.json', {'markdown': markdown})
+    wire = build_summary_visual(task_id=c.task, presentation=presentation, markdown=markdown,
+        blocks=reviewed_visual_blocks(value), frames=frames, scenes=scenes, diagram=diagram)
+    return markdown, wire, raw, value
+
+
+@pytest.mark.parametrize('presentation', ['comic', 'infographic'])
+def test_protocol_four_saved_reads_preserve_raw_origin_model_and_body_hashes(case, monkeypatch, presentation):
+    c = case
+    markdown, wire, raw, value = final_ledger_case(c, presentation)
+    from app.services.vilab_cloud_service import VILabCloudService
+    monkeypatch.setattr(VILabCloudService, 'connection_snapshot', lambda *a, **k: pytest.fail('read must not resolve a connection'))
+    monkeypatch.setattr('app.services.windows_ocr.recognize_batch', lambda *a, **k: pytest.fail('read must not OCR'))
+    path = c.folder / 'meeting_fact_review.json'
+    before = path.read_bytes()
+    assert save_summary_visual(c.artifacts, c.owner, c.task, markdown, wire, sessions=c.sessions) == wire
+    assert read(c) == wire
+    payload = json.loads((c.folder / SIDECAR).read_bytes())
+    assert payload['review_sha256'] == hashlib.sha256(before).hexdigest()
+    assert payload['receipt']['snapshot_sha256'] == _digest(c.snapshot)
+    assert payload['visual']['body_sha256'] == hashlib.sha256(markdown.encode('utf-8')).hexdigest()
+    assert path.read_bytes() == before and json.loads(before)['raw_response'] == raw
+    assert json.loads(raw)['protocol'] == 4 and 'audit' not in json.loads(raw)
+    assert value['blocks'][0]['markdown'].startswith('\n\t ')
+
+
+@pytest.mark.parametrize('change', ['raw_whitespace', 'origin', 'model', 'fingerprint', 'body'])
+def test_protocol_four_read_rejects_binding_mutations_without_new_execution(case, change):
+    c = case
+    markdown, wire, raw, _ = final_ledger_case(c)
+    save_summary_visual(c.artifacts, c.owner, c.task, markdown, wire, sessions=c.sessions)
+    if change == 'raw_whitespace':
+        c.write('meeting_fact_review.json', {'protocol': 1, 'raw_response': raw + '\n'})
+    elif change in {'origin', 'model'}:
+        c.write('model_source_snapshot.json', {**c.snapshot,
+            **({'server_url': 'https://other-origin.invalid'} if change == 'origin' else {'llm_model': 'other-model'})})
+    elif change == 'fingerprint':
+        with c.sessions() as db:
+            db.get(SourceRequestDB, (c.owner, str(c.body.operation_id))).fingerprint = '0' * 64
+    else:
+        c.write('result.json', {'markdown': markdown + 'Changed'})
+    assert read(c) is None
+
+
+@pytest.mark.parametrize('change', ['wrong_final_source', 'different_plan', 'fenced_raw'])
+def test_protocol_four_save_cannot_rebind_layout_or_sources_or_repair_a_fence(case, change):
+    c = case
+    markdown, wire, raw, value = final_ledger_case(c)
+    if change == 'wrong_final_source':
+        value['claims'][0]['evidence'][0]['source_ref'] = '[FRAME:9999]'
+        raw = json.dumps(value)
+    elif change == 'different_plan':
+        value['visual']['scenes'][0]['grounded_label'] = '尚待确认'
+        raw = json.dumps(value)
+    else:
+        raw = '```json\n' + raw + '\n```'
+    c.write('meeting_fact_review.json', {'protocol': 1, 'raw_response': raw})
+    with pytest.raises(SummaryVisualError):
+        save_summary_visual(c.artifacts, c.owner, c.task, markdown, wire, sessions=c.sessions)
+    assert not (c.folder / SIDECAR).exists()

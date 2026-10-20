@@ -416,8 +416,10 @@ def test_real_fresh_note_pipeline_sends_full_audio_with_selected_llm(fresh, audi
         material = {'protocol': 3, 'topics': [{'id': 'T1', 'title': 'Synthetic source'}],
             'claims': [{'id': 'C1', 'topic_id': 'T1', 'field': 'relation', 'text': 'new', 'anchor': 'new',
                 'material': True, 'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': 'new'}]}]}
-        review = {'protocol': 3, 'blocks': [{'id': 'B1', 'markdown': '# Synthetic meeting\n\nnew'}],
-            'audit': [{'claim_id': 'C1', 'disposition': 'included', 'block_ids': ['B1']}], 'figures': []}
+        review = {'protocol': 4, 'blocks': [{'id': 'B1', 'markdown': '# Synthetic meeting\n\nnew'}],
+            'claims': [{'id': 'C1', 'field': 'relation', 'text': 'new', 'material': True,
+                'disposition': 'included', 'block_ids': ['B1'],
+                'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': 'new'}]}]}
         return {'choices': [{'message': {'content': json.dumps(material if len(chats) == 1 else review)}}]}
     monkeypatch.setattr(VILabCloudService, 'request', chat)
     monkeypatch.setattr(settings, 'meeting_review_model', '')

@@ -215,8 +215,10 @@ def test_second_version_uses_original_evidence_never_previous_summary_and_freeze
                 return json.dumps({'protocol': 3, 'topics': [{'id': 'T1', 'title': 'Synthetic source'}],
                     'claims': [{'id': 'C1', 'topic_id': 'T1', 'field': 'relation', 'text': c.transcript['full_text'], 'anchor': c.transcript['full_text'],
                          'material': True, 'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': c.transcript['full_text']}]}]})
-            return json.dumps({'protocol': 3, 'blocks': [{'id': 'B1', 'markdown': '# Synthetic source'}, {'id': 'B2', 'markdown': c.transcript['full_text']}],
-                'audit': [{'claim_id': 'C1', 'disposition': 'included', 'block_ids': ['B2']}], 'figures': []})
+            return json.dumps({'protocol': 4, 'blocks': [{'id': 'B1', 'markdown': '# Synthetic source'}, {'id': 'B2', 'markdown': c.transcript['full_text']}],
+                'claims': [{'id': 'C1', 'field': 'relation', 'text': c.transcript['full_text'], 'material': True,
+                    'disposition': 'included', 'block_ids': ['B2'],
+                    'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': c.transcript['full_text']}]}]})
     llm = CaptureLLM()
     runner = object.__new__(NoteService)
     runner.artifact_service = c.artifacts

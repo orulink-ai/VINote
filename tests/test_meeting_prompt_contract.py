@@ -18,8 +18,10 @@ def test_structured_stages_do_not_inherit_markdown_only_outer_response(presentat
         assert 'exactly one JSON object' in prompts['system_prompt']
         assert 'Return only the final Markdown content' not in prompts['system_prompt']
         assert 'Return only the report, without' not in prompts['system_prompt']
-    assert 'additional_claims item needs all six fields' in review['system_prompt']
-    assert 'Audit additions as well as original claims' in review['system_prompt']
+    assert 'FINAL CLAIM LEDGER PROTOCOL 4' in review['system_prompt']
+    assert 'Define and account for each proposition together' in review['system_prompt']
+    assert 'protocol-3 blocks/audit' not in review['system_prompt']
+    assert 'This core ledger has no' not in review['system_prompt']
 
 
 def test_legacy_and_intermediate_requests_keep_the_original_markdown_envelope():

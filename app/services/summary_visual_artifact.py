@@ -166,14 +166,16 @@ def build_summary_visual(*, task_id, presentation, markdown, blocks, frames, sce
 
 
 def reviewed_visual_blocks(review):
-    """Project final review blocks and included audit; ignore self-claimed IDs.
+    """Project validated legacy audit or v4 final ledger; never rewrite raw4.
 
     Call only after existing fact-protocol finalization succeeds. This function
     performs no evidence review and cannot turn a failed/raw draft into a final.
     """
-    _need(type(review) is dict and type(review.get('protocol')) is int and review['protocol'] in (2, 3))
+    _need(type(review) is dict and type(review.get('protocol')) is int and review['protocol'] in (2, 3, 4))
     _rows(review.get('blocks'), 64, 1)
-    audit = review.get('audit')
+    final = review['protocol'] == 4
+    audit = review.get('claims' if final else 'audit')
+    claim_key = 'id' if final else 'claim_id'
     _need(type(audit) is list)
     rows, claims = {}, set()
     for block in review['blocks']:
@@ -183,9 +185,9 @@ def reviewed_visual_blocks(review):
         rows[block['id']] = {'id': block['id'], 'text': block['markdown'], 'claim_ids': []}
     for item in audit:
         _need(type(item) is dict)
-        _id(item.get('claim_id'))
-        _need(item['claim_id'] not in claims)
-        claims.add(item['claim_id'])
+        _id(item.get(claim_key))
+        _need(item[claim_key] not in claims)
+        claims.add(item[claim_key])
         refs = item.get('block_ids')
         _need(type(refs) is list and all(isinstance(ref, str) and ref in rows for ref in refs)
               and len(set(refs)) == len(refs))
@@ -193,7 +195,7 @@ def reviewed_visual_blocks(review):
         if item['disposition'] == 'included':
             _need(bool(refs))
             for key in refs:
-                rows[key]['claim_ids'].append(item['claim_id'])
+                rows[key]['claim_ids'].append(item[claim_key])
         else:
             _need(not refs)
     projected = list(rows.values())
@@ -203,6 +205,32 @@ def reviewed_visual_blocks(review):
     projected[0]['text'] = projected[0]['text'].lstrip()
     projected[-1]['text'] = projected[-1]['text'].rstrip()
     return projected
+
+
+def reviewed_claim_sources(review):
+    """Read v4's explicit final evidence, without OCR, donor reads or inference.
+
+    This is a projection after successful finalization, not fresh authorization
+    or semantic validation. Saved reads additionally bind the original raw file
+    hash and the accepted operation/Origin/model fingerprint.
+    """
+    _need(type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 4)
+    reviewed_visual_blocks(review)
+    result = {}
+    for claim in review['claims']:
+        if claim['disposition'] != 'included':
+            continue
+        evidence = claim.get('evidence')
+        _need(type(evidence) is list and bool(evidence))
+        refs = set()
+        for row in evidence:
+            _need(type(row) is dict and isinstance(row.get('source_ref'), str))
+            kind, ref = row.get('kind'), row['source_ref']
+            _need(isinstance(kind, str) and kind in {'asr_span', 'ocr_span', 'frame_observation'}
+                  and re.fullmatch(r'\[ASR:[0-9]{4,}\]' if kind == 'asr_span' else r'\[FRAME:[0-9]{4,}\]', ref))
+            refs.add(ref)
+        result[claim['id']] = sorted(refs)
+    return result
 
 
 def _plain(path):
@@ -322,10 +350,24 @@ def _review_binding(folder, wire):
           and isinstance(artifact.get('raw_response'), str))
     # Match the existing fact-protocol parser's optional JSON fence envelope.
     text = artifact['raw_response'].strip()
-    if text.startswith('```json') and text.endswith('```'):
+    fenced = text.startswith('```json') and text.endswith('```')
+    if fenced:
         text = text[7:-3].strip()
     review = _decode(text.encode('utf-8'))
     _need(wire['blocks'] == reviewed_visual_blocks(review))
+    if review['protocol'] == 4:
+        _need(not fenced and set(review) == {'protocol', 'blocks', 'claims', 'visual'})
+        plan = review['visual']
+        _object(plan, ['scenes', 'diagram'])
+        _need(plan['scenes'] == wire['scenes'] and plan['diagram'] == wire['diagram'])
+        sources = reviewed_claim_sources(review)
+        by_block = {row['id']: row['claim_ids'] for row in wire['blocks']}
+        if wire['presentation'] == 'comic':
+            for scene in wire['scenes']:
+                _need(any(scene['frame_id'] in sources[key]
+                          for block in scene['block_ids'] for key in by_block[block]))
+        else:
+            _need(wire['presentation'] == 'infographic' and not wire['frames'])
     return _sha(raw)
 
 

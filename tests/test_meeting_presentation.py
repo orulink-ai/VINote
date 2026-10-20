@@ -23,7 +23,9 @@ def test_depth_only_changes_final_review_not_evidence_preservation():
                                              extras=None, output_language='en')
         draft = build_meeting_draft_prompts(title='title', source='all source',
                                             extras=None, output_language='en')
-    assert depth_instructions('brief') in review['system_prompt']
+    # Structured reports put Markdown in blocks rather than a report field.
+    assert depth_instructions('brief').replace('The report field contains Markdown facts only;',
+        'Report blocks[].markdown contain Markdown facts only;') in review['system_prompt']
     assert depth_instructions('brief') not in draft['system_prompt']
     assert depth_instructions('brief') not in build_meeting_review_prompts(
         source='all source', draft='facts', extras=None, output_language='en')['system_prompt']

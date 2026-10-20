@@ -1,4 +1,4 @@
-"""Glue for reviewed layout and Peirce's wire/sidecar; no host imports yet.
+"""Glue for validated review layouts and source-bound wire/sidecar artifacts.
 
 No source sampling, inference, fallback images, retries or model changes.
 The pipeline must supply a snapshot captured after successful fact review.
@@ -8,7 +8,7 @@ import re
 
 from app.services.summary_visual_artifact import (
     SummaryVisualError, build_summary_visual, reviewed_visual_blocks,
-    save_summary_visual,
+    reviewed_claim_sources, save_summary_visual,
 )
 from app.services.video_evidence_service import _MAX_IMAGE_BYTES
 
@@ -24,6 +24,8 @@ def render_review_visual(artifacts, context, markdown):
     _need(isinstance(snapshot, dict) and set(snapshot) == {'review', 'claim_sources'})
     review, sources = snapshot['review'], snapshot['claim_sources']
     blocks = reviewed_visual_blocks(review)
+    if review['protocol'] == 4:
+        _need(sources == reviewed_claim_sources(review))
     _need('\n\n'.join(block['text'] for block in blocks).strip() == markdown)
     plan = review.get('visual')
     _need(type(plan) is dict and set(plan) == {'scenes', 'diagram'})
