@@ -482,3 +482,11 @@ B原视频实际通过进度控件seek到26:18，点击播放后自然到26:25�
 最终56项聚焦测试通过（3.27秒）、TypeScript退出0、生产构建7.73秒通过；完整前端137文件/1654项全部通过（102.28秒，maxWorkers=2）。独立审查覆盖84个真实字体样本及8个原反例，未发现阻断项。
 
 原生应用对同一A分镜分别实际SaveAs到新文件 `native-v15-evidence/A-comic-wrap-r2.svg` / `A-comic-wrap-r2.png`，显示“图形已保存到所选位置”。SVG SHA `746f89dc709727534cc5f402ce669fe96c1676087fb63edae233edca3a368cce`，PNG SHA `5122972296195391c2ba564bea634d1a6741031b3ce1405399ef93963c58a1be`（1783625字节），与候选真实导出一致。旧SVG/PNG、旧83分及失败历史保留；本段是排版与导出验收，不是新LLM生成结果或100分证明。两份成功反馈截图另存为 `A-comic-wrap-r2-svg-feedback.png` / `A-comic-wrap-r2-png-feedback.png`，未重新生成纪要、调用ASR或追加飞书通知。
+
+### V16 旧稿兼容、新稿导出与上下文导航
+
+P7接线后原生继续显示既有V15分镜，打开“生成新版本”实际默认复用已有ASR、沿用所选纪要的DeepSeek。明确切换模型来源时显示目录核验反馈；目录返回DeepSeek和Luna，未选择时确认按钮禁用。取消后仍为原纪要，不提交第五个模型操作。截图 `new-version-defaults-after-p7.png` / `new-version-model-catalog-after-p7.png`，未切换全局模型偏好。
+
+文件库B原件详情显示26:25及原件管理操作，点击“查看关联内容”实际导航到带locate_note/locate_task的会议列表，定位原18:02:18档案及其关联旧稿，没有跳到笔记列表。返回文件库后恢复同一source_video.webm详情、meeting用途及原查询。三个往返截图 `file-library-meeting-link-after-p7.png` / `file-library-located-meeting-after-p7.png` / `file-library-return-restored-after-p7.png`，源文件原历史标题保留，不把其占位词当作当前会议状态。
+
+V16四个新受控operation全部终态，47项runtime无漂移；仅A精简信息图成功610.4秒。普通保存校验原raw7/result/DB逐字一致，note254abf7d-4a70-5f26-aeda-f3218136f533、正文SHA `77e4c21d79f8df8d3943f593c47ae3f6d24bf53641b7fb1df959aafb8e5658a3`。这是受控service提交及普通保存，不冒充原生提交/自动保存。原生实际打开该新稿，两个图面节点显示，原视频28:32；实际SaveAs保存 `native-v16-evidence/A-info-v16.svg` / `.png`并显示成功反馈。SVG SHA `137de3931d0d2131f0b3ea5a58407c317aaa2d7b8b2f8569f6a95735faa5a991`，PNG SHA `a91c92bccb027ceff0256c9d739620e420ea20b60e6bfbfe5ac1afa23e170255`，独立呈现评分另记。未改模型正文、覆盖旧版本或创建飞书文档/通知；其它三个失败不补成品分。
