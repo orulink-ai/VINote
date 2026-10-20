@@ -244,3 +244,11 @@ A09 draft HTTP524未返回稿；Bbrief03完成draft/review但guardfailed。B只�
 
 - 后续A13在复核请求等待响应头期间ReadError（165.1秒）退出，没有完整review可评分；保留unknown，未重放。A11同类ReadError为166.7秒，B图文02为RemoteProtocolError287.9秒；这些不是已确认的客户端超时，尚不能据此认定供应商/代理根因，也未修改vilab-server或延长超时掩盖失败。
 - PipelineContext单字段修复后，真实slots上下文至summary/render/实际sidecar授权保存读取的6项回归通过，覆盖comic/infographic的成功和严格失败。只替代模型响应/能力探测/测试DB目的地，不用SimpleNamespace冒充生产context；旧B04不改成功、不补写产物，不调用ASR/provider。
+
+### 2026-10-20 20:58 · 完整检查失败与后续修复
+
+- 首次完整yarn verify的backend阶段：3198 passed、10 failed、2 skipped、19 subtests passed，427.03秒。4项在test_asr_p2_recovery，6项在test_meeting_participants；wrapper按失败停止，不能称全项目通过。独立完成剩余检查：前端1325 passed/5 failed，失败均为SavedRecordingChoice测试mock缺subscribe；桌面脚本23 passed，TypeScript/Vite/文档构建通过。
+- ASR四例是旧fixture未匹配0251565后的Origin绑定；仅补合成内置Origin及认证环境，错Origin严格409且不取token，剩余音频两次token区分policy/submit且模型不变。对照origin/dev内存源码确认旧行为；修后目标4例及恢复/认证组合52 passed。没有改ASR产品或真实调用。主线ASR模块+新Markdown guard组合63 passed。
+- v4 HTML guard正则误拒Markdown中的C++代码。改用已有Markdown解析器区分真实HTML token与行内/围栏代码，仍在所有代码区域拒绝内部来源ID、图片和截图占位符。新生产host52例、相关组合223 passed，raw4不改；打包hooks及现有release/test PYZ都包含所需Markdown模块，不新增依赖。
+- 新实际AHTML02在完整复核前RemoteProtocolError中断，B信息图05在完整复核前HTTP502，均已有draft但无完整review、无ASR checkpoint、无可评分成品。当前和冻结连接均api.orulink.ai/gpt-6-luna，未跨地址/切模型；暂不继续发模型请求，等待服务错误日志/状态，同时完成本机修复。
+- B04新统一rubric正文72/90，呈现/总分N/A，不能换算100；独立视觉计划另有N6标签不属于引用正文的问题，未因slot修复就称图形成品通过。旧历史临时分数继续保留，不覆盖或拼成最终100。

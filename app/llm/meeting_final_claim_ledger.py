@@ -11,6 +11,10 @@ from dataclasses import dataclass
 import json
 import re
 
+from markdown import Markdown
+from markdown.inlinepatterns import HtmlInlineProcessor
+from markdown.preprocessors import HtmlBlockPreprocessor
+
 from app.llm.meeting_fact_protocol import REJECTIONS, _evidence, prepare as prepare_v3
 
 
@@ -60,6 +64,31 @@ def _source_evidence(rows):
         raise FinalLedgerError('invalid_final_evidence') from None
 
 
+class _RejectHtmlBlock(HtmlBlockPreprocessor):
+    def run(self, lines):
+        # fenced_code (priority 25) already stashed its escaped code output.
+        # Only raw HTML newly recognized by html_block (20) is disallowed.
+        before = len(self.md.htmlStash.rawHtmlBlocks)
+        result = super().run(lines)
+        _need(len(self.md.htmlStash.rawHtmlBlocks) == before, 'invalid_block_content')
+        return result
+
+
+class _RejectHtmlInline(HtmlInlineProcessor):
+    def handleMatch(self, match, data):
+        # The parser has already recognized escapes, code spans and autolinks.
+        raise FinalLedgerError('invalid_block_content')
+
+
+def _check_markdown_html(text):
+    """Reject actual raw HTML tokens without changing the supplied Markdown."""
+    parser = Markdown(extensions=['fenced_code'])
+    parser.preprocessors.register(_RejectHtmlBlock(parser), 'html_block', 20)
+    parser.inlinePatterns.register(_RejectHtmlInline(parser.inlinePatterns['html'].pattern, parser), 'html', 90)
+    # Generated HTML is discarded: validation never rewrites the body or raw4.
+    parser.convert(text)
+
+
 def validate_final_ledger(value, material, *, depth):
     """Validate a whole response; return nothing on any missing/invalid row.
 
@@ -86,9 +115,12 @@ def validate_final_ledger(value, material, *, depth):
     _need(bool(blocks), 'invalid_blocks')
     for block in blocks.values():
         _need(set(block) == {'id', 'markdown'} and _text(block.get('markdown')), 'invalid_blocks')
-        _need(not re.search(r'\[(?:ASR|FRAME):|!\[|\[\[Screenshot:'
-                            r'|<\s*/?\s*[A-Za-z][A-Za-z0-9-]*(?:\s[^<>]*|/?)>',
+        # These protocol/resource guards deliberately apply even inside code.
+        _need(not re.search(r'\[(?:ASR|FRAME):|!\[|\[\[Screenshot:',
                             block['markdown']), 'invalid_block_content')
+    markdown = '\n\n'.join(block['markdown'] for block in blocks.values()).strip()
+    # Code delimiters can span report blocks; parse the actual final body once.
+    _check_markdown_html(markdown)
     claims = _index(value['claims'], 'id', 'invalid_claim_ids')
     _need(set(original) <= set(claims), 'missing_original_claims')
     required = {'id', 'field', 'text', 'material', 'disposition', 'block_ids', 'evidence'}
@@ -123,7 +155,7 @@ def validate_final_ledger(value, material, *, depth):
                 if claim['evidence']:
                     claim['evidence'] = _source_evidence(claim['evidence'])
     return FinalClaimLedger(
-        markdown='\n\n'.join(block['markdown'] for block in blocks.values()).strip(),
+        markdown=markdown,
         blocks=tuple(blocks.values()), claims=tuple(claims.values()),
         original_ids=frozenset(original),
     )
