@@ -39,6 +39,12 @@ def cloud_owner(subject):
 
 def principal(request: Request):
     authorization = request.headers.get("authorization", "")
+    from app.services.feishu_cli import enabled
+    if enabled():
+        # Desktop credentials belong to its signed-in device user, never a
+        # remotely supplied integration principal or shared cloud connection.
+        user = get_current_user(request, None)
+        return user.user_id, user.user_id
     if authorization.startswith("Bearer "):
         # This route alone accepts a verified Supabase bearer. No unsigned JWT claims.
         identity = _request("user", token=authorization[7:])
@@ -55,6 +61,9 @@ def principal(request: Request):
 
 
 def proxy(identity, method, path, body=None):
+    from app.services.feishu_cli import enabled
+    if enabled():
+        return False, None
     if not settings.feishu_service_url or identity[1] is None:
         return False, None
     token = CloudAccountService().access_token(identity[1])
@@ -90,6 +99,8 @@ class Preferences(BaseModel):
     auto_publish: bool = False
     destination_config: Destination | None = None
     permission_policy: Literal["private", "inherit"] | None = None
+    contacts: list[dict] | None = Field(default=None, max_length=20)
+    automatic_delivery_consent: bool = False
 
 
 class ContactSelection(BaseModel):
@@ -132,13 +143,36 @@ def status(identity=Depends(principal), response: Response = None):
     if response is not None:
         response.headers["Cache-Control"] = "no-store"
     remote, result = proxy(identity, "GET", "/status")
-    return result if remote else service.for_owner(identity[0]).status(identity[0])
+    if remote:
+        return result
+    result = service.for_owner(identity[0]).status(identity[0])
+    from app.services.feishu_cli import enabled
+    if not enabled():
+        return {**result, "auto_publish": False,
+                "capabilities": {**result.get("capabilities", {}), "background_delivery": False}}
+    from app.services.feishu_auto_runtime import decorate_status
+    return decorate_status(identity, result)
 
 
 @router.post("/authorize")
 def authorize(identity=Depends(principal)):
     remote, result = proxy(identity, "POST", "/authorize")
     return result if remote else service.for_owner(identity[0]).authorize(identity[0])
+
+
+class CompleteAuthorization(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    flow_id: str = Field(min_length=1, max_length=100)
+
+
+@router.post("/authorize/complete")
+def complete_authorization(payload: CompleteAuthorization, response: Response,
+                           identity=Depends(principal)):
+    from app.services.feishu_cli import enabled
+    if not enabled():
+        raise HTTPException(404, "没有此授权流程")
+    response.headers["Cache-Control"] = "no-store"
+    return service.for_owner(identity[0]).complete_authorization(identity[0], payload.flow_id)
 
 
 @router.get("/callback", response_class=HTMLResponse)
@@ -183,8 +217,22 @@ def contacts(response: Response, query: str = Query(min_length=1, max_length=50,
 @router.put("/preferences")
 def preferences(payload: Preferences, identity=Depends(principal)):
     body = payload.model_dump(exclude_none=True)
+    from app.services.feishu_cli import enabled
+    from app.services.feishu_auto_runtime import bind_device_policy, decorate_status
+    if not enabled() and (payload.auto_publish or payload.contacts or payload.automatic_delivery_consent):
+        raise HTTPException(409, "自动交付与联系人预设请在桌面端设置")
+    if enabled() and payload.auto_publish and not payload.automatic_delivery_consent:
+        current = service.for_owner(identity[0]).status(identity[0])
+        if not decorate_status(identity, current).get("auto_publish"):
+            raise HTTPException(409, "启用此设备的自动交付需要明确确认")
+    if payload.auto_publish is False and identity[1]:
+        bind_device_policy(identity[1], None)
     remote, result = proxy(identity, "PUT", "/preferences", body)
-    return result if remote else service.for_owner(identity[0]).save_preferences(identity[0], body)
+    if remote:
+        return result
+    result = service.for_owner(identity[0]).save_preferences(identity[0], body)
+    bind_device_policy(identity[1], result)
+    return decorate_status(identity, result)
 
 
 @router.get("/destinations")
@@ -232,6 +280,10 @@ def delivery(note_key: str, identity=Depends(principal)):
 @router.post("/deliveries")
 def publish(payload: Publish, background: BackgroundTasks, identity=Depends(principal)):
     body = payload.model_dump(exclude_none=True)
+    from app.services.feishu_cli import enabled
+    if enabled():
+        from app.services.feishu_auto_runtime import guard_manual_publish
+        guard_manual_publish(identity, payload.note_key)
     if payload.recipient_access_policy:
         if payload.automatic or not payload.operation_id:
             raise HTTPException(422, "阅读授权与通知需要明确的新发布操作")
@@ -319,12 +371,19 @@ class EnterpriseApplication(BaseModel):
 
 @router.get("/application")
 def get_application(identity=Depends(principal)):
+    from app.services.feishu_cli import enabled
+    if enabled():
+        return {"transport": "cli", "custom": True, "app_id": "", "redirect_uri": "",
+                "tenant_key": "", "document_domain": ""}
     remote, result = proxy(identity, "GET", "/application")
     return result if remote else application_status(identity[0])
 
 
 @router.put("/application")
 def put_application(payload: EnterpriseApplication, identity=Depends(principal)):
+    from app.services.feishu_cli import enabled
+    if enabled():
+        raise HTTPException(409, "请使用扫码连接，无需提交应用密钥")
     remote, result = proxy(identity, "PUT", "/application", payload.model_dump())
     if remote:
         return result
@@ -336,5 +395,8 @@ def put_application(payload: EnterpriseApplication, identity=Depends(principal))
 
 @router.delete("/application")
 def delete_application(identity=Depends(principal)):
+    from app.services.feishu_cli import enabled
+    if enabled():
+        raise HTTPException(409, "请在账号连接中断开飞书")
     remote, result = proxy(identity, "DELETE", "/application")
     return result if remote else clear_application(identity[0])

@@ -34,7 +34,7 @@
     "client:production": "node scripts/legacy-command.mjs client:production package:release",
     "client:test:plan": "node scripts/legacy-command.mjs client:test:plan package:test:plan",
     "client:production:plan": "node scripts/legacy-command.mjs client:production:plan package:release:plan",
-    "client:check": "node --test scripts/desktop-build-profile.test.mjs scripts/desktop-dev-profile.test.mjs scripts/project-scripts.test.mjs",
+    "client:check": "node --test scripts/desktop-build-profile.test.mjs scripts/desktop-dev-profile.test.mjs scripts/project-scripts.test.mjs scripts/lark-cli-bundle.test.mjs",
     "dev:desktop:lan": "node scripts/dev.mjs --target desktop --environment lan",
     "dev:desktop:lan:plan": "node scripts/dev.mjs --target desktop --environment lan --plan",
     "dev:desktop:public": "node scripts/dev.mjs --target desktop --environment public",

@@ -12,7 +12,15 @@ from app.db_models import CloudAccountDB
 from app.models.feishu_auto_delivery import FeishuAutoOutboxDB, FeishuDevicePolicyDB, FeishuMeetingSaveDB
 
 
+def integration_origin():
+    from app.services.feishu_cli import enabled
+    return "cli://device" if enabled() else settings.feishu_service_url
+
+
 def cloud_owner(db, user_id):
+    from app.services.feishu_cli import enabled
+    if enabled():
+        return user_id
     account = db.get(CloudAccountDB, user_id)
     if account and account.issuer == settings.cloud_auth_url and account.subject:
         return hashlib.sha256((account.issuer + ":" + account.subject).encode()).hexdigest()
@@ -39,7 +47,7 @@ def bind_device_policy(user_id, result):
             db.add(row)
         row.policy_id = identifier if enabled else ""
         row.enabled = enabled and bool(owner)
-        row.integration_origin = settings.feishu_service_url
+        row.integration_origin = integration_origin()
         row.cloud_owner = owner or ""
         # Already-submitted/unknown work is never relabelled cancelled or retried.
         db.execute(update(FeishuAutoOutboxDB).where(
@@ -56,7 +64,7 @@ def device_enabled(user_id, result):
         row = db.get(FeishuDevicePolicyDB, user_id)
         return bool(row and row.enabled
                     and row.policy_id == result["automatic_delivery"].get("policy_id")
-                    and row.integration_origin == settings.feishu_service_url
+                    and row.integration_origin == integration_origin()
                     and row.cloud_owner == cloud_owner(db, user_id))
 
 
@@ -101,7 +109,7 @@ def register_new_meeting(db, record):
         # new automatic authorization. It must still allow saving the note.
         return
     policy = db.get(FeishuDevicePolicyDB, record.created_by)
-    eligible = (policy and policy.enabled and policy.integration_origin == settings.feishu_service_url
+    eligible = (policy and policy.enabled and policy.integration_origin == integration_origin()
                 and policy.cloud_owner == cloud_owner(db, record.created_by))
     db.add(FeishuMeetingSaveDB(note_id=record.id, user_id=record.created_by,
                               policy_id=policy.policy_id if eligible else "", completed=False))
@@ -120,7 +128,7 @@ def capture_saved_meeting(db, record):
     first.completed = True
     policy = db.get(FeishuDevicePolicyDB, record.created_by)
     if (not first.policy_id or not policy or not policy.enabled or first.policy_id != policy.policy_id
-            or policy.integration_origin != settings.feishu_service_url
+            or policy.integration_origin != integration_origin()
             or policy.cloud_owner != cloud_owner(db, record.created_by)):
         return
     existing = db.scalar(select(FeishuAutoOutboxDB.id).where(

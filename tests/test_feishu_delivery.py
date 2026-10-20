@@ -79,7 +79,8 @@ def service(monkeypatch, tmp_path):
                             {"open_id": "ou_a", "name": "A", "tenant_key": "company"})
     monkeypatch.setattr(client, "groups", lambda owner: [{"chat_id": "oc_group", "name": "项目群"}])
     monkeypatch.setattr(client, "verify_group_permission", lambda *args: True)
-    client.save_preferences("a", {"notify_self": True, "groups": ["oc_group"], "auto_publish": True})
+    client.save_preferences("a", {"notify_self": True, "groups": ["oc_group"], "auto_publish": True,
+                                  "automatic_delivery_consent": True})
     yield client
     engine.dispose()
 
@@ -117,7 +118,7 @@ def test_partial_delivery_retry_preserves_document_and_successful_self(service, 
             raise module.FeishuError("机器人无法发送到此群", 403)
         return "message-id"
     monkeypatch.setattr(service, "send_message", send)
-    job = service.enqueue("a", "meeting", "纪要", "# 主题\n记录", automatic=True)
+    job = service.enqueue("a", "meeting", "纪要", "# 主题\n记录")
     service.process("a", job["id"])
     failed = service.delivery("a", "meeting")
     assert failed["status"] == "failed"
@@ -130,8 +131,8 @@ def test_partial_delivery_retry_preserves_document_and_successful_self(service, 
 
 
 def test_duplicate_enqueue_and_owner_isolation(service):
-    first = service.enqueue("a", "meeting", "纪要", "text", automatic=True)
-    second = service.enqueue("a", "meeting", "纪要", "text", automatic=True)
+    first = service.enqueue("a", "meeting", "纪要", "text")
+    second = service.enqueue("a", "meeting", "纪要", "text")
     assert first["id"] == second["id"]
     service.enqueue("a", "meeting", "纪要", "edited")
     assert service.enqueue("a", "meeting", "纪要", "text")["id"] == first["id"]

@@ -21,6 +21,7 @@ export type DestinationCheck = FeishuDestination & {
   error_code: string;
 };
 export type FeishuStatus = {
+  transport?: 'cli' | 'http';
   automatic_delivery_protocol?: number;
   automatic_delivery?: { policy_id: string | null; enabled: boolean };
   device_auto_enabled?: boolean;
@@ -28,7 +29,7 @@ export type FeishuStatus = {
   publish_receipt_protocol?: number;
   contact_selection_protocol?: number;
   recipient_access_protocol?: number;
-  setup?: { ready: boolean; missing: string[] };
+  setup?: { ready?: boolean; missing?: string[]; cli_available?: boolean };
   connection_state?: string;
   grant_state?: string;
   configured: boolean;
@@ -45,7 +46,38 @@ export type FeishuStatus = {
   capabilities?: Record<string, boolean>;
   capability_reason?: string;
 };
-export type FeishuAuthorization = { url: string; qr_data_url: string; expires_at: number };
+export type FeishuAuthorization = { url: string; qr_data_url: string; expires_at: number; flow_id?: string; stage?: 'application' | 'authorization'; pending?: boolean };
+export function isFeishuAuthorization(value: unknown): value is FeishuAuthorization {
+  if (!value || typeof value !== 'object') return false;
+  const item = value as FeishuAuthorization;
+  const pendingApplication = item.pending === true && item.stage === 'application' && !!item.flow_id && item.url === '' && item.qr_data_url === '';
+  return typeof item.url === 'string' && (!!item.url || pendingApplication) && Number.isFinite(item.expires_at) && item.expires_at > 0
+    && (item.pending === undefined || typeof item.pending === 'boolean')
+    && (item.pending !== true || item.stage === 'application' && !!item.flow_id)
+    && (item.flow_id === undefined || typeof item.flow_id === 'string' && !!item.flow_id)
+    && (item.stage === undefined || item.stage === 'application' || item.stage === 'authorization');
+}
+export const completeFeishuAuthorization = (flow_id: string) => apiJson<FeishuAuthorization | FeishuStatus>('/api/feishu/authorize/complete', { method: 'POST', body: JSON.stringify({ flow_id }) });
+
+export type FeishuObject = { id: string; name: string; kind: 'contact' | 'group' };
+export type FeishuObjectAlias = { id: string; alias: string; target_id: string; target_name: string; kind: 'contact' | 'group' };
+export type FeishuObjectHotwords = { objects: FeishuObject[]; aliases: FeishuObjectAlias[]; partial: boolean; updated_at?: number };
+const validObjectKind = (value: unknown) => value === 'contact' || value === 'group';
+const nonempty = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
+export const normalizeObjectAlias = (alias: string) => alias.normalize('NFKC').trim().toLocaleLowerCase();
+function validateObjectHotwords(value: FeishuObjectHotwords): FeishuObjectHotwords {
+  if (!value || !Array.isArray(value.objects) || !Array.isArray(value.aliases) || typeof value.partial !== 'boolean'
+    || value.objects.some(item => !item || !nonempty(item.id) || !nonempty(item.name) || !validObjectKind(item.kind))
+    || value.aliases.some(item => !item || !nonempty(item.id) || !nonempty(item.alias) || !nonempty(item.target_id) || !nonempty(item.target_name) || !validObjectKind(item.kind))
+    || new Set(value.objects.map(item => item.id)).size !== value.objects.length
+    || new Set(value.aliases.map(item => item.id)).size !== value.aliases.length
+    || value.updated_at !== undefined && (!Number.isFinite(value.updated_at) || value.updated_at < 0)) throw new Error('对象目录响应未核验，请重新读取');
+  return value;
+}
+export const feishuObjectHotwords = async () => validateObjectHotwords(await apiJson<FeishuObjectHotwords>('/api/feishu/object-hotwords', { cache: 'no-store' }));
+export const refreshFeishuObjectHotwords = async () => validateObjectHotwords(await apiJson<FeishuObjectHotwords>('/api/feishu/object-hotwords/refresh', { method: 'POST' }));
+export const bindFeishuObjectAlias = async (alias: string, target_id: string) => validateObjectHotwords(await apiJson<FeishuObjectHotwords>('/api/feishu/object-hotwords', { method: 'POST', body: JSON.stringify({ alias, target_id }) }));
+export const deleteFeishuObjectAlias = async (id: string) => validateObjectHotwords(await apiJson<FeishuObjectHotwords>('/api/feishu/object-hotwords/' + encodeURIComponent(id), { method: 'DELETE' }));
 export type FeishuGroup = { chat_id: string; name: string };
 export type FeishuContact = { open_id: string; selection_token: string; name?: string; expiresAt?: number };
 export type FeishuPreferenceContact = { open_id: string; name: string; selection_token?: string; expiresAt?: number };

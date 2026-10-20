@@ -1,8 +1,11 @@
 import { feishuVerificationUnavailable, feishuVerificationMessage } from '@/lib/feishuConnectionState'
 import { useEffect, useRef, useState } from "react";
+import { useLocation } from 'react-router-dom';
 import { ChevronRight } from "lucide-react";
 import { FeishuDestinationPicker } from "@/components/Settings/FeishuDestinationPicker";
 import { FeishuPresetContacts } from '@/components/Settings/FeishuPresetContacts';
+import { FeishuObjectHotwords } from '@/components/Settings/FeishuObjectHotwords';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { apiJson } from "@/lib/api";
 import { useAuthStore } from "@/stores/authStore";
 import { publishScope } from '@/lib/feishuPublishReceipt';
@@ -14,6 +17,8 @@ import {
   automaticConsentNeeded,
   disableDeviceAutomaticDelivery,
   openExternal,
+  completeFeishuAuthorization,
+  isFeishuAuthorization,
   type FeishuGroup,
   type FeishuStatus,
   type DestinationCheck,
@@ -60,6 +65,9 @@ import { FeishuApplicationSetup } from '@/components/Settings/FeishuApplicationS
 const pluginStore = createConnectorPluginStore({ getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) });
 
 export function FeishuSettings() {
+  const location = useLocation();
+  const routeKey = JSON.stringify([location.key, location.pathname, location.search, location.hash]);
+  const currentRoute = useRef(routeKey); currentRoute.current = routeKey;
   const owner = useAuthStore((state) => state.user?.id);
   const [identityVisit, setIdentityVisit] = useState(0);
   const draftKey = owner ? `vinote:feishu-preferences:${owner}` : "";
@@ -78,19 +86,24 @@ export function FeishuSettings() {
   const [busy, setBusy] = useState(false);
   const [dirty, setDirty] = useState(false);
   const [authUrl, setAuthUrl] = useState("");
-  const [authorization, setAuthorization] = useState<FeishuAuthorization | null>(null);
+  const [authorization, setAuthorizationState] = useState<FeishuAuthorization | null>(null);
+  const authorizationRef = useRef<FeishuAuthorization | null>(null);
+  const setAuthorization = (next: FeishuAuthorization | null) => { authorizationRef.current = next; setAuthorizationState(next) };
   const [authExpired, setAuthExpired] = useState(false);
+  const authPending = useRef(false);
   const [disconnect, setDisconnect] = useState(false);
   const savedValue = useRef<FeishuStatus>();
   const editRevision = useRef(0);
   const [consent, setConsent] = useState<{ snapshot: FeishuStatus; revision: number; current: () => boolean; destinationLabel: string; recipientLabel: string } | null>(null);
   const currentValue = useRef(value); currentValue.current = value;
   const canEnableAutomatic = value?.automatic_delivery_protocol === 1 && value.capabilities?.background_delivery === true;
+  const cliMode = value?.transport === 'cli';
+  const canAuthorize = cliMode ? value?.setup?.cli_available === true : !!value?.configured;
   const [destinationCheck, setDestinationCheck] =
     useState<DestinationCheck | null>(null);
   const renderScope = owner ? publishScope(owner) : null;
   const isCurrentOwner = () => {
-    try { renderScope?.(); return !!renderScope && useAuthStore.getState().user?.id === owner } catch { return false }
+    try { renderScope?.(); return !!renderScope && currentRoute.current === routeKey && useAuthStore.getState().user?.id === owner } catch { return false }
   };
   const statusRequest = useRef(0);
   const displayedStatus = statusRequest.current;
@@ -100,7 +113,7 @@ export function FeishuSettings() {
     const request = ++sequence.current;
     const scope = owner ? publishScope(owner) : null;
     return () => {
-      if (!scope || !isCurrentOwner() || request !== sequence.current) return false;
+      if (!scope || !isCurrentOwner() || request !== sequence.current || currentRoute.current !== routeKey) return false;
       try { scope(); return true; } catch { return false; }
     };
   };
@@ -156,9 +169,11 @@ export function FeishuSettings() {
       savedValue.current = next;
       if (draft?.contacts) draft.contacts = draft.contacts.map(contact => (next.contacts || []).find(saved => saved.open_id === contact.open_id) || { open_id: contact.open_id, name: '待重新选择联系人' });
       setValue({ ...next, ...draft });
-      if (next.connected && !next.expired && !feishuVerificationUnavailable(next)) {
+      const connected = next.connected && !next.expired && !feishuVerificationUnavailable(next);
+      if (!authorizationRef.current?.flow_id && connected) {
         setAuthUrl(''); setAuthorization(null); setAuthExpired(false);
-      } else if (authUrl) setMessage(feishuVerificationUnavailable(next) ? feishuVerificationMessage : next.expired ? '需要重新授权，请使用新的授权链接。' : '尚未收到飞书授权，请完成后再次核验。');
+        if (!draft) setMessage('');
+      } else if (authUrl && !connected) setMessage(feishuVerificationUnavailable(next) ? feishuVerificationMessage : next.expired ? '需要重新授权，请使用新的授权链接。' : '尚未收到飞书授权，请完成后再次核验。');
       setDirty(!!draft);
       if (draft) setMessage("已恢复未保存的设置，请核对后保存。");
       setGroupError("");
@@ -201,6 +216,7 @@ export function FeishuSettings() {
   useEffect(() => useAuthStore.subscribe((state, previous) => {
     if (state.user?.id !== previous.user?.id) {
       ++statusRequest.current; ++groupRequest.current; groupPending.current = false;
+      authPending.current = false;
       setIdentityVisit(visit => visit + 1);
     }
   }), []);
@@ -212,6 +228,7 @@ export function FeishuSettings() {
     setMessage("");
     setAuthUrl("");
     setAuthorization(null);
+    authPending.current = false;
     setAuthExpired(false);
     setGroupPicker(false);
     setGroupError("");
@@ -228,21 +245,22 @@ export function FeishuSettings() {
       statusRequest.current++;
       groupRequest.current++;
       groupPending.current = false;
+      authPending.current = false;
     };
-  }, [owner, identityVisit]);
+  }, [owner, identityVisit, routeKey]);
   useEffect(() => {
     if (!authorization) return;
     const timer = window.setTimeout(() => setAuthExpired(true), Math.max(0, authorization.expires_at * 1000 - Date.now()));
     return () => window.clearTimeout(timer);
   }, [authorization]);
   useEffect(() => {
-    if (!authUrl) return;
+    if (!authUrl || authorization?.flow_id || cliMode) return;
     const verify = () => {
       if (document.visibilityState === "visible") void load();
     };
     window.addEventListener("focus", verify);
     return () => window.removeEventListener("focus", verify);
-  }, [authUrl]);
+  }, [authUrl, authorization, cliMode]);
   useEffect(() => {
     const guard = (event: BeforeUnloadEvent) => {
       if (dirty) {
@@ -359,6 +377,12 @@ export function FeishuSettings() {
           <AlertDescription>{message}</AlertDescription>
         </Alert>
       )}
+      <Tabs defaultValue="authorization" activationMode="manual" className="flex flex-col gap-4">
+        <TabsList aria-label="飞书设置" className="h-auto flex-wrap self-start">
+          <TabsTrigger value="authorization">授权</TabsTrigger>
+          <TabsTrigger value="delivery">会议纪要发送设置</TabsTrigger>
+          <TabsTrigger value="hotwords">对象热词</TabsTrigger>
+        </TabsList>
       {!value ? (
         !error ? (
           <Skeleton className="h-48 w-full" />
@@ -369,7 +393,10 @@ export function FeishuSettings() {
         )
       ) : (
         <>
-          {!value.configured && (
+          <TabsContent value="authorization" className="flex flex-col gap-4">
+          {cliMode && <p className="text-sm text-muted-foreground">使用你自己的飞书应用扫码连接，凭据由这台桌面管理，直接连接飞书。</p>}
+          {cliMode && !canAuthorize && <Alert><AlertDescription>飞书授权工具尚未就绪，请完成安装后重新检查。</AlertDescription><Button variant="outline" disabled={busy} onClick={() => void load()}>重新检查接入</Button></Alert>}
+          {!cliMode && !value.configured && (
             <Alert>
               <AlertDescription>
                 授权服务尚未就绪，当前无法生成有效的飞书授权链接。你的笔记和会议纪要仍可正常保存。
@@ -405,7 +432,7 @@ export function FeishuSettings() {
                     </span>
                   )}
                   <Badge variant="secondary" className="w-fit">
-                    {!value.configured ? '授权服务未就绪' : verificationUnavailable ? '连接暂时无法核验' : authExpired ? '授权链接已过期' : authUrl ? '等待你授权' : value.expired
+                    {authExpired ? '授权链接已过期' : authorization?.pending ? '正在准备应用连接' : authUrl ? '等待你授权' : !canAuthorize ? '授权服务未就绪' : verificationUnavailable ? '连接暂时无法核验' : value.expired
                       ? "需重新授权"
                       : value.connected
                         ? "已连接"
@@ -424,12 +451,15 @@ export function FeishuSettings() {
                   </Button>
                 )}
                 <Button
-                  disabled={busy || !value.configured}
+                  disabled={busy || !canAuthorize}
                   onClick={async () => {
-                    if (verificationUnavailable) { await load(); return; }
+                    if (!isCurrentOwner() || authPending.current) return;
+                    if (verificationUnavailable && !cliMode) { await load(); return; }
                     const current = requestGuard(statusRequest);
+                    authPending.current = true;
                     setBusy(true);
                     setError("");
+                    setMessage('');
                     setSaveFailed(false);
                     try {
                       const auth = await apiJson<FeishuAuthorization>(
@@ -437,42 +467,67 @@ export function FeishuSettings() {
                         { method: "POST" },
                       );
                       if (!current()) return;
+                      if (!isFeishuAuthorization(auth) || cliMode && !auth.flow_id) throw new Error('授权流程未核验，请重新连接。');
                       setAuthUrl(auth.url);
                       setAuthorization(auth);
                       setAuthExpired(false);
                     } catch (cause) {
                       if (current()) setError((cause as Error).message);
                     } finally {
-                      if (current()) setBusy(false);
+                      if (current()) { authPending.current = false; setBusy(false) }
                     }
                   }}
                 >
-                  {busy ? "处理中…" : verificationUnavailable ? "重新核验飞书连接" : authExpired ? '重新生成授权' : value.connected ? "重新连接" : "连接飞书"}
+                  {busy ? "处理中…" : verificationUnavailable && !cliMode ? "重新核验飞书连接" : authExpired ? '重新生成授权' : value.connected ? "重新连接" : "连接飞书"}
                 </Button>
               </div>
             </div>
-            {authUrl && (
+            {(authUrl || authorization?.flow_id) && (
               <div className="flex flex-col gap-3">
                 <div className="flex flex-wrap items-center gap-5 rounded-xl bg-muted/40 p-4">
                   {authorization?.qr_data_url && !authExpired && <img src={authorization.qr_data_url} alt="用飞书扫描二维码授权 VINote" className="size-36 rounded-lg bg-white p-2" />}
-                  <div className="grid gap-3"><p className="text-sm text-muted-foreground" role="status">{authExpired ? '本次授权已过期，请重新生成链接。' : '扫码或打开官方授权页，同意后返回 VINote。链接有效期 10 分钟。'}</p>
-                    <Button variant="outline" disabled={authExpired} onClick={() => void openExternal(authUrl).catch(cause => setError((cause as Error).message))}>在浏览器中授权飞书</Button>
+                  <div className="grid gap-3"><p className="text-sm text-muted-foreground" role="status">{authExpired ? '本次授权已过期，请重新生成链接。' : authorization?.pending ? '应用连接正在准备，首次启动可能需要几秒。请稍后点击“继续连接/刷新二维码”查看进度。' : authorization?.stage === 'application' ? '第一步：扫码连接你自己的飞书应用，完成后返回确认。' : authorization?.stage === 'authorization' ? '第二步：扫码授予飞书用户权限，完成后返回确认。' : '扫码或打开官方授权页，同意后返回 VINote。请在链接有效期内完成。'}</p>
+                    {authUrl && <Button variant="outline" disabled={authExpired} onClick={() => { if (isCurrentOwner()) void openExternal(authUrl).catch(cause => { if (isCurrentOwner()) setError((cause as Error).message) }) }}>在浏览器中授权飞书</Button>}
                   </div>
                 </div>
                 <Button
                   variant="outline"
-                  disabled={busy || authExpired}
+                  disabled={busy || authExpired || cliMode && !authorization?.flow_id}
                   onClick={async () => {
-                    if (await load())
-                      setMessage("连接状态已核验，请查看账号状态。");
+                    if (!isCurrentOwner() || authPending.current) return;
+                    if (authorization && authorization.expires_at * 1000 <= Date.now()) { setAuthExpired(true); return }
+                    if (!authorization?.flow_id) { if (!cliMode && await load()) setMessage('连接状态已核验，请查看账号状态。'); return }
+                    const current = requestGuard(statusRequest);
+                    const flowId = authorization.flow_id;
+                    authPending.current = true; setBusy(true); setError('');
+                    try {
+                      const result = await completeFeishuAuthorization(flowId);
+                      if (!current()) return;
+                      if (isFeishuAuthorization(result)) {
+                        if (!result.flow_id) throw new Error('授权流程缺少确认标识，请重新连接。');
+                        setAuthorization(result); setAuthUrl(result.url); setAuthExpired(false); setMessage(result.pending ? '应用连接仍在准备，请稍后继续连接。' : '请继续完成下一步扫码授权。');
+                      } else {
+                        if (!result || typeof result.connected !== 'boolean' || typeof result.configured !== 'boolean') throw new Error('授权结果未核验，请重新确认。');
+                        if (!result.connected || result.expired || feishuVerificationUnavailable(result)) throw new Error('授权尚未完成，请在有效期内完成扫码后再次确认。');
+                        setAuthorization(null); setAuthUrl(''); setAuthExpired(false);
+                        setMessage('');
+                        authPending.current = false;
+                        await load();
+                      }
+                    } catch (cause) { if (current()) setError(cause instanceof Error ? cause.message : '授权未完成，请重试') }
+                    finally { if (current()) { authPending.current = false; setBusy(false) } }
                   }}
                 >
-                  我已完成授权
+                  {authorization?.pending ? busy ? '正在读取连接进度…' : '继续连接/刷新二维码' : '我已完成授权'}
                 </Button>
               </div>
             )}
           </section>
+          {!cliMode && <FeishuApplicationSetup key={JSON.stringify([owner, identityVisit])} onChanged={() => void load()} />}
           {verificationUnavailable && <Alert><AlertDescription>{feishuVerificationMessage}</AlertDescription></Alert>}
+          </TabsContent>
+          <TabsContent value="delivery" className="flex flex-col gap-4">
+          {(!value.connected || value.expired || verificationUnavailable) && <Alert><AlertDescription>请先在授权页签连接飞书并核验权限，再设置会议纪要发送。</AlertDescription></Alert>}
           {value.connected && !value.expired && !verificationUnavailable && <><section
             aria-labelledby="delivery-preferences-heading"
             className="overflow-hidden rounded-2xl border border-border/80 bg-background"
@@ -516,7 +571,7 @@ export function FeishuSettings() {
             <section className="border-b p-5">
               <FieldGroup>
                 <FieldSet disabled={busy || !value.connected || value.expired}>
-                  <FieldLegend>机器人通知</FieldLegend>
+                  <FieldLegend>{cliMode ? '文档通知' : '机器人通知'}</FieldLegend>
                   <Field orientation="horizontal">
                     <Checkbox
                       id="feishu-self"
@@ -559,7 +614,7 @@ export function FeishuSettings() {
                     <ChevronRight aria-hidden="true" />
                   </Button>
                   <FieldDescription>
-                    仅列出你与机器人共同加入的群。交付前为群授予文档阅读权限，失败时保留文档并提示重试。
+                    {cliMode ? '列出当前授权账号可见的群，以你的身份发送通知。' : '仅列出你与机器人共同加入的群。'}交付前核验群的文档阅读权限，失败时保留文档。
                   </FieldDescription>
                   {value.contact_selection_protocol === 1 ? <FeishuPresetContacts value={value.contacts || []} onChange={contacts => change({ contacts })} disabled={busy || !value.connected || value.expired || verificationUnavailable} connectionKey={statusRequest.current} connectionCurrent={() => displayedStatus === statusRequest.current && isCurrentOwner()} /> : <FieldDescription>当前服务暂不支持选择预设联系人；已保存的联系人继续保留。</FieldDescription>}
                   {groupError && !groupPicker && (
@@ -587,7 +642,7 @@ export function FeishuSettings() {
                 </Field>
                 <FieldDescription>
                   {canEnableAutomatic
-                    ? "仅这台桌面今后成功生成并保存的新个人会议纪要自动交付。历史稿、编辑稿和失败任务不发送；尚未交给服务的任务需要应用运行。"
+                    ? "仅这台桌面今后成功生成并保存的新个人会议纪要自动交付。历史稿、编辑稿和失败任务不发送；请保持应用运行。"
                     : "当前服务暂不支持经确认的自动交付，可在详情页手动发布。"}
                 </FieldDescription>
                 <FieldDescription>{!value.notify_self && !value.groups.length && !value.contacts?.length ? '未选择通知对象：自动交付只创建文档，不发送通知。' : '通知所选联系人和群时会授予文档阅读权限。'}</FieldDescription>
@@ -624,9 +679,15 @@ export function FeishuSettings() {
               {busy ? "处理中…" : saveFailed && dirty ? "重试保存" : "保存设置"}
             </Button>
           </div></>}
+          </TabsContent>
+          <TabsContent value="hotwords">
+            {value.connected && !value.expired && !verificationUnavailable
+              ? <FeishuObjectHotwords key={JSON.stringify([owner, identityVisit])} connectionKey={statusRequest.current} connectionCurrent={() => displayedStatus === statusRequest.current && isCurrentOwner()} />
+              : <Alert><AlertDescription>请先在授权页签连接飞书，再读取当前可见对象。</AlertDescription></Alert>}
+          </TabsContent>
         </>
       )}
-      <FeishuApplicationSetup key={JSON.stringify([owner, identityVisit])} onChanged={() => void load()} />
+      </Tabs>
       <AlertDialog open={!!consent} onOpenChange={open => { if (!open) setConsent(null) }}>
         <AlertDialogContent>
           <AlertDialogHeader>
@@ -636,7 +697,7 @@ export function FeishuSettings() {
           <div className="flex flex-col gap-3 text-sm">
             <p>文档位置：{consent?.destinationLabel}</p>
             <p>通知对象：{consent?.recipientLabel}</p>
-            <p>{consent?.snapshot.auto_publish ? '通知联系人或群会授予文档阅读权限。断开飞书或关闭自动交付将停止尚未启动的任务；服务接收后可继续，未交给服务的任务需要应用保持运行。' : '当前仅保存预设。将来开启自动交付时需要再次确认目的地、通知对象和阅读权限。'}</p>
+            <p>{consent?.snapshot.auto_publish ? '通知联系人或群会授予文档阅读权限。断开飞书或关闭自动交付将停止尚未启动的任务；自动交付需要应用保持运行。' : '当前仅保存预设。将来开启自动交付时需要再次确认目的地、通知对象和阅读权限。'}</p>
           </div>
           <AlertDialogFooter>
             <AlertDialogCancel>取消，保留修改</AlertDialogCancel>
@@ -670,7 +731,7 @@ export function FeishuSettings() {
                     </FieldLabel>
                     <Input
                       id="feishu-group-search"
-                      placeholder="搜索机器人已加入的群"
+                      placeholder={cliMode ? '搜索当前账号可见的群' : '搜索机器人已加入的群'}
                       value={query}
                       onChange={(event) => setQuery(event.target.value)}
                     />
@@ -711,7 +772,7 @@ export function FeishuSettings() {
                   {groupsLoading && <p role="status" className="text-sm text-muted-foreground">正在读取群列表，已选群继续保留…</p>}
                   {groupsLoaded && !groupsLoading && groups.length === 0 && !groupError && (
                     <FieldDescription>
-                      没有可用群。请将机器人加入目标群，再刷新。
+                      {cliMode ? '暂未读取到可用群，请确认当前账号已加入目标群后刷新。' : '没有可用群。请将机器人加入目标群，再刷新。'}
                     </FieldDescription>
                   )}
                   {groups.length > 0 &&

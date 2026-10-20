@@ -26,6 +26,8 @@ from app.services import feishu_auto_runtime as runtime, feishu_auto_outbox as o
 
 @pytest.fixture
 def queue(tmp_path, monkeypatch):
+    from app.services import feishu_cli
+    monkeypatch.setattr(feishu_cli, 'enabled', lambda: True)
     engine = create_engine('sqlite:///' + (tmp_path / 'queue.db').as_posix(),
                            connect_args={'check_same_thread': False, 'timeout': 5})
     Base.metadata.create_all(engine)
@@ -45,9 +47,9 @@ def queue(tmp_path, monkeypatch):
     with scope() as db:
         db.add(NoteDB(id=note, created_by='alice', scope='personal', title=body['title'], content=body['content']))
         db.add(FeishuDevicePolicyDB(user_id='alice', policy_id=policy, enabled=True,
-                                   integration_origin='', cloud_owner='alice'))
+                                   integration_origin='cli://device', cloud_owner='alice'))
         db.add(FeishuAutoOutboxDB(id=operation, user_id='alice', note_id=note,
-                                 policy_id=policy, integration_origin='', cloud_owner='alice',
+                                 policy_id=policy, integration_origin='cli://device', cloud_owner='alice',
                                  payload=json.dumps(body), status='queued'))
     c = SimpleNamespace(sessions=sessions, scope=scope, operation=operation, note=note,
                         policy=policy, job=job, body=body)
@@ -326,6 +328,4 @@ def test_network_unknown_lookup_uses_original_origin_and_operation_never_resubmi
 
     monkeypatch.setattr(httpx, 'request', request)
     assert runtime.check_local('alice', c.note)['status'] == 'unknown'
-    assert len(calls) == 1 and calls[0][0] == 'GET'
-    assert calls[0][1] == settings.feishu_service_url + '/api/feishu/deliveries/by-operation/' + c.operation
-    assert 'json' not in calls[0][2] and calls[0][2]['follow_redirects'] is False
+    assert calls == []  # No historical Hong Kong lookup or new handoff.

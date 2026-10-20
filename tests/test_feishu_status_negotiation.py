@@ -44,7 +44,7 @@ def test_bearer_status_negotiates_only_automatic_display(contact_service, negoti
         headers['X-VINote-Automatic-Delivery'] = protocol
     response = client.get('/api/feishu/status', headers=headers)
     assert response.status_code == 200
-    expected = internal if protocol == '1' else {**internal, 'auto_publish': False,
+    expected = {**internal, 'auto_publish': False,
         'capabilities': {**internal['capabilities'], 'background_delivery': False}}
     # All manual capabilities, verified contacts and policy fields stay intact.
     assert response.json() == expected
@@ -60,7 +60,9 @@ def test_negotiation_header_does_not_authenticate(negotiated_client):
     verify.assert_not_called()
 
 
-def test_cookie_status_without_header_uses_device_overlay(negotiated_client, contact_service):
+def test_cookie_status_without_header_uses_device_overlay(negotiated_client, contact_service, monkeypatch):
+    from app.services import feishu_cli
+    monkeypatch.setattr(feishu_cli, 'enabled', lambda: True)
     client, runtime, _ = negotiated_client
     client.app.dependency_overrides[feishu.principal] = lambda: ('a', 'local-a')
     internal = contact_service.status('a')
@@ -77,7 +79,7 @@ def test_cookie_status_without_header_uses_device_overlay(negotiated_client, con
     ('PUT', '/api/feishu/preferences', {'auto_publish': False}),
     ('POST', '/api/feishu/deliveries', {'note_key': 'synthetic-note', 'title': 'Title', 'content': 'Body'}),
 ])
-def test_proxy_adds_fixed_protocol_without_forwarding_source_headers(negotiated_client, monkeypatch, method, path, body):
+def test_legacy_http_proxy_never_adds_automatic_protocol_or_source_headers(negotiated_client, monkeypatch, method, path, body):
     client, _, _ = negotiated_client
     client.app.dependency_overrides[feishu.principal] = lambda: ('a', 'local-a')
     monkeypatch.setattr(module.settings, 'feishu_service_url', 'https://synthetic-integration.example')
@@ -91,16 +93,15 @@ def test_proxy_adds_fixed_protocol_without_forwarding_source_headers(negotiated_
     outbound.assert_called_once()
     args, kwargs = outbound.call_args
     assert args == (method, 'https://synthetic-integration.example' + path)
-    assert kwargs['headers'] == {'Authorization': 'Bearer owned-session-token',
-                                 'X-VINote-Automatic-Delivery': '1'}
+    assert kwargs['headers'] == {'Authorization': 'Bearer owned-session-token'}
 
 
-def test_automatic_post_is_not_gated_by_display_header(contact_service, negotiated_client):
+def test_automatic_post_is_not_exposed_by_cloud_http(contact_service, negotiated_client):
     client, runtime, _ = negotiated_client
     chosen = contact_service.status('a')['automatic_delivery']['policy_id']
     response = client.post('/api/feishu/automatic-deliveries',
         headers={'Authorization': 'Bearer synthetic-owner-token'}, json={
             'operation_id': str(uuid.uuid4()), 'policy_id': chosen, 'note_key': 'synthetic-new-note',
             'title': 'Title', 'content': 'Complete synthetic minutes'})
-    assert response.status_code == 200 and response.json()['automatic_policy_id'] == chosen
-    runtime.wake.assert_called_once()
+    assert response.status_code == 404
+    runtime.wake.assert_not_called()

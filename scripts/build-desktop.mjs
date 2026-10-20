@@ -6,6 +6,7 @@ import { resolveDesktopProfile, checksum, publicTracingReceipt } from './desktop
 import { root, python, loadEnv } from './runtime.mjs'
 import { bootstrap } from './bootstrap-dev.mjs'
 import { assertProjectVersion } from './project-version.mjs'
+import { resolveLarkCli } from './lark-cli-bundle.mjs'
 const { values } = parseArgs({ options: {
   channel: { type: 'string', default: 'release' },
   'build-id': { type: 'string' }, plan: { type: 'boolean', default: false },
@@ -54,6 +55,12 @@ for (const tool of ['ffmpeg', 'ffprobe']) {
   if (!found) throw new Error(`Install ${tool} or set VINOTE_${tool.toUpperCase()}_PATH`)
   copyFileSync(found, join(staging, 'bin', tool + (process.platform === 'win32' ? '.exe' : '')))
 }
+// Include only the executable, never ~/.lark-cli, profiles or credentials.
+const cliBinary = resolveLarkCli()
+const cliProbe = spawnSync(cliBinary, ['--version'], { encoding: 'utf8', windowsHide: true, timeout: 10000 })
+const cliVersion = cliProbe.stdout?.match(/^lark-cli version (\d+\.\d+\.\d+)/m)?.[1]
+if (cliProbe.status !== 0 || !cliVersion) throw new Error('The official lark-cli version could not be verified')
+copyFileSync(cliBinary, join(staging, 'bin', 'lark-cli' + (process.platform === 'win32' ? '.exe' : '')))
 exec(process.execPath, [join(root, 'frontend/node_modules/typescript/bin/tsc')], { cwd: join(root, 'frontend') })
 exec(process.execPath, [join(root, 'frontend/node_modules/vite/bin/vite.js'), 'build'], {
   cwd: join(root, 'frontend'), env: { ...process.env, VINOTE_DESKTOP_BUILD: 'true', VITE_API_BASE_URL: '' },
@@ -132,6 +139,6 @@ const dirty = gitRun('diff', '--quiet').status !== 0
 writeFileSync(join(artifacts, 'manifest.json'), JSON.stringify({ channel: profile.channel, version: profile.version,
   buildId: profile.buildId, identifier: profile.identifier,
   platform: process.platform, arch: process.arch, commit: git('rev-parse', 'HEAD'),
-  dirty,
+  dirty, feishuCli: { version: cliVersion, sha256: checksum(readFileSync(cliBinary)) },
   langfuse: publicTracingReceipt(JSON.parse(readFileSync(join(staging, 'smoke-data/langfuse-smoke.json'), 'utf8'))), files }, null, 2))
 console.log(`Desktop ${profile.channel} artifacts: ${artifacts}`)

@@ -144,6 +144,8 @@ def test_automatic_snapshot_stops_after_policy_or_binding_revocation(contact_ser
 
 @pytest.fixture
 def http_client(contact_service, monkeypatch):
+    from app.services import feishu_cli
+    monkeypatch.setattr(feishu_cli, 'enabled', lambda: True)
     runtime = SimpleNamespace(background_ready=lambda: False, wake=Mock(), decorate_status=Mock(side_effect=lambda identity, result: result),
                               bind_device_policy=Mock(), guard_manual_publish=Mock())
     monkeypatch.setitem(sys.modules, 'app.services.feishu_auto_runtime', runtime)
@@ -158,18 +160,18 @@ def http_client(contact_service, monkeypatch):
         yield client, runtime
 
 
-def test_automatic_http_strict_body_wakes_worker_never_background_process(contact_service, http_client, monkeypatch):
+def test_public_automatic_endpoint_is_absent_desktop_owns_dispatch(contact_service, http_client, monkeypatch):
     client, runtime = http_client
     chosen = policy_id(enable(contact_service, monkeypatch))
     process = Mock(side_effect=AssertionError('route cannot process directly'))
     monkeypatch.setattr(contact_service, 'process', process)
     body = dict(operation_id=str(uuid.uuid4()), policy_id=chosen, note_key='synthetic-http', title='Title', content='Body')
     for extra in ('targets', 'model', 'desired_destination', 'automatic', 'contacts'):
-        assert client.post('/api/feishu/automatic-deliveries', json={**body, extra: []}).status_code == 422
+        assert client.post('/api/feishu/automatic-deliveries', json={**body, extra: []}).status_code == 404
     response = client.post('/api/feishu/automatic-deliveries', json=body)
-    assert response.status_code == 200 and '_dispatch_required' not in response.json()
-    assert client.get('/api/feishu/deliveries/by-operation/' + body['operation_id']).json()['id'] == response.json()['id']
-    runtime.wake.assert_called_once()
+    assert response.status_code == 404
+    assert client.get('/api/feishu/deliveries/by-operation/' + body['operation_id']).status_code == 404
+    runtime.wake.assert_not_called()
     process.assert_not_called()
 
 
@@ -465,37 +467,26 @@ def test_policy_receipt_and_pending_note_are_isolated_by_owner(contact_service, 
         assert db.get(module.FeishuDeliveryDB, manual['id']).owner == 'b'
 
 
-def test_local_successful_preferences_bind_only_after_remote_acceptance(http_client, monkeypatch):
+def test_cli_preferences_bind_only_after_local_acceptance(http_client, contact_service, monkeypatch):
     client, runtime = http_client
-    remote_status = {'automatic_delivery_protocol': 1}
     accepted = {'automatic_delivery_protocol': 1, 'auto_publish': True,
                 'automatic_delivery': {'enabled': True, 'policy_id': str(uuid.uuid4())}}
-    calls = []
-
-    def proxy(identity, method, path, body=None):
-        runtime.bind_device_policy.assert_not_called()
-        calls.append((method, path))
-        return True, remote_status if method == 'GET' else accepted
-
-    monkeypatch.setattr(feishu, 'proxy', proxy)
+    monkeypatch.setattr(contact_service, 'save_preferences', lambda *a: accepted)
     response = client.put('/api/feishu/preferences', json={'auto_publish': True,
         'notify_self': True, 'automatic_delivery_consent': True})
-    assert response.status_code == 200 and calls == [('GET', '/status'), ('PUT', '/preferences')]
+    assert response.status_code == 200
     runtime.bind_device_policy.assert_called_once_with('local-a', accepted)
 
 
-def test_legacy_remote_cannot_silently_ignore_new_automatic_policy(http_client, monkeypatch):
+def test_http_client_cannot_forward_automatic_consent_to_remote(http_client, monkeypatch):
+    from app.services import feishu_cli
     client, runtime = http_client
+    monkeypatch.setattr(feishu_cli, 'enabled', lambda: False)
     calls = []
-
-    def proxy(identity, method, path, body=None):
-        calls.append((method, path))
-        return True, {'connected': True}
-
-    monkeypatch.setattr(feishu, 'proxy', proxy)
+    monkeypatch.setattr(feishu, 'proxy', lambda *args: calls.append(args) or (True, {}))
     assert client.put('/api/feishu/preferences', json={'auto_publish': True,
         'automatic_delivery_consent': True}).status_code == 409
-    assert calls == [('GET', '/status')]
+    assert not calls
     runtime.bind_device_policy.assert_not_called()
 
 

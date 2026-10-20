@@ -46,6 +46,8 @@ def create_app() -> FastAPI:
     def shutdown_tracing():
         from app.services import feishu_auto_runtime
         feishu_auto_runtime.stop()
+        from app.services import feishu_cli
+        feishu_cli.shutdown()
         from app.services.tracing_service import shutdown
         shutdown()
 
@@ -86,6 +88,9 @@ def create_app() -> FastAPI:
     from app.routers import feishu_auto_local
     app.include_router(feishu_auto_local.router, prefix="/api")
     app.include_router(feishu_auto_local.device_router, prefix="/api")
+    if settings.desktop_runtime:
+        from app.routers import feishu_object_hotwords
+        app.include_router(feishu_object_hotwords.router, prefix="/api")
     app.include_router(share.private_router, prefix="/api")
     app.include_router(preferences.router, prefix="/api")
     app.include_router(model_profiles.router, prefix="/api")

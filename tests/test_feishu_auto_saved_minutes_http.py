@@ -25,6 +25,8 @@ from test_feishu_delivery import service  # noqa: F401
 def test_confirm_preferences_save_minutes_dispatch_readback_edit_reopen_and_disable(
         contact_service, monkeypatch, tmp_path, lost_response):
     instance, events, accepted = contact_service, [], []
+    from app.services import feishu_cli
+    monkeypatch.setattr(feishu_cli, 'enabled', lambda: True)
     monkeypatch.setattr(settings, 'feishu_service_url', '')
     monkeypatch.setattr(settings, 'output_dir', tmp_path / 'output')
     monkeypatch.setattr(note_repository, 'session_scope', module.session_scope)

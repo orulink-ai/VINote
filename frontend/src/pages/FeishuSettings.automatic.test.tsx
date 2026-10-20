@@ -13,7 +13,8 @@ const base: FeishuStatus = { configured: true, connected: true, expired: false, 
 const proof = { open_id: 'ou_new', name: '服务端联系人', selection_token: 'short-lived-proof', expiresAt: Date.now() + 900000 };
 const page = (items = [proof], more = false): FeishuContactPage => ({ items, has_more: more, page_token: more ? 'next-page' : '', selection_expires_in: 900 });
 const puts = () => vi.mocked(apiJson).mock.calls.filter(([path, options]) => path === '/api/feishu/preferences' && options?.method === 'PUT');
-const mount = () => render(<MemoryRouter><FeishuSettings /></MemoryRouter>);
+const tab = (name: string) => fireEvent.mouseDown(screen.getByRole('tab', { name }));
+const mount = () => { const view = render(<MemoryRouter><FeishuSettings /></MemoryRouter>); tab('会议纪要发送设置'); return view };
 const ready = async () => { await screen.findByRole('switch', { name: '自动交付新纪要' }); await waitFor(() => expect(screen.getByRole('checkbox', { name: '发给我本人' })).toBeEnabled()) };
 const verify = async () => { fireEvent.click(screen.getByRole('button', { name: '核验位置与权限' })); await waitFor(() => expect(screen.getByRole('button', { name: '保存设置' })).toBeEnabled()) };
 beforeEach(() => {
@@ -190,7 +191,7 @@ it('same-owner disconnect invalidates a pending contact query before it can retu
   let finish!: (value: FeishuContactPage) => void;
   vi.mocked(feishuContacts).mockImplementationOnce(() => new Promise(resolve => { finish = resolve })); mount(); await ready();
   fireEvent.change(screen.getByLabelText('预设通知联系人'), { target: { value: '姓名' } }); fireEvent.click(screen.getByRole('button', { name: '搜索联系人' }));
-  fireEvent.click(screen.getByRole('button', { name: '断开' }));
+  tab('授权'); fireEvent.click(screen.getByRole('button', { name: '断开' }));
   vi.mocked(feishuStatus).mockResolvedValue({ ...base, connected: false });
   fireEvent.click(await screen.findByRole('button', { name: '断开连接' })); await waitFor(() => expect(feishuStatus).toHaveBeenCalledTimes(2));
   await act(async () => finish(page())); expect(screen.queryByRole('button', { name: '选择联系人服务端联系人' })).toBeNull(); expect(puts()).toHaveLength(0);

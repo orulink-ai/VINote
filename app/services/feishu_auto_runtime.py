@@ -1,8 +1,7 @@
 """One bounded durable dispatcher per process; unknown writes are never replayed.
 
-Device rows hand off a frozen saved body exactly once. The integration process
-independently drains accepted automatic deliveries using existing side-effect
-journals. This is deliberate publication, not workspace synchronization.
+The desktop drains a frozen saved body through its own CLI connection and
+existing side-effect journals. No integration-server handoff or cloud worker.
 """
 import json
 import logging
@@ -10,11 +9,9 @@ import threading
 import time
 import uuid
 
-import httpx
 from fastapi import HTTPException
 from sqlalchemy import Float, cast, select, update
 
-from app.config import settings
 from app.db import session_scope
 from app.db_models import FeishuDeliveryDB, NoteDB
 from app.models.feishu_auto_delivery import FeishuAutoOutboxDB, FeishuDevicePolicyDB
@@ -105,7 +102,7 @@ class HandoffError(Exception):
 
 def _assert_binding(row, *, policy_required):
     with session_scope() as db:
-        if (row.integration_origin != settings.feishu_service_url
+        if (row.integration_origin != outbox.integration_origin()
                 or row.cloud_owner != outbox.cloud_owner(db, row.user_id)):
             raise HandoffError("交付绑定的账号或服务已变化，未发送到其他账号或地址", cancelled=True)
         if policy_required:
@@ -119,45 +116,22 @@ def _assert_binding(row, *, policy_required):
 
 def _request(row, *, read_only):
     """No credentials persisted, no model call, no redirects or HTTP retries."""
-    from app.services.cloud_account_service import CloudAccountService
     from app.services.feishu_service import FeishuService
 
     _assert_binding(row, policy_required=not read_only)
-    if not row.integration_origin:
+    from app.services.feishu_cli import enabled
+    if enabled():
+        if row.integration_origin != "cli://device":
+            raise HandoffError("原交付来自另一连接方式，请只核验原回执", cancelled=True)
         service = FeishuService().for_owner(row.cloud_owner)
         try:
             return (service.delivery_by_operation(row.cloud_owner, row.id) if read_only else
                     service.enqueue_automatic(row.cloud_owner, **json.loads(row.payload)))
         except HTTPException as exc:
-            if read_only and exc.status_code == 404:
-                raise HandoffError("尚未查到原服务回执；保留原提交，不会重复发送", uncertain=True) from None
-            raise HandoffError("交付尚未确认，请核验原结果" if exc.status_code >= 500 else str(exc.detail),
-                               uncertain=exc.status_code >= 500 or exc.status_code == 409) from None
-    try:
-        token = CloudAccountService().access_token(row.user_id)
-    except HTTPException:
-        raise HandoffError("账号暂时无法核验，纪要已保存；请登录后手动发布") from None
-    # Refresh can take time: recheck identity/consent immediately before dispatch.
-    _assert_binding(row, policy_required=not read_only)
-    path = ("/api/feishu/deliveries/by-operation/" + row.id if read_only else
-            "/api/feishu/automatic-deliveries")
-    try:
-        response = httpx.request("GET" if read_only else "POST", row.integration_origin + path,
-                                headers={"Authorization": "Bearer " + token},
-                                **({} if read_only else {"json": json.loads(row.payload)}),
-                                timeout=45, follow_redirects=False, trust_env=False)
-    except httpx.RequestError:
-        raise HandoffError("自动交付响应尚未确认，请核验原结果；不会重复提交", uncertain=True) from None
-    if not response.is_success:
-        if read_only and response.status_code == 404:
-            raise HandoffError("尚未查到原服务回执；保留原提交，不会重复发送", uncertain=True)
-        raise HandoffError("自动交付未完成，请核验原结果" if response.status_code >= 500 else
-                           "自动交付被服务拒绝，纪要已保存，请检查连接与发布设置",
-                           uncertain=response.status_code >= 500 or response.status_code == 409)
-    try:
-        return response.json()
-    except ValueError:
-        raise HandoffError("服务回执无法读取，请核验原结果；不会重复提交", uncertain=True) from None
+            raise HandoffError(str(exc.detail), uncertain=(read_only or exc.status_code >= 500
+                                                          or getattr(exc, "uncertain", False))) from None
+    # Never transfer a device-owned publication to any integration server.
+    raise HandoffError("桌面飞书连接未启用，未提交此纪要", cancelled=True)
 
 
 def attempt_device(operation_id, *, read_only=False):
@@ -210,6 +184,9 @@ def check_local(user_id, note_id):
 def run_once():
     """A bounded pass; no failure retry loop or scan of historical content."""
     from app.services.feishu_service import FeishuService
+    from app.services.feishu_cli import enabled
+    if not enabled():
+        return
 
     now = time.time()
     with session_scope() as db:
@@ -268,6 +245,9 @@ def _worker_main():
 
 def start():
     global _desired_running
+    from app.services.feishu_cli import enabled
+    if not enabled():
+        return
     with _lifecycle:
         _desired_running = True
         # A previous stop may still be waiting for an in-flight provider call.
