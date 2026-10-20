@@ -45,6 +45,32 @@ def depth_instructions(depth=None):
     return instructions.get(depth, '') + ('\nChoose headings from the actual content; no fixed sections, counts or action tables. The report field contains Markdown facts only; do not generate HTML, images, image URLs or screenshot placeholders.' if depth else '')
 
 
+def final_depth_selection(depth):
+    """Resolve publication selection separately from complete source checking."""
+    choices = {
+        'brief': ('Select a short introduction to the meeting purpose, main substantive results or arrangements, '
+                  'and constraints necessary to understand them. Secondary specifications, comparisons, examples '
+                  'and supporting detail may remain out of the report even when valid and material. '
+                  'Do not turn an introduction into a topic-by-topic source inventory.'),
+        'concise': ('Select a compact account of the substantive topics, their important outcomes or open choices, '
+                    'rationale and actionable follow-ups. Secondary valid details may remain out of the report; '
+                    'keep a necessary condition or disagreement with every selected proposition.'),
+        'detailed': ('Include every still-valid material proposition, naturally consolidating duplicates without '
+                     'losing distinct relationships or qualifiers. Do not use omitted_for_depth for material=true.'),
+    }
+    if depth not in choices:
+        return ''
+    return ('\nFINAL REPORT SELECTION PRIORITY. Complete source checking is not complete source publication. '
+            'The requested depth controls which valid propositions enter reader-facing blocks; generic '
+            'preserve/restore instructions require accuracy of the selected propositions, not publication of '
+            'every checked detail at every depth. ' + choices[depth] +
+            (' For brief and concise, use omitted_for_depth with a real selection reason for a valid unselected '
+             'claim, including material=true; keep its frozen id, field and material unchanged. Do not falsely '
+             'reject or reclassify it to shorten the report.' if depth != 'detailed' else '') +
+            ' The complete claim ledger may be longer than the report. Keep its accounting outside the '
+            'reader-facing blocks. No truncation, fixed headings or extra model call.')
+
+
 def presentation_availability(*, has_visuals):
     return {
         'text': {'available': True},

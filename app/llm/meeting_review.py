@@ -56,6 +56,8 @@ Keep offsets internal unless the user explicitly requests recording references. 
                 'Keep the reader-facing blocks free of internal ASR/FRAME references and evidence ledgers; '
                 'return the machine-readable final claim ledger required below outside those blocks.')
             rules += '\n\n' + REVIEW_MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + review_protocol(state.presentation)
+            from app.llm.meeting_presentation import final_depth_selection
+            rules += '\n' + final_depth_selection(state.depth)
             from app.llm.meeting_visual_review import visual_review_instructions
             rules += visual_review_instructions(state.presentation, protocol=4)
             if state.presentation == 'illustrated':
@@ -64,13 +66,28 @@ Keep offsets internal unless the user explicitly requests recording references. 
                     '"after_block_id":"B1",'
                     '"caption":"brief supported description of the actual frame"}. '
                     'Each selected frame must be in the cited included claim evidence and independently support its object/relationship; '
+                    'Use each after_block_id only once. Every listed claim_id must include that exact block in '
+                    'its block_ids and that exact frame_ref in its own evidence; a neighboring block or frame '
+                    'does not qualify. Choose fewer well-bound figures rather than filling a quota or attaching '
+                    'unmatched claims to a figure. '
                     'timing proximity alone is insufficient. Return no arbitrary URL. No valid relevant frame means illustrated is incomplete, '
                     'never select opening frames or decorative screenshots just to fill a quota.')
     source_label = "Reviewed chunk notes" if source_is_reviewed_notes else "Original transcript"
+    user_prompt = (
+        f"Explicit context and terminology:\n{extras or '(none)'}\n\n"
+        f"{source_label}:\n{source}\n\nDraft to check:\n{draft}"
+    )
+    if structured:
+        # The working interpretation must not replace the original as the last
+        # source text the reviewer sees. Keep both complete, without another call.
+        user_prompt = (
+            f"Fallible working draft to audit (not evidence):\n{draft}\n\n"
+            f"Explicit context and terminology:\n{extras or '(none)'}\n\n"
+            f"{source_label}:\n{source}\n\n"
+            "Use the original material to correct the working interpretation, then select the report "
+            "at the requested depth. Account for every frozen original claim outside the report blocks."
+        )
     return {
         "system_prompt": meeting_system_base(language, structured=structured) + "\n\n" + rules,
-        "user_prompt": (
-            f"Explicit context and terminology:\n{extras or '(none)'}\n\n"
-            f"{source_label}:\n{source}\n\nDraft to check:\n{draft}"
-        ),
+        "user_prompt": user_prompt,
     }

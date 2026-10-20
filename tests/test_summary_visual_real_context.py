@@ -116,6 +116,11 @@ def test_real_slotted_context_hands_review_state_to_render_and_private_artifact(
         'claim_sources': {'C1': ['[ASR:0001]', '[FRAME:0001]']}}
     assert context.presentation_figures is None
     assert len(automatic.calls) == 2 and 'summarize' in context.step_timings
+    from app.llm.meeting_presentation import depth_instructions, final_depth_selection
+    assert final_depth_selection(depth) in automatic.calls[1]['system_prompt']
+    assert depth_instructions(depth).replace('The report field contains Markdown facts only;',
+        'Report blocks[].markdown contain Markdown facts only;') in automatic.calls[1]['system_prompt']
+    assert final_depth_selection(depth) not in automatic.calls[0]['system_prompt']
     runner.llm_service.create_summarizer.assert_called_once_with(user_id=c.owner,
         model_profile_id=None, model_name=context.model_name, api_key=None, base_url=None)
     runner.transcription_service.transcribe.assert_not_called()

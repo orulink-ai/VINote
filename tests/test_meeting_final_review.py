@@ -94,6 +94,9 @@ def test_all_new_hosts_keep_two_calls_full_source_raw4_and_real_rendering(case, 
     with presentation_scope(depth, presentation) as state, capture_working_draft(observed.append):
         body = automatic.summarize('Synthetic', [TranscriptSegment(0, 10, SOURCE)], style='meeting',
                                    video_evidence=c.evidence)
+        from app.llm.meeting_presentation import final_depth_selection
+        assert final_depth_selection(depth) in automatic.calls[1]['system_prompt']
+        assert final_depth_selection(depth) not in automatic.calls[0]['system_prompt']
         assert state.raw_review == raw4
         context = SimpleNamespace(task_id=str(uuid4()), task_dir=child, user_id='fixture',
             presentation=presentation, video_evidence=c.evidence, presentation_figures=state.figures,

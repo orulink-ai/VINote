@@ -57,3 +57,8 @@ def test_materiality_contract_is_specific_to_the_actual_stage(language, depth, p
     assert 'Do not reclassify original.material' in review['system_prompt']
     assert 'Classify material only for genuinely new source-supported claim IDs' in review['system_prompt']
     assert 'specific valid source-grounded reason' in review['system_prompt']
+    assert review['user_prompt'].index('Fallible original claims') < review['user_prompt'].index(source)
+    assert review['user_prompt'].count(source) == 1
+    from app.llm.meeting_presentation import final_depth_selection
+    assert final_depth_selection(depth) in review['system_prompt']
+    assert final_depth_selection(depth) not in draft['system_prompt']
