@@ -440,3 +440,9 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 原进度第二步在LLM仍生成时显示“核对共享画面与发言：已完成”，含义超出材料准备。七文件只改展示文案为“整理共享画面与发言资料”，所有阶段key/状态判断/请求/消息allowlist键保持，最终生成核对及保存仍独立。187项既有定向测试、TS通过，独立机械还原逐字相同并复验8项，无阻断；原生HMR实际截图A-text-native-material-preparation-copy.png，完成截图A-text-native-saved.png。文案修正不等于改善模型内容分。
 
 最终前端136文件/1628项通过，70.41秒，生产构建12.00秒通过。V14完整后端4434 passed、3 skipped、19 subtests、362 warnings，638.40秒；385个Python源码开始/结束指纹一致，虽然期间提交从08664ee变245bf93，测试源码没有变化。后端与前端回归、原生运行、模型内容评分及正式安装包/知识库交付是不同验收范围；没有合并、发布、部署或追加真实通知。
+
+### V14 原生末段播放与原件定位补验
+
+A信息图note e064a2a8-c205-5ef5-8353-d66086ee6eed关联canonical原录屏；真实播放器在14:17 seek后播放出淘宝画面，随后定位28:00持续播放至28:17，并实际自然到28:32末帧停止，滑块1712.530秒。不是仅读取metadata或逐字稿时间跳转；没有从头连续观看全片，也没有把UIA一帧落后的时间值当真实画面。证据A-video-mid-play.png、A-video-end-playback.png。
+
+展开“原视频文件”，实际显示“在文件夹中显示”“另存为…”及187.8MB。点击定位原件后，资源管理器打开受验收来源目录并选中source_video.webm，而非.playback-preview派生目录；应用显示已打开并定位原文件，未启动视频外部播放器。证据A-original-selected-explorer.png，只读目录和选择核验，无文件删除/移动/覆盖。A/B信息图本轮SVG/PNG实际原生SaveAs及完整导出独评分别记录在质量进度，不以呈现成功抵消事实扣分。
