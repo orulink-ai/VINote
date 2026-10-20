@@ -36,3 +36,11 @@ TypeScript 及生产前端构建通过。当前 feature node_modules 中 Rollup 
 原任务/回执/测试意图及离线 DB 副本保留。只读检查确认文档仍是创建后的默认分享设置，private PATCH 未落地；没有把空文档当真实会议内容发布。已验证：实际身份 GET 约 0.08～0.42 秒，后台线程身份读取 0.87 秒；原数据库副本配同 snapshot/policy、保留实际身份元数据写入的完整 process 可离线通过权限阶段；原生身份 GET 加写前拒绝的后台 process 预检 2.04 秒。以上未证实原卡顿根因。诊断工具读取现存 API worker 栈时其已空闲，原 harness 已退出，因此没有阻塞现场栈；不能臆断为 provider、SQLite 或锁的问题。
 
 准备了独立测试数据库、单一 worker、逐 CLI 调用耗时及周期线程栈的诊断脚本，尚未执行任何新的写入。若需再次实发，必须取得新的单次许可；不复用已关闭的原策略或改写原回执绕过授权。VILab、ASR/LLM、App、香港服务器及热更新均未改动。
+
+## 后续单 worker 自动交付：通过
+
+用户再次明确许可后，改用独立测试数据库和单一正常 worker，并记录逐 CLI 调用耗时/周期线程栈。未修改提供方适配器、未替换真实 CLI，完成元数据仍为明确的虚构 fixture。真实保存 HTTP → 同事务 outbox → worker 自动接收 → 创建个人文档 → 关闭公开/外部分享 → 写正文 → 本人通知均完成，原 operation 回执为 completed、phase=completed、execution_location=device，只有一个 recipient 且 sent。保存正文重新打开、官方 API 回读和真实飞书网页正文核对通过；原关闭设置已恢复。没有 ASR/LLM、真实会议材料或群消息。
+
+此结果证明正常单 worker 场景的真实自动交付；不抹除上一次共享测试 DB、多 worker 环境的失败，也不把它武断归因于 worker 数量。原场景缺失现场栈，保留为未复现的诊断风险，未将不同 operation 的文档或回执相互替代。程序未对未知结果重放。单 worker 隔离是本次验收环境修正，不冒充已修复一个未定因的产品缺陷。
+
+本轮证据位于 ignored proof 目录的 single-worker-acceptance-receipt.json、single-worker-readback.json、single-worker-trace.log 和 automatic-document-acceptance.png。按生产单 worker 范围完成最终审查与 CI 后再合并；联系人/群第三方实发、多 backend 同 DB 的完整提供方并发及安装包仍未验收。
