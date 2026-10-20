@@ -41,10 +41,19 @@ def six(c, kind):
     return value
 
 
+def seven(c, kind):
+    value=six(c,kind);value['protocol']=7
+    value['title_ref']=dict(block_id='B1',part_index=0)
+    for claim in value['claims']:
+        claim.pop('text');claim.pop('block_ids')
+        claim['part_ref']=dict(block_id='B1',part_index=0)
+    return value
+
+
 @pytest.mark.parametrize('kind',['comic','infographic'])
 @pytest.mark.parametrize('depth',['brief','concise','detailed'])
-def test_actual_adapter_two_whole_source_calls_raw6_and_frozen_image_input(case,monkeypatch,kind,depth):
-    c=case; value=six(c,kind)
+def test_actual_adapter_two_whole_source_calls_raw7_and_frozen_image_input(case,monkeypatch,kind,depth):
+    c=case; value=seven(c,kind)
     raw3=json.dumps(c.material); raw6=json.dumps(value,ensure_ascii=False,indent=2)
     calls=[]; captured=[]; saved=[]
     monkeypatch.setattr('app.services.tracing_service.observation',lambda *a,**k:nullcontext(None))
@@ -66,10 +75,10 @@ def test_actual_adapter_two_whole_source_calls_raw6_and_frozen_image_input(case,
         assert render_review_visual(None,context,body)==SOURCE
     assert len(calls)==2 and captured==[raw3] and state.raw_review==raw6
     assert saved[0]['visual_protocol']==1 and saved[0]['body_sha256']==hashlib.sha256(SOURCE.encode()).hexdigest()
-    assert state.expected_review_protocol==6
+    assert state.expected_review_protocol==7
     assert 'PROTOCOL 3' in calls[0]['messages'][0]['content']
     rules=calls[1]['messages'][0]['content']
-    assert 'PROTOCOL 6' in rules and 'STRING PARTS AND VISUAL-REF/3' in rules
+    assert 'PROTOCOL 7' in rules and 'SINGLE-COPY PARTS AND VISUAL-REF/3' in rules
     assert 'All labels must be short unchanged contiguous substrings' not in rules
     assert 'Markdown belongs only inside blocks[].markdown' not in rules
     material=[]
@@ -88,13 +97,13 @@ def test_actual_adapter_two_whole_source_calls_raw6_and_frozen_image_input(case,
 
 
 @pytest.mark.parametrize('kind',['comic','infographic'])
-@pytest.mark.parametrize('old_protocol',[4,5])
+@pytest.mark.parametrize('old_protocol',[4,5,6])
 def test_new_actual_graphic_call_rejects_explicit_legacy_without_retry_or_partial_graphic(case,monkeypatch,kind,old_protocol):
     c=case; calls=[]
     monkeypatch.setattr('app.services.tracing_service.observation',lambda *a,**k:nullcontext(None))
     def request(*a,**k):
         calls.append(k)
-        raw=json.dumps(c.material if len(calls)==1 else (response(c,kind) if old_protocol==4 else five(c,kind)))
+        raw=json.dumps(c.material if len(calls)==1 else (response(c,kind) if old_protocol==4 else (five(c,kind) if old_protocol==5 else six(c,kind))))
         return dict(choices=[dict(message=dict(content=raw))])
     monkeypatch.setattr('app.llm.vilab_llm.VILabCloudService.request',request)
     llm=VILabLLM('fixture','fixture')

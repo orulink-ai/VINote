@@ -76,7 +76,7 @@ def test_actual_structured_review_builder_uses_prefixed_envelope_example(kind, i
     with presentation_scope('concise', kind) as state:
         prompts = build_meeting_review_prompts(source='Synthetic unchanged original material.',
             draft='Synthetic fallible draft.', extras=None, output_language='en')
-    assert state.expected_review_protocol == 6
+    assert state.expected_review_protocol == 7
     value = example(prompts['system_prompt'])
     assert visual_row(value, kind)['id'] == identifier
     assert 'Synthetic unchanged original material.' in prompts['user_prompt']
@@ -88,7 +88,7 @@ def test_complete_p6_prompt_examples_and_endpoint_refs_are_consistently_prefixed
         rules = build_meeting_review_prompts(source='Synthetic original material.',
             draft='Synthetic draft.', extras=None, output_language='en')['system_prompt']
     # Inspect visual contexts; shared claim examples may legitimately use N1.
-    layout = rules.split('FINAL/6 STRING PARTS AND VISUAL-REF/3.', 1)[1]
+    layout = rules.split('FINAL/7 SINGLE-COPY PARTS AND VISUAL-REF/3.', 1)[1]
     assert not re.search(r'"(?:id|from|to)"\s*:\s*"(?:N[12]|E1|S1)"', layout)
     assert visual_row(example(rules), kind)['id'] == ('VS1' if kind == 'comic' else 'VN1')
     if kind == 'comic':
@@ -98,7 +98,7 @@ def test_complete_p6_prompt_examples_and_endpoint_refs_are_consistently_prefixed
         assert len(re.findall(r'"id"\s*:\s*"VE1"', rules)) == 1
         assert '"from":"VN1","to":"VN2"' in rules
     # The change is an example convention, not a schema requirement or repair.
-    assert 'All block/claim/scene/node/edge IDs retain their global uniqueness' in rules
+    assert 'All block/claim/scene/node/edge IDs remain globally unique' in rules
 
 
 @pytest.mark.parametrize('kind', ['comic', 'infographic'])
@@ -134,8 +134,8 @@ def test_real_vilab_two_stage_adapter_second_system_contains_only_prefixed_visua
     else:
         visual = dict(protocol=3, scenes=[], diagram=dict(kind='cards', nodes=[
             dict(id='VN1', label_ref=dict(block_id='B1', part_index=0, claim_ids=['C1']))], edges=[]))
-    final = dict(protocol=6, blocks=[dict(id='B1', parts=[source])], claims=[
-        dict(id='C1', field='condition', text=source, material=True, disposition='included', block_ids=['B1'], evidence=proof)], visual=visual)
+    final = dict(protocol=7, title_ref=dict(block_id='B1',part_index=0), blocks=[dict(id='B1', parts=[source])], claims=[
+        dict(id='C1', field='condition', material=True, disposition='included', part_ref=dict(block_id='B1',part_index=0), evidence=proof)], visual=visual)
     replies = [json.dumps(draft), json.dumps(final)]
     calls = []
     def request(self, owner, method, path, **kwargs):
@@ -152,10 +152,10 @@ def test_real_vilab_two_stage_adapter_second_system_contains_only_prefixed_visua
                 llm.summarize('Synthetic', [TranscriptSegment(0, 1, source)], style='meeting')
         else:
             assert llm.summarize('Synthetic', [TranscriptSegment(0, 1, source)], style='meeting') == source
-        assert state.expected_review_protocol == 6 and state.raw_review == replies[1]
+        assert state.expected_review_protocol == 7 and state.raw_review == replies[1]
     assert len(calls) == 2
     second = calls[1]['messages'][0]['content']
-    layout = second.split('FINAL/6 STRING PARTS AND VISUAL-REF/3.', 1)[1]
+    layout = second.split('FINAL/7 SINGLE-COPY PARTS AND VISUAL-REF/3.', 1)[1]
     assert not re.search(r'"(?:id|from|to)"\s*:\s*"(?:N[12]|E1|S1)"', layout)
     assert visual_row(example(second), kind)['id'] == ('VS1' if kind == 'comic' else 'VN1')
     assert ('"from":"VN1","to":"VN2"' in second) == (kind == 'infographic')

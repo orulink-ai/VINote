@@ -752,13 +752,25 @@ class NoteService:
             # media duration without changing the source or ASR coverage clock.
             audio_meta = replace(audio_meta, duration=video_duration)
         if context.style == 'meeting':
-            heading = re.search(r'^#\s+([^\n]+)', markdown, re.M)
-            if heading:
-                topic = re.sub(r'[*_`]', '', heading.group(1)).strip().strip('#').strip()
-                source_time = re.match(r'^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*[|｜]', audio_meta.title or '')
-                if topic:
-                    title = f'{source_time.group(1)} | {topic}' if source_time and not topic.startswith(source_time.group(1)) else topic
-                    audio_meta = replace(audio_meta, title=title[:180].rstrip())
+            snapshot = context.presentation_visual
+            review = snapshot.get('review') if isinstance(snapshot, dict) else None
+            if (context.presentation in {'comic', 'infographic'} and isinstance(review, dict)
+                    and type(review.get('protocol')) is int and review['protocol'] == 7):
+                from app.llm.meeting_single_copy_projection7 import project_review7, metadata_title7
+                from app.llm.meeting_final_claim_ledger import FinalLedgerError
+                core, _ = project_review7(review, presentation=context.presentation)
+                if '\n\n'.join(row['markdown'] for row in core['blocks']).strip() != markdown:
+                    raise FinalLedgerError('changed_final_body')
+                title = metadata_title7(review, presentation=context.presentation, source_title=audio_meta.title)
+                audio_meta = replace(audio_meta, title=title)
+            else:
+                heading = re.search(r'^#\s+([^\n]+)', markdown, re.M)
+                if heading:
+                    topic = re.sub(r'[*_`]', '', heading.group(1)).strip().strip('#').strip()
+                    source_time = re.match(r'^(\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2})\s*[|｜]', audio_meta.title or '')
+                    if topic:
+                        title = f'{source_time.group(1)} | {topic}' if source_time and not topic.startswith(source_time.group(1)) else topic
+                        audio_meta = replace(audio_meta, title=title[:180].rstrip())
         return NoteResult(
             markdown=markdown,
             transcript=transcript,

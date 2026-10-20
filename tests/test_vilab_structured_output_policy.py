@@ -155,12 +155,15 @@ def test_no_frozen_source_never_enables_policy_or_looks_up_current_connection(ga
 def final_response(c, form):
     value = response(c, form)
     if form in {'comic', 'infographic'}:
-        value.update(protocol=6, blocks=[{'id': 'B1', 'parts': [SOURCE]}])
+        value.update(protocol=7, blocks=[{'id': 'B1', 'parts': [SOURCE]}], title_ref={'block_id':'B1','part_index':0})
         ref = {'block_id': 'B1', 'part_index': 0, 'claim_ids': ['C1']}
         value['visual'] = ({'protocol': 3, 'scenes': [
             {'id': 'S1', 'frame_id': '[FRAME:0001]', 'label_ref': ref}], 'diagram': None}
             if form == 'comic' else {'protocol': 3, 'scenes': [], 'diagram': {
                 'kind': 'cards', 'nodes': [{'id': 'N1', 'label_ref': ref}], 'edges': []}})
+        for claim in value['claims']:
+            claim.pop('text'); claim.pop('block_ids')
+            claim['part_ref'] = {'block_id': 'B1', 'part_index': 0}
     return value
 
 

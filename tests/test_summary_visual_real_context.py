@@ -64,13 +64,17 @@ def pipeline(c, monkeypatch, presentation, depth, *, invalid_quote=False):
     else:
         review['visual'] = {'scenes': [], 'diagram': {'kind': 'cards', 'edges': [],
             'nodes': [{'id': 'N1', 'block_ids': ['B1'], 'grounded_label': SOURCE}]}}
-    review['protocol'] = 6
+    review['protocol'] = 7
+    review['title_ref'] = dict(block_id='B1',part_index=0)
     review['blocks'] = [dict(id=row['id'], parts=[row['markdown']])
-                        for i, row in enumerate(review['blocks'])]
+                        for i, row in enumerate(review['blocks']) if row['id'] == 'B1']
     ref = dict(block_id='B1', part_index=0, claim_ids=['C1'])
     review['visual'] = (dict(protocol=3, scenes=[dict(id='S1', frame_id='[FRAME:0001]', label_ref=ref)], diagram=None)
         if presentation == 'comic' else dict(protocol=3, scenes=[], diagram=dict(kind='cards', edges=[],
             nodes=[dict(id='N1', label_ref=ref)])))
+    for claim in review['claims']:
+        claim.pop('text');claim.pop('block_ids')
+        claim['part_ref'] = dict(block_id='B1',part_index=0)
     if invalid_quote:
         review['claims'][0]['evidence'][0]['quote'] = 'This clause was never supplied.'
     raw3, raw4 = json.dumps(draft, indent=2), json.dumps(review, indent=2)
@@ -104,6 +108,8 @@ def pipeline(c, monkeypatch, presentation, depth, *, invalid_quote=False):
         api_key=None, base_url=None, user_id=c.owner, source_video_url=None,
         task_start_time=time.time(), step_timings={}, video_evidence=evidence,
         content_depth=depth, presentation=presentation)
+    from dataclasses import asdict
+    c.write('audio_meta.json', asdict(context.audio_meta))
     assert type(context) is PipelineContext and not hasattr(context, '__dict__')
     assert getattr(context, 'presentation_visual', None) is None
     return runner, context, transcript, automatic, review, raw3, raw4, frame, original_bytes
@@ -126,7 +132,7 @@ def test_real_slotted_context_hands_review_state_to_render_and_private_artifact(
     from app.llm.meeting_presentation import depth_instructions, final_depth_selection
     assert final_depth_selection(depth) in automatic.calls[1]['system_prompt']
     assert depth_instructions(depth).replace('The report field contains Markdown facts only;',
-        'Report blocks[].parts[] strings contain Markdown facts only;') in automatic.calls[1]['system_prompt']
+        'Report blocks[].parts[] strings contain plain text facts only;') in automatic.calls[1]['system_prompt']
     assert final_depth_selection(depth) not in automatic.calls[0]['system_prompt']
     runner.llm_service.create_summarizer.assert_called_once_with(user_id=c.owner,
         model_profile_id=None, model_name=context.model_name, api_key=None, base_url=None)
@@ -143,12 +149,12 @@ def test_real_slotted_context_hands_review_state_to_render_and_private_artifact(
     payload = json.loads(path.read_bytes())
     wire = payload['visual']
     assert wire['presentation'] == presentation and wire['task_id'] == context.task_id
-    assert wire['blocks'][1]['claim_ids'] == ['C1']
+    assert wire['blocks'][0]['claim_ids'] == ['C1']
     assert payload['review_sha256'] == hashlib.sha256(review_bytes).hexdigest()
     assert payload['receipt']['snapshot_sha256'] == _digest(c.snapshot)
     assert wire['body_sha256'] == hashlib.sha256(markdown.encode('utf-8')).hexdigest()
-    from app.llm.meeting_visual_projection6 import project_review6
-    _, projected = project_review6(review, presentation=presentation)
+    from app.llm.meeting_single_copy_projection7 import project_review7
+    _, projected = project_review7(review, presentation=presentation)
     assert wire['scenes'] == projected['scenes'] and wire['diagram'] == projected['diagram']
     assert bool(wire['frames']) == (presentation == 'comic')
     if presentation == 'comic':

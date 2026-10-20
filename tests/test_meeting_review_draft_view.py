@@ -14,7 +14,7 @@ from app.llm.vilab_llm import VILabLLM
 from app.models.transcript import TranscriptSegment
 from test_meeting_final_review import SOURCE, case, response
 from test_meeting_final_review import finalize
-from test_meeting_visual_protocol5_adapter import six
+from test_meeting_visual_protocol5_adapter import seven
 
 
 def material():
@@ -106,7 +106,7 @@ def test_actual_adapter_changes_only_review_draft_view_and_keeps_original_for_gu
     c = case
     monkeypatch.setattr('app.services.tracing_service.observation', lambda *a, **k: nullcontext(None))
     monkeypatch.setattr(httpx.Client, 'request', lambda *a, **k: pytest.fail('No network'))
-    value = six(c, presentation) if presentation in {'comic', 'infographic'} else response(c, presentation)
+    value = seven(c, presentation) if presentation in {'comic', 'infographic'} else response(c, presentation)
     projector = view_module.review_draft_input_view
     import app.llm.meeting_final_review as host
     guard = host.finalize_final_review

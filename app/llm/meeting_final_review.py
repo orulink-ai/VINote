@@ -39,6 +39,11 @@ def prepare_final_draft(text):
 def validate_review_envelope(value, material, *, depth, presentation):
     """Return the checked ledger and detached original versioned envelope."""
     _need(isinstance(presentation, str) and presentation in _EXTRAS, 'invalid_presentation')
+    if isinstance(value, dict) and type(value.get('protocol')) is int and value['protocol'] == 7:
+        _need(set(value) == _CORE | _EXTRAS[presentation] | {'title_ref'}, 'invalid_host_envelope')
+        from app.llm.meeting_single_copy_projection7 import validate_review7
+        _need(presentation in {'comic', 'infographic'}, 'invalid_protocol')
+        return validate_review7(value, material, depth=depth, presentation=presentation), copy.deepcopy(value)
     _need(isinstance(value, dict) and set(value) == _CORE | _EXTRAS[presentation], 'invalid_host_envelope')
     if type(value.get('protocol')) is int and value['protocol'] == 6:
         from app.llm.meeting_visual_projection6 import core_review6, project_review6
@@ -118,6 +123,9 @@ def review_protocol(presentation, *, protocol=4):
     """The model sees the actual envelope, not contradictory core-only rules."""
     presentation = presentation or 'text'
     _need(isinstance(presentation, str) and presentation in _EXTRAS, 'invalid_presentation')
+    if type(protocol) is int and protocol == 7:
+        from app.llm.meeting_single_copy_projection7 import review_protocol7
+        return review_protocol7(presentation)
     if protocol == 6:
         _need(type(protocol) is int and presentation in {'comic', 'infographic'}, 'invalid_protocol')
         # Build the new explicit contract from core4 accounting, not raw5 or

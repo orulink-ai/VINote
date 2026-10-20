@@ -23,6 +23,7 @@ from app.db_models import SourceRequestDB
 
 SIDECAR = 'summary_visual.json'
 MAX_WIRE_BYTES = 128 * 1024
+_TITLE_NOT_REQUIRED = object()
 _ID = re.compile(r'[A-Za-z0-9_\[\]:.\-]{1,64}\Z')
 _TASK = re.compile(r'[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}\Z')
 
@@ -165,12 +166,15 @@ def build_summary_visual(*, task_id, presentation, markdown, blocks, frames, sce
     }, task_id=task_id, presentation=presentation, markdown=markdown)
 
 
-def reviewed_visual_blocks(review):
+def reviewed_visual_blocks(review, *, presentation=None):
     """Project validated legacy audit or v4/v5 ledger; never rewrite raw.
 
     Call only after existing fact-protocol finalization succeeds. This function
     performs no evidence review and cannot turn a failed/raw draft into a final.
     """
+    if type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 7:
+        from app.llm.meeting_single_copy_projection7 import project_review7
+        review, _ = project_review7(review, presentation=presentation)
     if type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 6:
         from app.llm.meeting_visual_projection6 import core_review6
         review = core_review6(review)
@@ -213,13 +217,16 @@ def reviewed_visual_blocks(review):
     return projected
 
 
-def reviewed_claim_sources(review):
+def reviewed_claim_sources(review, *, presentation=None):
     """Read explicit final evidence, without OCR, donor reads or inference.
 
     This is a projection after successful finalization, not fresh authorization
     or semantic validation. Saved reads additionally bind the original raw file
     hash and the accepted operation/Origin/model fingerprint.
     """
+    if type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 7:
+        from app.llm.meeting_single_copy_projection7 import project_review7
+        review, _ = project_review7(review, presentation=presentation)
     if type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 6:
         from app.llm.meeting_visual_projection6 import core_review6
         review = core_review6(review)
@@ -227,7 +234,7 @@ def reviewed_claim_sources(review):
         from app.llm.meeting_visual_projection import core_review5
         review = core_review5(review)
     _need(type(review) is dict and type(review.get('protocol')) is int and review['protocol'] == 4)
-    reviewed_visual_blocks(review)
+    reviewed_visual_blocks(review, presentation=presentation)
     result = {}
     for claim in review['claims']:
         if claim['disposition'] != 'included':
@@ -355,7 +362,8 @@ def _screenshots(folder, visual):
     return result
 
 
-def _review_binding(folder, wire):
+def _review_binding(folder, wire, *, presentation, result_title=_TITLE_NOT_REQUIRED):
+    _need(presentation == wire['presentation'])
     raw = _read(folder / 'meeting_fact_review.json', 4 * 1024 * 1024)
     artifact = _decode(raw)
     _need(type(artifact.get('protocol')) is int and artifact['protocol'] == 1
@@ -366,11 +374,11 @@ def _review_binding(folder, wire):
     if fenced:
         text = text[7:-3].strip()
     review = _decode(text.encode('utf-8'))
-    _need(wire['blocks'] == reviewed_visual_blocks(review))
-    if review['protocol'] == 6:
-        from app.llm.meeting_visual_projection6 import project_review6
+    if type(review.get('protocol')) is int and review['protocol'] == 7:
+        from app.llm.meeting_single_copy_projection7 import project_review7
         _need(not fenced)
-        core, plan = project_review6(review, presentation=wire['presentation'])
+        core, plan = project_review7(review, presentation=presentation)
+        _need(wire['blocks'] == reviewed_visual_blocks(review, presentation=presentation))
         body = '\n\n'.join(row['markdown'] for row in core['blocks']).strip()
         _need(wire['body_sha256'] == _sha(body.encode('utf-8')))
         _need(plan['scenes'] == wire['scenes'] and plan['diagram'] == wire['diagram'])
@@ -381,11 +389,33 @@ def _review_binding(folder, wire):
         for index, ((key, label), frame) in enumerate(zip(selected.items(), wire['frames'])):
             _need(frame['id'] == key and frame['screenshot_index'] == index
                   and frame['grounded_label'] == label)
-        reviewed_claim_sources(review)
+        reviewed_claim_sources(review, presentation=presentation)
+        from app.llm.meeting_single_copy_projection7 import metadata_title7
+        source_title = _load(folder / 'audio_meta.json', 4 * 1024 * 1024).get('title')
+        expected_title = metadata_title7(review, presentation=presentation, source_title=source_title)
+        if result_title is not _TITLE_NOT_REQUIRED:
+            _need(isinstance(result_title, str) and result_title == expected_title)
+        return _sha(raw)
+    _need(wire['blocks'] == reviewed_visual_blocks(review, presentation=presentation))
+    if review['protocol'] == 6:
+        from app.llm.meeting_visual_projection6 import project_review6
+        _need(not fenced)
+        core, plan = project_review6(review, presentation=presentation)
+        body = '\n\n'.join(row['markdown'] for row in core['blocks']).strip()
+        _need(wire['body_sha256'] == _sha(body.encode('utf-8')))
+        _need(plan['scenes'] == wire['scenes'] and plan['diagram'] == wire['diagram'])
+        selected = {}
+        for scene in plan['scenes']:
+            selected.setdefault(scene['frame_id'], scene['grounded_label'])
+        _need(len(wire['frames']) == len(selected))
+        for index, ((key, label), frame) in enumerate(zip(selected.items(), wire['frames'])):
+            _need(frame['id'] == key and frame['screenshot_index'] == index
+                  and frame['grounded_label'] == label)
+        reviewed_claim_sources(review, presentation=presentation)
     if review['protocol'] == 5:
         from app.llm.meeting_visual_projection import project_review5
         _need(not fenced)
-        core, plan = project_review5(review, presentation=wire['presentation'])
+        core, plan = project_review5(review, presentation=presentation)
         body = '\n\n'.join(row['markdown'] for row in core['blocks']).strip()
         _need(wire['body_sha256'] == _sha(body.encode('utf-8')))
         _need(plan['scenes'] == wire['scenes'] and plan['diagram'] == wire['diagram'])
@@ -398,13 +428,13 @@ def _review_binding(folder, wire):
         for index, ((key, label), frame) in enumerate(zip(selected.items(), wire['frames'])):
             _need(frame['id'] == key and frame['screenshot_index'] == index
                   and frame['grounded_label'] == label)
-        reviewed_claim_sources(review)
+        reviewed_claim_sources(review, presentation=presentation)
     if review['protocol'] == 4:
         _need(not fenced and set(review) == {'protocol', 'blocks', 'claims', 'visual'})
         plan = review['visual']
         _object(plan, ['scenes', 'diagram'])
         _need(plan['scenes'] == wire['scenes'] and plan['diagram'] == wire['diagram'])
-        sources = reviewed_claim_sources(review)
+        sources = reviewed_claim_sources(review, presentation=presentation)
         by_block = {row['id']: row['claim_ids'] for row in wire['blocks']}
         if wire['presentation'] == 'comic':
             for scene in wire['scenes']:
@@ -413,6 +443,16 @@ def _review_binding(folder, wire):
         else:
             _need(wire['presentation'] == 'infographic' and not wire['frames'])
     return _sha(raw)
+
+
+def _frozen_visual_context(folder, owner, task, requested, sessions):
+    # A disk choice alone is not authority: the existing DB-bound
+    # submission/snapshot gate must validate it before projection.
+    presentation = _load(folder / 'new_generation.json').get('presentation')
+    _need(isinstance(presentation, str) and presentation in {'comic', 'infographic'})
+    bound = _authorization(folder, owner, task, presentation, sessions)
+    _need(requested == presentation)
+    return presentation, bound
 
 
 def save_summary_visual(artifacts, owner, task_id, markdown, visual, *, sessions=None):
@@ -425,9 +465,10 @@ def save_summary_visual(artifacts, owner, task_id, markdown, visual, *, sessions
     wire = validate_summary_visual(visual, task_id=task_id,
                                   presentation=visual.get('presentation'), markdown=markdown)
     folder = _folder(artifacts, owner, task_id)
-    bound = _authorization(folder, owner, task_id, wire['presentation'], sessions or session_scope)
+    presentation, bound = _frozen_visual_context(
+        folder, owner, task_id, wire['presentation'], sessions or session_scope)
     payload = {'artifact_protocol': 1, 'owner': owner, 'receipt': bound,
-               'review_sha256': _review_binding(folder, wire),
+               'review_sha256': _review_binding(folder, wire, presentation=presentation),
                'screenshots': _screenshots(folder, wire), 'visual': wire}
     data = _json(payload)
     path = folder / SIDECAR
@@ -467,11 +508,15 @@ def read_summary_visual(artifacts, owner, task_id, *, sessions=None):
               and payload['owner'] == owner and _load(folder / 'status.json')['status'] == 'success')
         # JSON preserves the exact string returned to the client. note.md uses
         # OS newline translation on Windows and is not the savedBody authority.
-        markdown = _load(folder / 'result.json', 4 * 1024 * 1024)['markdown']
+        result = _load(folder / 'result.json', 4 * 1024 * 1024)
+        markdown = result['markdown']
         wire = validate_summary_visual(payload['visual'], task_id=task_id,
                                       presentation=payload['visual'].get('presentation'), markdown=markdown)
-        _need(payload['review_sha256'] == _review_binding(folder, wire)
-              and payload['receipt'] == _authorization(folder, owner, task_id, wire['presentation'], sessions or session_scope)
+        presentation, bound = _frozen_visual_context(
+            folder, owner, task_id, wire['presentation'], sessions or session_scope)
+        _need(payload['review_sha256'] == _review_binding(
+            folder, wire, presentation=presentation, result_title=result.get('title'))
+              and payload['receipt'] == bound
               and payload['screenshots'] == _screenshots(folder, wire))
         _need(_folder(artifacts, owner, task_id) == folder)
         return wire

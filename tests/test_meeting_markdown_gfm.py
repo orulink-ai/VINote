@@ -75,6 +75,20 @@ def graphic6_fixture(value):
     return value
 
 
+def graphic7_fixture(value):
+    value = graphic6_fixture(value); value['protocol'] = 7
+    value['title_ref'] = {'block_id': value['blocks'][0]['id'], 'part_index': 0}
+    for claim in value['claims']:
+        block = claim.pop('block_ids')[0]; claim.pop('text')
+        claim['part_ref'] = {'block_id': block, 'part_index': 0}
+    covered = {c['part_ref']['block_id'] for c in value['claims']}
+    for block in value['blocks']:
+        if block['id'] not in covered:
+            value['claims'].append({**copy.deepcopy(value['claims'][0]), 'id': 'NEW_' + block['id'],
+                'part_ref': {'block_id': block['id'], 'part_index': 0}})
+    return value
+
+
 @pytest.fixture(scope='module')
 def react_render():
     frontend = Path(__file__).resolve().parents[1] / 'frontend'
@@ -297,15 +311,15 @@ def test_footnotes_are_explicitly_unsupported_in_actual_host(case, presentation,
     value = response(case, presentation)
     value['blocks'] = [{'id':f'B{i+1}', 'markdown':text} for i, text in enumerate(blocks)]
     if presentation in {'comic', 'infographic'}:
-        value = graphic6_fixture(value)
+        value = graphic7_fixture(value)
         assert [''.join(block['parts']) for block in value['blocks']] == blocks
     llm, raw_review = automatic(case, value)
     with presentation_scope('detailed', presentation) as state:
         with pytest.raises(FinalLedgerError) as error:
             summarize(llm, case)
-        assert error.value.code == 'invalid_block_content'
+        assert error.value.code == ('invalid_body_part_visibility' if presentation in {'comic', 'infographic'} else 'invalid_block_content')
         assert state.raw_review == raw_review and state.figures == [] and state.visual_review is None
-        assert json.loads(raw_review)['protocol'] == (6 if presentation in {'comic', 'infographic'} else 4)
+        assert json.loads(raw_review)['protocol'] == (7 if presentation in {'comic', 'infographic'} else 4)
     assert len(llm.calls) == 2
 
 

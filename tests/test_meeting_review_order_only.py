@@ -14,7 +14,7 @@ from app.llm.meeting_review import build_meeting_review_prompts
 from app.llm.vilab_llm import VILabLLM
 from app.models.transcript import TranscriptSegment
 from test_meeting_final_review import SOURCE, case, finalize, response
-from test_meeting_visual_protocol5_adapter import five, six
+from test_meeting_visual_protocol5_adapter import five, six, seven
 
 
 OLD_ORDER = 'Write the report once in ordered blocks.'
@@ -83,7 +83,7 @@ def test_actual_adapter_wire_changes_only_second_system_order(case, monkeypatch,
     c = case
     monkeypatch.setattr('app.services.tracing_service.observation', lambda *a, **k: nullcontext(None))
     monkeypatch.setattr(httpx.Client, 'request', lambda *a, **k: pytest.fail('No network'))
-    value = six(c, presentation) if presentation in {'comic', 'infographic'} else response(c, presentation)
+    value = seven(c, presentation) if presentation in {'comic', 'infographic'} else response(c, presentation)
 
     def capture(rules):
         calls = []
@@ -111,7 +111,10 @@ def test_actual_adapter_wire_changes_only_second_system_order(case, monkeypatch,
     assert wire_bytes(previous[0]) == wire_bytes(current[0])
     old_system = previous[1]['messages'][0]['content']
     new_system = current[1]['messages'][0]['content']
-    assert_only_order_changed(old_system, new_system)
+    if presentation in {'comic', 'infographic'}:
+        assert old_system == new_system  # Historical P4 mutation cannot rewrite the independent new7 contract.
+    else:
+        assert_only_order_changed(old_system, new_system)
     previous[1]['messages'][0]['content'] = new_system
     assert previous[1] == current[1]  # Complete source, OCR, images, model and transport options.
     assert wire_bytes(previous[1]) == wire_bytes(current[1])

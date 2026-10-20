@@ -20,20 +20,30 @@ def _assert_final_envelope(rules, presentation, expected_protocol):
     example = json.loads(lines[header + 1].removesuffix('.'))
     assert type(example['protocol']) is int and example['protocol'] == expected_protocol
     expected_fields = {'protocol', 'blocks', 'claims'}
+    if expected_protocol == 7: expected_fields.add('title_ref')
     if presentation == 'illustrated':
         expected_fields.add('figures')
     if presentation in {'comic', 'infographic'}:
         expected_fields.add('visual')
     assert set(example) == expected_fields
     expected_order = ['protocol', 'claims', 'blocks']
+    if expected_protocol == 7:
+        expected_order.append('title_ref')
+        assert example['title_ref'] == {'block_id': 'B1', 'part_index': 0}
     if presentation == 'illustrated':
         expected_order.append('figures')
     elif presentation in {'comic', 'infographic'}:
         expected_order.append('visual')
     assert list(example) == expected_order
-    assert rules.count('Complete claims before blocks; their block_ids reference the report blocks that follow.') == 1
+    if expected_protocol == 7:
+        assert rules.count('Complete claims before blocks; their part_ref locates') == 1
+        for claim in example['claims']:
+            assert 'text' not in claim and 'block_ids' not in claim
+            assert claim['part_ref'] == {'block_id': 'B1', 'part_index': 0}
+    else:
+        assert rules.count('Complete claims before blocks; their block_ids reference the report blocks that follow.') == 1
     for block in example['blocks']:
-        if expected_protocol == 6:
+        if expected_protocol in (6, 7):
             assert set(block) == {'id', 'parts'}
             assert all(type(part) is str for part in block['parts'])
         elif expected_protocol == 5:
@@ -43,7 +53,7 @@ def _assert_final_envelope(rules, presentation, expected_protocol):
             assert set(block) == {'id', 'markdown'}
     if presentation in {'comic', 'infographic'}:
         visual = example['visual']
-        if expected_protocol == 6:
+        if expected_protocol in (6, 7):
             assert set(visual) == {'protocol', 'scenes', 'diagram'}
             assert type(visual['protocol']) is int and visual['protocol'] == 3
         elif expected_protocol == 5:
@@ -62,7 +72,7 @@ def _assert_final_envelope(rules, presentation, expected_protocol):
             assert len(visual['diagram']['nodes']) == 1
             row = visual['diagram']['nodes'][0]
             base = {'id'}
-        if expected_protocol == 6:
+        if expected_protocol in (6, 7):
             assert set(row) == base | {'label_ref'}
             assert row['label_ref'] == {'block_id': example['blocks'][0]['id'], 'part_index': 0, 'claim_ids': ['C1']}
             assert type(row['label_ref']['part_index']) is int
@@ -77,7 +87,7 @@ def _assert_final_envelope(rules, presentation, expected_protocol):
 
 
 @pytest.mark.parametrize('presentation,expected_protocol', [
-    ('text', 4), ('html', 4), ('illustrated', 4), ('comic', 6), ('infographic', 6),
+    ('text', 4), ('html', 4), ('illustrated', 4), ('comic', 7), ('infographic', 7),
 ])
 def test_structured_stages_do_not_inherit_markdown_only_outer_response(presentation, expected_protocol):
     source = '[ASR:0001] Synthetic source: verify the interlock before opening.'
@@ -154,7 +164,7 @@ def test_materiality_contract_is_specific_to_the_actual_stage(language, depth, p
         assert 'materiality is not certainty' in prompts['system_prompt']
         assert 'No source window or frame is required to yield a business fact' in prompts['system_prompt']
     _assert_final_envelope(review['system_prompt'], presentation,
-                           6 if presentation in {'comic', 'infographic'} else 4)
+                           7 if presentation in {'comic', 'infographic'} else 4)
     assert 'Classify each unique draft claim' in draft['system_prompt']
     assert 'Do not reclassify original.material' not in draft['system_prompt']
     assert 'Classify each unique draft claim' not in review['system_prompt']
@@ -216,17 +226,21 @@ def test_source_fidelity_replacements_reach_both_stages_without_rewriting_source
             assert replaced not in prompts['system_prompt']
     assert frozen_draft in review['user_prompt']
     assert 'Preserve each original ID, field and boolean material flag' in review['system_prompt']
-    assert 'Each row requires id/field/text/material/disposition/block_ids/evidence' in review['system_prompt']
+    if presentation in {'comic', 'infographic'}:
+        assert 'Included row fields are exactly id/field/material/disposition/evidence/part_ref' in review['system_prompt']
+        assert 'Each row requires id/field/text/material/disposition/block_ids/evidence' not in review['system_prompt']
+    else:
+        assert 'Each row requires id/field/text/material/disposition/block_ids/evidence' in review['system_prompt']
     assert 'never correct punctuation, repetitions, spelling, spacing or broken grammar inside it' in review['system_prompt']
     node_rule = 'Select self-contained unchanged excerpts naming objects and essential attributes'
     assert node_rule not in draft['system_prompt']
     assert node_rule not in review['system_prompt']
     if presentation in {'comic', 'infographic'}:
-        for instruction in ('FINAL/6 STRING PARTS AND VISUAL-REF/3.',
-                            'Write reader-facing text once, only in blocks[].parts[] strings.',
-                            'Graphic labels use only label_ref=',
-                            'Never output grounded_label, part_id, a second block_ids list or free label text',
-                            'Keep existing claims/accounting/evidence rules'):
+        for instruction in ('FINAL/7 SINGLE-COPY PARTS AND VISUAL-REF/3.',
+                            'write the reader-facing report ONCE in blocks[].parts[] strings.',
+                            'Every graphic label_ref=',
+                            'No free label, grounded_label, part_id, block_ids or second text copy.',
+                            'Every original draft claim ID must appear exactly once'):
             assert review['system_prompt'].count(instruction) == 1
         assert 'Markdown belongs only inside blocks[].markdown;' not in review['system_prompt']
         assert 'FINAL/6 STRING PARTS AND VISUAL-REF/3.' not in draft['system_prompt']
