@@ -180,28 +180,76 @@ def attempt_device(operation_id, *, read_only=False):
 
 
 def resume_participants(user_id, note_id):
-    """Wake only an original, definitely unsent attendee-waiting intent.
+    """Resume only existing unsent intents sharing the confirmed meeting scope.
 
-    Called after the authenticated meeting confirmation commits. No new intent
-    or authority is created; the dispatcher rechecks the original policy and
-    newly confirmed evidence before it can create a document or send anything.
+    Reads owned evidence and the existing connection only; no directory search,
+    new operation, provider request or replay of an ambiguous/accepted delivery.
+    The dispatcher still rechecks each original frozen policy before dispatch.
     """
+    from app.services.feishu_service import FeishuService
+    from app.services.meeting_participants import get_meeting_participants
+
+    try:
+        service = FeishuService().for_owner(user_id)
+        binding = service.contact_binding(user_id)
+        confirmed = get_meeting_participants(service, user_id, note_id)
+        if (not confirmed.get("can_confirm") or not confirmed.get("canonical_task_id")
+                or confirmed["confirmation"]["status"] not in {"confirmed", "cleared"}):
+            return
+    except Exception:
+        return  # Confirmation is already committed; unread scope grants nothing.
+
+    def matches(view):
+        return (view.get("can_confirm") is True
+                and view.get("canonical_task_id") == confirmed["canonical_task_id"]
+                and view.get("evidence_revision") == confirmed["evidence_revision"]
+                and view.get("confirmation") == confirmed["confirmation"])
+
     with session_scope() as db:
         rows = db.scalars(select(FeishuAutoOutboxDB).where(
             FeishuAutoOutboxDB.user_id == user_id,
-            FeishuAutoOutboxDB.note_id == note_id,
-            FeishuAutoOutboxDB.status == "waiting_participants")).all()
+            FeishuAutoOutboxDB.cloud_owner == user_id,
+            FeishuAutoOutboxDB.integration_origin == "cli://device",
+            FeishuAutoOutboxDB.status == "waiting_participants",
+            FeishuAutoOutboxDB.job_id == "",
+            FeishuAutoOutboxDB.lease_until <= time.time())).all()
         for row in rows:
-            if row.job_id or row.lease_until > time.time():
+            db.expunge(row)
+    resumed = False
+    for row in rows:
+        try:
+            payload = json.loads(row.payload)
+            if (not isinstance(payload, dict) or payload.get("operation_id") != row.id
+                    or payload.get("policy_id") != row.policy_id or payload.get("note_key") != row.note_id):
                 continue
-            db.execute(update(FeishuAutoOutboxDB).where(
-                FeishuAutoOutboxDB.id == row.id,
-                FeishuAutoOutboxDB.user_id == user_id,
-                FeishuAutoOutboxDB.status == "waiting_participants",
-                FeishuAutoOutboxDB.lease_until == row.lease_until,
-                FeishuAutoOutboxDB.job_id == "",
-            ).values(status="queued", error=""))
-    wake()
+            if not matches(get_meeting_participants(service, user_id, row.note_id)):
+                continue
+            _assert_binding(row, policy_required=True)
+            if (service.contact_binding(user_id) != binding
+                    or not matches(get_meeting_participants(service, user_id, note_id))):
+                continue
+            with session_scope() as db:
+                note = db.get(NoteDB, row.note_id)
+                if (not note or note.created_by != user_id or note.scope != "personal"
+                        or note.title != payload.get("title") or note.content != payload.get("content")):
+                    continue
+                changed = db.execute(update(FeishuAutoOutboxDB).where(
+                    FeishuAutoOutboxDB.id == row.id,
+                    FeishuAutoOutboxDB.user_id == user_id,
+                    FeishuAutoOutboxDB.note_id == row.note_id,
+                    FeishuAutoOutboxDB.policy_id == row.policy_id,
+                    FeishuAutoOutboxDB.payload == row.payload,
+                    FeishuAutoOutboxDB.cloud_owner == row.cloud_owner,
+                    FeishuAutoOutboxDB.integration_origin == row.integration_origin,
+                    FeishuAutoOutboxDB.status == "waiting_participants",
+                    FeishuAutoOutboxDB.lease_until == row.lease_until,
+                    FeishuAutoOutboxDB.job_id == "",
+                ).values(status="queued", error=""))
+                resumed = resumed or changed.rowcount == 1
+        except Exception:
+            continue  # Keep this original intent waiting; never invent authority.
+    if resumed:
+        wake()
 
 
 def check_local(user_id, note_id):

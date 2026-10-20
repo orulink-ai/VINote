@@ -408,3 +408,67 @@ def test_format_ordinals_are_real_stable_separate_and_not_title_based(setup):
         assert wiki.child_metadata(OWNER, job.id)['version_id']
     assert len(setup.service.calls) == 1
     with pytest.raises(FeishuError): wiki.child_title('another-owner', jobs[0].id)
+
+
+@pytest.mark.parametrize('form,label', list(wiki.FORMAT_LABELS.items()))
+@pytest.mark.parametrize('depth,depth_label', [('brief', '摘要'), ('concise', '精简'), ('detailed', '详细')])
+def test_actual_service_format_depth_hook_produces_readable_child_labels(setup, monkeypatch, tmp_path, form, label, depth, depth_label):
+    """Exercise the production host hook with its real owner/task sidecar read."""
+    from app.db_models import NoteDB
+    from app.services import feishu_service, task_artifact_service
+    artifacts = task_artifact_service.TaskArtifactService(tmp_path / 'artifacts')
+    folder = artifacts.create_task_dir(TASK)
+    (folder / 'recording_owner').write_text(OWNER, encoding='utf-8')
+    (folder / '.task_id').write_text(TASK, encoding='utf-8')
+    artifacts.write_json(folder / 'status.json', {'status': 'success'})
+    artifacts.write_json(folder / 'summary_presentation.json', dict(
+        protocol=1, task_id=TASK, presentation=form, content_depth=depth))
+    job = setup.job()
+    with setup.sessions() as db:
+        db.add(NoteDB(id=job.note_key, created_by=OWNER, task_id=TASK, title=job.title,
+                      content=job.content, scope='personal', status='done', source_type='meeting_video'))
+    monkeypatch.setattr(feishu_service, 'session_scope', setup.sessions)
+    monkeypatch.setattr(task_artifact_service, 'TaskArtifactService', lambda: artifacts)
+
+    def saved_context(owner, frozen_job, **metadata):
+        assert owner == OWNER and frozen_job.id == job.id
+        assert metadata['version_id'] == TASK
+        return setup.service.context.model_copy(update={
+            'summary_format': metadata['summary_format'], 'version_id': metadata['version_id']})
+
+    monkeypatch.setattr(wiki, 'context_for_saved_note', saved_context)
+    context = FeishuService.meeting_wiki_context(setup.service, OWNER, job)
+    assert context.summary_format == f'{form}:{depth}'
+    setup.service.context = context
+    wiki.grouped_creation(OWNER, job, ROOT, setup.service)
+    assert wiki.child_title(OWNER, job.id) == f'{label}·{depth_label}｜V1'
+    metadata = wiki.child_metadata(OWNER, job.id)
+    assert metadata['format_label'] == f'{label}·{depth_label}'
+    assert metadata['summary_format'] == f'{form}:{depth}' and metadata['version_id'] == TASK
+    assert len(setup.service.calls) == 1  # Synthetic parent adapter, no CLI/network.
+
+
+@pytest.mark.parametrize('form,label', list(wiki.FORMAT_LABELS.items()))
+def test_legacy_single_format_labels_remain_compatible(setup, form, label):
+    setup.service.context = setup.service.context.model_copy(update={'summary_format': form})
+    job = setup.job()
+    wiki.grouped_creation(OWNER, job, ROOT, setup.service)
+    assert wiki.child_title(OWNER, job.id) == f'{label}｜V1'
+    assert wiki.child_metadata(OWNER, job.id)['format_label'] == label
+
+
+def test_format_label_fix_never_renames_existing_remote_or_frozen_child_titles(setup):
+    setup.service.context = setup.service.context.model_copy(update={'summary_format': 'text:concise'})
+    job = setup.job()
+    parent = wiki.grouped_creation(OWNER, job, ROOT, setup.service)
+    with setup.sessions() as db:
+        child = db.get(FeishuMeetingWikiChildDB, job.id)
+        child.title = 'text:concise｜V1'  # A pre-fix remote/frozen title.
+        original_snapshot = child.snapshot
+    calls = list(setup.service.calls)
+    assert wiki.grouped_creation(OWNER, job, ROOT, setup.service) == parent
+    assert wiki.child_title(OWNER, job.id) == 'text:concise｜V1'
+    assert wiki.child_metadata(OWNER, job.id)['format_label'] == '文字·精简'
+    assert setup.service.calls == calls
+    with setup.sessions() as db:
+        assert db.get(FeishuMeetingWikiChildDB, job.id).snapshot == original_snapshot

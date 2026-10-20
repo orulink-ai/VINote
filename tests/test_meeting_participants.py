@@ -1049,3 +1049,148 @@ def test_confirmation_put_never_requeues_ambiguous_or_terminal_intents(participa
     assert client.put(path, json=http_payload(saved, client.get(path).json())).status_code == 200
     with saved.sessions() as db:
         assert db.get(FeishuAutoOutboxDB, operation).status == state
+
+
+@pytest.fixture
+def waiting_meeting_versions(participants_api, monkeypatch):
+    """Existing same-meeting intents, isolated DB/ASR fixtures and no dispatcher."""
+    from app.services import feishu_auto_runtime as runtime
+    from app.models.feishu_auto_delivery import FeishuAutoOutboxDB, FeishuDevicePolicyDB
+    saved, client, _ = participants_api
+    monkeypatch.setattr(runtime, "session_scope", saved.sessions)
+    monkeypatch.setattr(runtime, "resume_participants", saved.resume_participants)
+    monkeypatch.setattr(runtime, "wake", lambda: None)
+    policy = str(uuid.uuid4())
+    with saved.sessions() as db:
+        Base.metadata.create_all(db.connection())
+        db.add(FeishuDevicePolicyDB(user_id=saved.owner, policy_id=policy, enabled=True,
+                                   integration_origin="cli://device", cloud_owner=saved.owner))
+
+    def waiting(note_key, **changes):
+        operation = str(uuid.uuid4())
+        with saved.sessions() as db:
+            note = db.get(NoteDB, note_key)
+            payload = {"operation_id": operation, "policy_id": policy, "note_key": note_key,
+                       "title": note.title, "content": note.content}
+            fields = dict(id=operation, user_id=saved.owner, note_id=note_key, policy_id=policy,
+                          integration_origin="cli://device", cloud_owner=saved.owner,
+                          payload=json.dumps(payload), status="waiting_participants")
+            fields.update(changes)
+            db.add(FeishuAutoOutboxDB(**fields))
+        return operation, payload
+
+    def confirm_origin(*, empty=False):
+        path = "/api/meeting-participants/" + saved.key
+        body = http_payload(saved, client.get(path).json())
+        if empty:
+            body["contacts"] = []
+        response = client.put(path, json=body)
+        assert response.status_code == 200
+        return response.json()
+
+    return SimpleNamespace(saved=saved, waiting=waiting, confirm=confirm_origin, policy=policy)
+
+
+@pytest.mark.parametrize("empty", [False, True])
+def test_one_confirmation_resumes_existing_same_canonical_versions_without_new_operations(waiting_meeting_versions, empty):
+    from sqlalchemy import select
+    from app.models.feishu_auto_delivery import FeishuAutoOutboxDB
+    from app.db_models import FeishuDeliveryDB
+    case = waiting_meeting_versions
+    first = summary_child(case.saved)
+    second = summary_child(case.saved, presentation="text", depth="detailed")
+    intents = [case.waiting(note) for note in (case.saved.key, first.key, second.key)]
+    case.confirm(empty=empty)
+    for child in (first, second):
+        view = module.get_meeting_participants(case.saved.service, case.saved.owner, child.key)
+        assert view["confirmation"]["status"] == ("cleared" if empty else "confirmed")
+    with case.saved.sessions() as db:
+        rows = db.scalars(select(FeishuAutoOutboxDB)).all()
+        assert {row.id for row in rows} == {operation for operation, _ in intents}
+        for operation, payload in intents:
+            row = db.get(FeishuAutoOutboxDB, operation)
+            assert row.status == "queued" and not row.job_id
+            assert json.loads(row.payload) == payload
+        assert db.scalars(select(FeishuDeliveryDB)).all() == []
+    assert not any(event[0] == "search" for event in case.saved.events)
+
+
+@pytest.mark.parametrize("changes", [
+    {"status": "unknown"}, {"status": "accepted"}, {"status": "failed"},
+    {"status": "submitting"}, {"status": "cancelled"}, {"job_id": "already-bound-job"},
+    {"lease_until": 1e20}, {"user_id": "other-owner"},
+    {"integration_origin": "https://historical.invalid"}, {"cloud_owner": "another-connection-owner"},
+])
+def test_shared_confirmation_preserves_non_unsent_sibling_intents(waiting_meeting_versions, changes):
+    from app.models.feishu_auto_delivery import FeishuAutoOutboxDB
+    case = waiting_meeting_versions
+    child = summary_child(case.saved)
+    operation, payload = case.waiting(child.key, **changes)
+    case.confirm()
+    with case.saved.sessions() as db:
+        row = db.get(FeishuAutoOutboxDB, operation)
+        assert row.status == changes.get("status", "waiting_participants")
+        assert row.job_id == changes.get("job_id", "")
+        assert row.lease_until == changes.get("lease_until", 0)
+        assert json.loads(row.payload) == payload
+
+
+@pytest.mark.parametrize("damage", ["canonical", "evidence", "confirmation_revision", "connection", "policy", "frozen_body"])
+def test_shared_confirmation_does_not_resume_a_mismatched_sibling_scope(waiting_meeting_versions, monkeypatch, damage):
+    from app.models.feishu_auto_delivery import FeishuAutoOutboxDB, FeishuDevicePolicyDB
+    case = waiting_meeting_versions
+    child = summary_child(case.saved)
+    operation, payload = case.waiting(child.key)
+    original = module.get_meeting_participants
+
+    def changed(service, owner, note_key):
+        view = original(service, owner, note_key)
+        if note_key == child.key:
+            if damage == "canonical": view["canonical_task_id"] = str(uuid.uuid4())
+            elif damage == "evidence": view["evidence_revision"] = "c" * 64
+            elif damage == "confirmation_revision": view["confirmation"]["revision"] += 1
+            elif damage == "connection": case.saved.binding["connection_id"] = "changed-connection"
+        return view
+
+    monkeypatch.setattr(module, "get_meeting_participants", changed)
+    with case.saved.sessions() as db:
+        if damage == "policy": db.get(FeishuDevicePolicyDB, case.saved.owner).enabled = False
+        if damage == "frozen_body": db.get(NoteDB, child.key).content = "Edited after the original intent"
+    case.confirm()
+    with case.saved.sessions() as db:
+        row = db.get(FeishuAutoOutboxDB, operation)
+        assert row.status == "waiting_participants" and not row.job_id
+        assert json.loads(row.payload) == payload
+
+
+@pytest.mark.parametrize("race", ["accepted", "unknown", "lease", "payload"])
+def test_sibling_resume_cas_cannot_overwrite_a_later_execution_state(waiting_meeting_versions, monkeypatch, race):
+    from app.models.feishu_auto_delivery import FeishuAutoOutboxDB
+    case = waiting_meeting_versions
+    child = summary_child(case.saved)
+    operation, payload = case.waiting(child.key)
+    original = module.get_meeting_participants
+    injected = False
+
+    def changed(service, owner, note_key):
+        nonlocal injected
+        view = original(service, owner, note_key)
+        if note_key == child.key and not injected:
+            injected = True
+            with case.saved.sessions() as db:
+                row = db.get(FeishuAutoOutboxDB, operation)
+                if race in {"accepted", "unknown"}: row.status = race
+                if race == "accepted": row.job_id = "real-accepted-job"
+                if race == "lease": row.lease_until = 1e20
+                if race == "payload": row.payload = json.dumps({**payload, "title": "concurrent replacement"})
+        return view
+
+    monkeypatch.setattr(module, "get_meeting_participants", changed)
+    case.confirm()
+    assert injected
+    with case.saved.sessions() as db:
+        row = db.get(FeishuAutoOutboxDB, operation)
+        assert row.status == (race if race in {"accepted", "unknown"} else "waiting_participants")
+        if race == "accepted": assert row.job_id == "real-accepted-job"
+        if race == "lease": assert row.lease_until == 1e20
+        assert json.loads(row.payload) == ({**payload, "title": "concurrent replacement"} if race == "payload" else payload)

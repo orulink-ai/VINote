@@ -43,6 +43,14 @@ from app.services.feishu_service import FeishuError
 
 LEASE_SECONDS = 300
 FORMAT_LABELS = dict(text='文字', illustrated='图文', html='HTML', comic='漫画', infographic='信息图')
+DEPTH_LABELS = dict(brief='摘要', concise='精简', detailed='详细')
+
+
+def _format_label(value):
+    form, separator, depth = value.partition(':')
+    if separator and form in FORMAT_LABELS and depth in DEPTH_LABELS:
+        return f'{FORMAT_LABELS[form]}·{DEPTH_LABELS[depth]}'
+    return FORMAT_LABELS.get(value, value)
 
 
 def _json(value):
@@ -172,7 +180,7 @@ def _reserve(owner, job, scope, context, snapshot):
         if saved is None:
             ordinal = (db.scalar(select(func.max(Child.ordinal)).where(
                 Child.scope_key == key, Child.summary_format == context.summary_format)) or 0) + 1
-            label = FORMAT_LABELS.get(context.summary_format, context.summary_format)
+            label = _format_label(context.summary_format)
             _insert_once(db, Child, dict(delivery_id=job.id, scope_key=key, snapshot=child_json,
                 summary_format=context.summary_format, ordinal=ordinal, title=f'{label}｜V{ordinal}'), 'delivery_id')
         saved = db.get(Child, job.id)
@@ -305,7 +313,7 @@ def child_metadata(owner, job_id):
         if not receipt or receipt.owner != owner: raise _error('meeting_job_not_found')
         return {**json.loads(child.snapshot), 'ordinal': child.ordinal,
                 'revision_label': f'V{child.ordinal}', 'child_title': child.title,
-                'format_label': FORMAT_LABELS.get(child.summary_format, child.summary_format)}
+                'format_label': _format_label(child.summary_format)}
 
 
 def child_title(owner, job_id):
