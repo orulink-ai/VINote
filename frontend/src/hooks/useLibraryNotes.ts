@@ -97,6 +97,7 @@ export function useLibraryNotes() {
                 : "保存于",
             localId: resolvedLocalId,
             taskId: source?.taskId,
+            meetingSource: source?.meetingSource,
             sourceIds: ids,
             // Keep local-only history reachable even when the list uses a shared
             // representative. Projection does not migrate or delete versions.

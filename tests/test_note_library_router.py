@@ -1,4 +1,6 @@
 import tempfile
+import json
+import uuid
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
@@ -20,6 +22,76 @@ from app.routers import note_library
 from app.services.auth_service import get_current_user
 from app.services.note_repository import NoteRepository
 from app.services.task_artifact_service import TaskArtifactService
+
+
+class MeetingSourceProjectionTest(unittest.TestCase):
+    """Synthetic metadata only: no live storage, provider or media processing."""
+
+    def test_owner_bound_canonical_projection_and_fail_closed_counterexamples(self):
+        from app.models.note_library import NoteRecordResponse
+        from datetime import datetime, timezone
+
+        with tempfile.TemporaryDirectory() as temporary:
+            artifacts = TaskArtifactService(Path(temporary))
+            parent, child, sibling = (str(uuid.uuid4()) for _ in range(3))
+            for task in (parent, child, sibling):
+                folder = artifacts.create_task_dir(task)
+                (folder / '.task_id').write_text(task, encoding='utf-8')
+                (folder / 'recording_owner').write_text('owner-a', encoding='utf-8')
+                artifacts.write_json(folder / 'request.json', {'request': {'workflow': 'meeting'}})
+            canonical = artifacts.find_task_dir(parent)
+            artifacts.write_json(canonical / 'source_media.json', {'sha256': 'a' * 64,
+                'relative_path': 'media/source_audio.wav', 'size_bytes': 12, 'media_kind': 'audio'})
+            for task in (child, sibling):
+                artifacts.write_json(artifacts.find_task_dir(task) / 'source_reference.json', {
+                    'version': 1, 'owner': 'owner-a', 'parent_task_id': parent, 'source_version': 'a' * 64})
+            now = datetime.now(timezone.utc)
+            notes = [NoteRecordResponse(id=task, task_id=task, title='相同标题', content='保留正文',
+                status='done', source_type='meeting_recording', created_at=now, updated_at=now)
+                for task in (parent, child, sibling)]
+            app = FastAPI()
+            app.include_router(note_library.router, prefix='/api')
+            app.dependency_overrides[get_current_user] = lambda: AuthenticatedUser(user_id='owner-a')
+            with TestClient(app) as client, patch.object(note_library, '_artifact_service', artifacts), \
+                    patch.object(note_library._repository, 'list_notes', return_value=notes), \
+                    patch.object(note_library._repository, 'get_note', return_value=notes[1]):
+                def read():
+                    response = client.get('/api/notes')
+                    self.assertEqual(response.status_code, 200)
+                    return response.json()
+
+                expected = {'owner_id': 'owner-a', 'canonical_task_id': parent}
+                before = {str(p): p.read_bytes() for p in Path(temporary).rglob('*') if p.is_file()}
+                self.assertEqual([n.get('meeting_source') for n in read()], [expected] * 3)
+                self.assertEqual(client.get('/api/notes/child').json().get('meeting_source'), expected)
+                # Saving/editing replaces the in-memory row immediately: its
+                # response must retain provenance without a list refresh.
+                with patch.object(note_library._repository, 'create_note', return_value=notes[1]), \
+                        patch.object(note_library._repository, 'update_note', return_value=notes[1]):
+                    self.assertEqual(client.post('/api/notes', json={'title': '人工R2', 'task_id': child}).json().get('meeting_source'), expected)
+                    self.assertEqual(client.patch('/api/notes/child', json={'content': '人工R2'}).json().get('meeting_source'), expected)
+                # Missing original media is not missing saved text or its proven relation.
+                self.assertFalse((canonical / 'media/source_audio.wav').exists())
+                self.assertEqual(before, {str(p): p.read_bytes() for p in Path(temporary).rglob('*') if p.is_file()})
+
+                child_folder = artifacts.find_task_dir(child)
+                reference_path = child_folder / 'source_reference.json'
+                valid = json.loads(reference_path.read_text(encoding='utf-8'))
+                for update in ({'owner': 'other'}, {'parent_task_id': child},
+                               {'source_version': 'b' * 64}, {'parent_task_id': '../escape'},
+                               {'parent_task_id': sibling}, {'extra': True}):
+                    artifacts.write_json(reference_path, {**valid, **update})
+                    self.assertIsNone(read()[1].get('meeting_source'), update)
+                    self.assertEqual(read()[1]['content'], '保留正文')
+                artifacts.write_json(reference_path, valid)
+                (child_folder / 'recording_owner').write_text('other', encoding='utf-8')
+                self.assertIsNone(read()[1].get('meeting_source'))
+                (child_folder / 'recording_owner').write_text('owner-a', encoding='utf-8')
+                (child_folder / '.task_id').write_text(parent, encoding='utf-8')
+                self.assertIsNone(read()[1].get('meeting_source'))
+                (child_folder / '.task_id').write_text(child, encoding='utf-8')
+                (canonical / 'recording_owner').write_text('other', encoding='utf-8')
+                self.assertTrue(all(n.get('meeting_source') is None for n in read()))
 
 
 class NoteLibraryRouterTest(unittest.TestCase):

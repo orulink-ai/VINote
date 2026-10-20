@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { LocalRecordingPreview } from "./LocalRecordingPreview";
 import { notePreview } from "@/lib/notePreview";
-import { libraryNoteIdentities, type LibraryNote as NoteRecord } from "@/hooks/useLibraryNotes";
+import { type LibraryNote as NoteRecord } from "@/hooks/useLibraryNotes";
 import { type PendingMeeting } from "@/lib/audioStorage";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,6 +24,9 @@ import {
 } from "@/components/ui/empty";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/ui/skeleton";
+import { buildMeetingRows, type MeetingRow } from '@/lib/meetingGroups';
+export { buildMeetingRows } from '@/lib/meetingGroups';
+import { useAuthStore } from '@/stores/authStore';
 import { serverTimestamp } from "@/lib/serverTimestamp";
 
 function meetingTime(value: string | undefined, serverValue = false) {
@@ -74,69 +77,12 @@ function relatedNotePresentation(note: NoteRecord) {
   return { note, savedTime, updatedTime, metadata, preview, signature };
 }
 
-type Row = {
-  key: string;
-  title: string;
-  date: string;
-  state: string;
-  recording?: PendingMeeting;
-  note?: NoteRecord;
-  notes: NoteRecord[];
-  recordings: PendingMeeting[];
-};
-
-function relatedViewIds(row: Row) {
+function relatedViewIds(row: MeetingRow) {
   // Use the real members so a different representative does not reset the row.
   return [
     ...row.notes.map(note => `${note.scope}:${note.teamId || ""}:note:${note.id}`),
     ...row.recordings.map(recording => `${recording.workspace.scope}:${recording.workspace.scope === "team" ? recording.workspace.teamId : ""}:recording:${recording.id}`),
   ];
-}
-/** A projection only: every content object and retained original stays reachable. */
-export function buildMeetingRows(recordings: PendingMeeting[], notes: NoteRecord[], taskStates: MeetingTaskStates = {}): Row[] {
-  const retainedNotes = [...new Map(notes.flatMap(note => [note, ...(note.localSources || [])])
-    .map(note => [`${note.scope}:${note.teamId || ''}:${note.workspaceKey || ''}:${note.id}`, note] as const)).values()];
-  const nodes = [
-    ...recordings.map(recording => {
-      const scope = `${recording.workspace.scope}:${recording.workspace.scope === 'team' ? recording.workspace.teamId : ''}:`;
-      return { recording, note: undefined as NoteRecord | undefined, identities: [
-        `${scope}task:${recording.id}`, ...(recording.taskId ? [`${scope}task:${recording.taskId}`] : []),
-        ...[recording.noteId, recording.draftNoteId].filter(Boolean).map(id => `${scope}note:${id}`),
-      ] };
-    }),
-    ...retainedNotes.map(note => ({ note, recording: undefined as PendingMeeting | undefined, identities: libraryNoteIdentities(note) })),
-  ];
-  const parents = nodes.map((_, index) => index);
-  const root = (index: number): number => parents[index] === index ? index : (parents[index] = root(parents[index]));
-  const owners = new Map<string, number>();
-  nodes.forEach((node, index) => node.identities.forEach(identity => {
-    const previous = owners.get(identity);
-    if (previous !== undefined) parents[root(index)] = root(previous);
-    owners.set(identity, index);
-  }));
-  const groups = new Map<number, typeof nodes>();
-  nodes.forEach((node, index) => { const key = root(index); groups.set(key, [...(groups.get(key) || []), node]); });
-  return [...groups.values()].map(group => {
-    const content = group.flatMap(node => node.note ? [node.note] : [])
-      .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt) || Number(!!b.workspaceKey) - Number(!!a.workspaceKey));
-    const originals = group.flatMap(node => node.recording ? [node.recording] : []);
-    const recording = originals.find(row => row.processingStatus !== 'completed') || originals[0];
-    const note = content[0];
-    let state = recording ? recording.processingStatus === 'failed' ? '需处理'
-      : recording.processingStatus === 'idle' ? '未生成' : recording.processingStatus === 'completed' ? '已完成' : '处理中' : note.status === 'failed' || note.status === 'transcribing_failed' || note.status === 'generation_failed' ? '需处理' : note.status === 'done' ? '已完成' : '状态未核验';
-    const taskState = taskStates[recording?.taskId || note?.taskId || ''];
-    if (taskState === 'failed') state = '需处理';
-    else if (taskState === 'processing') state = '处理中';
-    else if (taskState === 'checking') state = '状态核验中';
-    else if (taskState === 'unverified') state = '状态未核验';
-    else if (taskState === 'complete') state = note?.status === 'done' && (!recording || recording.processingStatus === 'completed' || recording.noteId === note.id) ? '已完成' : '纪要待保存';
-    return {
-      key: recording ? `recording:${recording.id}` : `note:${note.id}`,
-      title: recording?.options.title || note.title,
-      date: recording?.startedAt || note.recordingStartedAt || note.createdAt,
-      state, recording, note, notes: content, recordings: originals,
-    };
-  }).sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
 }
 export function MeetingWorkbench({
   recordings,
@@ -159,6 +105,7 @@ export function MeetingWorkbench({
   archived?: boolean;
   onArchiveChange?: (archived: boolean) => void;
 }) {
+  const ownerId = useAuthStore(state => state.user?.id);
   const [previewOpen, setPreviewOpen] = useState(false);
   const [previewRecordingId, setPreviewRecordingId] = useState<string | null>(null);
   const [query, setQuery] = useViewState("recordings-query", "");
@@ -170,7 +117,7 @@ export function MeetingWorkbench({
   const [expandedRows, setExpandedRows] = useViewState<string[]>("recordings-expanded", []);
   const expandedIds = Array.isArray(expandedRows) ? expandedRows : [];
   // Group stable identities before filtering: retained history is not a new row.
-  const rows = buildMeetingRows(recordings, notes, taskStates)
+  const rows = buildMeetingRows(recordings.filter(row => !ownerId || row.ownerId === ownerId), notes, taskStates, ownerId)
     .filter(row => Boolean(row.note?.archived) === archived &&
       (!archived || ["meeting_recording", "meeting_video"].includes(row.note?.sourceType || '')))
     .map(row => archived && row.note ? {
@@ -182,8 +129,8 @@ export function MeetingWorkbench({
     (row) =>
       (
         row.title +
-        (row.note?.title || "") +
-        notePreview(row.note?.content || "")
+        row.notes.map(note => note.title + ' ' + notePreview(note.content || '')).join(' ') +
+        row.recordings.map(recording => recording.options.title || '').join(' ')
       )
         .toLowerCase()
         .includes(query.trim().toLowerCase()) &&
@@ -253,9 +200,16 @@ export function MeetingWorkbench({
             const isRecordingDate = !!(row.recording?.startedAt || row.note?.recordingStartedAt);
             const time = meetingTime(row.date, !isRecordingDate);
             const duration = recordingDuration(row.recording?.elapsedSeconds);
-            const hasRelated = row.notes.length > 1 || row.recordings.length > 0;
+            // Server-retained originals remain reachable after local capture
+            // history has gone. Open the authorized note; detail verifies media.
+            const retainedSource = !archived && !row.recordings.length
+              ? row.notes.find(note => note.meetingSource && note.meetingSource.canonicalTaskId === note.taskId) ||
+                row.notes.find(note => note.meetingSource)
+              : undefined;
+            const hasOriginal = row.recordings.length > 0 || !!retainedSource;
+            const hasRelated = row.notes.length > 1 || hasOriginal;
             const relatedLabel = row.notes.length
-              ? `关联纪要（${row.notes.length}条）${row.recordings.length ? "与原录制" : ""}`
+              ? `关联纪要（${row.notes.length}条）${hasOriginal ? "与原录制" : ""}`
               : "查看原录制";
             const Icon = row.recording
               ? row.recording.options.screen ||
@@ -274,7 +228,7 @@ export function MeetingWorkbench({
                 type="button"
                 aria-label={`${row.title.slice(0, 120)} · ${row.state}`}
                 aria-pressed={row.recording ? previewOpen && selected?.key === row.key : undefined}
-                onClick={() => { if (row.note && (!row.recording || row.state === '已完成')) onOpenNote(row.note.id); else { setSelectedKey(row.key); setPreviewRecordingId(row.recording?.id || null); setPreviewOpen(true) } }}
+                onClick={() => { if (row.note && (!row.recording || row.note.status === 'done' && row.note.content.trim())) onOpenNote(row.note.id); else { setSelectedKey(row.key); setPreviewRecordingId(row.recording?.id || null); setPreviewOpen(true) } }}
                 className={`flex w-full items-start gap-3 px-3 py-5 text-left transition-colors motion-reduce:transition-none hover:bg-muted/60 ${previewOpen && selected?.key === row.key ? "bg-muted/50" : ""}`}
               >
                 <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted/40 text-muted-foreground">
@@ -288,6 +242,7 @@ export function MeetingWorkbench({
                     {isRecordingDate ? "录制于 " : "纪要保存于 "}
                     <span title={time.full} className="tabular-nums">{time.short}</span>
                     {duration && ` · ${duration}`}
+                    {row.notes.length > 0 && <span>{row.notes.length} 份纪要</span>}
                     <Badge
                       variant="secondary"
                       className={`rounded px-1.5 py-0 text-[10px] ${row.state === "已完成" ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200" : row.state === "需处理" ? "bg-destructive/10 text-destructive" : ""}`}
@@ -344,6 +299,13 @@ export function MeetingWorkbench({
                         </span>
                       </Button>;
                     })}
+                  </section>}
+                  {retainedSource && <section aria-label="关联原录制" className="grid gap-2">
+                    <h3 className="font-medium">原录制</h3>
+                    <p className="text-xs leading-5 text-muted-foreground">打开关联纪要查看来源，原录制是否可用以详情核验为准。纪要和旧稿始终保留。</p>
+                    <Button variant="ghost" className="h-auto min-h-11 w-full justify-start whitespace-normal py-3 text-left" onClick={() => onOpenNote(retainedSource.id)}>
+                      查看原录制 · {retainedSource.title}
+                    </Button>
                   </section>}
                 </div>
               </details>}

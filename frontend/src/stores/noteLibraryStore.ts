@@ -12,6 +12,7 @@ type NoteRow = {
   media_kind?: 'audio' | 'video' | null
   generation_client?: string | null
   task_id: string | null
+  meeting_source?: { owner_id: string; canonical_task_id: string } | null
   status: string
   scope: 'personal' | 'team'
   team_id: string | null
@@ -29,6 +30,7 @@ export interface NoteRecord {
   mediaKind?: 'audio' | 'video'
   generationClient?: string
   taskId?: string
+  meetingSource?: { ownerId: string; canonicalTaskId: string }
   status: string
   scope: 'personal' | 'team'
   teamId?: string
@@ -84,6 +86,7 @@ const mapRow = (row: NoteRow): NoteRecord => ({
   mediaKind: row.media_kind ?? undefined,
   generationClient: row.generation_client ?? undefined,
   taskId: row.task_id ?? undefined,
+  meetingSource: row.meeting_source ? { ownerId: row.meeting_source.owner_id, canonicalTaskId: row.meeting_source.canonical_task_id } : undefined,
   status: row.status,
   scope: row.scope,
   teamId: row.team_id ?? undefined,

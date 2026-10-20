@@ -10,6 +10,7 @@ from fastapi.responses import FileResponse
 
 from app.models.auth import AuthenticatedUser
 from app.models.note_library import (
+    MeetingSourceResponse,
     NoteCreateRequest,
     NoteRecordResponse,
     NoteScope,
@@ -27,6 +28,78 @@ from app.services.note_origin_service import read_origin
 router = APIRouter(tags=["notes-library"])
 _repository = NoteRepository()
 _artifact_service = TaskArtifactService()
+
+
+def _with_meeting_source(note: NoteRecordResponse, owner: str) -> NoteRecordResponse:
+    """Project a single owner-bound canonical hop, without reading media.
+
+    A missing recording does not erase saved text or proven metadata relations.
+    This grants no media access and never repairs/registers historical artifacts.
+    """
+    def regular(path: Path) -> str:
+        info = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 65536
+                or getattr(path, 'is_junction', lambda: False)()):
+            raise ValueError('Unverified metadata')
+        return path.read_text(encoding='utf-8')
+
+    def folder_for(task: str) -> Path:
+        if str(uuid.UUID(task)) != task:
+            raise ValueError('Noncanonical task')
+        folder = _artifact_service.find_task_dir(task)
+        if (not folder or folder.is_symlink() or getattr(folder, 'is_junction', lambda: False)()
+                or folder.resolve().parent != _artifact_service.output_dir.resolve()):
+            raise ValueError('Unverified task')
+        mapping = folder / '.task_id'
+        if (regular(mapping).strip() if mapping.exists() or mapping.is_symlink() else folder.name) != task:
+            raise ValueError('Task mismatch')
+        if regular(folder / 'recording_owner') != owner:
+            raise ValueError('Owner mismatch')
+        return folder
+
+    source = None
+    try:
+        if not note.task_id:
+            raise ValueError('Missing task')
+        folder = folder_for(note.task_id)
+        canonical = note.task_id
+        reference_path = folder / 'source_reference.json'
+        reference = None
+        if reference_path.exists() or reference_path.is_symlink():
+            reference = json.loads(regular(reference_path))
+            if (set(reference) != {'version', 'owner', 'parent_task_id', 'source_version'}
+                    or type(reference['version']) is not int or reference['version'] != 1 or reference['owner'] != owner):
+                raise ValueError('Unverified reference')
+            canonical = reference['parent_task_id']
+            original = folder_for(canonical)
+            if (original / 'source_reference.json').exists() or (original / 'source_reference.json').is_symlink():
+                raise ValueError('Reference chain')
+        else:
+            original = folder
+        # Intake type is not canonical identity. Verify the recorded workflow;
+        # capture-only tasks may have no request yet but carry explicit meeting type.
+        request_path = original / 'request.json'
+        if request_path.exists() or request_path.is_symlink():
+            if json.loads(regular(request_path))['request']['workflow'] != 'meeting':
+                raise ValueError('Not a meeting')
+        elif note.source_type not in {'meeting_recording', 'meeting_video'} or reference:
+            raise ValueError('Unknown workflow')
+        manifest = json.loads(regular(original / 'source_media.json'))
+        fingerprint = manifest['sha256']
+        if (not isinstance(fingerprint, str) or len(fingerprint) != 64
+                or any(c not in '0123456789abcdef' for c in fingerprint)
+                or reference and reference['source_version'] != fingerprint):
+            raise ValueError('Source mismatch')
+        index = original / 'source_original.json'
+        if index.exists() or index.is_symlink():
+            declared = json.loads(regular(index))
+            if any(declared.get(key) != value for key, value in {
+                    'owner': owner, 'task_id': canonical, 'workflow': 'meeting'}.items()):
+                raise ValueError('Original mismatch')
+        source = MeetingSourceResponse(owner_id=owner, canonical_task_id=canonical)
+    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+        pass
+    return note.model_copy(update={'meeting_source': source})
 
 
 def _with_media_kind(note: NoteRecordResponse, owner: str) -> NoteRecordResponse:
@@ -109,7 +182,8 @@ def list_notes(
     team_id: str | None = Query(default=None),
     user: AuthenticatedUser = Depends(get_current_user),
 ):
-    return _repository.list_notes(user.user_id, scope=scope, team_id=team_id)
+    return [_with_meeting_source(note, user.user_id)
+            for note in _repository.list_notes(user.user_id, scope=scope, team_id=team_id)]
 
 
 @router.get("/notes/{note_id}", response_model=NoteRecordResponse)
@@ -117,7 +191,7 @@ def get_note(note_id: str, user: AuthenticatedUser = Depends(get_current_user)):
     note = _repository.get_note(user.user_id, note_id)
     if not note:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
-    return _with_media_kind(note, user.user_id)
+    return _with_media_kind(_with_meeting_source(note, user.user_id), user.user_id)
 
 
 @router.get("/notes/{note_id}/media", include_in_schema=False)
@@ -244,7 +318,8 @@ def create_note(payload: NoteCreateRequest, request: Request, user: Authenticate
         # 以生成任务为准，不能用当前保存请求冒充原始生成来源。
         folder = _artifact_service.find_task_dir(payload.task_id) if payload.task_id else None
         client = read_origin(folder)
-        return _with_media_kind(_repository.create_note(user.user_id, payload, generation_client=client), user.user_id)
+        note = _repository.create_note(user.user_id, payload, generation_client=client)
+        return _with_media_kind(_with_meeting_source(note, user.user_id), user.user_id)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
@@ -254,11 +329,16 @@ def update_note(note_id: str, payload: NoteUpdateRequest, user: AuthenticatedUse
     note = _repository.update_note(user.user_id, note_id, payload)
     if not note:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")
-    return _with_media_kind(note, user.user_id)
+    return _with_media_kind(_with_meeting_source(note, user.user_id), user.user_id)
 
 
 @router.delete("/notes/{note_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_note(note_id: str, user: AuthenticatedUser = Depends(get_current_user)):
-    deleted = _repository.delete_note(user.user_id, note_id)
+def delete_note(
+    note_id: str,
+    personal_only: bool = Query(default=False),
+    user: AuthenticatedUser = Depends(get_current_user),
+):
+    deleted = (_repository.delete_note(user.user_id, note_id, personal_only=True)
+               if personal_only else _repository.delete_note(user.user_id, note_id))
     if not deleted:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Note not found")

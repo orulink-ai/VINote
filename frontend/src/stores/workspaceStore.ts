@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import { apiJson } from "@/lib/api";
+import { apiFetch, apiJson } from "@/lib/api";
 import type { WorkspaceNote, WorkspaceStatus, WorkspaceSummary, WorkspaceVersion, WorkspaceWrite } from "@/lib/workspace";
 import { readWorkspaceCache, writeWorkspaceCache } from "@/lib/workspaceCache";
 import { useAuthStore } from "./authStore";
@@ -36,6 +36,7 @@ interface State extends CachedState {
   save: (key: string, body: WorkspaceWrite) => Promise<WorkspaceNote | null>;
   resolve: (operationId: string, content: string, title: string, comparedRevision?: number, expectedOwner?: string) => Promise<void>;
   changeDeleted: (key: string, deleted: boolean) => Promise<WorkspaceNote | null>;
+  purgeDeleted: (key: string, expectedOwner: string, expectedRevision: number) => Promise<void>;
 }
 const blank = (): CachedState => ({ itemPolicies: {}, items: [], details: {}, mappings: {}, pending: [],
   lastSync: '', deviceId: crypto.randomUUID(), localOnlyVersion: 1, retainedSyncOperations: [], cloudBaselines: {},
@@ -184,10 +185,15 @@ function purgeClearedContent(source: CachedState): CachedState {
     itemPolicies: Object.fromEntries(Object.entries(source.itemPolicies).filter(([key]) => !keys.has(key))),
     cloudBaselines: Object.fromEntries(Object.entries(source.cloudBaselines || {}).filter(([key]) => !keys.has(key))),
     retainedSyncOperations: histories.filter(op => !keys.has(op.key) && !(op.localId && keys.has(op.localId))),
+    pending: source.pending.filter(op => !keys.has(op.key) && !(op.localId && keys.has(op.localId))),
     clearedContentKeys: [...keys], contentResetCleanupVersion: 2 };
 }
 
 export const useWorkspaceStore = create<State>((set, get) => {
+  // Actual successful DELETE responses only. Never loaded from arbitrary cache
+  // fields; reset/reload revokes them. They let a manual retry finish a failed
+  // cache write without deleting the backing note a second time.
+  const confirmedDeletes = new Map<string, { ids: string; completed: Set<string> }>();
   const scopeFor = (): Scope => ({ owner: get().owner, epoch });
   const currentScope = (scope: Scope) => epoch === scope.epoch && get().owner === scope.owner && sameOwner(scope.owner);
   const guard = (scope: Scope) => { if (!currentScope(scope)) throw new Error('账号已变化，请重新打开；原稿保留'); };
@@ -238,6 +244,7 @@ export const useWorkspaceStore = create<State>((set, get) => {
     initialize: async owner => {
       if (get().owner === owner && get().ready && get().contentResetCleanupVersion === 2) return;
       const run = ++epoch;
+      confirmedDeletes.clear();
       set({ ...blank(), owner, ready: false, busy: false, error: '', status: null });
       try {
         if (!sameOwner(owner)) throw new Error('账号已变化，请重新打开');
@@ -252,7 +259,7 @@ export const useWorkspaceStore = create<State>((set, get) => {
         set({ ...recovered, ready: true });
       } catch (cause) { if (run === epoch) set({ error: `无法保存资料：${message(cause)}`, ready: false }); }
     },
-    reset: () => { epoch++; set({ ...blank(), owner: '', ready: false, busy: false, error: '', status: null }); },
+    reset: () => { epoch++; confirmedDeletes.clear(); set({ ...blank(), owner: '', ready: false, busy: false, error: '', status: null }); },
     // Left as a no-network compatibility method for callers being removed.
     sync: async () => {
       const scope = scopeFor();
@@ -315,6 +322,71 @@ export const useWorkspaceStore = create<State>((set, get) => {
         const next = note.deleted === deleted ? note : { ...note, deleted, revision: note.revision + 1, updated_at: new Date().toISOString() };
         await commit(scope, () => accept(next));
         return next;
+      } finally { if (currentScope(scope)) set({ busy: false }); }
+    },
+    purgeDeleted: async (reference, expectedOwner, expectedRevision) => {
+      const scope = scopeFor(); requireReady(scope);
+      if (scope.owner !== expectedOwner) throw new Error('账号已变化，请重新打开回收站');
+      if (get().busy) throw new Error('正在保存，请完成后再清理');
+      const key = canonicalKey(reference);
+      const validate = () => {
+        guard(scope);
+        const item = get().items.find(item => item.key === key);
+        const detail = get().details[key];
+        if (!item?.deleted || (detail && !detail.deleted)) throw new Error('内容已变化，请重新打开回收站确认');
+        if (item.revision !== expectedRevision || (detail && detail.revision !== expectedRevision)) throw new Error('内容已变化，请重新确认清理');
+      };
+      const prepare = () => {
+        validate();
+        const next = purgeClearedContent({ ...snapshot(get()), clearedContentKeys: [...(get().clearedContentKeys || []), key] });
+        const removed = new Set(next.clearedContentKeys);
+        if (get().items.some(item => removed.has(item.key) && !item.deleted) ||
+            Object.values(get().details).some(note => removed.has(note.key) && !note.deleted)) {
+          throw new Error('关联内容仍在使用，请先分别确认移入回收站');
+        }
+        return next;
+      };
+      // Only documented local DB mappings/desktop IDs, never task/file IDs or
+      // metadata paths. Historical unknown workspace writes are not replayed.
+      const backingIds = (next: CachedState) => {
+        const ids = new Set(Object.entries(get().mappings)
+          .filter(([, mapping]) => next.clearedContentKeys!.includes(mapping.key)).map(([id]) => id));
+        for (const op of [...get().pending, ...(get().retainedSyncOperations || [])]) {
+          if (op.localId && next.clearedContentKeys!.includes(op.key)) ids.add(op.localId);
+        }
+        if (key.startsWith('desktop-')) ids.add(key.slice('desktop-'.length));
+        return ids;
+      };
+      const ids = backingIds(prepare());
+      const idBinding = JSON.stringify([...ids].sort());
+      const proofKey = JSON.stringify([scope.owner, scope.epoch, key, expectedRevision]);
+      const proof = confirmedDeletes.get(proofKey) || { ids: idBinding, completed: new Set<string>() };
+      if (proof.ids !== idBinding) throw new Error('关联内容已变化，请重新读取后确认清理');
+      set({ busy: true });
+      try {
+        for (const id of ids) {
+          validate();
+          if (proof.completed.has(id)) continue;
+          const response = await apiFetch(`/api/notes/${encodeURIComponent(id)}?personal_only=true`, { method: 'DELETE' });
+          guard(scope);
+          if (response.status !== 204) {
+            // 404 also conceals foreign/scope-changed rows; it proves nothing
+            // about deletion. Keep this account's cache copy for inspection.
+            if (response.status === 404) throw new Error('无法确认删除结果，正文与版本仍保留；请重新读取后再操作');
+            if (response.ok) throw new Error('未收到明确的删除确认，正文与版本仍保留');
+            let detail = '';
+            try { const body = await response.json(); if (typeof body?.detail === 'string') detail = body.detail; } catch { /* Keep the HTTP status if no JSON detail exists. */ }
+            guard(scope);
+            throw new Error(detail || `清理未完成（HTTP ${response.status}），请重试`);
+          }
+          proof.completed.add(id); confirmedDeletes.set(proofKey, proof);
+        }
+        const current = prepare();
+        if (JSON.stringify([...backingIds(current)].sort()) !== idBinding) throw new Error('关联内容已变化，缓存正文与版本仍保留');
+        await commit(scope, () => set(current));
+        guard(scope);
+        useNoteLibraryStore.setState(state => ({ notes: state.notes.filter(note => note.scope !== 'personal' || !ids.has(note.id)) }));
+        confirmedDeletes.delete(proofKey);
       } finally { if (currentScope(scope)) set({ busy: false }); }
     },
     resolve: async (operationId, content, title, comparedRevision, expectedOwner) => {

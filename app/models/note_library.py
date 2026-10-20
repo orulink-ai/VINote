@@ -12,6 +12,12 @@ class WorkspaceSummary(BaseModel):
     team_name: str | None = None
 
 
+class MeetingSourceResponse(BaseModel):
+    """Verified grouping evidence only; never authorizes playback or generation."""
+    owner_id: str
+    canonical_task_id: str
+
+
 class NoteRecordResponse(BaseModel):
     id: str
     title: str
@@ -21,6 +27,7 @@ class NoteRecordResponse(BaseModel):
     media_kind: Literal["audio", "video"] | None = None
     generation_client: Literal["mobile", "desktop", "web"] | None = None
     task_id: str | None = None
+    meeting_source: MeetingSourceResponse | None = None
     status: str
     scope: NoteScope = "personal"
     team_id: str | None = None

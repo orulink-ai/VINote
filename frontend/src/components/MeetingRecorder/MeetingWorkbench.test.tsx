@@ -2,6 +2,7 @@ import { cleanup, render, screen, waitFor, within } from '@testing-library/react
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import type { LibraryNote } from '@/hooks/useLibraryNotes'
+import type { PendingMeeting } from '@/lib/audioStorage'
 
 const account = vi.hoisted(() => ({ owner: 'owner-a' }))
 vi.mock('@/stores/authStore', () => ({
@@ -161,4 +162,41 @@ it('keeps unverified and unsaved successful task results distinct from completed
   expect(screen.getByRole('button', { name: '同名纪要 · 状态未核验' })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: '同名纪要 · 纪要待保存' })).toBeInTheDocument()
   expect(screen.queryByText('· 纪要已完成')).toBeNull()
+})
+
+it('shows one canonical meeting and opens the newest readable saved object while every child and original remains reachable', async () => {
+  const source = { ownerId: 'owner-a', canonicalTaskId: 'original' }
+  const notes = [note('old', { title: '旧稿标题', taskId: 'original', meetingSource: source, content: '旧稿独有检索词', updatedAt: '2026-10-20T10:00:00Z' }),
+    note('latest', { title: '最新可读稿', taskId: 'summary-child', meetingSource: source, createdAt: '2026-10-20T01:00:00Z' }),
+    note('failed', { taskId: 'asr-child', meetingSource: source, status: 'failed', createdAt: '2026-10-20T02:00:00Z' })]
+  const recording = { id: 'rec', ownerId: 'owner-a', taskId: 'original', workspace: { scope: 'personal' },
+    options: { title: '真实会议' }, startedAt: savedAt, elapsedSeconds: 20, recordingStatus: 'saved', processingStatus: 'completed' } as PendingMeeting
+  const open = vi.fn()
+  const view = render(<MeetingWorkbench recordings={[recording]} notes={notes} loading={false} onOpenNote={open} onDeleted={vi.fn()} />)
+  expect(document.querySelectorAll('[data-meeting-row-ids]')).toHaveLength(1)
+  expect(screen.getByText('3 份纪要')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: '真实会议 · 已完成' }))
+  expect(open).toHaveBeenLastCalledWith('latest')
+  await userEvent.type(screen.getByRole('textbox', { name: '搜索记录' }), '旧稿独有检索词')
+  await userEvent.click(screen.getByText('关联纪要（3条）与原录制'))
+  const history = screen.getByRole('region', { name: '关联纪要' })
+  expect(within(history).getAllByRole('button', { name: /查看纪要/ })).toHaveLength(3)
+  await userEvent.click(within(history).getByRole('button', { name: /查看纪要 · 旧稿标题/ }))
+  expect(open).toHaveBeenLastCalledWith('old')
+  await userEvent.click(screen.getByRole('button', { name: /查看原录制 · 真实会议/ }))
+  expect(screen.getByRole('dialog', { name: '录制详情' })).toBeInTheDocument()
+  expect(screen.getByText('原件操作')).toBeInTheDocument()
+  view.unmount()
+  render(<MeetingWorkbench recordings={[recording]} notes={notes} loading={false} onOpenNote={open} onDeleted={vi.fn()} />)
+  expect(screen.getByRole('textbox', { name: '搜索记录' })).toHaveValue('旧稿独有检索词')
+  expect(screen.getByText('关联纪要（3条）与原录制').closest('details')).toHaveAttribute('open')
+})
+
+it('keeps a canonical recording entry after the IndexedDB history is absent, without claiming availability', async () => {
+  const source = { ownerId: 'owner-a', canonicalTaskId: 'original' }, open = vi.fn()
+  mount([note('original-note', { taskId: 'original', meetingSource: source }), note('child', { taskId: 'summary-child', meetingSource: source })], open)
+  await userEvent.click(screen.getByText('关联纪要（2条）与原录制'))
+  await userEvent.click(within(screen.getByRole('region', { name: '关联原录制' })).getByRole('button', { name: /查看原录制/ }))
+  expect(open).toHaveBeenLastCalledWith('original-note')
+  expect(screen.getByText(/原录制是否可用以详情核验为准/)).toBeInTheDocument()
 })
