@@ -196,6 +196,7 @@ class TaskArtifactService:
         failed_stage: str | None = None,
         attempt: int | None = None,
         asr_failure_context: dict | None = None,
+        summary_failure_context: dict | None = None,
     ) -> None:
         status_file = task_dir / "status.json"
         payload = {
@@ -268,6 +269,17 @@ class TaskArtifactService:
                         if previous.get("retryable") is False:
                             payload["retryable"] = False
                     payload.setdefault("retryable", True)
+                    from app.services.summary_failure import (
+                        SUMMARY_UNCONFIRMED_CODE, safe_summary_failure_context,
+                    )
+                    if payload.get('error_code') == SUMMARY_UNCONFIRMED_CODE:
+                        summary_context = safe_summary_failure_context(summary_failure_context)
+                        if (summary_context is None and not restarting
+                                and previous.get('status') == 'failed'
+                                and previous.get('error_code') == SUMMARY_UNCONFIRMED_CODE):
+                            summary_context = safe_summary_failure_context(previous.get('summary_failure_context'))
+                        if summary_context is not None:
+                            payload['summary_failure_context'] = summary_context
                     from app.services.task_failure import recovery_status
                     payload = recovery_status(payload)
                 self.write_json(temp_file, payload)

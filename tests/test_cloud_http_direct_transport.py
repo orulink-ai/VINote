@@ -130,9 +130,11 @@ def assert_direct_once(wire):
     return sent
 
 
-def assert_summary_not_replayable(error, tmp_path):
-    assert failure_details(error) == {
-        'error_code': 'summary_result_unconfirmed', 'retryable': False}
+def assert_summary_not_replayable(error, tmp_path, *, terminal_context=None):
+    expected = {'error_code': 'summary_result_unconfirmed', 'retryable': False}
+    if terminal_context is not None:
+        expected['summary_failure_context'] = terminal_context
+    assert failure_details(error) == expected
     artifacts = TaskArtifactService(tmp_path)
     folder = artifacts.create_task_dir('summary-failure')
     artifacts.update_status(folder, 'summarizing', processed_seconds=100,
@@ -145,6 +147,10 @@ def assert_summary_not_replayable(error, tmp_path):
     assert saved['retryable'] is False and saved['failed_stage'] == 'summarizing'
     assert saved['processed_seconds'] == saved['total_seconds'] == 100
     assert 'asr_failure_context' not in saved
+    if terminal_context is not None:
+        assert saved['summary_failure_context'] == terminal_context
+    else:
+        assert 'summary_failure_context' not in saved
     assert SECRET not in json.dumps(saved) and PARTIAL not in json.dumps(saved)
 
 
@@ -200,7 +206,11 @@ def test_partial_sse_eof_or_disconnect_never_replays_or_returns_partial(
     assert_direct_once(wire)
     assert caught.value.status_code == 502
     assert PARTIAL not in caught.value.detail + caplog.text
-    assert_summary_not_replayable(caught.value, tmp_path)
+    terminal_context = None if truncated else {
+        'diagnostic_protocol': 'sse_terminal/1', 'done_seen': False, 'finish': 'missing',
+        'category': 'missing_done_and_non_stop_finish',
+    }
+    assert_summary_not_replayable(caught.value, tmp_path, terminal_context=terminal_context)
 
 
 @pytest.mark.parametrize('kind', ['request', 'stream'])

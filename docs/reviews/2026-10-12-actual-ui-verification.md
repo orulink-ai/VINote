@@ -406,3 +406,9 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 前端最终136文件/1606项通过（74.82秒）、TypeScript及生产构建通过（15.43秒），23项桌面脚本和test打包plan通过。plan仅为配置，不是安装包构建验收；当前完整后端与最终知识库交付仍未放行。
 
 - 13项过时协议测试修复只改fixture/契约断言：实际新graphic用raw5，text/html/illustrated及历史分支仍精确raw4，不能以“4或5均可”通过。脚注照旧拒绝invalid_block_content，新增历史raw4分支与raw5正向对照保留。GFM独审93项＋2正向通过；prompt独审59项＋相邻77项通过、20错/混协议反例拒绝。产品源码守卫与失败原物未因此修改；本记录对应protocol5测试修复，后续protocol6另验。
+
+### 新请求的私有流终止诊断
+
+- 仅原collector最终未同时满足DONE及stop的失败附带sse_terminal/1枚举，严格bool done_seen、白名单finish及一致category；未知终止值归other，不保留原值、原因文本、URL、消息或凭据。typed异常→failure_details→task status同attempt保留→recovery均重新做安全投影，未新增公开response字段或日志。原HTTP文案/错误码/retryable=false、成功接收条件和请求/超时/重试完全不变。
+- 独立166项定向回归通过；另对旧/新collector 2928种终止流输入比较成功正文/usage及失败HTTP code/copy均一致，300种历史字典只有13种安全且一致记录保留，8个并发task写入/覆盖/新attempt不串。六文件SHA均匹配冻结，无P1/P2阻断。
+- 没有回填旧A信息图V12；其具体终止原因仍未知。本组只是后续同次调用的私有诊断能力，没有新增模型探测、ASR、外发或结果重试，实际新调用验收另列。
