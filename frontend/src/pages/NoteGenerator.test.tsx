@@ -9,6 +9,7 @@ import { I18nProvider } from '../lib/i18n'
 import { useNoteGenerationStore } from '../stores/noteGenerationStore'
 import { NoteGenerator } from './NoteGenerator'
 import { ApiError } from '../lib/api'
+import { meetingVersionOperationKey } from '../lib/meetingVersion'
 
 const apiMock = vi.hoisted(() => ({
   apiJson: vi.fn(),
@@ -1127,6 +1128,80 @@ describe('summary-only operation recovery', () => {
 
 })
 
+describe('meeting version host integration', () => {
+  const canonical = '11111111-1111-4111-8111-111111111111'
+  const original = { verified: true, model_name: 'original-model', server_url: 'https://original.invalid' }
+  const versionContext = { protocol: 1, parent_task_id: 'selected-parent', canonical_task_id: canonical,
+    context_revision: 'a'.repeat(64), source: { version: 'b'.repeat(64), type: 'video', file_id: `task:${canonical}` }, original_llm: original }
+  const key = 'vinote:source-receipt:import-owner:version-operation'
+  const pointer = meetingVersionOperationKey('import-owner', 'selected-parent', 'selected-note')
+  function receipt(asrMode: 'reuse' | 'fresh' = 'reuse', extra = {}) {
+    return { operationId: 'version-operation', owner: 'import-owner', meetingVersion: true, meeting: true,
+      parentTaskId: 'selected-parent', summaryNoteId: 'selected-note', independentGeneration: true,
+      summaryOnly: asrMode === 'reuse', asrMode, origin: original.server_url, modelConnection: original,
+      meetingVersionContext: versionContext, workspace: { scope: 'personal' }, submissionState: 'unknown',
+      createdAt: '2026-10-20T19:35:00+08:00', sourceTitle: 'Verified recording', sourceType: 'file', ...extra }
+  }
+  beforeEach(() => {
+    vi.clearAllMocks(); apiMock.apiJson.mockReset(); localStorage.clear(); sessionStorage.clear()
+    queryMock.value = 'meeting=1&operation=version-operation'; languageMock.value = 'en'
+    useNoteGenerationStore.getState().reset()
+    useAuthStore.setState({ user: { id: 'import-owner', email: 'import@example.invalid' } })
+    useAppModeStore.setState({ config: { configured: true, mode: 'local', server_url: 'https://current.invalid', asr_model: 'different-asr', llm_model: 'different-llm' } })
+    libraryMock.notes = []; libraryMock.saveNote.mockReset()
+  })
+  afterEach(() => { cleanup(); localStorage.clear(); queryMock.value = ''; useAppModeStore.getState().reset() })
+
+  it.each(['reuse', 'fresh'] as const)('restores %s across different global Origin and saves the exact new child into the frozen workspace', async mode => {
+    localStorage.setItem(key, JSON.stringify(receipt(mode, { workspace: { scope: 'team', teamId: 'synthetic-team' } })))
+    localStorage.setItem(pointer, 'version-operation')
+    localStorage.setItem('vinote:import-receipt:import-owner:meeting', JSON.stringify({ id: 'newer-intake', meeting: true }))
+    libraryMock.saveNote.mockResolvedValue({ id: 'saved-version' })
+    apiMock.apiJson.mockImplementation(async path => path.includes('/source-requests/')
+      ? { operation_id: 'version-operation', task_id: 'version-child', state: 'accepted', source_type: 'audio' }
+      : { task_id: 'version-child', status: 'success', result: { task_id: 'version-child', title: '2026-10-19 15:41 | Source', markdown: '# Synthetic version' } })
+    renderGenerator('/meetings?q=kept')
+    await waitFor(() => expect(navigateMock).toHaveBeenCalledWith('/note/saved-version', expect.anything()))
+    expect(libraryMock.saveNote).toHaveBeenCalledOnce()
+    expect(libraryMock.saveNote.mock.calls[0][3]).toBe('version-child')
+    expect(libraryMock.saveNote.mock.calls[0][4]).toEqual({ scope: 'team', teamId: 'synthetic-team' })
+    expect(libraryMock.saveNote.mock.calls[0][5]).toBe('meeting_video')
+    expect(libraryMock.saveNote.mock.calls[0][0]).toContain('2026-10-19 15:41')
+    expect(localStorage.getItem(pointer)).toBeNull(); expect(localStorage.getItem(key)).toBeNull()
+    expect(JSON.parse(localStorage.getItem('vinote:import-receipt:import-owner:meeting')!).id).toBe('newer-intake')
+    expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+  })
+
+  it.each(['unknown', 'reserved'] as const)('keeps %s operation query-only without any provider submit or save', async state => {
+    const raw = JSON.stringify(receipt())
+    localStorage.setItem(key, raw); localStorage.setItem(pointer, 'version-operation')
+    apiMock.apiJson.mockImplementation(async path => {
+      if (state === 'unknown') throw new ApiError('not found', 404, {})
+      return { operation_id: 'version-operation', task_id: 'version-child', state: 'reserved' }
+    })
+    renderGenerator()
+    await waitFor(() => expect(apiMock.apiJson).toHaveBeenCalledWith('/api/source-requests/version-operation'))
+    expect(libraryMock.saveNote).not.toHaveBeenCalled()
+    expect(localStorage.getItem(pointer)).toBe('version-operation')
+    expect(apiMock.apiJson.mock.calls.every(([path, init]) => path === '/api/source-requests/version-operation' && !init?.method)).toBe(true)
+  })
+
+  it.each([{ owner: 'other-owner' }, { origin: 'https://forged.invalid' }, { summaryOnly: false }])('rejects malformed or cross-account version receipt %j', async extra => {
+    localStorage.setItem(key, JSON.stringify(receipt('reuse', extra)))
+    renderGenerator(); await screen.findByText(/无法读取本机任务回执/)
+    expect(apiMock.apiJson).not.toHaveBeenCalled(); expect(libraryMock.saveNote).not.toHaveBeenCalled()
+  })
+
+  it('retains a failed save and mismatched result task without clearing operation protection', async () => {
+    localStorage.setItem(key, JSON.stringify(receipt('fresh', { id: 'version-child', submissionState: 'accepted' })))
+    localStorage.setItem(pointer, 'version-operation')
+    apiMock.apiJson.mockResolvedValue({ task_id: 'version-child', status: 'success', result: { task_id: 'different-child', title: 'Wrong', markdown: 'Wrong' } })
+    renderGenerator(); await screen.findByText(/无法读取原任务进度/)
+    expect(libraryMock.saveNote).not.toHaveBeenCalled()
+    expect(localStorage.getItem(pointer)).toBe('version-operation'); expect(localStorage.getItem(key)).not.toBeNull()
+  })
+})
+
 
 describe('meeting shared-video verification stage', () => {
   beforeEach(() => {
@@ -1151,31 +1226,31 @@ describe('meeting shared-video verification stage', () => {
 describe('failed meeting task summary-only entrance', () => {
   const config = { configured: true, mode: 'cloud' as const, llm_model: 'explicit-selected-summary', asr_model: 'never-run', server_url: 'https://summary.invalid' }
   const summaryModels = [{ id: config.llm_model, modelType: 'llm', runtimeStatus: 'available' }]
-  const context = { parent_task_id: 'failed-summary-parent', context_revision: 'a'.repeat(64), source: { version: 'b'.repeat(64), type: 'meeting_video', title: 'Verified synthetic meeting source' }, can_regenerate_summary: true }
-  const pointer = 'vinote:summary-operation:import-owner:https://summary.invalid:task:failed-summary-parent'
+  const context = { protocol: 1, parent_task_id: 'failed-summary-parent', canonical_task_id: 'canonical', context_revision: 'a'.repeat(64), source: { version: 'b'.repeat(64), type: 'meeting_video', title: 'Verified synthetic meeting source' }, original_llm: { verified: true, model_name: 'original-summary-model', server_url: 'https://original.invalid' }, asr_modes: { reuse: { available: true }, fresh: { available: false } } }
+  const pointer = 'vinote:meeting-version-operation:import-owner:task:failed-summary-parent'
   beforeEach(() => {
     vi.clearAllMocks(); apiMock.apiJson.mockReset(); localStorage.clear(); sessionStorage.clear()
     queryMock.value = 'meeting=1&task=failed-summary-parent'; languageMock.value = 'en'
     useNoteGenerationStore.getState().reset(); useAuthStore.setState({ user: { id: 'import-owner', email: 'import@example.invalid' } })
     useAppModeStore.setState({ config, saving: false })
     libraryMock.notes = []; libraryMock.saveNote.mockReset()
-    apiMock.apiJson.mockImplementation(async (path: string) => path === '/api/vilab/models' ? summaryModels : path === '/api/vilab/config' ? config : path.endsWith('/summary-context') ? context : { task_id: 'failed-summary-parent', status: 'failed', failed_stage: 'summarizing', error_code: 'llm_failed', message: '总结服务未完成', retryable: false })
+    apiMock.apiJson.mockImplementation(async (path: string) => path === '/api/vilab/models' ? summaryModels : path === '/api/vilab/config' ? config : path.endsWith('/meeting-version-context') ? context : { task_id: 'failed-summary-parent', status: 'failed', failed_stage: 'summarizing', error_code: 'llm_failed', message: '总结服务未完成', retryable: false })
   })
   afterEach(() => { cleanup(); localStorage.clear(); queryMock.value = ''; useAppModeStore.getState().reset() })
   async function prepare() {
-    await screen.findByRole('button', { name: '仅重新生成纪要' })
-    await userEvent.click(screen.getByRole('button', { name: '仅重新生成纪要' }))
-    return screen.findByRole('dialog', { name: '确认仅重新生成纪要' })
+    await screen.findByRole('button', { name: '生成新版本' })
+    await userEvent.click(screen.getByRole('button', { name: '生成新版本' }))
+    return screen.findByRole('dialog', { name: '确认生成新版本' })
   }
   it.each(['accepted', 'lost'])('real task component prepare/confirm for %s response posts only regenerate-summary and saves the child', async outcome => {
     let operation = ''
     apiMock.apiJson.mockImplementation(async (path: string, init?: RequestInit) => {
       if (path === '/api/vilab/models') return summaryModels
       if (path === '/api/vilab/config') return config
-      if (path.endsWith('/summary-context')) return context
-      if (path.endsWith('/regenerate-summary')) {
+      if (path.endsWith('/meeting-version-context')) return context
+      if (path.endsWith('/meeting-versions')) {
         const body = JSON.parse(init!.body as string); operation = body.operation_id
-        expect(body.model_name).toBe(config.llm_model)
+        expect(body.llm_mode).toBe('inherit'); expect(body.model_name).toBeUndefined()
         expect(localStorage.getItem(pointer)).toBe(operation)
         if (outcome === 'lost') throw new Error('lost response')
         return { operation_id: operation, task_id: 'summary-child', state: 'accepted' }
@@ -1187,12 +1262,12 @@ describe('failed meeting task summary-only entrance', () => {
     const dialog = await prepare()
     expect(dialog).toHaveTextContent('不重新转录')
     expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
-    await userEvent.click(within(dialog).getByRole('button', { name: '确认，仅重新总结' }))
+    await userEvent.click(within(dialog).getByRole('button', { name: '确认生成新版本' }))
     await waitFor(() => expect(navigateMock).toHaveBeenCalled())
     const pending = JSON.parse(localStorage.getItem(`vinote:source-receipt:import-owner:${operation}`)!)
     expect(pending).toMatchObject({ parentTaskId: 'failed-summary-parent', summaryOnly: true, sourceType: 'meeting_video' })
     expect(pending.summaryNoteId).toBeUndefined()
-    expect(pending.summaryContext).toEqual(context)
+    expect(pending.meetingVersionContext).toEqual(context)
     expect(pending.sourceTitle).toBe(context.source.title)
     expect(pending.sourceTitle).not.toBe('Old intake title')
     cleanup(); queryMock.value = 'meeting=1&operation=' + operation
@@ -1205,7 +1280,7 @@ describe('failed meeting task summary-only entrance', () => {
     expect(localStorage.getItem(pointer)).toBeNull()
     const writes = apiMock.apiJson.mock.calls.filter(([, init]) => init?.method === 'POST')
     expect(writes).toHaveLength(1)
-    expect(writes[0][0]).toBe('/api/task/failed-summary-parent/regenerate-summary')
+    expect(writes[0][0]).toBe('/api/task/failed-summary-parent/meeting-versions')
     expect(apiMock.apiJson.mock.calls.some(([path]) => /retry|new-generation|generate_from/.test(path))).toBe(false)
   })
   it.each([true, false])('legacy receipt summaryOnly=%s keeps honest source disclosure without inventing any source id', async summaryOnly => {
@@ -1219,11 +1294,11 @@ describe('failed meeting task summary-only entrance', () => {
   })
   it('blocks incomplete-ASR summary-context 409 with no confirmation and no POST', async () => {
     apiMock.apiJson.mockImplementation(async path => {
-      if (path.endsWith('/summary-context')) throw new ApiError('Incomplete ASR', 409, {})
+      if (path.endsWith('/meeting-version-context')) throw new ApiError('Incomplete ASR', 409, {})
       return path === '/api/vilab/models' ? summaryModels : path === '/api/vilab/config' ? config : { task_id: 'failed-summary-parent', status: 'failed', message: '处理未完成', retryable: false }
     })
-    renderGenerator(); await screen.findByRole('button', { name: '仅重新生成纪要' })
-    await userEvent.click(screen.getByRole('button', { name: '仅重新生成纪要' }))
+    renderGenerator(); await screen.findByRole('button', { name: '生成新版本' })
+    await userEvent.click(screen.getByRole('button', { name: '生成新版本' }))
     await screen.findByText('当前资料不可重新生成纪要，请保留原文件与已有处理记录。')
     expect(screen.queryByRole('dialog')).toBeNull()
     expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
@@ -1233,10 +1308,10 @@ describe('failed meeting task summary-only entrance', () => {
     localStorage.setItem(pointer, 'unknown-summary')
     localStorage.setItem('vinote:source-receipt:import-owner:unknown-summary', JSON.stringify({ operationId: 'unknown-summary', parentTaskId: 'failed-summary-parent', summaryOnly: true, independentGeneration: true, origin: config.server_url, meeting: true, workspace: { scope: 'personal' }, submissionState: 'unknown' }))
     renderGenerator('/tasks?tab=generation')
-    await screen.findByRole('button', { name: '仅重新生成纪要' })
-    await userEvent.click(screen.getByRole('button', { name: '仅重新生成纪要' }))
+    await screen.findByRole('button', { name: '生成新版本' })
+    await userEvent.click(screen.getByRole('button', { name: '生成新版本' }))
     expect(navigateMock.mock.calls.at(-1)![0]).toContain('operation=unknown-summary')
-    expect(apiMock.apiJson.mock.calls.some(([path]) => path.endsWith('/summary-context'))).toBe(false)
+    expect(apiMock.apiJson.mock.calls.some(([path]) => path.endsWith('/meeting-version-context'))).toBe(false)
     cleanup(); queryMock.value = 'meeting=1&operation=unknown-summary'
     apiMock.apiJson.mockRejectedValue(new ApiError('Not yet found', 404, {}))
     renderGenerator()
@@ -1249,7 +1324,7 @@ describe('failed meeting task summary-only entrance', () => {
     renderGenerator(); await prepare()
     act(() => useAuthStore.setState({ user: { id: 'other', email: 'other@example.invalid' } }))
     act(() => useAuthStore.setState({ user: { id: 'import-owner', email: 'import@example.invalid' } }))
-    expect(screen.queryByRole('button', { name: '确认，仅重新总结' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '确认生成新版本' })).toBeNull()
     expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
     expect(localStorage.length).toBe(0)
   })
@@ -1261,7 +1336,7 @@ describe('failed meeting task summary-only entrance', () => {
     await screen.findByRole('button', { name: '查看原任务状态' })
     expect(screen.queryByRole('button', { name: '重试处理原任务' })).toBeNull()
     expect(screen.queryByRole('button', { name: '确认原模型，开始新的处理' })).toBeNull()
-    expect(screen.getByRole('button', { name: '仅重新生成纪要' })).toBeVisible()
+    expect(screen.getByRole('button', { name: '生成新版本' })).toBeVisible()
     expect(screen.getByRole('alert')).not.toHaveTextContent('此次转写未完成')
     await userEvent.click(screen.getByRole('button', { name: '查看原任务状态' }))
     await screen.findByRole('button', { name: '查看原任务状态' })
@@ -1283,10 +1358,10 @@ describe('failed meeting task summary-only entrance', () => {
   })
   it('late context from the previous task route cannot open confirmation on another task', async () => {
     let resolve!: (value: unknown) => void
-    apiMock.apiJson.mockImplementation(path => path.endsWith('/summary-context') ? new Promise(done => { resolve = done }) : Promise.resolve(path === '/api/vilab/models' ? summaryModels : path === '/api/vilab/config' ? config : { task_id: 'failed-summary-parent', status: 'failed', message: '处理未完成', retryable: false }))
+    apiMock.apiJson.mockImplementation(path => path.endsWith('/meeting-version-context') ? new Promise(done => { resolve = done }) : Promise.resolve(path === '/api/vilab/models' ? summaryModels : path === '/api/vilab/config' ? config : { task_id: 'failed-summary-parent', status: 'failed', message: '处理未完成', retryable: false }))
     const first = renderGenerator()
-    await screen.findByRole('button', { name: '仅重新生成纪要' })
-    await userEvent.click(screen.getByRole('button', { name: '仅重新生成纪要' }))
+    await screen.findByRole('button', { name: '生成新版本' })
+    await userEvent.click(screen.getByRole('button', { name: '生成新版本' }))
     first.unmount(); queryMock.value = 'meeting=1&task=other-task'
     apiMock.apiJson.mockResolvedValue({ task_id: 'other-task', status: 'failed', message: '其他任务未完成', retryable: false })
     renderGenerator()

@@ -37,6 +37,8 @@ class ASRExecutionBinding:
     snapshot_json: str
     canonical: str | None = None
     parent_prefix_json: str | None = None
+    fresh: bool = False
+    fresh_link_json: str | None = None
     _receipts: object = field(default=None, compare=False, repr=False)
     # Revocation also invalidates copy_context snapshots retained after dispatch.
     _live: list = field(default_factory=lambda: [True], compare=False, repr=False)
@@ -49,7 +51,8 @@ class ASRExecutionBinding:
         return {'version': 1, 'owner': self.owner, 'operation_id': self.operation,
                 'task_id': self.task, 'parent_task_id': self.parent,
                 'source_version': self.source_version, 'context_revision': self.revision,
-                'snapshot_sha256': hashlib.sha256(self.snapshot_json.encode()).hexdigest()}
+                'snapshot_sha256': hashlib.sha256(self.snapshot_json.encode()).hexdigest(),
+                **({'asr_mode': 'fresh'} if self.fresh else {})}
 
     def validate(self, *, owner=None, task=None, folder=None, source=None, chunks=None):
         from app.services.task_artifact_service import TaskArtifactService
@@ -78,7 +81,11 @@ class ASRExecutionBinding:
         link = _read_json(self.folder / 'new_generation.json')
         expected_link = {'version': 1, 'operation_id': self.operation, 'parent_task_id': self.parent,
                          'source_version': self.source_version, 'context_revision': self.revision}
-        if self.canonical is not None:
+        if self.fresh:
+            if self.fresh_link_json is None or self.parent_prefix_json is not None:
+                _deny()
+            expected_link = json.loads(self.fresh_link_json)
+        elif self.canonical is not None:
             if self.parent_prefix_json is None:
                 _deny()
             expected_link.update(version=2, canonical_task_id=self.canonical,
@@ -127,6 +134,21 @@ def _claimed_execution(receipts, artifacts, owner, task, folder, snapshot, link,
     from app.services.task_new_generation import NewGenerationConfirmation, _submission
     if folder.is_symlink():
         _deny()
+    if link.get('contract') == 'meeting-fresh-asr-v1':
+        from app.services.task_fresh_asr import _validate_claim
+        _validate_claim(receipts, artifacts, owner, task, folder, snapshot, link, source)
+        binding = ASRExecutionBinding(owner, link['operation_id'], task, link['parent_task_id'],
+            link['source_version'], link['fresh_context_revision'], folder.resolve(), source.resolve(),
+            json.dumps(snapshot, sort_keys=True), canonical=link['canonical_task_id'], fresh=True,
+            fresh_link_json=json.dumps(link, sort_keys=True), _receipts=receipts)
+        token = _execution.set(binding)
+        try:
+            binding.validate(owner=owner, task=task, folder=folder, source=source)
+            yield binding
+        finally:
+            binding._live[0] = False
+            _execution.reset(token)
+        return
     confirmation = NewGenerationConfirmation(confirmed=True, **{
         key: link[key] for key in ('operation_id', 'context_revision', 'source_version', 'canonical_task_id') if key in link})
     operation = str(confirmation.operation_id)

@@ -101,7 +101,7 @@ def test_formats_are_frozen_per_child_and_replay_cannot_change_them(case):
     assert not c.note.generate_from_file.called
 
 
-@pytest.mark.parametrize('presentation', ['illustrated', 'comic', 'infographic'])
+@pytest.mark.parametrize('presentation', ['illustrated', 'comic'])
 def test_unavailable_presentation_fails_before_catalog_or_reservation(case, monkeypatch, presentation):
     from app.services.meeting_summary_regeneration import SummaryConfirmation
     c = case
@@ -111,6 +111,18 @@ def test_unavailable_presentation_fails_before_catalog_or_reservation(case, monk
         accept(c, body)
     assert error.value.status_code == 409
     with pytest.raises(HTTPException): c.receipts.get('alice', str(body.operation_id))
+
+
+def test_infographic_is_an_explicit_same_model_format_without_imagegen(case):
+    c = case
+    body = c.body.model_copy(update={'presentation': 'infographic'})
+    receipt, _ = accept(c, body)
+    c.service.run_once(receipt.task_id, 'alice', c.note)
+    options = c.note.generate_from_transcript.call_args.kwargs
+    assert options['presentation'] == 'infographic'
+    frozen = json.loads((c.artifacts.find_task_dir(receipt.task_id) / SNAPSHOT_FILE).read_text())
+    assert frozen['llm_model'] == body.model_name
+    assert not c.note.generate_from_file.called
 
 
 def test_two_versions_of_same_format_are_distinct_operations(case):
@@ -200,11 +212,10 @@ def test_second_version_uses_original_evidence_never_previous_summary_and_freeze
         def _complete(self, **prompts):
             self.calls.append(prompts)
             if len(self.calls) == 1:
-                return json.dumps({'protocol': 2, 'topics': [{'id': 'T1', 'title': 'Synthetic source'}],
-                    'facts': [{'id': 'F1', 'topic_id': 'T1', 'entity': None, 'claims': [
-                        {'id': 'C1', 'field': 'relation', 'text': c.transcript['full_text'], 'anchor': c.transcript['full_text'],
-                         'material': True, 'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': c.transcript['full_text']}]}]}]})
-            return json.dumps({'protocol': 2, 'blocks': [{'id': 'B1', 'markdown': '# Synthetic source'}, {'id': 'B2', 'markdown': c.transcript['full_text']}],
+                return json.dumps({'protocol': 3, 'topics': [{'id': 'T1', 'title': 'Synthetic source'}],
+                    'claims': [{'id': 'C1', 'topic_id': 'T1', 'field': 'relation', 'text': c.transcript['full_text'], 'anchor': c.transcript['full_text'],
+                         'material': True, 'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': c.transcript['full_text']}]}]})
+            return json.dumps({'protocol': 3, 'blocks': [{'id': 'B1', 'markdown': '# Synthetic source'}, {'id': 'B2', 'markdown': c.transcript['full_text']}],
                 'audit': [{'claim_id': 'C1', 'disposition': 'included', 'block_ids': ['B2']}], 'figures': []})
     llm = CaptureLLM()
     runner = object.__new__(NoteService)

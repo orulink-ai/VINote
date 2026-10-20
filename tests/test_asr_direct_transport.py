@@ -17,6 +17,7 @@ from websockets.sync import client
 
 from app.services import asr_stream_service as service
 from app.services.task_failure import failure_details, safe_asr_failure_context
+from app.transcribers.vilab_transcriber import VILabTranscriber
 
 SECRET = 'SYNTHETIC_BEARER_REASON_AND_PROXY_PASSWORD_DO_NOT_LOG'
 TARGET = 'wss://target.invalid/v1/asr/transcriptions'
@@ -97,6 +98,42 @@ def test_tls_rejection_has_no_proxy_fallback_or_second_connection(direct_transpo
     assert diagnostic['transport_exception_class'] == 'SSLCertVerificationError'
     assert diagnostic['ws_proxy_mode'] == 'disabled'
     assert SECRET not in json.dumps(diagnostic)
+
+
+@pytest.mark.parametrize('failure', [None, 'tls', 'timeout'])
+def test_real_httpx_recorded_audio_catalog_ignores_proxy_discovery_and_never_falls_back(monkeypatch, failure):
+    """Keep actual httpx.get/Client/transport setup; substitute only socket I/O."""
+    reads, proxies, requests = [], [], []
+    def discovery():
+        reads.append(True)
+        return {'all://': 'http://127.0.0.1:7890'}
+    def proxy(*args, **kwargs):
+        proxies.append(True)
+        raise AssertionError('ASR catalog must not initialize an environment/system proxy')
+    monkeypatch.setenv('HTTPS_PROXY', 'http://127.0.0.1:7890')
+    monkeypatch.setattr(httpx._client, 'get_environment_proxies', discovery)
+    monkeypatch.setattr(httpx.Client, '_init_proxy_transport', proxy)
+    def direct(transport, request):
+        requests.append(request)
+        assert str(request.url) == 'https://target.invalid/v1/models'
+        assert request.method == 'GET' and request.headers['authorization'] == 'Bearer ' + SECRET
+        context = transport._pool._ssl_context
+        assert context.check_hostname and context.verify_mode == ssl.CERT_REQUIRED
+        if failure == 'tls':
+            raise httpx.ConnectError('synthetic TLS failure', request=request)
+        if failure == 'timeout':
+            raise httpx.ReadTimeout('synthetic timeout', request=request)
+        return httpx.Response(200, json={'data': [{'id': 'frozen-asr', 'modelType': 'asr',
+            'capabilities': {'recordedAudio': {'protocol': 1, 'supported': True,
+                'strategy': 'adaptive_pause', 'policySource': 'service_budget', 'maxSessionAudioBytes': 98304}}}]})
+    monkeypatch.setattr(httpx.HTTPTransport, 'handle_request', direct)
+    adapter = VILabTranscriber('https://target.invalid', '', 'frozen-asr')
+    if failure:
+        with pytest.raises(ValueError, match='尚未提交音频'):
+            adapter._recorded_audio_policy(SECRET)
+    else:
+        assert adapter._recorded_audio_policy(SECRET).max_session_audio_bytes == 98304
+    assert len(requests) == 1 and reads == proxies == []
 
 
 @pytest.mark.parametrize('failure,expected,close_code', [

@@ -33,6 +33,7 @@ def test_depth_only_changes_final_review_not_evidence_preservation():
 def test_presentation_availability_never_invents_generation_capability():
     from app.llm.meeting_presentation import presentation_availability
     options = presentation_availability(has_visuals=False)
-    assert all(options[key]['available'] for key in ('text', 'html'))
-    assert all(options[key]['available'] is False for key in ('illustrated', 'comic', 'infographic'))
+    assert all(options[key]['available'] for key in ('text', 'html', 'infographic'))
+    assert all(options[key]['available'] is False for key in ('illustrated', 'comic'))
     assert presentation_availability(has_visuals=True)['illustrated']['available']
+    assert presentation_availability(has_visuals=True)['comic']['available']

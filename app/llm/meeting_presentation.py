@@ -16,6 +16,7 @@ class PresentationState:
     presentation: str | None
     figures: list = field(default_factory=list)
     raw_review: str | None = None
+    visual_review: dict | None = None
 
 
 def presentation_state():
@@ -37,7 +38,7 @@ def presentation_scope(depth: ContentDepth | None, presentation=None):
 def depth_instructions(depth=None):
     depth = depth or _depth.get()
     instructions = {
-        'brief': 'Content depth: brief. Select the essential supported outcomes and material conditions for a quick reading. Omit secondary examples and repetition. Brevity may select facts but must never change their relationships, status, uncertainty, owners or deadlines.',
+        'brief': 'Content depth: brief. Aim for about 30–45 seconds of reading: prioritize the main substantive topics, key arrangements and necessary constraints. Omit secondary comparisons, peripheral wording, examples and repetition rather than itemizing everything. This is a reading goal, not a fixed section count or a hard truncation. Brevity may select facts but must never change their relationships, status, uncertainty, owners or deadlines.',
         'concise': 'Content depth: concise. Cover the substantive topics, outcomes, rationale and explicit follow-ups compactly. Remove repetition and secondary examples while preserving material conditions and disagreements.',
         'detailed': 'Content depth: detailed. Preserve substantive source-supported explanations, examples, comparisons, constraints, disagreements and changes of plan without repeating facts.',
     }
@@ -49,6 +50,6 @@ def presentation_availability(*, has_visuals):
         'text': {'available': True},
         'html': {'available': True},
         'illustrated': {'available': bool(has_visuals), 'reason': None if has_visuals else '缺少已核验的原视频截图，无法生成图文。'},
-        'comic': {'available': False, 'reason': '当前未接通所选模型的真实图像生成及结果核验，漫画不可用；不会更换模型。'},
-        'infographic': {'available': False, 'reason': '当前未接通可核验的信息图生成链路，信息图不可用。'},
+        'comic': {'available': bool(has_visuals), 'reason': None if has_visuals else '缺少已核验的原视频截图，画面分镜不可用。'},
+        'infographic': {'available': True},
     }

@@ -479,3 +479,8 @@ App original-recording details omit library-wide import/navigation actions. Exte
 
 ### Device-local per-item workspace policy (2026-10-12)
 New App content is local-only unless explicitly enabled. Existing acknowledged authorized content retains its policy; mappings/cache alone are not authorization. Canonical workspace keys stay unchanged, and device policy is not a global cloud deletion. GET /api/workspace/operations/{operation_id}?note_key=... returns the original owner-scoped committed revision only, without replay/latest content. /status advertises item_sync_policy=1, operation_receipts=1 and explicit_import=1 with policy_scope=device-local. POST /import-local requires {keys:[...],sync_authorized:true}; omitted/empty selection never imports all content. No new DB table or main.py registration is required: receipts use the existing registered workspace_operations table. This source contract is not evidence of deployment.
+
+## 会议新版本与图形阅读（2026-10-20）
+
+- 本机 `meeting_version_context.py` 适配器提供认证的 `GET /api/task/{task_id}/meeting-version-context`、显式换模型时的 `GET .../meeting-version-models` 和 `POST .../meeting-versions`。默认复用完整已有 ASR，沿用所选版本的可信原 LLM 与 Origin；不以上一稿正文为输入，不修改全局默认。历史来源须重建原 accepted 指纹与模型证明，不能仅相信磁盘快照。明确 fresh 才进入独立 ASR 执行流程，并选择本次 ASR/LLM、确认额外额度；未知结果只查原回执，不重放。实际验收仍须区分离线测试与真实 provider 执行。
+- `ResultPreview` 的画面分镜和信息图读取 `summary-visual/1`，绑定 task、已保存正文精确 SHA-256、正文块和受控截图路径。图形由设备 SVG/Canvas 渲染，模型不提供可执行 HTML/SVG 或任意资源路径。画面分镜使用真实录屏截图，不冒充人物生图。SVG/PNG/HTML 导出复用原生位置选择和字节保存，账号/正文/任务变化令迟到操作失效；无可核验图形时保留正文并说明状态。详见 `docs/reviews/2026-10-20-summary-visual-renderer.md`。前端合成导出通过不代表真实会议图形质量已验收。

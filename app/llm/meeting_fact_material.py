@@ -76,6 +76,7 @@ RELATION_FIDELITY_RULE = '''\nPRESERVE RELATIONAL DIMENSIONS THROUGH BOTH PASSES
 Before consolidation, organize each substantive source proposition as trigger -> action -> outcome, with its actual stage, scope, time role and status when supplied. Keep independently stated conditions distinct, even when they share an outcome or destination. A broad statement about a later problem does not cover a specific trigger or a numbered stage. Do not add missing dimensions or force every proposition into this shape.
 For a diagram, read each directed edge as source endpoint -> relation -> target endpoint. Preserve each edge and its direction separately before combining prose. Distinct input, output, feedback and control paths cannot be replaced with a shared undirected phrase merely because they meet at one component. Labels or spatial proximity without a readable edge do not establish a connection; do not infer an obscured arrow.
 For every reported number, recheck value, unit, object, configuration, source state and time role together against the actual supporting source. Verify the decimal point, digit grouping and sign rather than borrowing a nearby number or plausible value. Different selections or configurations remain separate comparisons. A visible number without a reliable object/value binding is not a useful precise comparison; omit the unsupported precision while retaining supported qualitative information. A disclaimer about purchase or selection status does not validate a number. Source references identify where to check; they do not prove that an obscured value is legible.
+Bind each time to the event and temporal role actually stated in its source, preserving uncertainty and conditions. Do not relabel an arrival or completion time as a departure, start or deadline, or invent an earlier event from scheduling plausibility. A time expression alone does not establish the type of event or transport. Compare event predicates before and after review: preserve the source's role and status, correcting a mistaken draft from the original rather than carrying its changed predicate forward.
 Do not discard an independently intelligible deadline, requirement strength, condition or stage merely because an adjacent noun or speaker identity is unclear. Preserve the supported clause with an appropriately limited description and relative time, without supplying a guessed object, named owner or calendar date. Distinguish a deadline or future arrangement from a historical recollection and from an incidental time reading. Reject only the unsupported portion when the remaining substantive relationship is independently clear.
 After writing or merging, compare the final sentence against both the original source and the working candidate for these dimensions. Restore a supported condition, stage, deadline, number binding or directed edge lost in paraphrase; if the working candidate was wrong, correct it from the source instead. An included audit passage must retain the material relationship, not just its topic or shared nouns. Perform this comparison internally within the existing draft and whole-source review; return the existing JSON schema, not an extra checklist, call or fixed report section.'''
 
@@ -92,7 +93,7 @@ def prepare_fact_material(text, source, *, require_protocol=None):
     value = _json(text)
     if require_protocol is not None:
         _require(value.get('protocol') == require_protocol)
-    if value.get('protocol') == 2:
+    if value.get('protocol') in (2, 3):
         from app.llm.meeting_fact_protocol import prepare
         return prepare(value)
     _require(value.get('protocol', 1) == 1)
@@ -126,7 +127,7 @@ def finalize_fact_review(text, draft, source):
     if state:
         state.raw_review = text
     value, material = _json(text), _json(draft)
-    if material.get('protocol') == 2:
+    if material.get('protocol') in (2, 3):
         from app.llm.meeting_fact_protocol import finalize
         return finalize(value, material)
     _require(value.get('protocol', 1) == 1)

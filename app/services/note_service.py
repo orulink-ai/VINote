@@ -642,6 +642,8 @@ class NoteService:
                         'protocol': 1, 'raw_response': presentation_state.raw_review})
             if getattr(context, 'presentation', None) == 'illustrated':
                 context.presentation_figures = presentation_state.figures
+            if getattr(context, 'presentation', None) in {'comic', 'infographic'}:
+                context.presentation_visual = presentation_state.visual_review
         context.step_timings["summarize"] = time.time() - step_start
         update_current(
             input={"title": context.audio_meta.title, "summary_mode": context.summary_mode,

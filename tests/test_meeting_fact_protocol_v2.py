@@ -205,6 +205,8 @@ def test_two_concurrent_meetings_each_use_exactly_two_calls_and_their_own_source
         raw = RAW.replace('43.875', number)
         draft = json.loads(json.dumps(candidate()).replace('43.875', number))
         review = json.loads(json.dumps(checked()).replace('43.875', number))
+        draft = {'protocol': 3, 'topics': draft['topics'], 'claims': [{**claim, 'topic_id': fact['topic_id']} for fact in draft['facts'] for claim in fact['claims']]}
+        review['protocol'] = 3
         class Automatic(_BasePromptLLM):
             def __init__(self): self.calls = []
             def _complete(self, **prompts):

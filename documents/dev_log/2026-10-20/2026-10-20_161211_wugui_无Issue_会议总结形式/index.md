@@ -181,3 +181,38 @@ TDD：全新合成命题用例首次 **6 failed / 16 passed**，接入后 **22 p
 验证包括：来源窗口错配、原文数字/空白/片段篡改、metadata伪证据、start/end类型/范围、唯一/重叠消歧；未知实体与有据独立属性、整fact/无来源拒绝禁止、entity理由滥用于数字禁止；空facts/单topic/扩展及新增漏项、block错误/重复/缺项、v1降级拒绝；无OCR图像不冒充文本、真实frame关联/段落exact唯一；两个并发会议各一次draft一次review、原始来源/原响应/ContextVar不互串。既有第二版排除旧纪要、无ASR、模型冻结及恢复回归保持green。未改或重新解析实际会议原稿以修正其内容，未将私有评审答案作为提示或测试期望。
 
 候选现已冻结：[backend-source-claims-v2.sha256](backend-source-claims-v2.sha256)，15个后端文件，清单本身SHA-256 `222E248BF3D6DDAD909C09EB5C051D04DD4EA66A7528F527A2CA50D6346FEE19`。由主线程审查后明确新operation运行；本agent不调用。协议2真实provider接受性和真实质量分数仍未验证，不能以264 passed冒称100分或稳定产出。冻结后停止追加实现。
+
+## v3 来源纠错最小修正与冻结（2026-10-20）
+
+A08/Bbrief02原始JSON均可解析，失败都在冗余anchor子串检查而非JSON语法。只读逐项核对：A08 24 claims，16项ASR证据中15项原样精准，C15将实际ASR:0023引到0022；另5项anchor不在引文。Bbrief02 28 claims，16项ASR证据中15项精准，C26将实际ASR:0013引到0014；另4项anchor不匹配。独立Aristotle复核相同。原始响应、失败状态和旧operation不改、不重放。
+
+用户批准的最小v3修正：移除anchor要求；逐项检查draft证据，来源错配仅附verification=unverified，原quote/ref/offsets不修不删，进入已有完整来源review。review audit可用同格式evidence替换该claim旧证据，included使用原有效证据或替换后的有效证据且必须重新严格核验；不得相信模型自报verification。rejected新证据也严格核验可信来源，但不要求与旧错误ref求交或重验被拒旧证据。未输出的omitted候选仍受空blocks/理由/深度material门槛，不新增旧错误证据门槛。v3 field为非空分类标签，允许责任等分类扩展；unclear_entity仍仅entity可用。legacy v1/v2路径未放宽。
+
+首次新增回归9 failed/18 passed；其中一条歧义quote测试最初使用只出现一次的the，改为实际重复的a，未因此调整产品匹配规则。修后四文件组合189 passed；最终移除未输出候选的多余strict检查后v3/v2专项64 passed。用例覆盖错引原样保留/伪验证覆盖、无纠正included禁止、有效纠正替换而非合并旧证据、跨旧错ref有据拒绝、非法数字/offset/ref/重复引文拒绝、additional_claims纠正、unknown entity部分拒绝、非空字段扩展与两次完整来源调用/原始draft和review保存。最后同组合重跑结果随后补记。
+
+Aristotle对最终源码独立离线验证：A08/Bbrief02分别24/28 claims均prepare通过，仅C15/C26保留unverified；原artifact字节不变。自己的首个重复离线脚本误以为视频manifest含identity嵌套键而KeyError退出，未修改数据、未调用provider，不将该失败脚本算成通过。采用独立核验结论，不人工改错quote来通过最终发布门槛。
+
+已冻结[15文件清单](backend-v3-source-correction.sha256)，清单SHA256：45B895F6856A19387DB3F0F55DA54F075E6E71695ACF467D3D7118231DA01CA4。protocol文件SHA256：515352D1C91E37EDE9923D06892F68C611F9F6318AFDDD8EB3DB724A374C63A5。未改变两调用数、原始完整来源、原始响应保存、连接/模型选择，无新增协议版本/自动修ref/补调用/重试/ASR/provider。由主线程另建A09/Bbrief03真实operation；结构通过不能声称真实事实100分。视觉backend交Peirce独立实现，本候选不接visual prompt/host。
+
+最终冻结源码四文件组合重跑190 passed（25.09秒，1条既有Starlette弃用警告）。冻结清单逐项核对全部15文件一致。
+
+## 视觉接线应用、真实批次冻结与工具整理（2026-10-20）
+
+A09 draft HTTP524未返回稿；Bbrief03完成draft/review但guardfailed。B只读对账为26claims/28audit、missing=[]、extra=C27/C28，无additional_claims，且included错引需有效纠正，不能自动补定义、删audit或人工改稿。Peirce独评原始10块正文90/100，与失败不发布分开。提示仅强化原有claimset/新增claim定义/有效证据替换及通用时间事件角色，无样例人名数值或答案。
+
+用户解除当批冻结后，已应用visual-host-integration.patch。新增独立prompt/state快照与generation adapter，接入既有review/state/note/render；原有text/HTML不新增visual字段要求，两调用不变。分镜为真实录屏，不调用生图；信息图为本轮正文的受控布局，设备渲染。adapter复用Peirce wire/sidecar模块，Mendel负责前端。app factory曾多人重复挂路由，main已保留artifacts=note._note_service.artifact_service单次挂载，并将测试改为assert count=1；该文件归main，我不再修改。
+
+独立新模块+staged-host组合71 passed；应用后组合首次212 passed/1 failed，失败是新增测试错误期待generate_from_transcript kwargs含model_name，而实际模型由冻结ContextVar承载，改测试检查accepted child快照，未改产品。随后216 passed。最后按用户要求强化brief约30–45秒阅读目标与时间谓词角色比较，未增schema/guard。一次性generator/staged测试在运行结束后移入ignored .desktop-build，正式tests/test_summary_visual_pipeline.py直接执行当前host；最终六文件组合106 passed（5.95秒，13条既有Starlette/FastAPI弃用警告），diff-check通过。
+
+原20文件冻结清单SHA D8A816A704DC362451581C0B8853E4F6B76BE65DB2F7E168FD81B7343E635B43；main已启动A HTML detailed01/B illustrated concise01，明确冻结core20。唯一授权例外：Peirce独立artifact模块修首/尾块合法空白与finalizer整体strip的投影差异，两种正在运行形式不调用它。prompt/host不再变更；修复及测试后仅更新20文件SHA，不等待文档。
+
+接线、请求字段、责任边界和证据说明补入[视觉接线文档](../../../../docs/reviews/2026-10-20-summary-visual-integration.md)。本agent本轮零provider/ASR、未commit、未切branch/worktree，旧真实稿、intent、receipt和状态未修改。实际各形式质量与完成状态由main另行真实调度及评分，离线green不能冒称100分。
+
+授权边界修复已由Peirce完成并冻结：artifact SHA8825F1DC269D69F8FAF571404A0C7A5B600FE952BED25B6439A493E7535D92D4，专项58 passed。刷新20文件清单前确认仅该独立模块发生改变，旧清单另存backend-visual-integration-pre-boundary.sha256；prompt/host保持原样。本agent仅更新清单与档案，未碰运行中两路源码。
+
+### 2026-10-20 19:20:29｜最终冻结 SHA 补记
+
+- Peirce artifact 边界修复及兼容验证共74 passed：artifact58 + generation/pipeline16；零provider/ASR。
+- artifact SHA256：8825F1DC269D69F8FAF571404A0C7A5B600FE952BED25B6439A493E7535D92D4。
+- 20文件清单SHA256：908793CAD54A4F24783E58DAA53B589878EF7A7A50A085A524838464C89AD053；逐项核验全部一致，清单已是授权修复后的版本，无需重写。
+- main正在最终8模块联测，计划同分支阶段commit，尚未合并；本agent不修改core、不提交，不预报联测或commit成功。

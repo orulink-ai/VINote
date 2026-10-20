@@ -1,4 +1,4 @@
-"""Protocol 2: exact source spans, atomic accounting, single-copy report blocks.
+"""Protocols 2/3: exact source spans, atomic accounting, single-copy blocks.
 
 This checks provenance and references, never semantic entailment or ASR accuracy.
 No provider, artifact writes, repair calls or legacy receipt migration.
@@ -54,8 +54,46 @@ def _evidence(rows):
     return result
 
 
+def _flat_to_v2(value):
+    """Internal compatibility projection only; never repair provider JSON."""
+    _require('facts' not in value)
+    _ids(value.get('claims'), 'id')
+    return {'protocol': 2, 'topics': value.get('topics'), 'facts': [
+        {'id': claim['id'], 'topic_id': claim.get('topic_id'), 'entity': None,
+         'claims': [{key: item for key, item in claim.items() if key != 'topic_id'}]}
+        for claim in value['claims']]}
+
+
+def _prepare_flat(value):
+    """Keep source mistakes for the existing review, without authorizing them."""
+    _require('facts' not in value)
+    topics = _ids(value.get('topics'), 'id')
+    _ids(value.get('claims'), 'id')
+    for claim in value['claims']:
+        _require(isinstance(claim.get('topic_id'), str) and claim['topic_id'] in topics
+                 and _text(claim.get('field'))
+                 and _text(claim.get('text')) and type(claim.get('material')) is bool)
+        rows = claim.get('evidence')
+        _require(isinstance(rows, list) and bool(rows))
+        checked = []
+        for row in rows:
+            _require(isinstance(row, dict) and isinstance(row.get('source_ref'), str)
+                     and isinstance(row.get('kind'), str) and row['kind'] in {'asr_span', 'ocr_span', 'frame_observation'}
+                     and _text(row.get('observation' if row['kind'] == 'frame_observation' else 'quote')))
+            try:
+                checked.extend(_evidence([row]))
+            except ValueError:
+                # Preserve the exact proposed quote/ref/offsets. Never search
+                # other windows or let a model-supplied verification authorize it.
+                checked.append({**row, 'verification': 'unverified'})
+        claim['evidence'] = checked
+    return value
+
+
 def prepare(value):
     value = copy.deepcopy(value)
+    if type(value.get('protocol')) is int and value['protocol'] == 3:
+        return json.dumps(_prepare_flat(value), ensure_ascii=False)
     _require(type(value.get('protocol')) is int and value['protocol'] == 2)
     topics = _ids(value.get('topics'), 'id')
     _ids(value.get('facts'), 'id')
@@ -90,12 +128,22 @@ def _block_ids(row, blocks):
 
 
 def finalize(value, material):
+    flat = type(material.get('protocol')) is int and material['protocol'] == 3
+    if flat:
+        _require(type(value.get('protocol')) is int and value['protocol'] == 3 and 'additional_facts' not in value)
+        value, material = copy.deepcopy(value), copy.deepcopy(material)
+        for key, addition in [('topics', 'additional_topics'), ('claims', 'additional_claims')]:
+            _require(isinstance(material.get(key), list) and isinstance(value.get(addition, []), list))
+            material[key].extend(value.pop(addition, []))
+        material = _flat_to_v2(json.loads(prepare(material)))
+        value['protocol'] = 2
     _require(type(value.get('protocol')) is int and value['protocol'] == 2)
     material = copy.deepcopy(material)
     for key, addition in [('topics', 'additional_topics'), ('facts', 'additional_facts')]:
         _require(isinstance(material.get(key), list) and isinstance(value.get(addition, []), list))
         material[key].extend(value.get(addition, []))
-    material = json.loads(prepare(material))  # Recheck every original and added source binding.
+    if not flat:
+        material = json.loads(prepare(material))  # Legacy protocol-2 behavior.
     block_keys = _ids(value.get('blocks'), 'id')
     _require(bool(block_keys))
     blocks = {row['id']: row.get('markdown') for row in value['blocks']}
@@ -112,6 +160,10 @@ def finalize(value, material):
         _require(isinstance(disposition, str) and disposition in {'included', 'rejected', 'omitted_for_depth'})
         if disposition == 'included':
             _require(bool(keys))
+            if flat:
+                # A correction replaces, rather than merges with, a mistaken
+                # draft binding. All final included evidence is checked afresh.
+                claim['evidence'] = _evidence(row.get('evidence', claim['evidence']))
             included[row['claim_id']] = set(keys)
         else:
             _require(not keys and _text(row.get('reason')))
@@ -119,7 +171,8 @@ def finalize(value, material):
                 code = row.get('reason_code')
                 _require(isinstance(code, str) and code in REJECTIONS and (code != 'unclear_entity' or claim['field'] == 'entity'))
                 evidence = _evidence(row.get('evidence'))
-                _require(bool({e['source_ref'] for e in evidence} & {e['source_ref'] for e in claim['evidence']}))
+                if not flat:
+                    _require(bool({e['source_ref'] for e in evidence} & {e['source_ref'] for e in claim['evidence']}))
             elif presentation_state() and presentation_state().depth == 'detailed':
                 _require(not claim['material'])
     # Optional topic index is never a second copy of the prose.
@@ -132,6 +185,11 @@ def finalize(value, material):
     figures = value.get('figures')
     _require(isinstance(figures, list) and len(figures) <= 8)
     state = presentation_state()
+    if flat and state and state.presentation in {'comic', 'infographic'}:
+        _require(not figures)
+        from app.llm.meeting_visual_review import capture_review_visual
+        state.visual_review = capture_review_visual(value, claims, included)
+        return markdown
     if not state or state.presentation != 'illustrated':
         _require(not figures)
         return markdown
@@ -156,16 +214,22 @@ def finalize(value, material):
     return markdown
 
 
-DRAFT_PROTOCOL = '''AUTOMATIC FACT MATERIAL PROTOCOL 2. Return one JSON object:
-{"protocol":2,"topics":[{"id":"T1","title":"source-grounded topic"}],"facts":[{"id":"F1","topic_id":"T1","entity":null,"claims":[{"id":"C1","field":"condition","text":"one independently supported proposition","anchor":"exact source wording","material":true,"evidence":[{"kind":"asr_span","source_ref":"[ASR:0001]","quote":"unique unchanged contiguous excerpt from raw speech"}]}]}]}.
-These are schema descriptions, not meeting facts. Field is entity/relation/attribute/quantity/condition/deadline/status. Each claim has a globally unique ID and independently checkable evidence; split uncertain entity identity from clear properties and conditions. entity=null means unknown, not that all properties are unknown. A named entity requires its own entity claim whose anchor exactly equals that name. Each anchor occurs verbatim in at least one evidence quote or visual observation. Do not join neighboring names into a new entity or infer ownership from adjacency.
+DRAFT_PROTOCOL = '''AUTOMATIC FACT MATERIAL PROTOCOL 3. Return one JSON object, with top-level topics and a FLAT claims array:
+{"protocol":3,"topics":[{"id":"T1","title":"source-grounded topic"}],"claims":[{"id":"C1","topic_id":"T1","field":"condition","text":"one independently supported proposition","material":true,"evidence":[{"kind":"asr_span","source_ref":"[ASR:0001]","quote":"unique unchanged contiguous excerpt from raw speech"}]}]}.
+These are schema descriptions, not meeting facts. Every claim directly has its topic_id. Do not output facts, nested claims or group objects. Put each claim object on its own line and close its evidence array before the next claim. Field is entity/relation/attribute/quantity/condition/deadline/status. Each claim has a globally unique ID and independently checkable evidence; split uncertain entity identity from clear properties and conditions. Unknown entity identity does not make all properties unknown: retain independently supported properties without guessing a name. Evidence quotes already locate source wording; no separate anchor field is required. Do not join neighboring names into a new entity or infer ownership from adjacency.
 asr_span quotes are exact raw speech, excluding time labels, speaker timelines and diagnostics; never normalize, repair or translate their spelling, numbers, punctuation or whitespace. Choose a unique contiguous excerpt retaining context. Only if repeated, disambiguate with exact zero-based Python-character start/end offsets into that raw ASR window. References alone do not prove a proposition or the correctness of ASR.
 For supplied images use {"kind":"frame_observation","source_ref":"[FRAME:0001]","observation":"what is actually legible or visibly connected"}; this remains fallible model interpretation, never verified OCR. ocr_span uses an exact quote only from actual supplied recognized OCR; unavailable OCR cannot authorize it. Source type must not be switched to make a claim pass. Keep entity, numeric value/configuration/state, conditional and directed relationships separately supported; a clear independent image fact does not require a spoken repetition or a final decision. Never reject a clear property merely because the entity name or spoken cross-reference is unclear.
-Keep all original sources in view. No required number of facts, no per-frame fact quota and no full coverage matrix. Empty facts/topics are legal when no substantive proposition remains; never manufacture evidence. The schema must not dictate report sections.'''
+Keep all original sources in view. No required number of claims, no per-frame claim quota and no full coverage matrix. Empty claims/topics are legal when no substantive proposition remains; never manufacture evidence. The schema must not dictate report sections.'''
 
 
-REVIEW_PROTOCOL = '''AUTOMATIC FACT REVIEW PROTOCOL 2. Return one JSON object:
-{"protocol":2,"blocks":[{"id":"B1","markdown":"one final report paragraph or heading"}],"audit":[{"claim_id":"C1","disposition":"included","block_ids":["B1"]}],"figures":[]}.
-Write the report once, in ordered blocks with unique stable IDs of your choice. Audit refers to those IDs, never recopied passages. The program joins block text without displaying IDs. Blocks follow the source topics, with no fixed sections/count. Merged duplicates are included and may share block_ids. Each included claim must retain its actual relation and qualifiers, not an unrelated neighboring paragraph. Complete source review must also restore omissions outside the working list: optional additional_facts/additional_topics use the exact draft schema, with new IDs and validated evidence, and their claims also receive audit rows.
-Audit every claim exactly once, never reject an entire fact as one unit. Working material is fallible even when the draft marked material=true. Reconstruct against full original speech and actual images. For a rejected claim use block_ids=[], reason_code=unclear_entity/unsupported/misread/incidental/non_meeting, a specific nonempty reason and evidence in the same source-bound format, including a source of that claim. Bare reasons or references cannot authorize rejection. unclear_entity only rejects an entity claim, never its independent quantity/condition/deadline. Use specific source reasons for non_meeting, incidental or garbled candidates (misread for garbled text). Recheck each attribute separately; correct a wrong candidate without deleting other clear properties. A checked span proves literal presence, not semantic truth; a visual observation is still a model judgment. Do not label important valid content as rejected merely to shorten it.
+REVIEW_PROTOCOL = '''AUTOMATIC FACT REVIEW PROTOCOL 3. Return one JSON object:
+{"protocol":3,"blocks":[{"id":"B1","markdown":"one final report paragraph or heading"}],"audit":[{"claim_id":"C1","disposition":"included","block_ids":["B1"]}],"figures":[]}.
+Write the report once, in ordered blocks with unique stable IDs of your choice. Audit refers to those IDs, never recopied passages. The program joins block text without displaying IDs. Blocks follow the source topics, with no fixed sections/count. Merged duplicates are included and may share block_ids. Each included claim must retain its actual relation and qualifiers, not an unrelated neighboring paragraph. Complete source review must also restore omissions outside the working list: optional additional_claims is a FLAT array with the same per-claim topic_id and evidence as the draft. Use new unique IDs and audit each added claim too. Optional additional_topics names new source topics. Do not output additional_facts, nested claims or group objects.
+Before returning, check claim IDs against the draft plus this response's additional_claims. Every audit claim_id must have a definition there; do not invent an ID merely because a paragraph was expanded or reorganized. Reuse original IDs for their existing propositions. If a genuinely new proposition needs a new ID, define it with actual source evidence in additional_claims in this same response, as well as auditing it.
+Each additional_claims item needs all six fields id/topic_id/field/text/material/evidence, exactly like a draft claim; an evidence-only index is not a claim definition. Audit additions as well as original claims. If no new proposition is needed, omit additional_claims rather than inventing IDs for expanded wording. For example, a new claim object is {"id":"C2","topic_id":"T1","field":"condition","text":"one source-supported proposition","material":true,"evidence":[{"kind":"asr_span","source_ref":"[ASR:0001]","quote":"unchanged source clause"}]} and it also needs its own audit entry. This example describes shape, never meeting facts.
+Draft evidence marked verification=unverified has not matched its proposed source. Do not trust any draft verification as semantic proof. Check the complete original material: correct mistaken quotes, references or offsets in that claim's audit row using evidence in the same source-bound format. This replaces that claim's draft evidence, never merges with the wrong list. An included claim needs either valid original evidence or valid corrected evidence; never include an unresolved source mismatch. Preserve exact source text, punctuation and numbers, using actual supplied ASR/FRAME references. A rejected claim still needs valid source-bound evidence and a specific reason, but its corrected source may differ from the mistaken draft reference. Do not invent a matching quote or switch source type to rescue a claim. No extra correction call is available.
+For every included claim, inspect its evidence list: if any retained draft row is unverified, explicitly supply audit.evidence as the complete valid replacement list. Marking the claim included or citing a final block does not correct a wrong source reference.
+Copy a short coherent original clause for each quote rather than retyping a long fluent paragraph. Preserve fillers, conjunctions, punctuation, spacing and numbers inside that chosen clause exactly; never prepend a smoother connector. Multiple exact clauses may be supplied when one proposition needs several source passages. Check the complete source context before making the claim: literal quotation alone does not prove its interpretation.
+Each asr_span quote must occur uniquely inside its indicated raw ASR window. If it repeats, either quote a longer unchanged contiguous clause that is unique or provide exact zero-based Python-character start/end offsets selecting the intended occurrence; end is exclusive. For ocr_span apply the same uniqueness/offset rule within the corresponding actual raw OCR text, never an ASR window. This applies to original, corrected and rejection evidence alike. Offsets never establish word timing or speaker identity.
+Audit every claim exactly once, never reject an entire fact as one unit. Working material is fallible even when the draft marked material=true. Reconstruct against full original speech and actual images. For a rejected claim use block_ids=[], reason_code=unclear_entity/unsupported/misread/incidental/non_meeting, a specific nonempty reason and evidence in the same source-bound format from the actual source being reviewed; do not repeat a mistaken draft reference. Bare reasons or references cannot authorize rejection. unclear_entity only rejects an entity claim, never its independent quantity/condition/deadline. Use specific source reasons for non_meeting, incidental or garbled candidates (misread for garbled text). Recheck each attribute separately; correct a wrong candidate without deleting other clear properties. A checked span proves literal presence, not semantic truth; a visual observation is still a model judgment. Do not label important valid content as rejected merely to shorten it.
 omitted_for_depth uses block_ids=[] and a selection reason; detailed mode forbids omitting a still-valid material claim for depth. topic_audit is optional; if supplied, each topic occurs once with block_ids or a specific reason when no included claim remains. No internal source IDs, URLs for images, screenshot markers or raw HTML in block text. For illustrated only: figures entries are {frame_ref,claim_ids,after_block_id,caption}; each frame must support those included claims and the exact unique block. No suitable real frame means illustrated is incomplete. No third call, repair call, model substitution or replay.'''

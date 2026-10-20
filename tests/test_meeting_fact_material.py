@@ -305,6 +305,8 @@ def test_automatic_two_call_pipeline_preserves_full_source_and_selects_a_real_fr
     checked = {'protocol': 2, 'blocks': [{'id': 'B1', 'markdown': passage}],
         'audit': [{'claim_id': 'C1', 'disposition': 'included', 'block_ids': ['B1']}],
         'figures': [{'frame_ref': '[FRAME:0001]', 'claim_ids': ['C1'], 'after_block_id': 'B1', 'caption': 'Panel power proposal'}]}
+    facts = {'protocol': 3, 'topics': facts['topics'], 'claims': [{**claim, 'topic_id': fact['topic_id']} for fact in facts['facts'] for claim in fact['claims']]}
+    checked['protocol'] = 3
     class AutomaticLLM(_BasePromptLLM):
         def __init__(self): self.calls = []
         def _complete(self, **prompts):

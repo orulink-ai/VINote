@@ -54,3 +54,7 @@ yarn test src/lib/summaryVisual.test.ts src/lib/summaryVisualExport.test.tsx src
 - 本文档。
 
 其他 agent 的 RegenerateMeetingSummary、meetingVersion、后端、Cargo 和 App 改动不包含在本轮责任清单中。
+
+## 后续源码文案变更（尚未原生验收）
+
+主线程已将 `frontend/src-tauri/src/original_download.rs` 的共享保存框标题由“导出原文件”改为“另存为”，适用于媒体、HTML、SVG 和 PNG；仅改文案，不改变 IPC 能力。上文保留测试时事实，此变更尚待主线程重编 Native 后实际验收，不计已完成原生验证；renderer 前端继续冻结。

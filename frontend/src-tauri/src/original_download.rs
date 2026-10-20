@@ -39,7 +39,7 @@ pub async fn choose_original_destination(
     eprintln!("[original-export] stage=picker_started");
     let selected = rfd::AsyncFileDialog::new()
         .set_parent(&window)
-        .set_title("导出原文件")
+        .set_title("另存为")
         .set_file_name(&filename)
         .save_file()
         .await;

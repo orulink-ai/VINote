@@ -1,6 +1,7 @@
 """Ground meeting drafts in source evidence before returning the final note."""
 
-from app.llm.prompts import build_system_prompt, normalize_output_language
+from app.llm.prompts import normalize_output_language
+from app.llm.meeting_prompt_contract import meeting_system_base
 
 
 def build_meeting_review_prompts(
@@ -9,6 +10,9 @@ def build_meeting_review_prompts(
     source_is_reviewed_notes: bool = False,
 ) -> dict[str, str]:
     language = normalize_output_language(output_language)
+    from app.llm.meeting_presentation import presentation_state
+    state = presentation_state()
+    structured = bool(not intermediate and state and state.depth)
     rules = """Review the meeting draft against the supplied evidence and return only the corrected Markdown.
 The draft may be source-preservation working notes rather than polished prose. Use them to check coverage, not as the final structure or independent evidence. Synthesize the final meeting report from the full original material, retaining supported concrete details and relationships; do not output a working-note ledger or repeat field labels mechanically.
 The draft is not evidence: independently check the full original material. Preserve important source-supported facts and their relationships; correct errors locally and restore omissions from the source. Do not delete or generalize away supported information, or alter its relationships, merely to polish the prose. Remove or correct unsupported claims and relationships without discarding the supported facts around them.
@@ -40,13 +44,18 @@ Keep offsets internal unless the user explicitly requests recording references. 
     if not intermediate:
         from app.llm.meeting_presentation import depth_instructions
         rules += '\n' + depth_instructions()
-        from app.llm.meeting_presentation import presentation_state
-        state = presentation_state()
         if state and state.depth:
             from app.llm.meeting_fact_material import MATERIALITY_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
             from app.llm.meeting_fact_protocol import REVIEW_PROTOCOL
-            rules = rules.replace('return only the corrected Markdown.', 'return protocol-2 report blocks and claim accounting.')
+            rules = rules.replace('return only the corrected Markdown.', 'return protocol-3 report blocks and claim accounting.')
+            rules = rules.replace('The report field contains Markdown facts only;', 'Report blocks[].markdown contain Markdown facts only;')
+            rules = rules.replace(
+                'Return only the report, without the internal ASR/FRAME references or an evidence ledger.',
+                'Keep the reader-facing blocks free of internal ASR/FRAME references and evidence ledgers; '
+                'return the separate machine-readable audit fields required below outside those blocks.')
             rules += '\n\n' + MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + REVIEW_PROTOCOL
+            from app.llm.meeting_visual_review import visual_review_instructions
+            rules += visual_review_instructions(state.presentation)
             if state.presentation == 'illustrated':
                 rules += ('\nIllustrated output: choose 1–8 genuinely relevant actual supplied frames during this review. '
                     'Use figures entries {"frame_ref":"[FRAME:0001]","claim_ids":["C1"],'
@@ -57,7 +66,7 @@ Keep offsets internal unless the user explicitly requests recording references. 
                     'never select opening frames or decorative screenshots just to fill a quota.')
     source_label = "Reviewed chunk notes" if source_is_reviewed_notes else "Original transcript"
     return {
-        "system_prompt": build_system_prompt(language) + "\n\n" + rules,
+        "system_prompt": meeting_system_base(language, structured=structured) + "\n\n" + rules,
         "user_prompt": (
             f"Explicit context and terminology:\n{extras or '(none)'}\n\n"
             f"{source_label}:\n{source}\n\nDraft to check:\n{draft}"

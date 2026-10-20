@@ -8,6 +8,9 @@ def render_presentation(artifacts, context, markdown):
     # Model output never chooses external image URLs or executable HTML assets.
     markdown = re.sub(r'!\[[^\]\n]*\]\([^\n]*?\)', '', markdown)
     markdown = re.sub(r'\[\[Screenshot:[^\]]*\]\]', '', markdown)
+    if context.presentation in {'comic', 'infographic'}:
+        from app.services.summary_visual_generation import render_review_visual
+        return render_review_visual(artifacts, context, markdown)
     if context.presentation != 'illustrated':
         return markdown
     evidence = context.video_evidence

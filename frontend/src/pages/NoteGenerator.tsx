@@ -1,4 +1,5 @@
 import { RegenerateMeetingSummary, summaryOperationKey } from '@/components/Notes/RegenerateMeetingSummary'
+import { isMeetingVersionReceipt, meetingVersionOperationKey, meetingVersionSourceType, meetingVersionOriginalFile } from '@/lib/meetingVersion'
 import { FrozenModelDisplay } from '@/components/NoteGenerator/FrozenModelDisplay'
 import { taskRecoveryView, type RecoveryTask } from '@/lib/taskRecoveryView'
 import { sourceRecoveryCopy } from '@/lib/sourceRecoveryCopy'
@@ -57,7 +58,7 @@ function frozenOriginalFile(context: FrozenNewContext, parentTask: string): stri
 }
 
 type TaskResponse = { task_id: string; source_type?: string; operation_id?: string; state?: 'reserved' | 'accepted' }
-type ImportReceipt = { id?: string; operationId?: string; createdAt?: string; submissionState?: 'registering' | 'unknown' | 'reserved' | 'accepted'; workspace: WorkspaceSelection; sourceUrl?: string; sourceType?: string; sourceTitle?: string; mode?: UploadMode; meeting: boolean; localFileId?: string; independentGeneration?: boolean; summaryOnly?: boolean; summaryNoteId?: string; origin?: string; parentTaskId?: string; frozenContext?: FrozenNewContext }
+type ImportReceipt = { id?: string; operationId?: string; createdAt?: string; submissionState?: 'registering' | 'unknown' | 'reserved' | 'accepted'; workspace: WorkspaceSelection; sourceUrl?: string; sourceType?: string; sourceTitle?: string; mode?: UploadMode; meeting: boolean; localFileId?: string; independentGeneration?: boolean; summaryOnly?: boolean; summaryNoteId?: string; origin?: string; parentTaskId?: string; frozenContext?: FrozenNewContext; meetingVersion?: boolean }
 type TaskStatusResponse = {
   task_id?: string
   error_code?: string
@@ -187,8 +188,12 @@ export function NoteGenerator() {
       try {
         const key = operationParam && /^[A-Za-z0-9_-]{1,160}$/.test(operationParam) ? `vinote:source-receipt:${owner}:${operationParam}` : receiptKey
         let saved = JSON.parse(localStorage.getItem(key) || 'null') as ImportReceipt | null
+        if (saved?.meetingVersion) {
+          if (!isMeetingVersionReceipt(saved, owner)) throw new Error('新版本回执归属或来源无法核验')
+          saved = { ...saved, sourceType: meetingVersionSourceType(saved, owner), localFileId: meetingVersionOriginalFile(saved, owner) }
+        }
         if (saved?.independentGeneration && saved.frozenContext) saved = { ...saved, sourceType: frozenSourceType(saved.frozenContext), localFileId: saved.parentTaskId ? frozenOriginalFile(saved.frozenContext, saved.parentTaskId) : undefined }
-        if (saved?.summaryOnly && (saved.origin !== serviceOrigin || useAppModeStore.getState().config?.mode !== 'cloud')) throw new Error('原总结服务已变化，只能在原服务核验操作回执')
+        if (saved?.summaryOnly && !isMeetingVersionReceipt(saved, owner) && (saved.origin !== serviceOrigin || useAppModeStore.getState().config?.mode !== 'cloud')) throw new Error('原总结服务已变化，只能在原服务核验操作回执')
         if (operationParam && (!saved || saved.operationId !== operationParam)) throw new Error('缺少原操作回执')
         if ((saved?.id || saved?.operationId) && saved?.workspace && saved.meeting === isMeeting) {
           setReceipt(saved); setTaskId(saved.id || '')
@@ -196,7 +201,7 @@ export function NoteGenerator() {
           if (saved.operationId && saved.submissionState !== 'accepted') {
             setStatus('failed'); void recoverSubmission(saved)
           } else if (saved.id) {
-            pollTaskStatus(saved.id, saved.workspace, saved.sourceUrl, saved.sourceType, saved.operationId, saved.summaryOnly ? undefined : saved.createdAt)
+            pollTaskStatus(saved.id, saved.workspace, saved.sourceUrl, saved.sourceType, saved.operationId, saved.summaryOnly || isMeetingVersionReceipt(saved, owner) ? undefined : saved.createdAt)
           }
         }
       } catch { setRecoveryUnavailable(true); setStatus('failed'); setError('无法读取本机任务回执，请勿重复提交，先检查处理记录。') }
@@ -245,6 +250,7 @@ export function NoteGenerator() {
         if (!data || typeof data.status !== 'string') throw new Error('任务进度响应无效')
         if (readOnlyTask && data.task_id !== id) throw new Error('指定任务响应身份尚未核验。')
         if (data.task_id && data.task_id !== id) throw new Error('响应与原任务不一致，请重新核验。')
+        if (data.result?.task_id && data.result.task_id !== id) throw new Error('结果与原任务不一致，请重新核验。')
         setVerifiedTask({ taskId: data.task_id || data.result?.task_id || '', status: data.status, errorCode: data.error_code, failedStage: typeof data.failed_stage === 'string' ? data.failed_stage : undefined, hasCompleteResult: !!data.result?.markdown?.trim() && !!data.result?.title?.trim() })
         firstRead = false
         setReadingTask(false)
@@ -285,6 +291,10 @@ export function NoteGenerator() {
             if (operationId) {
               const operationKey = `vinote:source-receipt:${owner}:${operationId}`
               const completed = JSON.parse(localStorage.getItem(operationKey) || 'null') as ImportReceipt | null
+              if (isMeetingVersionReceipt(completed, owner) && completed?.parentTaskId) {
+                const pointer = meetingVersionOperationKey(owner!, completed.parentTaskId, completed.summaryNoteId)
+                if (localStorage.getItem(pointer) === operationId) localStorage.removeItem(pointer)
+              }
               if (completed?.summaryOnly && completed.parentTaskId) {
                 const pointer = summaryOperationKey(owner!, completed.origin, completed.parentTaskId, completed.summaryNoteId)
                 if (localStorage.getItem(pointer) === operationId) localStorage.removeItem(pointer)
@@ -358,13 +368,13 @@ export function NoteGenerator() {
     }
     if (!value.id) throw new Error('尚未收到任务编号，原提交保留')
     setStatus('processing'); setCurrentStep('preparing'); setProgress(15)
-    pollTaskStatus(value.id, value.workspace, value.sourceUrl, value.sourceType, value.operationId, value.summaryOnly ? undefined : value.createdAt)
+    pollTaskStatus(value.id, value.workspace, value.sourceUrl, value.sourceType, value.operationId, value.summaryOnly || isMeetingVersionReceipt(value, owner) ? undefined : value.createdAt)
   }
   const recoverSubmission = async (value: ImportReceipt) => {
     if (!owner || readOnlyTask || !value.operationId || recoveryLock.current || (operationParam && operationParam !== value.operationId)) return
     const request = { token: Symbol('receipt-read'), owner, epoch: recoveryEpoch.current, operationId: value.operationId, route: routeIdentity.current }
     recoveryLock.current = request
-    const active = () => (!value.summaryOnly || value.origin === useAppModeStore.getState().config?.server_url) && mounted.current && request.owner === useAuthStore.getState().user?.id
+    const active = () => (!value.summaryOnly || isMeetingVersionReceipt(value, request.owner) || value.origin === useAppModeStore.getState().config?.server_url) && mounted.current && request.owner === useAuthStore.getState().user?.id
       && recoveryEpoch.current === request.epoch && routeIdentity.current === request.route
       && recoveryLock.current?.token === request.token && recoveryLock.current.operationId === request.operationId
     setTaskMessage('正在核验上次提交…')
@@ -372,7 +382,7 @@ export function NoteGenerator() {
       const data = await apiJson<TaskResponse>(`/api/source-requests/${encodeURIComponent(request.operationId)}`)
       if (!active()) return
       if (data.operation_id !== request.operationId || !data.task_id || !['reserved', 'accepted'].includes(data.state || '')) throw new Error('回执与原操作不一致，请继续核验')
-      resumeReceipt({ ...value, id: data.task_id, sourceType: value.independentGeneration && value.frozenContext ? frozenSourceType(value.frozenContext) : data.source_type || value.sourceType, submissionState: data.state })
+      resumeReceipt({ ...value, id: data.task_id, sourceType: isMeetingVersionReceipt(value, request.owner) ? meetingVersionSourceType(value, request.owner) : value.independentGeneration && value.frozenContext ? frozenSourceType(value.frozenContext) : data.source_type || value.sourceType, submissionState: data.state })
     } catch (cause) {
       if (!active()) return
       setStatus('failed')
@@ -522,7 +532,7 @@ export function NoteGenerator() {
       }
       if (!mounted.current || epoch !== recoveryEpoch.current || owner !== useAuthStore.getState().user?.id) return
       setTaskRetryable(false); setStatus('processing')
-      pollTaskStatus(receipt.id, receipt.workspace, receipt.sourceUrl, receipt.sourceType, receipt.operationId, receipt.summaryOnly ? undefined : receipt.createdAt)
+      pollTaskStatus(receipt.id, receipt.workspace, receipt.sourceUrl, receipt.sourceType, receipt.operationId, receipt.summaryOnly || isMeetingVersionReceipt(receipt, owner) ? undefined : receipt.createdAt)
     } catch (cause) {
       if (mounted.current && epoch === recoveryEpoch.current && owner === useAuthStore.getState().user?.id) {
         setError((cause as Error).message)

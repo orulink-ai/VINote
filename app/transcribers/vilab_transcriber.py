@@ -218,7 +218,7 @@ class VILabTranscriber(Transcriber):
         from app.services.adaptive_asr_policy import RecordedAudioPolicy
         try:
             response = httpx.get(self.base_url + "/v1/models",
-                headers={"Authorization": "Bearer " + bearer}, timeout=15)
+                headers={"Authorization": "Bearer " + bearer}, timeout=15, trust_env=False)
             response.raise_for_status()
             data = response.json()
         except (httpx.HTTPError, ValueError):
@@ -286,6 +286,8 @@ class VILabTranscriber(Transcriber):
                     saved = json.loads(checkpoint.read_text(encoding='utf-8'))
                     if not isinstance(saved, dict) or saved.get('execution') != stamp:
                         raise ValueError('本次处理的转写记录归属不一致')
+                    if execution.fresh and 'seed' in saved:
+                        raise _CheckpointEvidenceUnavailable()
                     if saved.get('inflight') is not None:
                         raise ASRServiceError('unknown_result')
                     confirmed = _confirmed_prefix(saved, total_frames)
@@ -293,6 +295,13 @@ class VILabTranscriber(Transcriber):
                         # A verified complete child is self-contained. Donor
                         # availability only gates seeding or remaining sends.
                         return self._transcribe_checkpoint(file_path, bearer, duration, total_frames, folder)
+                if execution.fresh:
+                    # A separately accepted fresh operation starts at zero. Do
+                    # not even lock/read a legacy global or selected-parent
+                    # donor; its inflight/prefix belongs to the old operation.
+                    if saved is None:
+                        _save_checkpoint(checkpoint, {'completed': [], 'execution': stamp})
+                    return self._transcribe_checkpoint(file_path, bearer, duration, total_frames, folder)
                 # Keep the same-source lock for the entire new execution, not
                 # just the donor read. Legacy and new operations cannot race
                 # into paid submissions after the seed has been read.

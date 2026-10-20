@@ -86,6 +86,15 @@ def create_app() -> FastAPI:
     app.include_router(create_summary_regeneration_router(
         note_service=note._note_service,
         active=lambda task_id: task_id in note._ACTIVE_FILE_TASKS), prefix='/api')
+    from app.routers.summary_visual import create_summary_visual_router
+    app.include_router(create_summary_visual_router(
+        artifacts=note._note_service.artifact_service), prefix='/api')
+    from app.routers.meeting_version_context import create_meeting_version_router
+    from app.services.task_fresh_asr import FreshASRService
+    app.include_router(create_meeting_version_router(
+        note_service=note._note_service,
+        fresh_service=FreshASRService(),
+        active=lambda task_id: task_id in note._ACTIVE_FILE_TASKS), prefix='/api')
     app.include_router(note_library.router, prefix="/api")
     from app.routers import feishu_auto_local
     app.include_router(feishu_auto_local.router, prefix="/api")
