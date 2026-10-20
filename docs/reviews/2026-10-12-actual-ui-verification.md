@@ -260,3 +260,11 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - B duration=1585.276 秒；50% target/seeked=792.638/792.638，帧=792.690；90%=1426.7484/1426.7484，帧=1426.768；near-end=1583.276/1583.353924，帧=1583.348。
 - 六点均收到 requestVideoFrameCallback 的 1920×1080 真实帧、解码计数增加、readyState=4、media.error=null；全部观察到的媒体 HTTP 响应为 206，无 pageerror。B near-end 计数显示1帧 dropped，其余五点为0；仍有成功帧与播放推进。浏览器 seek／关闭页面期间各有3个 net::ERR_ABORTED 取消请求，原始事件保留；初始过严的“任何 requestfailed 均失败”汇总被单独保留，最终按解码、媒体错误及非取消网络错误分类，未隐去原始取消。
 - 证据：`.desktop-build/meeting-delivery-20261020/probe-ab-seek-readonly.json`（duration、target、seekedAt、frame.mediaTime、actualTime、error、Range、文件 stamp），同名 `.mjs` 及 `probe-ab-seek-inventory.py`。本项是六个指定位置解码证据，不等于整段观看或 Native 全程播放验收。无产品代码变更、无 commit。
+
+### 2026-10-20 · 原生 HTML 预览与实际另存为
+
+- 重编译并启动本 checkout 的 `frontend/src-tauri/target/debug/vinote.exe`，窗口标题“VINote 开发验收 · 会议与飞书改造”，Vite 3189/API 8919。仍使用原账号和测试数据库，不把浏览器当作桌面交付。
+- 实际模型 A HTML detailed01 任务 `1173a77a-731e-4e23-a66a-dd8115642fb5` 成功后，经原 NoteRepository 保存完全相同正文到 note `75650909-a624-5549-a04e-b70f8a298bb1`，正文 SHA256 `3a781836049f173161033e7fd8df19d0747acec462a3119fe658ef09760bab11`。确认原自动交付策略关闭，没有修改策略或对外发送。原生会议档案显示 A8份/B5份；点击新稿进入详情，实际 HTML sandbox iframe 与 28:32 原视频播放器可见。
+- 实际点击“导出 HTML”，系统“另存为”对话框选择唯一私有目标，保存后反馈“HTML 纪要已保存到所选位置”。文件 `.desktop-build/meeting-delivery-20261020/exports/A-html-detailed-01.html`，4353字节，SHA256 `aeeb2ad6d67362ad788f924bfbb026ea9a7e04a34d2c0561dc1513bd10efb63f`；包含完整正文与 default-src none 等 CSP。没有覆盖原件或导出播放派生缓存。
+- 系统对话框的 AX focused_element 报告停留搜索框，实际截图显示文件名控件；按可见文件名选择后输入并刷新确认路径，再保存。未按失效 AX 索引盲点或将初始按钮等待当作失败。
+- 原生预览和导出通过不代表正文达到100分。独立音画对照评分为84/100；实际 LLM 有型号/数值/关系错误和遗漏，保留原稿，不人工修稿冒充模型结果。

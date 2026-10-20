@@ -345,6 +345,15 @@ class SummaryRegenerationService:
                 visual = retained_visual_evidence(self.artifacts, parent_folder,
                     context['canonical_task_id'], source, owner)
                 _preflight(visual_version(visual) == context['visual_evidence_version'], 'summary_preflight_visual_changed')
+            if visual is not None:
+                from app.services.meeting_video_ocr import prepare_meeting_video_ocr
+                self.artifacts.update_status(folder, 'summarizing', '正在核对会议画面文字…')
+                visual = prepare_meeting_video_ocr(visual, task_dir=folder, task_id=task,
+                    owner=owner, context_binding={
+                        'context_revision': body.context_revision,
+                        'source_version': body.source_version,
+                        'snapshot_sha256': accepted_snapshot_sha256,
+                    })
             if note_service is None:
                 from app.services.note_service import NoteService
                 note_service = NoteService()

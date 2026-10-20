@@ -216,3 +216,12 @@ A09 draft HTTP524未返回稿；Bbrief03完成draft/review但guardfailed。B只�
 - artifact SHA256：8825F1DC269D69F8FAF571404A0C7A5B600FE952BED25B6439A493E7535D92D4。
 - 20文件清单SHA256：908793CAD54A4F24783E58DAA53B589878EF7A7A50A085A524838464C89AD053；逐项核验全部一致，清单已是授权修复后的版本，无需重写。
 - main正在最终8模块联测，计划同分支阶段commit，尚未合并；本agent不修改core、不提交，不预报联测或commit成功。
+
+### 2026-10-20 20:05 · 实际结果、原生运行与本机 OCR 补强
+
+- 前述8模块联测246 passed；提示冲突修复后125 passed，独立审查所提重复引文及OCR/ASR范围措辞问题修复后40 passed。提交4221ff6已推送同一功能分支，PR64仍draft/dev，未合并部署；App gitlink和Cargo换行噪声未提交。
+- 最新单场实际原始LLM正文评分：详细文字A10=82（上一轮83、最高86），简介B03=90，HTML A01=84，图文B01=80，分镜A01=77，信息图B01=90。不是两场每形式完整验收；只有HTML成功保存，其余为被guard阻断的raw-review。人工稿不计分。具体正文exacthash与证据范围在各ignored run的quality-review.md。
+- A10两调用共105.5秒，新增C22–C28缺audit，且缺figures；B图文02约282秒后模型连接中断，无可评分正文，状态unknown/nonretryable，未重放。所有实际运行仍硬性拦截ASR，未创建ASR checkpoint。不能把离线green或原始正文评分冒称产品成功。
+- 原生桌面已重编译重新运行，HTML84分原稿实际预览、另存为4353字节成功；证据补到实际UI验收文档。没有借此宣称质量100或飞书交付完成。
+- Windows原生中文OCR已发现并完成A/B各一张真实图测试：727/1398字符，约464/320ms识别时间；125图及两份旧manifest哈希不变。新增有界批处理模块与桌面新子任务派生材料接入：前后图hash、原文/坐标、真实引擎/语言/系统版本、不可覆盖子任务receipt；旧ASR/图片/manifest不改。失败不采用部分OCR，不截断全文材料，不安装/下载OCR引擎，不发新provider修复请求。
+- 新OCR接入与既有summary回归86 passed；OCR模块/派生接入/visual pipeline组合94 passed。仍在独立审查，尚未以完整125图OCR的新材料生成下一候选，不提前声称质量改善。
