@@ -383,3 +383,10 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - A精简信息图note `7d5e74b3-dd8b-5f1e-a993-a8cdef0e0ba2` 实际系统另存SVG5150字节、PNG88839字节。SVG SHA256 `8f46331ac77b874fd78a1f48d4861474afc5003293611f5c1567cc1661f908de`，PNG `b062c47f6b0ef2948b6910ef9d7a17b53760a7991a18d00eb58480f772d6c257`，与renderer逐字节/逐像素一致，4节点3边无裁切和共线歧义。独评正文82/90＋呈现10/10，总92。B信息图没有合法成品，完整raw正文60/90不能归一化为100或用旧版本替换。
 - 原生A信息图首次GET失败后，显式重新读取形式与图形及重新加载视频恢复；B详细文字也复现已显示26:25时长但旧读取失败banner仍残留，显式重新加载后原画面及提示恢复。同期有开发API源码热重载，仅为相关现象，尚未证明release根因；此异常仍进入后续审查。B随后实际seek至20:12并播放，截图确认20:56后暂停；UIA滑块值未随播放同步刷新，不能用该静态值推断卡顿。后段截图另存 `B-text-v11-native-late-playback.png`，不冒充全片连续观看。截图保留于ignored `native-v8-evidence/A-text-v11-native-open.png`、`B-text-v11-native-open.png`、`A-info-v11-native-export.png`。
 - 本轮没有重跑ASR、改写原稿、追加真实飞书写入或通知。完整图形交付仍待形式metadata权威性残余P2关闭及真实外部验收；新protocol5是后续独立候选，不追改V11终态或评分。
+
+### 飞书图形适配与形式元数据权威性闭环
+
+- 新受理冻结owner/note/task/body/sidecar/源帧及实际加载renderer身份，worker先完整渲染并校验全部PNG，再进入已有知识库/文档创建及原生图片journal；原content保持，所有图片回读通过后才通知。失败不静默走文字，冻结PNG恢复不调用renderer。旧accepted/unknown operation在新捕获前返回，不补快照/重发。
+- 独审先后复现两个同根P2：只改形式标签，以及删可编辑metadata/磁盘marker后退legacy。修复改用owner+task持久回执/sidecar识别现代来源，再强制原授权；不把普通accepted intake当新版本。主线再发现真实fresh分支只持久化嵌套meeting_version，独审通过实际reserve/accept/_bind形状复现四个失败，追加key存在性后关闭，null/损坏同样不得降级。历史失败证据保留，不声称首版完备。
+- 最终独立107项（27.82秒）＋24项（15.11秒）通过，无失败/跳过，源码与依赖前后hash稳定。包含原四stripping、真实fresh receipt、ordinary intake、legacy/no-task、生成PNG后改变实际open_id而connection_id不变、旧unknown query-only，以及当前protocol5依赖下68项旧4回读。主线核对最终6项源码/测试及3依赖SHA一致；协议5另由独立审查通过，不互相代替。
+- 全程临时DB、合成资料、模拟CLI边界；未调用实际ASR/模型/飞书、没有真实知识库写入或通知。本组源码可提交继续验收，**不表示最终目标知识库交付完成或允许合并发布**。

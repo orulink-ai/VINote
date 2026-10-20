@@ -844,6 +844,56 @@ class FeishuService:
         if not selected or selected.title != title or selected.content != content:
             raise FeishuError("已保存版本发生冲突，停止发布", 409, code="workspace_content_mismatch")
 
+    @staticmethod
+    def _guard_graphic_delivery(db, owner, note_key, content):
+        """Reject new sidecar-only publications; never reinterpret old receipts."""
+        from app.db_models import NoteDB
+        from app.services.summary_presentation_artifact import read_presentation
+        from app.services.task_artifact_service import TaskArtifactService
+
+        note = db.scalar(select(NoteDB).where(
+            NoteDB.id == note_key, NoteDB.created_by == owner).with_for_update())
+        if not note or not note.task_id:
+            return  # Unrelated legacy text snapshots need no graphical proof.
+        artifacts = TaskArtifactService()
+        try:
+            presentation = read_presentation(artifacts, owner, note.task_id)
+            # A bound task with unavailable/unknown presentation is not evidence
+            # of plain text. Only verified supported forms may bypass the guard.
+            if (not isinstance(presentation, dict)
+                    or type(presentation.get('protocol')) is not int or presentation['protocol'] != 1
+                    or presentation.get('presentation') not in ('text', 'html', 'illustrated', 'comic', 'infographic')):
+                raise ValueError()
+            if presentation['presentation'] in ('text', 'html', 'illustrated'):
+                from app.services.feishu_graphic_delivery import verify_supported_presentation
+                verify_supported_presentation(artifacts, db, owner, note.task_id, presentation)
+                return
+            folder = artifacts.find_task_dir(note.task_id)
+            if (folder is None or folder.is_symlink()
+                    or folder.resolve().parent != artifacts.output_dir.resolve()):
+                raise ValueError()
+            marker = folder / 'recording_owner'
+            result = folder / 'result.json'
+            if (marker.is_symlink() or marker.read_text(encoding='utf-8') != owner
+                    or result.is_symlink() or not result.is_file()):
+                raise ValueError()
+            # result.json preserves the exact client body; note.md may have OS
+            # newline translation. Bound the read even if the file grows.
+            limit = 4 * 1024 * 1024
+            with result.open('rb') as stream:
+                raw = stream.read(limit + 1)
+            if len(raw) > limit:
+                raise ValueError()
+            payload = json.loads(raw.decode('utf-8'))
+            if (not isinstance(payload, dict) or not isinstance(payload.get('markdown'), str)
+                    or payload['markdown'] != note.content or note.content != content):
+                raise ValueError()
+        except (OSError, ValueError, TypeError, AttributeError):
+            raise FeishuError("纪要形式、已保存正文或来源尚不能核验，请保留原稿并核对；尚未创建文档或通知",
+                              409, code="meeting_context_unverified") from None
+        from app.services.feishu_graphic_delivery import capture
+        return capture(artifacts, db, owner, note, content, presentation['presentation'])
+
     def _automatic_policy(self, owner, account, preferences, policy_id):
         policy = auto_policy.saved(preferences,
             auto_policy.binding(owner, account, preferences, self.config), enabled=True)
@@ -1043,6 +1093,7 @@ class FeishuService:
             if previous:
                 receipts.bind_operation(db, owner, operation_id, request_hash, previous)
                 return {**self.serialize(previous, db=db), **({"operation_id": operation_id, "_dispatch_required": False} if operation_id else {})}
+            graphic = self._guard_graphic_delivery(db, owner, note_key, content)
             if automatic_policy_id is not None and saved_automatic.get('notify_participants'):
                 from app.models.meeting_participants import MeetingParticipantConfirmationDB
                 from app.services.feishu_object_hotwords import binding_hash
@@ -1085,6 +1136,11 @@ class FeishuService:
                         "content_source": source, "automatic": automatic,
                         "open_id": account.open_id, "connection_id": preferences.get("connection_id"),
                         "tenant_key": self.config.feishu_tenant_key}
+            if graphic is not None:
+                snapshot.update(graphic_delivery=graphic, app_id=self.config.feishu_app_id)
+                snapshot['format_selection'] = {**snapshot['format_selection'],
+                    'image_source_preserved': True,
+                    'message': '图形与原正文须完整写入并回读核验'}
             if snapshot['format_selection'].get('image_source_preserved'):
                 snapshot['app_id'] = self.config.feishu_app_id
             if automatic_policy_id is not None:
@@ -1640,7 +1696,8 @@ class FeishuService:
                 db.expunge(job)
                 if is_policy_job:
                     job._automatic_policy_snapshot = snapshot
-            execution = auto_policy.active_delivery.set((owner, snapshot)) if is_policy_job else None
+            execution = (auto_policy.active_delivery.set((owner, snapshot))
+                         if is_policy_job or 'graphic_delivery' in snapshot else None)
             try:
                 self.assert_delivery_connection(owner, snapshot)
                 self.prepare_native_body(owner, job)

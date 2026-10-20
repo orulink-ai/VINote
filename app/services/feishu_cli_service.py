@@ -42,6 +42,7 @@ class FeishuCLIService(FeishuService):
         result["execution_location"] = "device"
         if result.get("formatting", {}).get("image_source_preserved"):
             from app.models.feishu_native_images import FeishuNativeImagePlanDB
+            from app.models.feishu_destination import FeishuDeliveryDestinationDB
 
             def has_plan(session):
                 return (inspect(session.connection()).has_table(FeishuNativeImagePlanDB.__tablename__)
@@ -49,6 +50,10 @@ class FeishuCLIService(FeishuService):
 
             with db.no_autoflush:
                 present = has_plan(db)
+                metadata = db.get(FeishuDeliveryDestinationDB, row.id)
+                snapshot = json.loads(metadata.snapshot) if metadata else {}
+            if not present and 'graphic_delivery' in snapshot:
+                result['formatting'].update(status='pending', message='图形与原正文正在准备，尚未确认写入')
             if present:
                 from app.services.feishu_native_images import PROTOCOL
                 receipt = self._native_image_writer().receipt(row.owner, row.id, db=db)
@@ -102,6 +107,9 @@ class FeishuCLIService(FeishuService):
             original = receipts.owned_job(db, owner, job.id)
             metadata = db.get(FeishuDeliveryDestinationDB, job.id)
             snapshot = json.loads(metadata.snapshot) if metadata else {}
+            graphic = 'graphic_delivery' in snapshot
+            if graphic and snapshot.get('format_selection', {}).get('image_source_preserved') is not True:
+                raise FeishuError('图形交付快照缺少图片计划，禁止退为文字', 409, code='graphic_snapshot_changed')
             if not snapshot.get("format_selection", {}).get("image_source_preserved"):
                 illustrated = False
             else:
@@ -115,6 +123,9 @@ class FeishuCLIService(FeishuService):
                 if note is None or note.created_by != owner or not note.task_id:
                     raise FeishuError("缺少当前账号已保存的会议来源", 409, code="image_task_unbound")
                 task = note.task_id
+                if graphic and (not isinstance(snapshot['graphic_delivery'], dict)
+                        or task != snapshot['graphic_delivery'].get('task_id') or note.content != original.content):
+                    raise FeishuError('图形交付的已保存正文或来源已变化', 409, code='graphic_source_changed')
                 if original.content != job.content or original.document_id != job.document_id:
                     raise FeishuError("原发布内容或目标已变化", 409, code="image_plan_changed")
         if not illustrated:
@@ -132,8 +143,15 @@ class FeishuCLIService(FeishuService):
             raise FeishuError("缺少原生格式转换权限，图片正文未写入", 403, code="converter_scope_missing")
         if not snapshot.get("app_id") or snapshot["app_id"] != self.config.feishu_app_id:
             raise FeishuError("图片交付缺少原应用快照，禁止补用当前默认值", 409, code="connection_changed")
+        graphic_manifest = None
+        if graphic:
+            from app.services import feishu_graphic_delivery as graphics
+            graphic_manifest = graphics.prepare(TaskArtifactService(), owner, job, snapshot, sessions=session_scope)
+            parts = graphic_manifest['parts']
+        else:
+            parts = images.split_body(job.content)
         assets = []
-        for part in images.split_body(job.content):
+        for part in parts:
             if part["kind"] == "image":
                 asset, _ = images.read_asset(TaskArtifactService(), owner, task, part["reference"])
                 assets.append(asset)
@@ -144,6 +162,12 @@ class FeishuCLIService(FeishuService):
             metadata = db.get(FeishuDeliveryDestinationDB, job.id)
             current = json.loads(metadata.snapshot)
             previous = current.get("image_source_manifest")
+            if graphic:
+                frozen_graphic = current.get('graphic_manifest')
+                if frozen_graphic is not None and frozen_graphic != graphic_manifest:
+                    raise FeishuError('原图形交付计划已变化', 409, code='graphic_manifest_changed')
+                if frozen_graphic is None and previous is not None:
+                    raise FeishuError('原图片计划缺少图形绑定，禁止补写', 409, code='graphic_manifest_changed')
             if previous is not None and previous != source:
                 raise FeishuError("原截图或正文已变化，禁止继续原发布", 409, code="image_source_changed")
             if previous is None:
@@ -154,6 +178,8 @@ class FeishuCLIService(FeishuService):
                         FeishuWriteBatchDB.job_id == job.id).limit(1)):
                     raise FeishuError("已有正文写入但缺少原图片清单，禁止重写", 409, uncertain=True, code="write_unknown")
                 current["image_source_manifest"] = source
+                if graphic:
+                    current['graphic_manifest'] = graphic_manifest
                 changed = db.execute(update(FeishuDeliveryDestinationDB).where(
                     FeishuDeliveryDestinationDB.delivery_id == job.id,
                     FeishuDeliveryDestinationDB.snapshot == metadata.snapshot).values(snapshot=json.dumps(current)))
@@ -168,6 +194,9 @@ class FeishuCLIService(FeishuService):
         plan = self.prepare_native_body(owner, job)
         if isinstance(plan, dict) and plan.get("protocol") == PROTOCOL:
             result = self._native_image_writer().run(owner, job.id)
+            if result.get('images_embedded') is not True:
+                raise FeishuError('图片尚未完整回读核验，未通知收件人', 409,
+                                  uncertain=True, code='image_binding_unverified')
             self.checkpoint(owner, job.id, written_blocks=str(result["written_blocks"]))
             return result
         # The original text writer and its old receipt protocol remain intact.

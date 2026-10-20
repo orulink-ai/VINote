@@ -227,7 +227,11 @@ class NativeImageWriter:
         self.guard(owner, job, snapshot)
         if existing is not None:
             return existing
-        parts = split_body(job.content)
+        if 'graphic_delivery' in snapshot:
+            from app.services.feishu_graphic_delivery import delivery_parts
+            parts = delivery_parts(self.artifacts, owner, job, snapshot)
+        else:
+            parts = split_body(job.content)
         # Resolve every local image BEFORE conversion or any target write.
         for part in parts:
             if part["kind"] == "image":
@@ -260,6 +264,8 @@ class NativeImageWriter:
                     "snapshot_hash": receipts.fingerprint(snapshot),
                     "binding": {k: snapshot[k] for k in ("connection_id", "open_id", "app_id", "tenant_key")},
                     "baseline": baseline, "events": events}
+        if 'graphic_delivery' in snapshot:
+            manifest['graphic_manifest_hash'] = receipts.fingerprint(snapshot['graphic_manifest'])
         self.guard(owner, job, snapshot)
         with self.sessions() as db:
             _lock(db)
@@ -287,6 +293,10 @@ class NativeImageWriter:
                 manifest.get("snapshot_hash") != receipts.fingerprint(snapshot) or
                 task_id is not None and manifest.get("task_id") != task_id):
             raise _error("image_plan_changed")
+        if ('graphic_delivery' in snapshot and
+                (not isinstance(snapshot.get('graphic_manifest'), dict)
+                 or manifest.get('graphic_manifest_hash') != receipts.fingerprint(snapshot['graphic_manifest']))):
+            raise _error('image_plan_changed')
 
     def _load(self, owner, job_id, *, for_write=True):
         with self.sessions() as db:
@@ -300,8 +310,13 @@ class NativeImageWriter:
                 note = db.get(NoteDB, job.note_key)
                 if note is None or note.created_by != owner or note.task_id != manifest["task_id"]:
                     raise _error("image_task_unbound")
+                if 'graphic_delivery' in snapshot and note.content != job.content:
+                    raise _error('image_task_unbound')
         if for_write:
             self.guard(owner, job, snapshot)
+            if 'graphic_delivery' in snapshot:
+                from app.services.feishu_graphic_delivery import delivery_parts
+                delivery_parts(self.artifacts, owner, job, snapshot)
         return job, snapshot, manifest
 
     def _step(self, owner, job, snapshot, key, bound, dispatch, validate):
