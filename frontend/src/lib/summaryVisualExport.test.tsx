@@ -31,6 +31,78 @@ it('includes exact model-supplied relationships and no external resources', asyn
   expect(readImage).not.toHaveBeenCalled()
 })
 
+it.each([
+  ['wide Latin', 'W'.repeat(120)],
+  ['mixed Unicode', '控制W🧭12.5% / 08:30；'.repeat(5)],
+  ['technical URL', 'https://sensor.example.invalid/' + 'W'.repeat(80)],
+])('wraps complete %s relationship legends to the actual export width', async (_name, label) => {
+  const visual = await makeVisualFixture('infographic')
+  visual.blocks[1].text = label
+  visual.diagram = { kind: 'relationship', nodes: [
+    { id: 'N1', block_ids: ['B2'], grounded_label: label },
+    { id: 'N2', block_ids: ['B2'], grounded_label: label },
+  ], edges: [{ id: 'E1', from: 'N1', to: 'N2', block_ids: ['B2'], grounded_label: label }] }
+  const body = visual.blocks.map(block => block.text).join('\n\n')
+  const digest = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(body))
+  visual.body_sha256 = Array.from(new Uint8Array(digest), byte => byte.toString(16).padStart(2, '0')).join('')
+  const before = JSON.stringify(visual), readImage = vi.fn()
+  const svg = await buildSummaryVisualSvg(visual, body, visualTitle, readImage)
+  const root = new DOMParser().parseFromString(svg, 'image/svg+xml').documentElement
+  const group = [...root.children].find(element => element.tagName === 'g')!
+  const legend = [...group.children].find(element => element.tagName === 'text' && element.getAttribute('font-size') === '16')!
+  const available = Number(root.getAttribute('width')) - 64
+  const lines = [...legend.querySelectorAll('tspan')]
+  expect(lines.length).toBeGreaterThan(1)
+  // jsdom has no canvas. The shared wrapping helper uses a conservative
+  // 16px-per-BMP / 32px-per-supplementary-character fallback there.
+  for (const line of lines) {
+    const width = Array.from(line.textContent!).reduce((sum, char) => sum + (char.codePointAt(0)! > 0xffff ? 32 : 16), 0)
+    expect(width).toBeLessThanOrEqual(available)
+  }
+  expect(legend.textContent).toBe(`1. ${label} → ${label} · ${label}`)
+  expect(legend.getAttribute('font-weight')).toBe('400')
+  expect(Number(legend.getAttribute('y')) + (lines.length - 1) * 22 + 16).toBeLessThanOrEqual(Number(root.getAttribute('height')) - 32)
+  expect(JSON.stringify(visual)).toBe(before)
+  expect(root.querySelector('a,image,script,foreignObject')).toBeNull()
+  expect(readImage).not.toHaveBeenCalled()
+})
+
+it.each([2, 20])('keeps the complete nested diagram inside the real SVG export with %s final-node self links', async count => {
+  const visual = await makeVisualFixture('infographic')
+  visual.diagram!.kind = 'relationship'
+  visual.diagram!.nodes = visual.diagram!.nodes.slice(0, 3)
+  visual.diagram!.edges = Array.from({ length: count }, (_, i) => ({ id: `SELF${i}`, from: 'N3', to: 'N3',
+    block_ids: ['B4'], grounded_label: i % 2 ? '控制台复核结果返回采集端' : '控制台复核异常样本后，由值班员确认' }))
+  const readImage = vi.fn()
+  const source = await buildSummaryVisualSvg(visual, visualSavedBody, visualTitle, readImage)
+  const doc = new DOMParser().parseFromString(source, 'image/svg+xml')
+  expect(doc.querySelector('parsererror')).toBeNull()
+  const root = doc.documentElement, diagram = root.querySelector('svg')!
+  const outerWidth = Number(root.getAttribute('width')), outerHeight = Number(root.getAttribute('height'))
+  const [x, y] = diagram.parentElement!.getAttribute('transform')!.match(/-?\d+(?:\.\d+)?/g)!.map(Number)
+  const inOuter = (px: number, py: number) => {
+    expect(px + x).toBeGreaterThanOrEqual(0); expect(px + x).toBeLessThanOrEqual(outerWidth)
+    expect(py + y).toBeGreaterThanOrEqual(0); expect(py + y).toBeLessThanOrEqual(outerHeight)
+  }
+  // Check the enclosing viewport as well as actual marks in outer coordinates:
+  // valid inner geometry alone cannot detect clipping by the exported root.
+  inOuter(0, 0)
+  inOuter(Number(diagram.getAttribute('width')), Number(diagram.getAttribute('height')))
+  const circles = [...diagram.querySelectorAll('circle')]
+  expect(circles).toHaveLength(count)
+  for (const circle of circles) {
+    const cx = Number(circle.getAttribute('cx')), cy = Number(circle.getAttribute('cy')), r = Number(circle.getAttribute('r'))
+    inOuter(cx - r, cy - r); inOuter(cx + r, cy + r)
+  }
+  for (const path of diagram.querySelectorAll('path[marker-end]')) {
+    const coordinates = path.getAttribute('d')!.match(/-?\d+(?:\.\d+)?/g)!.map(Number)
+    for (let i = 0; i < coordinates.length; i += 2) inOuter(coordinates[i], coordinates[i + 1])
+  }
+  for (const edge of visual.diagram!.edges) expect(root.textContent).toContain(edge.grounded_label)
+  expect(diagram.querySelectorAll('path[marker-end]')).toHaveLength(count)
+  expect(readImage).not.toHaveBeenCalled()
+})
+
 it('fails before loading assets on a changed saved body and never silently omits missing screenshots', async () => {
   const visual = await makeVisualFixture(), readImage = vi.fn().mockRejectedValue(new Error('missing frame'))
   await expect(buildSummaryVisualSvg(visual, 'Another body', visualTitle, readImage)).rejects.toThrow('正文')

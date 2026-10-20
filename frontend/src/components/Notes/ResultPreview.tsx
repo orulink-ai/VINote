@@ -8,12 +8,13 @@ import { validateSummaryVisual, type SummaryVisual } from '@/lib/summaryVisual'
 import { SummaryVisualPanel } from './visual/SummaryVisualPanel'
 import { downloadRecording } from '@/lib/recordingDownload'
 import { useSummaryExportScope } from '@/lib/useSummaryExportScope'
+import { resolveBackendOrigin } from '@/lib/runtimeConfig'
 
 type Props = ComponentProps<typeof MarkdownContent> & { taskId?: string; title?: string; exportContent?: string }
 
 export function ResultPreview({ taskId, title = '会议纪要', ...props }: Props) {
   const owner = useAuthStore(s => s.user?.id)
-  return <PresentationPreview key={JSON.stringify([owner, taskId])} taskId={taskId} title={title} {...props} />
+  return <PresentationPreview key={JSON.stringify([owner, taskId, props.exportContent ?? props.content, resolveBackendOrigin()])} taskId={taskId} title={title} {...props} />
 }
 
 function PresentationPreview({ taskId, title = '会议纪要', exportContent, ...props }: Props) {
@@ -24,46 +25,83 @@ function PresentationPreview({ taskId, title = '会议纪要', exportContent, ..
   const [exportStatus, setExportStatus] = useState('')
   const [visualState, setVisualState] = useState<{ body: string; visual: SummaryVisual } | null>(null)
   const [visualNotice, setVisualNotice] = useState('')
+  const [readError, setReadError] = useState('')
+  const [canReadAgain, setCanReadAgain] = useState(false)
+  const [reading, setReading] = useState(false)
+  const [readRevision, setReadRevision] = useState(0)
+  const readClaim = useRef(false)
   const savedBody = exportContent ?? props.content
+  const origin = resolveBackendOrigin()
   const visual = visualState?.body === savedBody ? visualState.visual : undefined
   const exportClaim = useRef(false)
-  const captureExportScope = useSummaryExportScope([savedBody, title, taskId])
+  const captureExportScope = useSummaryExportScope([savedBody, title, taskId, origin])
+  const captureReadScope = useSummaryExportScope([savedBody, taskId, origin])
   const live = useRef(true)
   useEffect(() => { live.current = true; return () => { live.current = false } }, [])
   useEffect(() => {
     let active = true
-    if (taskId) void apiJson<SummaryPresentation>(`/api/task/${encodeURIComponent(taskId)}/summary-presentation`)
-      .then(value => {
-        if (active && value.protocol === 1 && value.task_id === taskId &&
-          Object.prototype.hasOwnProperty.call(depthLabels, value.content_depth) && Object.prototype.hasOwnProperty.call(presentationLabels, value.presentation)) setMetadata(value)
-      }).catch(cause => { if (active && !(cause instanceof ApiError && cause.status === 404)) setError('形式信息读取失败，正文仍可阅读。') })
-    return () => { active = false }
-  }, [taskId])
-  useEffect(() => {
-    let active = true
+    const scoped = captureReadScope()
+    const current = () => active && scoped() && resolveBackendOrigin() === origin
+    setMetadata(null); setReadError(''); setCanReadAgain(false)
     setVisualState(null); setVisualNotice('')
-    if (!taskId || !metadata || (metadata.presentation !== 'comic' && metadata.presentation !== 'infographic')) return
-    const presentation = metadata.presentation
-    setVisualNotice('正在读取图形与正文依据…')
-    void apiJson<unknown>(`/api/task/${encodeURIComponent(taskId)}/summary-visual`)
-      .then(value => validateSummaryVisual(value, taskId, presentation, savedBody))
-      .then(value => {
-        if (!active) return
-        if (value.ok) { setVisualState({ body: savedBody, visual: value.value }); setVisualNotice('') }
-        else setVisualNotice(value.reason)
-      }).catch(cause => {
-        if (active) setVisualNotice(cause instanceof ApiError && cause.status === 404 ? '此版本尚无可核验图形，已保留正文。' : '图形读取失败，已保留正文。')
-      })
+    if (!taskId) return () => { active = false }
+    readClaim.current = true; setReading(true)
+    // Explicit recovery only re-reads these artifacts. It never submits or
+    // resumes generation; missing historical metadata remains a silent 404.
+    void (async () => {
+      try {
+        const metadata = await apiJson<SummaryPresentation>(`/api/task/${encodeURIComponent(taskId)}/summary-presentation`)
+        if (!current()) return
+        if (!metadata || metadata.protocol !== 1 || metadata.task_id !== taskId ||
+          !Object.prototype.hasOwnProperty.call(depthLabels, metadata.content_depth) || !Object.prototype.hasOwnProperty.call(presentationLabels, metadata.presentation)) {
+          setReadError('形式信息无法核验，正文仍可阅读。'); setCanReadAgain(true); return
+        }
+        setMetadata(metadata)
+        if (metadata.presentation !== 'comic' && metadata.presentation !== 'infographic') return
+        setVisualNotice('正在读取图形与正文依据…')
+        try {
+          const raw = await apiJson<unknown>(`/api/task/${encodeURIComponent(taskId)}/summary-visual`)
+          if (!current()) return
+          const value = await validateSummaryVisual(raw, taskId, metadata.presentation, savedBody)
+          if (!current()) return
+          if (value.ok) { setVisualState({ body: savedBody, visual: value.value }); setVisualNotice('') }
+          else { setVisualNotice(value.reason); setCanReadAgain(true) }
+        } catch (cause) {
+          if (!current()) return
+          const missing = cause instanceof ApiError && cause.status === 404
+          setVisualNotice(missing ? '此版本尚无可核验图形，已保留正文。' : '图形读取失败，已保留正文。')
+          setCanReadAgain(!missing)
+        }
+      } catch (cause) {
+        if (current() && !(cause instanceof ApiError && cause.status === 404)) {
+          setReadError('形式信息读取失败，正文仍可阅读。'); setCanReadAgain(true)
+        }
+      } finally {
+        if (active) {
+          readClaim.current = false; setReading(false)
+          // A→B→A between React renders invalidates the request as well. Offer
+          // a fresh explicit read instead of accepting the old account result.
+          if (!current()) { setReadError('账号或来源已变化，请重新读取形式信息。'); setCanReadAgain(true) }
+        }
+      }
+    })()
     return () => { active = false }
-  }, [taskId, metadata, savedBody])
+  }, [taskId, savedBody, origin, readRevision])
   useEffect(() => {
     let active = true
+    const scoped = captureExportScope()
+    const current = () => active && scoped() && resolveBackendOrigin() === origin
     setHtml('')
     if (metadata?.presentation === 'html') void buildSummaryHtml(props.content, title, taskId)
-      .then(value => { if (active) setHtml(value) })
-      .catch(() => { if (active) setError('HTML 预览准备失败，已保留 Markdown 正文。') })
+      .then(value => { if (current()) setHtml(value) })
+      .catch(() => { if (current()) setError('HTML 预览准备失败，已保留 Markdown 正文。') })
     return () => { active = false }
-  }, [metadata, props.content, title, taskId])
+  }, [metadata, props.content, title, taskId, origin])
+  function reread() {
+    if (readClaim.current) return
+    readClaim.current = true
+    setReadRevision(value => value + 1)
+  }
   async function download() {
     if (exportClaim.current) return
     exportClaim.current = true; setExporting(true); setExportStatus('')
@@ -87,6 +125,10 @@ function PresentationPreview({ taskId, title = '会议纪要', exportContent, ..
       <Button variant="outline" size="sm" disabled={exporting} onClick={() => void download()}>{exporting ? '正在准备导出…' : '导出 HTML'}</Button>
     </div>}
     {error && <p role="alert" className="px-6 text-sm text-destructive">{error}</p>}
+    {readError && <p role="alert" className="px-6 text-sm text-destructive">{readError}</p>}
+    {(canReadAgain || (reading && readRevision > 0)) && <div className="px-6 py-2">
+      <Button type="button" variant="outline" size="sm" disabled={reading} onClick={reread}>{reading ? '正在重新读取…' : '重新读取形式与图形'}</Button>
+    </div>}
     {exportStatus && <p role="status" className="px-6 text-sm text-muted-foreground">{exportStatus}</p>}
     {visualNotice && <p role="status" className="px-6 py-3 text-sm text-muted-foreground">{visualNotice}</p>}
     {visual && <SummaryVisualPanel key={JSON.stringify([visual.body_sha256, savedBody])} visual={visual} savedBody={savedBody} title={title} onVideoJump={props.onVideoJump} />}

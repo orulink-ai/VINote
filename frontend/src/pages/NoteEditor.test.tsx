@@ -597,9 +597,12 @@ describe("NoteEditor transcript evidence", () => {
     fireEvent.timeUpdate(video);
     apiMock.apiFetch.mockResolvedValueOnce(new Response(null, { status: 503, headers: { 'Retry-After': '2' } }));
     fireEvent.error(video);
-    expect(await screen.findByRole('button', { name: 'Reload video' })).toBeEnabled();
-    expect(screen.getByRole('alert')).not.toHaveTextContent(/deleted|removed|not found/i);
-    fireEvent.click(screen.getByRole('button', { name: 'Reload video' }));
+    const reload = await screen.findByRole('button', { name: 'Reload video' });
+    expect(reload).toBeEnabled();
+    const playbackAlert = reload.closest('[role="alert"]');
+    expect(playbackAlert).toHaveTextContent(/Preparing the playback copy/i);
+    expect(playbackAlert).not.toHaveTextContent(/deleted|removed|not found/i);
+    fireEvent.click(reload);
     expect(screen.getByTestId('source-video')).toBe(video);
     expect(video.load).toHaveBeenCalled();
     video.currentTime = 0;

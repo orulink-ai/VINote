@@ -1,16 +1,19 @@
 import type { SummaryVisual } from '@/lib/summaryVisual'
 import { visualTimestamp } from '@/lib/summaryVisual'
-import { diagramLayout, visualTextLines } from '@/lib/summaryVisualLayout'
+import { diagramLayout, diagramTextLines, visualTextLines } from '@/lib/summaryVisualLayout'
 import { DiagramGraphic, exportPalette } from './DiagramGraphic'
 
 /** Standalone export made entirely of owned SVG elements and embedded JPEGs. */
 export function SummaryVisualSvg({ visual, title, images }: { visual: SummaryVisual; title: string; images: Map<string, string> }) {
   const titleLines = visualTextLines(title, 78), top = 62 + titleLines.length * 28
-  const width = 1104, margin = 32, columnWidth = 508
+  const margin = 32, columnWidth = 508
   const diagram = visual.diagram
   const nodes = diagram?.nodes.map(node => ({ id: node.id, label: node.grounded_label })) || []
   const edges = diagram?.edges.map(edge => ({ from: edge.from, to: edge.to, label: edge.grounded_label })) || []
   const layout = diagram ? diagramLayout(nodes, edges, diagram.kind === 'flow') : null
+  // Keep the entire diagram viewport (including routed reference circles)
+  // inside the standalone export instead of centering it beyond fixed bounds.
+  const width = Math.max(1104, (layout?.width || 0) + margin * 2)
   const panels = visual.scenes.map((scene, index) => {
     const frame = visual.frames.find(frame => frame.id === scene.frame_id)!
     return { scene, frame, lines: visualTextLines(scene.grounded_label, 52), index }
@@ -18,7 +21,7 @@ export function SummaryVisualSvg({ visual, title, images }: { visual: SummaryVis
   const panelHeight = 330 + Math.max(0, ...panels.map(panel => panel.lines.length * 22))
   let legendY = top + (layout?.height || 0) + 16
   const legend = edges.map((edge, index) => {
-    const lines = visualTextLines(`${index + 1}. ${nodes.find(node => node.id === edge.from)!.label} → ${nodes.find(node => node.id === edge.to)!.label} · ${edge.label}`, 112)
+    const lines = diagramTextLines(`${index + 1}. ${nodes.find(node => node.id === edge.from)!.label} → ${nodes.find(node => node.id === edge.to)!.label} · ${edge.label}`, width - margin * 2)
     const entry = { lines, y: legendY }; legendY += lines.length * 22 + 16
     return entry
   })
@@ -32,7 +35,7 @@ export function SummaryVisualSvg({ visual, title, images }: { visual: SummaryVis
       <text x={margin} y="64" fontSize="24" fontWeight="600">{titleLines.map((line, index) => <tspan key={index} x={margin} dy={index ? 28 : 0}>{line}</tspan>)}</text>
       {diagram ? <>
         <g transform={`translate(${(width - layout!.width) / 2},${top})`}><DiagramGraphic nodes={nodes} edges={edges} flow={diagram.kind === 'flow'} palette={exportPalette} /></g>
-        {legend.map((entry, index) => <text key={index} x={margin} y={entry.y} fontSize="16">{entry.lines.map((line, lineIndex) => <tspan key={lineIndex} x={margin} dy={lineIndex ? 22 : 0}>{line}</tspan>)}</text>)}
+        {legend.map((entry, index) => <text key={index} x={margin} y={entry.y} fontSize="16" fontWeight="400">{entry.lines.map((line, lineIndex) => <tspan key={lineIndex} x={margin} dy={lineIndex ? 22 : 0}>{line}</tspan>)}</text>)}
       </> : panels.map(({ scene, frame, lines, index }) => {
         const x = margin + index % 2 * (columnWidth + 24), y = top + Math.floor(index / 2) * (panelHeight + 24)
         return <g key={scene.id}>
