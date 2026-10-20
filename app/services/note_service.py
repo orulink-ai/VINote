@@ -56,6 +56,7 @@ class PipelineContext:
     content_depth: str | None = None
     presentation: str | None = None
     presentation_figures: list | None = None
+    presentation_visual: dict | None = None
 
 
 class NoteService:

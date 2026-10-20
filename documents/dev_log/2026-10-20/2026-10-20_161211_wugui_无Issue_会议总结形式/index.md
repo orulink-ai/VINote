@@ -241,3 +241,6 @@ A09 draft HTTP524未返回稿；Bbrief03完成draft/review但guardfailed。B只�
 - v4接线与统一rubric已在c9f31aa提交；独立561项组合、主线202项核心/host/provenance/OCR组合分别记录。原始draft重复字段在规范化前拒绝；最终claim同一行定义和处置，不自动补缺行，原始响应不改。主线把FinalLedgerError展示文字改为中文说明，机器code属性保留。
 - B信息图04通过v4 ledger后，在真实PipelineContext slots赋值presentation_visual失败，耗时130.8秒；raw4保留，未保存或发布、未改旧终态。此前synthetic SimpleNamespace无法捕获该类错误，已补真实dataclass字段，并新增实际上下文回归测试。不能把此轮称为信息图成品验收通过。
 - A文字13从已保存HTML1173走真实MeetingVersionService默认reuse/inherit创建，实际parent/operation/model/source冻结，当前draft完成复核中；不使用HTML正文作为材料，不创建ASR checkpoint。后续实际评分仍待原稿返回，不能提前宣称100。
+
+- 后续A13在复核请求等待响应头期间ReadError（165.1秒）退出，没有完整review可评分；保留unknown，未重放。A11同类ReadError为166.7秒，B图文02为RemoteProtocolError287.9秒；这些不是已确认的客户端超时，尚不能据此认定供应商/代理根因，也未修改vilab-server或延长超时掩盖失败。
+- PipelineContext单字段修复后，真实slots上下文至summary/render/实际sidecar授权保存读取的6项回归通过，覆盖comic/infographic的成功和严格失败。只替代模型响应/能力探测/测试DB目的地，不用SimpleNamespace冒充生产context；旧B04不改成功、不补写产物，不调用ASR/provider。
