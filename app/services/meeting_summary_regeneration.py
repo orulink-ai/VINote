@@ -22,7 +22,7 @@ from app.services.task_new_generation import NewGenerationConfirmation
 from app.services.task_original_service import TaskOriginalService
 from app.services.vilab_cloud_service import VILabCloudService
 from app.llm.meeting_presentation import ContentDepth, Presentation, presentation_availability
-from app.services.summary_visual_evidence import retained_visual_evidence, visual_version
+from app.services.summary_visual_evidence import retained_visual_evidence, visual_version, visual_reference, REFERENCE_FILE
 
 
 class SummaryConfirmation(NewGenerationConfirmation):
@@ -201,7 +201,7 @@ class SummaryRegenerationService:
         if manifest.get('sha256') != version or reference and reference['source_version'] != version:
             _unavailable('source_changed', '原文件版本已变化，未开始重新总结。')
         transcript, transcript_version = _evidence(folder)
-        visual = retained_visual_evidence(self.artifacts, folder, canonical, source, owner)
+        visual = retained_visual_evidence(self.artifacts, folder, canonical, source, owner, receipts=self.receipts)
         context = {'protocol': 1, 'parent_task_id': parent, 'canonical_task_id': canonical, 'workflow': 'meeting',
             'source': {'file_id': info['id'], 'title': info['title'], 'type': info['source_type'], 'version': version},
             'transcript_version': transcript_version, 'requires_confirmation': True,
@@ -242,6 +242,10 @@ class SummaryRegenerationService:
                 _unavailable('summary_connection_changed', '模型连接已变化，请重新核验并确认。')
             with cloud.task_snapshot(owner, snapshot=snapshot):
                 cloud.validate_ready(owner, needs_stt=False)
+            visual = retained_visual_evidence(self.artifacts, folder,
+                context['canonical_task_id'], source, owner, receipts=self.receipts)
+            if visual_version(visual) != context['visual_evidence_version']:
+                _unavailable('summary_context_changed', '会议画面已变化，请重新核验并确认。')
             claim = self.receipts.reserve(owner, operation, submission)
             if not claim.created:
                 return claim
@@ -255,6 +259,10 @@ class SummaryRegenerationService:
                     **body.model_dump(mode='json')})
                 self.artifacts.write_json(child / 'source_reference.json', {'version': 1, 'owner': owner,
                     'parent_task_id': context['canonical_task_id'], 'source_version': body.source_version})
+                visual_link = visual_reference(visual, owner=owner, task=claim.task_id,
+                    canonical=context['canonical_task_id'], source_version=body.source_version)
+                if visual_link is not None:
+                    self.artifacts.write_json(child / REFERENCE_FILE, visual_link)
                 self.artifacts.write_json(child / SNAPSHOT_FILE, snapshot)
                 self.artifacts.write_json(child / 'request.json', {'request': _options(saved, body)})
                 self.artifacts.write_json(child / 'summary_presentation.json', {
@@ -279,6 +287,7 @@ class SummaryRegenerationService:
                         and row.fingerprint == _fingerprint(submission), 'summary_preflight_snapshot_changed')
                     bound = json.loads(row.receipt_json or '{}')
                     bound['summary_snapshot_sha256'] = _digest(snapshot)
+                    bound['summary_visual_reference_sha256'] = _digest(visual_link) if visual_link is not None else None
                     row.receipt_json = json.dumps(bound)
                     db.flush()
                 background.add_task(self.run_once, claim.task_id, owner, note_service)
@@ -342,8 +351,8 @@ class SummaryRegenerationService:
                     and snapshot['llm_model'] == body.model_name
                     and (body.connection_id is None or body.connection_id == snapshot.get('connection_id')),
                     'summary_preflight_snapshot_changed')
-                visual = retained_visual_evidence(self.artifacts, parent_folder,
-                    context['canonical_task_id'], source, owner)
+                visual = retained_visual_evidence(self.artifacts, folder,
+                    context['canonical_task_id'], source, owner, receipts=self.receipts)
                 _preflight(visual_version(visual) == context['visual_evidence_version'], 'summary_preflight_visual_changed')
             if visual is not None:
                 from app.services.meeting_video_ocr import prepare_meeting_video_ocr

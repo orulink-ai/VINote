@@ -360,7 +360,7 @@ def _canonical_meeting(artifacts, owner, task):
     Missing/corrupt selected evidence cannot fall back to an older ASR cache.
     """
     from app.services.meeting_summary_regeneration import SummaryConfirmation, _submission
-    from app.services.source_request_service import _fingerprint
+    from app.services.source_request_service import SourceRequestService, _fingerprint
     from app.services.task_original_service import TaskOriginalService
     from app.services.summary_visual_evidence import retained_visual_evidence, visual_version
 
@@ -423,7 +423,8 @@ def _canonical_meeting(artifacts, owner, task):
     # Existing evidence validators are read-only; no model/current preference gate.
     # This is exactly summary regeneration's selected-parent/original lookup:
     # a present invalid selected manifest fails, without trying another donor.
-    visual = retained_visual_evidence(artifacts, evidence_folder, canonical, source, owner)
+    visual = retained_visual_evidence(artifacts, evidence_folder, canonical, source, owner,
+        receipts=SourceRequestService(session_scope))
     visual_revision = visual_version(visual)  # Actual retained JPEG digests.
     return canonical, evidence_folder, source_hash, visual_revision, folder
 

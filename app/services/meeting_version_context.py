@@ -140,7 +140,9 @@ class MeetingVersionService:
         if set(link) != expected or link["canonical_task_id"] is not None or link["confirmed"] is not True:
             return False
         try:
-            context, folder, _, _, request = self.summary._context(owner, link["parent_task_id"])
+            from app.services.summary_visual_evidence import legacy_selected_visual_cache
+            with legacy_selected_visual_cache(link["parent_task_id"]):
+                context, folder, _, _, request = self.summary._context(owner, link["parent_task_id"])
             original = validate_source(_read_json(folder / SNAPSHOT_FILE), owner)
             reference_path = folder / "source_reference.json"
             reference = _read_json(reference_path) if reference_path.exists() or reference_path.is_symlink() else None

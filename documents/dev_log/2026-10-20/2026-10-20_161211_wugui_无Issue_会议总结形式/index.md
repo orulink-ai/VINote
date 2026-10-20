@@ -233,3 +233,11 @@ A09 draft HTTP524未返回稿；Bbrief03完成draft/review但guardfailed。B只�
 - 新冻结统一rubric见summary-quality-20261020-v1文档；历史临时分数不换算、不同版本最高分不拼盘。后续两样本六项取较低分，事实/关系错误必须扣分，不以渲染或测试冒称100。
 - 通用来源提示补强：OCR每条frame记录增加与实际图片一致的显式source_ref，不要求模型按61条OCR数组心算图片编号。raw OCR原文、空格和错误不规范化；独立看清图像时使用frame_observation，不冒充exact OCR。没有重排/裁剪帧、修改旧manifest或增加provider。新增绑定断言及视频/OCR组合36 passed。
 - UI前置入口和固定弹窗操作区分别c9dd784/dff3ca3已推送并原生验收。新HTML再生成的视觉来源关联修复候选已实际GET与原生弹窗恢复复用，但独立审查仍在修补现代回执缺hash的读取完整性反例，尚未最终冻结。
+
+### 2026-10-20 20:42 · 后续版本视觉材料引用与 v4 实际首轮
+
+- 新子任务用source/canonical/owner/manifest/frame hash绑定的扁平视觉donor引用，DB accepted receipt提交其摘要；不会复制原视频或JPEG、形成引用链、读取上版最终纪要、覆盖旧材料或重新扫描。历史HTML1173只在原accepted指纹、选定父context和视觉版本一致时读取具体原manifest；未知或缺失证明不凭磁盘链接借用。
+- 两次独立审查指出并修复现代缺失/null snapshot摘要读取完整性、损坏pointer被own cache掩盖，以及无视觉材料音频context的兼容回归。主线最初把摘要要求扩大到历史own cache，导致A12/B03在intent/provider前停止；原状保留，无模型或ASR调用。后续仅exact历史intent、原accepted指纹及已有legacy Origin proof可读OWN cache，现代形态不借此绕过，递归有界。最终helper c9a6db2da6077e0bbb7d9889361ce21d88feee831fd77b18b799706c51c55b57；独立组合135/135通过，3个实际context恢复reuse/inherit。A原父fresh不可用仍按既有证明拒绝，不影响复用。
+- v4接线与统一rubric已在c9f31aa提交；独立561项组合、主线202项核心/host/provenance/OCR组合分别记录。原始draft重复字段在规范化前拒绝；最终claim同一行定义和处置，不自动补缺行，原始响应不改。主线把FinalLedgerError展示文字改为中文说明，机器code属性保留。
+- B信息图04通过v4 ledger后，在真实PipelineContext slots赋值presentation_visual失败，耗时130.8秒；raw4保留，未保存或发布、未改旧终态。此前synthetic SimpleNamespace无法捕获该类错误，已补真实dataclass字段，并新增实际上下文回归测试。不能把此轮称为信息图成品验收通过。
+- A文字13从已保存HTML1173走真实MeetingVersionService默认reuse/inherit创建，实际parent/operation/model/source冻结，当前draft完成复核中；不使用HTML正文作为材料，不创建ASR checkpoint。后续实际评分仍待原稿返回，不能提前宣称100。
