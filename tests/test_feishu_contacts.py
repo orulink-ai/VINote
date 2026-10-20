@@ -305,9 +305,6 @@ def test_official_bot_availability_error_is_definite_and_sanitized(contact_servi
 
 
 def test_modern_proxy_forwards_original_contact_body_once(contact_service, monkeypatch):
-    from app.services import feishu_auto_runtime
-    # This test isolates proxying; the device outbox guard has its own SQLite tests.
-    monkeypatch.setattr(feishu_auto_runtime, 'guard_manual_publish', lambda *args: None)
     chosen = selection(contact_service, monkeypatch)
     payload = feishu.Publish(note_key="note", title="标题", content="正文", operation_id="op", contacts=[chosen])
     calls = []

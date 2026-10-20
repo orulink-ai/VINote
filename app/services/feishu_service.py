@@ -9,7 +9,6 @@ import secrets
 import threading
 import time
 import uuid
-from contextlib import nullcontext
 from datetime import timezone
 from urllib.parse import urlparse
 from urllib.parse import urlencode
@@ -28,7 +27,6 @@ from app.models.workspace import WorkspaceNoteDB, WorkspaceVersionDB
 from app.services import feishu_receipt_service as receipts
 from app.services import feishu_markdown as native_markdown
 from app.services import feishu_recipient_access as recipient_access
-from app.services import feishu_auto_policy as auto_policy
 from app.services.feishu_notification_card import document_card
 from app.services.cloud_account_service import _cipher
 
@@ -83,10 +81,6 @@ class FeishuService:
             raise FeishuError("飞书接入尚未启用，请联系管理员完成应用配置", 503, code="not_configured")
 
     def request(self, method, path, *, token=None, body=None, params=None):
-        execution = auto_policy.active_delivery.get()
-        if (execution and method.upper() in ('POST', 'PUT', 'PATCH', 'DELETE') and
-                path.startswith(('docx/', 'drive/', 'wiki/', 'im/'))):
-            self.assert_delivery_connection(*execution)
         try:
             response = httpx.request(method, "https://open.feishu.cn/open-apis/" + path,
                                      headers={"Authorization": "Bearer " + token} if token else {},
@@ -155,13 +149,7 @@ class FeishuService:
             can_write = bool(scopes & {"docx:document", "docx:document:write_only"})
             can_create_doc = bool(scopes & {"docx:document", "docx:document:create"}) and can_write
             destination = preferences.get("destination_config", {"kind": "personal"})
-            saved_policy = auto_policy.saved(preferences, auto_policy.binding(owner, row, preferences, self.config))
-            enabled = bool(connected and saved_policy and saved_policy['enabled'] and preferences.get('auto_publish') is True)
             return {"configured": self.configured(), "setup": self.setup_status(),
-                    "automatic_delivery_protocol": auto_policy.PROTOCOL,
-                    "automatic_delivery": {"policy_id": saved_policy['id'] if saved_policy else None,
-                        "enabled": enabled, "enabled_at": saved_policy['enabled_at'] if saved_policy else None},
-                    "contacts": [{"open_id": c['open_id'], "name": c['name']} for c in saved_policy['contacts']] if saved_policy else [],
                     "publish_receipt_protocol": 1,
                     "contact_selection_protocol": 1,
                     "recipient_access_protocol": recipient_access.PROTOCOL,
@@ -177,14 +165,14 @@ class FeishuService:
                     "connected": connected,
                     "expired": bool(row and row.expired), "name": row.name if row else "",
                     "notify_self": preferences.get("notify_self", True), "groups": preferences.get("groups", []),
-                    "auto_publish": enabled, "destination": destination["kind"],
+                    "auto_publish": preferences.get("auto_publish", False), "destination": destination["kind"],
                     "destination_config": destination,
                     "permission_policy": preferences.get("permission_policy", "private" if destination["kind"] == "personal" else "inherit"),
                     "capabilities": {
                         "personal": connected and can_create_doc,
                         "folder": connected and can_create_doc and bool(scopes & {"drive:drive", "drive:drive.metadata:readonly"}),
                         "wiki": connected and bool(scopes & {"wiki:wiki", "wiki:node:create"}) and can_write,
-                        "update_existing": False, "background_delivery": connected and auto_policy.background_ready(),
+                        "update_existing": False, "background_delivery": False,
                         "resume_pending": connected,
                         "contact_search": connected and "contact:user:search" in scopes,
                         "contact_notification": connected,
@@ -397,11 +385,7 @@ class FeishuService:
                 db.add(row)
             row.open_id, row.name = identity["open_id"], identity.get("name", "飞书用户")
             preferences = json.loads(row.preferences or "{}")
-            # A new OAuth connection is not a refresh of the old consent.
-            preferences["connection_id"] = str(uuid.uuid4())
-            if isinstance(preferences.get('auto_policy'), dict):
-                preferences['auto_policy']['enabled'] = False
-                preferences['auto_publish'] = False
+            preferences.setdefault("connection_id", str(uuid.uuid4()))
             row.preferences = json.dumps(preferences)
             row.tokens = _cipher().encrypt(json.dumps(tokens).encode()).decode()
             row.expired = False
@@ -559,30 +543,7 @@ class FeishuService:
     def save_preferences(self, owner, preferences):
         self.user_token(owner)
         with session_scope() as db:
-            account = db.get(FeishuConnectionDB, owner)
-            saved = json.loads(account.preferences)
-            binding = auto_policy.binding(owner, account, saved, self.config)
-        if not binding:
-            raise FeishuError("飞书连接已变化，请重新连接", 409, code="connection_changed")
-        old_policy = auto_policy.saved(saved, binding)
-        retained = {c['open_id']: c for c in old_policy['contacts']} if old_policy else {}
-        contacts = list(retained.values())
-        if 'contacts' in preferences:
-            requested = preferences['contacts']
-            if not isinstance(requested, list) or len(requested) > 20:
-                raise FeishuError("联系人列表无效", 422, code="invalid_recipient")
-            selected = {}
-            for item in requested:
-                if not isinstance(item, dict) or set(item) not in ({'open_id'}, {'open_id', 'selection_token'}):
-                    raise FeishuError("联系人选择无效", 422, code="invalid_recipient")
-                if set(item) == {'open_id'}:
-                    if not isinstance(item['open_id'], str) or item['open_id'] not in retained:
-                        raise FeishuError("新联系人须重新搜索并选择", 422, code="invalid_recipient")
-                    proof = retained[item['open_id']]
-                else:
-                    proof = self.validate_contacts(owner, [item])[0]
-                selected[proof['open_id']] = proof
-            contacts = list(selected.values())
+            saved = json.loads(db.get(FeishuConnectionDB, owner).preferences)
         destination = self.normalize_destination(preferences.get("destination_config", saved.get("destination_config")))
         policy = self.normalize_policy(destination, preferences.get("permission_policy") or (
             saved.get("permission_policy") if "destination_config" not in preferences else None))
@@ -595,45 +556,20 @@ class FeishuService:
         available = {item["chat_id"] for item in available_groups}
         if any(group not in available for group in groups):
             raise FeishuError("目标群不可用，请确认你与机器人均在群内并刷新列表")
-        if preferences.get("auto_publish") and not (preferences.get("notify_self") or groups or contacts) and "destination_config" not in preferences and "destination_config" not in saved:
-            raise FeishuError("自动交付至少需要选择本人、联系人或一个群")
-        enabled = preferences.get('auto_publish') is True
-        consent = preferences.get('automatic_delivery_consent') is True
-        content = auto_policy.spec(binding, destination, bool(preferences.get('notify_self')), groups, policy, contacts)
-        changed = not old_policy or old_policy['fingerprint'] != auto_policy.fingerprint(content)
-        contacts_changed = auto_policy.fingerprint(contacts) != auto_policy.fingerprint(list(retained.values()))
-        if (enabled and (changed or not old_policy['enabled']) or
-                contacts_changed) and not consent:
-            raise FeishuError("启用自动交付或更改通知对象/位置需要明确同意", 409, code="automatic_consent_required")
-        next_policy = (auto_policy.create(content, enabled) if consent and (changed or enabled and not old_policy['enabled'])
-                       else {**old_policy, 'enabled': enabled} if old_policy else None)
-        with _lock(owner), session_scope() as db:
-            row = db.scalar(select(FeishuConnectionDB).where(FeishuConnectionDB.owner == owner).with_for_update())
+        if preferences.get("auto_publish") and not (preferences.get("notify_self") or groups) and "destination_config" not in preferences and "destination_config" not in saved:
+            raise FeishuError("自动交付至少需要选择本人或一个群")
+        with session_scope() as db:
+            row = db.get(FeishuConnectionDB, owner)
             if not row or not row.tokens:
                 raise FeishuError("飞书连接已断开", 401)
-            current = json.loads(row.preferences)
-            if current != saved or auto_policy.binding(owner, row, current, self.config) != binding:
-                raise FeishuError("准备期间飞书设置已变化，请重新核对", 409, code="automatic_policy_changed")
             merged = {**json.loads(row.preferences),
                 "notify_self": bool(preferences.get("notify_self")), "groups": groups,
                 "group_names": {item["chat_id"]: item["name"] for item in available_groups if item["chat_id"] in groups},
                 "auto_publish": bool(preferences.get("auto_publish"))}
-            if next_policy is not None:
-                merged['auto_policy'] = next_policy
             # Legacy clients must not reset a destination selected by another device.
             if "destination_config" in preferences or "destination_config" in saved or "permission_policy" in preferences:
                 merged.update(destination_config=destination, permission_policy=policy)
-            # FOR UPDATE is ignored by SQLite. A concurrent committed revoke or
-            # reconnect must also defeat this write after its final validation.
-            changed = db.execute(update(FeishuConnectionDB).where(
-                FeishuConnectionDB.owner == owner,
-                FeishuConnectionDB.preferences == row.preferences,
-                FeishuConnectionDB.tokens == row.tokens,
-                FeishuConnectionDB.open_id == row.open_id,
-                FeishuConnectionDB.expired == False,  # noqa: E712
-            ).values(preferences=json.dumps(merged)).execution_options(synchronize_session=False))
-            if changed.rowcount != 1:
-                raise FeishuError("准备期间飞书设置已变化，请重新核对", 409, code="automatic_policy_changed")
+            row.preferences = json.dumps(merged)
         return self.status(owner)
 
     def disconnect(self, owner):
@@ -671,8 +607,6 @@ class FeishuService:
                 "version_id": source.get("version_id") if source.get("verified") else None,
                 "revision_id": source.get("revision_id") if source.get("verified") else None,
                 "content_source": source,
-                **({"automatic_policy_id": snapshot['automatic_policy_id'], "automatic_delivery_protocol": 1}
-                   if snapshot.get('automatic_policy_id') else {}),
                 "formatting": {
                     **snapshot.get("format_selection", {"protocol": "legacy-unknown", "message": "历史交付未核验转换范围"}),
                     "status": ("unsupported" if snapshot.get("format_selection", {}).get("image_source_preserved") else
@@ -821,70 +755,6 @@ class FeishuService:
         if not selected or selected.title != title or selected.content != content:
             raise FeishuError("已保存版本发生冲突，停止发布", 409, code="workspace_content_mismatch")
 
-    def _automatic_policy(self, owner, account, preferences, policy_id):
-        policy = auto_policy.saved(preferences,
-            auto_policy.binding(owner, account, preferences, self.config), enabled=True)
-        if not policy or policy['id'] != policy_id:
-            raise FeishuError("自动交付授权已关闭或变化，请核对设置", 409, code="automatic_policy_changed")
-        return policy
-
-    @staticmethod
-    def _assert_no_pending_automatic(db, owner, note_key):
-        rows = db.execute(select(FeishuDeliveryDB, FeishuDeliveryDestinationDB).join(
-            FeishuDeliveryDestinationDB, FeishuDeliveryDestinationDB.delivery_id == FeishuDeliveryDB.id
-        ).where(FeishuDeliveryDB.owner == owner, FeishuDeliveryDB.note_key == note_key)).all()
-        for job, metadata in rows:
-            snapshot = json.loads(metadata.snapshot)
-            if snapshot.get('automatic_policy_id') and (job.status != 'completed' or metadata.phase != 'completed'):
-                raise FeishuError("此纪要的自动交付尚未完成，请核验或恢复原交付，不要另建发布", 409,
-                                  code="automatic_delivery_pending")
-
-    def enqueue_automatic(self, owner, *, operation_id, note_key, policy_id, title, content):
-        """An explicit saved policy, never caller-selected targets or old defaults."""
-        try:
-            if any(not isinstance(value, str) or str(uuid.UUID(value)) != value for value in (operation_id, policy_id)):
-                raise ValueError()
-        except (ValueError, AttributeError):
-            raise FeishuError("自动交付操作及策略标识无效", 422, code="invalid_automatic_request") from None
-        if any(not isinstance(value, str) or not value.strip() or len(value) > limit
-               for value, limit in ((note_key, 160), (title, 500), (content, 300000))):
-            raise FeishuError("自动交付内容无效", 422, code="invalid_automatic_request")
-        request_hash = receipts.fingerprint(dict(automatic_delivery_protocol=1, policy_id=policy_id,
-            note_key=note_key, title=title, content=content))
-        with session_scope() as db:
-            prior = receipts.operation_job(db, owner, operation_id, request_hash)
-            if prior:
-                return {**self.serialize(prior, db=db), 'operation_id': operation_id, '_dispatch_required': False}
-            account = db.get(FeishuConnectionDB, owner)
-            prefs = json.loads(account.preferences) if account else {}
-            policy = self._automatic_policy(owner, account, prefs, policy_id)
-            _, _, source = self.resolve_content(db, owner, note_key, title, content, None, None, 'local_snapshot')
-        destination = self.check_destination(owner, policy['destination'])
-        if not destination['can_attempt_create']:
-            raise FeishuError(destination['reason'], destination.get('http_status', 403),
-                              code=destination['error_code'], uncertain=destination.get('uncertain', False))
-        groups = self.groups(owner) if policy['groups'] else []
-        if any(group not in {g['chat_id'] for g in groups} for group in policy['groups']):
-            raise FeishuError("自动通知目标群已不可用", 403, code="recipient_unavailable")
-        content_revision = hashlib.sha256((title + '\n' + content).encode()).hexdigest()
-        revision = receipts.fingerprint(dict(content_revision=content_revision, automatic_policy_id=policy_id))
-        try:
-            return self._enqueue(owner, note_key, title, content, True, True, destination,
-                policy['permission_policy'], policy['notify_self'], policy['groups'], groups,
-                None, None, content_revision, revision, source, operation_id, request_hash,
-                policy['contacts'], recipient_access.POLICY, automatic_policy_id=policy_id)
-        except IntegrityError:
-            with session_scope() as db:
-                prior = receipts.operation_job(db, owner, operation_id, request_hash)
-                if prior:
-                    return {**self.serialize(prior, db=db), 'operation_id': operation_id, '_dispatch_required': False}
-                previous = db.scalar(select(FeishuDeliveryDB).where(FeishuDeliveryDB.owner == owner,
-                    FeishuDeliveryDB.note_key == note_key, FeishuDeliveryDB.revision == revision))
-                if previous:
-                    receipts.bind_operation(db, owner, operation_id, request_hash, previous)
-                    return {**self.serialize(previous, db=db), 'operation_id': operation_id, '_dispatch_required': False}
-            raise
-
     def enqueue(self, owner, note_key, title=None, content=None, automatic=False, *, destination_config=None,
                 permission_policy=None, notify_self=None, groups=None, version_id=None, revision_id=None,
                 operation_id=None, source_mode=None, contacts=None, recipient_access_policy=None):
@@ -895,8 +765,6 @@ class FeishuService:
             raise FeishuError("联系人通知需要手动确认及 operation_id", 422, code="explicit_publish_required")
         if source_mode == "local_snapshot" and automatic:
             raise FeishuError("请在预览正文后手动确认发布", 422, code="explicit_publish_required")
-        if automatic:
-            raise FeishuError("自动交付须使用已确认策略的专用入口", 422, code="automatic_policy_required")
         request_payload = dict(note_key=note_key, title=title, content=content, automatic=automatic,
             destination_config=destination_config, permission_policy=permission_policy, notify_self=notify_self,
             groups=groups, version_id=version_id, revision_id=revision_id, source_mode=source_mode)
@@ -912,7 +780,6 @@ class FeishuService:
                     return {**self.serialize(prior, db=db), "operation_id": operation_id, "_dispatch_required": False}
         # Resolve and validate outside the write transaction (network calls can refresh OAuth).
         with session_scope() as db:
-            self._assert_no_pending_automatic(db, owner, note_key)
             account = db.get(FeishuConnectionDB, owner)
             preferences = json.loads(account.preferences) if account else {}
             title, content, source = self.resolve_content(db, owner, note_key, title, content, version_id, revision_id, source_mode)
@@ -962,30 +829,18 @@ class FeishuService:
 
     def _enqueue(self, owner, note_key, title, content, automatic, enhanced, destination, policy,
                  notify_self, groups, available_groups, version_id, revision_id, content_revision, revision, source,
-                 operation_id=None, request_hash=None, contacts=None, recipient_access_policy=None,
-                 automatic_policy_id=None):
+                 operation_id=None, request_hash=None, contacts=None, recipient_access_policy=None):
         with _lock(owner), session_scope() as db:
-            if db.get_bind().dialect.name == 'sqlite':
-                # SQLite ignores FOR UPDATE; take its writer lock before the final
-                # policy/pending-job reads, including across server processes.
-                db.execute(update(FeishuConnectionDB).where(FeishuConnectionDB.owner == owner)
-                           .values(preferences=FeishuConnectionDB.preferences))
             if operation_id:
                 prior = receipts.operation_job(db, owner, operation_id, request_hash)
                 if prior:
                     return {**self.serialize(prior, db=db), "operation_id": operation_id, "_dispatch_required": False}
             account = db.scalar(select(FeishuConnectionDB).where(FeishuConnectionDB.owner == owner).with_for_update())
             if not account or not account.tokens:
-                if automatic_policy_id is not None:
-                    raise FeishuError("自动交付授权已失效", 409, code="automatic_policy_changed")
                 if automatic:
                     return None
                 raise FeishuError("请先连接飞书", 401)
             preferences = json.loads(account.preferences)
-            if not automatic:
-                self._assert_no_pending_automatic(db, owner, note_key)
-            if automatic_policy_id is not None:
-                self._automatic_policy(owner, account, preferences, automatic_policy_id)
             for contact in contacts or []:
                 if (contact["connection_id"] != preferences.get("connection_id") or
                         contact["sender_open_id"] != account.open_id or account.expired or
@@ -1028,9 +883,6 @@ class FeishuService:
                         "content_source": source, "automatic": automatic,
                         "open_id": account.open_id, "connection_id": preferences.get("connection_id"),
                         "tenant_key": self.config.feishu_tenant_key}
-            if automatic_policy_id is not None:
-                snapshot.update(automatic_policy_id=automatic_policy_id,
-                                app_id=self.config.feishu_app_id, automatic_delivery_protocol=1)
             if contacts:
                 snapshot["contacts"] = [{"open_id": item["open_id"], "name": item["name"]} for item in contacts]
                 snapshot["contact_selection_protocol"] = 1
@@ -1127,7 +979,6 @@ class FeishuService:
         token = self.user_token(owner)
         path = f"drive/v2/permissions/{job.document_id}/public"
         if policy == "private":
-            self._check_automatic_delivery(owner, job)
             self.request("PATCH", path, token=token, params={"type": "docx"}, body={
                 "external_access_entity": "closed", "link_share_entity": "closed",
                 "share_entity": "same_tenant", "manage_collaborator_entity": "collaborator_full_access"})
@@ -1160,19 +1011,6 @@ class FeishuService:
                 raise FeishuError("交付绑定的飞书账号已变更，请重新发布", 409, code="connection_changed")
             if snapshot.get("connection_id") and json.loads(account.preferences).get("connection_id") != snapshot["connection_id"]:
                 raise FeishuError("原交付授权已随断开连接撤销，请重新发布", 409, code="connection_changed")
-            if snapshot.get('automatic_policy_id') is not None:
-                self._automatic_policy(owner, account, json.loads(account.preferences), snapshot['automatic_policy_id'])
-
-    def _check_automatic_delivery(self, owner, job):
-        snapshot = getattr(job, '_automatic_policy_snapshot', None)
-        if snapshot is None and getattr(job, 'id', None):
-            with session_scope() as db:
-                metadata = db.get(FeishuDeliveryDestinationDB, job.id)
-                snapshot = json.loads(metadata.snapshot) if metadata else {}
-                if snapshot.get('automatic_policy_id'):
-                    receipts.owned_job(db, owner, job.id)
-        if snapshot and snapshot.get('automatic_policy_id'):
-            self.assert_delivery_connection(owner, snapshot)
 
     def prepare_native_body(self, owner, job):
         # The new format is opt-in at enqueue. Old jobs keep exactly the old path.
@@ -1222,7 +1060,6 @@ class FeishuService:
         # A conversion timeout is safe to retry: no target document was edited.
         def convert(text):
             try:
-                self._check_automatic_delivery(owner, job)
                 return self.request("POST", "docx/v1/documents/blocks/convert",
                                     token=self.user_token(owner),
                                     body={"content_type": "markdown", "content": text})
@@ -1272,7 +1109,6 @@ class FeishuService:
                                   uncertain=True, code="write_unknown") from None
             if dispatch:
                 try:
-                    self._check_automatic_delivery(owner, job)
                     response = self.request("POST", path, token=token, body=body,
                                             params={"client_token": batch["client_token"]})
                     relations = response.get("block_id_relations", [])
@@ -1336,7 +1172,6 @@ class FeishuService:
                 raise FeishuError("原正文批次结果未核验，禁止重新写入；请打开原文档核对", 409, uncertain=True, code="write_unknown") from None
             if dispatch:
                 try:
-                    self._check_automatic_delivery(owner, job)
                     self.request("POST", f"docx/v1/documents/{job.document_id}/blocks/{job.document_id}/children",
                                  token=token, body=body,
                                  params={"client_token": str(uuid.uuid5(uuid.NAMESPACE_URL, job.id + str(offset)))})
@@ -1352,7 +1187,6 @@ class FeishuService:
             self.checkpoint(owner, job.id, written_blocks=str(offset + len(blocks[offset:offset + 50])))
 
     def grant_group(self, owner, target, job):
-        self._check_automatic_delivery(owner, job)
         self.request("POST", f"drive/v1/permissions/{job.document_id}/members", token=self.user_token(owner),
                      params={"type": "docx", "need_notification": "false"},
                      body={"member_type": "openchat", "member_id": target, "perm": "view"})
@@ -1406,7 +1240,6 @@ class FeishuService:
             return
         # Only the new explicit contact policy or an already-consented legacy
         # group path calls this function. No preferences or arbitrary IDs are used.
-        self._check_automatic_delivery(owner, job)
         state["reading_permission"] = {"status": "granting", "role": "view",
                                        "verification_scope": "direct_document_collaborator"}
         self.checkpoint(owner, job.id, recipients=json.dumps(recipients))
@@ -1495,7 +1328,6 @@ class FeishuService:
             return self.delivery_by_id(owner, job_id)
 
     def send_message(self, owner, target, job):
-        self._check_automatic_delivery(owner, job)
         with session_scope() as db:
             metadata = db.get(FeishuDeliveryDestinationDB, job.id)
             snapshot = json.loads(metadata.snapshot) if metadata else {}
@@ -1509,15 +1341,7 @@ class FeishuService:
         return result["message_id"]
 
     def process(self, owner, job_id, selected_recipients=None):
-        with session_scope() as db:
-            original = db.get(FeishuDeliveryDB, job_id)
-            if not original or original.owner != owner:
-                raise FeishuError("交付记录不存在", 404)
-            metadata = db.get(FeishuDeliveryDestinationDB, job_id)
-            is_policy_job = bool(metadata and json.loads(metadata.snapshot).get('automatic_policy_id'))
-        # The DB lease serializes auto workers. Do not hold the identity lock
-        # across their network calls: users must be able to revoke the policy.
-        with nullcontext() if is_policy_job else _lock(owner):
+        with _lock(owner):
             with session_scope() as db:
                 job = db.get(FeishuDeliveryDB, job_id)
                 if not job or job.owner != owner:
@@ -1546,9 +1370,6 @@ class FeishuService:
                 if result.rowcount != 1:
                     return
                 db.expunge(job)
-                if is_policy_job:
-                    job._automatic_policy_snapshot = snapshot
-            execution = auto_policy.active_delivery.set((owner, snapshot)) if is_policy_job else None
             try:
                 self.assert_delivery_connection(owner, snapshot)
                 self.prepare_native_body(owner, job)
@@ -1557,7 +1378,6 @@ class FeishuService:
                 if not job.document_id:
                     self.checkpoint(owner, job_id, document_id="__creating__", phase="pending_create", error_code="")
                     try:
-                        self._check_automatic_delivery(owner, job)
                         if snapshot.get("enhanced"):
                             document_id, url = self.create_at_destination(owner, job.title, snapshot["destination"])
                         else:
@@ -1571,7 +1391,6 @@ class FeishuService:
                     self.checkpoint(owner, job_id, document_id=document_id, document_url=url)
                     job.document_id, job.document_url = document_id, url
                 if snapshot.get("enhanced"):
-                    self._check_automatic_delivery(owner, job)
                     self.checkpoint(owner, job_id, phase="setting_permissions")
                     try:
                         # Before any content upload: enforce private policy or read inherited scope.
@@ -1582,7 +1401,6 @@ class FeishuService:
                         raise
                     self.checkpoint(owner, job_id, permission=permission)
                 self.checkpoint(owner, job_id, phase="writing")
-                self._check_automatic_delivery(owner, job)
                 self.write_document(owner, job)
                 recipients = json.loads(job.recipients)
                 for target, state in recipients.items():
@@ -1617,7 +1435,6 @@ class FeishuService:
                             self.ensure_recipient_reading(owner, target, job, recipients)
                             state["permission_granted"] = True
                             self.checkpoint(owner, job_id, recipients=json.dumps(recipients))
-                        self._check_automatic_delivery(owner, job)
                         state.update(status="sending", error="", error_code="")
                         self.checkpoint(owner, job_id, phase="notifying", recipients=json.dumps(recipients))
                         sending = True
@@ -1640,6 +1457,3 @@ class FeishuService:
                 self.checkpoint(owner, job_id, status="failed", lease_until="0",
                                 phase=phase, error_code=code,
                                 error=exc.detail if isinstance(exc, FeishuError) else "交付暂时中断，请重试")
-            finally:
-                if execution is not None:
-                    auto_policy.active_delivery.reset(execution)
