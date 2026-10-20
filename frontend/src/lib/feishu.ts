@@ -21,6 +21,7 @@ export type DestinationCheck = FeishuDestination & {
   error_code: string;
 };
 export type FeishuStatus = {
+  connection_binding_hash?: string;
   transport?: 'cli' | 'http';
   automatic_delivery_protocol?: number;
   automatic_delivery?: { policy_id: string | null; enabled: boolean };

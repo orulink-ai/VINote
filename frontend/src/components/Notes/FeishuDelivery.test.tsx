@@ -5,6 +5,7 @@ import {
   render,
   screen,
   waitFor,
+  within,
 } from "@testing-library/react";
 import { PageReturn } from "@/components/Layout/PageReturn";
 import { MemoryRouter, Routes, Route, Link, useLocation } from "react-router-dom";
@@ -769,4 +770,283 @@ it('wrong-job verification response cannot unlock notification retries', async (
   await screen.findByText('权限核验回执不属于原发布操作');
   expect(screen.getByRole('button', { name: retryLabel })).toBeDisabled();
   expect(screen.queryByRole('button', { name: '继续通知' })).toBeNull();
+});
+
+it('uses the verified connection scope for real picker favorites and recent places across reopening', async () => {
+  const status = await feishuStatus(), binding = 'a'.repeat(64);
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: binding });
+  const view = openPanel(); await verifyDestination();
+  fireEvent.click(screen.getByRole('button', { name: '选择文档位置' }));
+  fireEvent.click(await screen.findByRole('button', { name: '收藏位置' }));
+  fireEvent.click(screen.getByRole('button', { name: '确认位置并核验' }));
+  await waitFor(() => expect(screen.queryByRole('button', { name: '确认位置并核验' })).toBeNull());
+  const key = `vinote:feishu-destinations:owner:${encodeURIComponent(window.location.origin)}:${binding}`;
+  expect(JSON.parse(localStorage.getItem(key)!)).toMatchObject({
+    favorites: [{ target: { kind: 'personal' } }], recent: [{ target: { kind: 'personal' } }],
+  });
+  view.unmount(); openPanel(); await verifyDestination();
+  fireEvent.click(screen.getByRole('button', { name: '选择文档位置' }));
+  expect(within(await screen.findByRole('region', { name: '收藏位置' })).getByRole('button', { name: '个人云文档' })).toBeEnabled();
+  expect(screen.getByRole('region', { name: '最近使用' })).toBeInTheDocument();
+  expect(publishToFeishu).not.toHaveBeenCalled();
+});
+
+it.each([undefined, '', 'unverified-binding'])('keeps shortcuts disabled without a verified binding: %s', async binding => {
+  const status = await feishuStatus();
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: binding });
+  openPanel(); await verifyDestination();
+  fireEvent.click(screen.getByRole('button', { name: '选择文档位置' }));
+  expect(await screen.findByText('连接身份尚未核验，暂不读取或保存最近与收藏位置。')).toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '收藏位置' })).toBeDisabled();
+  expect(Object.keys(localStorage).filter(key => key.startsWith('vinote:feishu-destinations:'))).toEqual([]);
+  expect(publishToFeishu).not.toHaveBeenCalled();
+});
+
+it('clears unsubmitted selections on a pre-submit connection change and rejects the old late group response', async () => {
+  const status = await feishuStatus();
+  vi.mocked(feishuStatus).mockReset().mockResolvedValueOnce({ ...status, connection_binding_hash: 'a'.repeat(64), groups: ['oc_old'] })
+    .mockResolvedValue({ ...status, connection_binding_hash: 'b'.repeat(64) });
+  let finish!: (value: Awaited<ReturnType<typeof feishuGroups>>) => void;
+  vi.mocked(feishuGroups).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  openPanel(); await verifyDestination();
+  await waitFor(() => expect(feishuGroups).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole('button', { name: createLabel }));
+  await screen.findByText('飞书账号或连接已变化，请重新核验并确认；原交付回执保留。');
+  await act(async () => finish([{ chat_id: 'oc_old', name: '旧连接迟到群' }]));
+  await expandRecipients();
+  expect(screen.queryByText('旧连接迟到群')).toBeNull();
+  expect(screen.getByRole('checkbox', { name: '发给本人' })).not.toBeChecked();
+  const { readPublishDraft } = await import('@/lib/feishuPublishReceipt');
+  expect(readPublishDraft('owner', 'meeting-a')).toMatchObject({ state: 'draft', connectionBindingHash: 'b'.repeat(64), options: {
+    destination_config: { kind: 'personal' }, groups: [], notify_self: false,
+  } });
+  expect(publishToFeishu).not.toHaveBeenCalled();
+});
+
+it('discards a contact search response from the previous connection', async () => {
+  await enableContacts(); const status = await feishuStatus();
+  vi.mocked(feishuStatus).mockReset().mockResolvedValueOnce({ ...status, connection_binding_hash: 'a'.repeat(64) })
+    .mockResolvedValue({ ...status, connection_binding_hash: 'b'.repeat(64) });
+  let finish!: (value: Awaited<ReturnType<typeof feishuContacts>>) => void;
+  vi.mocked(feishuContacts).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  openPanel(); await verifyDestination();
+  fireEvent.change(screen.getByRole('textbox', { name: '搜索联系人' }), { target: { value: '旧查询' } });
+  fireEvent.click(screen.getByRole('button', { name: '搜索联系人' }));
+  await waitFor(() => expect(feishuContacts).toHaveBeenCalledTimes(1));
+  fireEvent.click(screen.getByRole('button', { name: createLabel }));
+  await screen.findByText('飞书账号或连接已变化，请重新核验并确认；原交付回执保留。');
+  await act(async () => finish({ items: [{ ...candidate('ou_old'), name: '旧连接迟到联系人' }], has_more: false, page_token: '', selection_expires_in: 900 }));
+  await expandRecipients();
+  expect(screen.queryByText('旧连接迟到联系人')).toBeNull();
+  expect(screen.getByRole('textbox', { name: '搜索联系人' })).toHaveValue('');
+  expect(publishToFeishu).not.toHaveBeenCalled();
+});
+
+it('preserves the frozen body but resets a restored unsubmitted draft from another connection', async () => {
+  const { newPublishDraft, persistPublishDraft, readPublishDraft } = await import('@/lib/feishuPublishReceipt');
+  const original = { ...newPublishDraft('owner', 'meeting-a', { title: '原草稿', content: '原正文' }, {
+    destination_config: { kind: 'folder' as const, folder_token: 'old-folder' }, permission_policy: 'inherit' as const,
+    notify_self: true, groups: ['oc_old'],
+  }), connectionBindingHash: 'a'.repeat(64) };
+  persistPublishDraft(original);
+  const status = await feishuStatus();
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: 'b'.repeat(64) });
+  openPanel();
+  await screen.findByText('飞书连接已变化或原草稿未绑定当前连接，已清除未提交的位置与通知选择；请重新核验后确认。');
+  await waitFor(() => expect(readPublishDraft('owner', 'meeting-a')).toMatchObject({
+    state: 'draft', connectionBindingHash: 'b'.repeat(64), snapshot: original.snapshot,
+    options: { destination_config: { kind: 'personal' }, groups: [], notify_self: false },
+  }));
+  expect(readPublishDraft('owner', 'meeting-a')?.operationId).not.toBe(original.operationId);
+  expect(publishToFeishu).not.toHaveBeenCalled();
+});
+
+it.each(['unknown', 'acknowledged'] as const)('keeps the exact historical %s receipt unchanged when another verified connection is loaded', async state => {
+  const { newPublishDraft, persistPublishDraft } = await import('@/lib/feishuPublishReceipt');
+  const original = { ...newPublishDraft('owner', 'meeting-a', { title: '原草稿', content: '原正文' }, {
+    destination_config: { kind: 'personal' as const }, permission_policy: 'private' as const,
+    notify_self: true, groups: [],
+  }), state, connectionBindingHash: 'a'.repeat(64) };
+  persistPublishDraft(original);
+  const before = JSON.stringify({ ...localStorage });
+  const status = await feishuStatus();
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: 'b'.repeat(64) });
+  vi.mocked(deliveryByOperation).mockRejectedValue(new Error('原回执待核验'));
+  openPanel(); await screen.findByText('原回执待核验');
+  expect(JSON.stringify({ ...localStorage })).toBe(before);
+  expect(deliveryByOperation).toHaveBeenCalledWith(original.operationId);
+  expect(publishToFeishu).not.toHaveBeenCalled();
+  expect(retryDelivery).not.toHaveBeenCalled();
+});
+
+it('preserves a bound draft through temporary identity verification unavailability and recovers the same cache scope', async () => {
+  const status = await feishuStatus(), binding = 'a'.repeat(64);
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: binding });
+  openPanel(); await verifyDestination();
+  const { readPublishDraft } = await import('@/lib/feishuPublishReceipt');
+  const before = readPublishDraft('owner', 'meeting-a');
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connected: false, connection_state: 'service_unavailable', connection_binding_hash: undefined });
+  fireEvent.click(screen.getByRole('button', { name: createLabel }));
+  const reconnect = await screen.findByRole('button', { name: '重新核验飞书连接' });
+  expect(readPublishDraft('owner', 'meeting-a')).toEqual(before);
+  expect(screen.queryByText(/已清除未提交的位置与通知选择/)).toBeNull();
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: binding });
+  fireEvent.click(reconnect);
+  await waitFor(() => expect(screen.queryByRole('button', { name: '重新核验飞书连接' })).toBeNull());
+  expect(readPublishDraft('owner', 'meeting-a')).toEqual(before);
+  fireEvent.click(screen.getByRole('button', { name: '选择文档位置' }));
+  expect(await screen.findByRole('button', { name: '收藏位置' })).toBeEnabled();
+  expect(publishToFeishu).not.toHaveBeenCalled();
+});
+
+it('keeps the cache hash out of a real submission payload and never repeats an ambiguous POST', async () => {
+  const status = await feishuStatus(), binding = 'a'.repeat(64);
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: binding });
+  vi.mocked(publishToFeishu).mockRejectedValue(new Error('提交结果未知'));
+  openPanel(); await verifyDestination();
+  fireEvent.click(screen.getByRole('button', { name: createLabel }));
+  await screen.findByText('提交结果未知');
+  expect(publishToFeishu).toHaveBeenCalledTimes(1);
+  expect(JSON.stringify(vi.mocked(publishToFeishu).mock.calls[0])).not.toContain(binding);
+  const { readPublishDraft } = await import('@/lib/feishuPublishReceipt');
+  expect(readPublishDraft('owner', 'meeting-a')).toMatchObject({ state: 'unknown', connectionBindingHash: binding });
+  expect(screen.getByRole('button', { name: createLabel })).toBeDisabled();
+});
+
+it.each([undefined, '', 'invalid-proof'])('invalidates unsubmitted recipients immediately when a verified binding is lost (%s)', async missing => {
+  const status = await feishuStatus(), binding = 'a'.repeat(64);
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: binding, groups: ['oc_old'] });
+  vi.mocked(feishuGroups).mockResolvedValue([{ chat_id: 'oc_old', name: '旧连接群' }]);
+  openPanel(); await verifyDestination();
+  await screen.findByRole('checkbox', { name: '旧连接群' });
+  const { readPublishDraft } = await import('@/lib/feishuPublishReceipt');
+  const before = readPublishDraft('owner', 'meeting-a')!;
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: missing });
+  fireEvent.click(screen.getByRole('button', { name: createLabel }));
+  await screen.findByText('飞书账号或连接已变化，请重新核验并确认；原交付回执保留。');
+  await waitFor(() => expect(readPublishDraft('owner', 'meeting-a')).toMatchObject({
+    state: 'draft', connectionBindingHash: binding, snapshot: before.snapshot,
+    options: { groups: [], notify_self: false, destination_config: { kind: 'personal' } },
+  }));
+  expect(screen.getByRole('button', { name: '创建文档' })).toBeDisabled();
+  await expandRecipients();
+  expect(screen.getByRole('checkbox', { name: '发给本人' })).toBeDisabled();
+  expect(screen.getByRole('checkbox', { name: '发给本人' })).not.toBeChecked();
+  expect(screen.queryByRole('checkbox', { name: '旧连接群' })).toBeNull();
+  expect(preflightFeishuPublish).not.toHaveBeenCalled();
+  expect(publishToFeishu).not.toHaveBeenCalled();
+});
+
+it.each(['a', 'b'])('returning from a binding gap to %s requires fresh confirmation and never revives a late group result', async returning => {
+  const status = await feishuStatus();
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: 'a'.repeat(64), groups: ['oc_old'] });
+  let finish!: (value: Awaited<ReturnType<typeof feishuGroups>>) => void;
+  vi.mocked(feishuGroups).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  openPanel(); await verifyDestination();
+  await waitFor(() => expect(feishuGroups).toHaveBeenCalledTimes(1));
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: undefined });
+  fireEvent.click(screen.getByRole('button', { name: createLabel }));
+  const reconnect = await screen.findByRole('button', { name: '重新核验飞书连接' });
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: returning.repeat(64), groups: ['oc_old'] });
+  fireEvent.click(reconnect);
+  await waitFor(() => expect(screen.queryByRole('button', { name: '重新核验飞书连接' })).toBeNull());
+  await act(async () => finish([{ chat_id: 'oc_old', name: '回环后迟到旧群' }]));
+  await verifyDestination();
+  const { readPublishDraft } = await import('@/lib/feishuPublishReceipt');
+  expect(readPublishDraft('owner', 'meeting-a')).toMatchObject({ connectionBindingHash: returning.repeat(64), options: { groups: [], notify_self: false } });
+  expect(screen.queryByRole('checkbox', { name: '回环后迟到旧群' })).toBeNull();
+  expect(screen.getByRole('checkbox', { name: '发给本人' })).not.toBeChecked();
+  expect(publishToFeishu).not.toHaveBeenCalled();
+  vi.mocked(publishToFeishu).mockRejectedValue(new Error('新的明确提交结果未知'));
+  fireEvent.click(screen.getByRole('button', { name: '创建文档' }));
+  await screen.findByText('新的明确提交结果未知');
+  expect(publishToFeishu).toHaveBeenCalledTimes(1);
+  expect(vi.mocked(publishToFeishu).mock.calls[0][4]).toMatchObject({ groups: [], notify_self: false });
+});
+
+it.each([false, true])('a binding interruption invalidates old contact searches even after A returns (typed outage=%s)', async unavailable => {
+  await enableContacts(); const status = await feishuStatus(), binding = 'a'.repeat(64);
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: binding });
+  let finish!: (value: Awaited<ReturnType<typeof feishuContacts>>) => void;
+  vi.mocked(feishuContacts).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }));
+  openPanel(); await verifyDestination();
+  fireEvent.change(screen.getByRole('textbox', { name: '搜索联系人' }), { target: { value: '旧搜索' } });
+  fireEvent.click(screen.getByRole('button', { name: '搜索联系人' }));
+  await waitFor(() => expect(feishuContacts).toHaveBeenCalledTimes(1));
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: undefined,
+    ...(unavailable ? { connected: false, connection_state: 'service_unavailable' } : {}) });
+  fireEvent.click(screen.getByRole('button', { name: createLabel }));
+  const reconnect = await screen.findByRole('button', { name: '重新核验飞书连接' });
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: binding });
+  fireEvent.click(reconnect);
+  await waitFor(() => expect(screen.queryByRole('button', { name: '重新核验飞书连接' })).toBeNull());
+  await act(async () => finish({ items: [{ ...candidate('ou_old'), name: '回环后旧联系人' }], has_more: false, page_token: '', selection_expires_in: 900 }));
+  await expandRecipients();
+  expect(screen.queryByRole('checkbox', { name: '回环后旧联系人' })).toBeNull();
+  expect(publishToFeishu).not.toHaveBeenCalled();
+});
+
+it('a typed outage preserves draft choices but cannot accept a pending old group result after recovery', async () => {
+  const status = await feishuStatus(), binding = 'a'.repeat(64);
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: binding, groups: ['oc_old'] });
+  let finish!: (value: Awaited<ReturnType<typeof feishuGroups>>) => void;
+  vi.mocked(feishuGroups).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; }))
+    .mockResolvedValue([{ chat_id: 'oc_current', name: '恢复后重新读取群' }]);
+  openPanel(); await verifyDestination();
+  const { readPublishDraft } = await import('@/lib/feishuPublishReceipt');
+  const before = readPublishDraft('owner', 'meeting-a');
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connected: false, connection_state: 'service_unavailable', connection_binding_hash: undefined });
+  fireEvent.click(screen.getByRole('button', { name: createLabel }));
+  const reconnect = await screen.findByRole('button', { name: '重新核验飞书连接' });
+  expect(readPublishDraft('owner', 'meeting-a')).toEqual(before);
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: binding });
+  fireEvent.click(reconnect);
+  await screen.findByRole('checkbox', { name: '恢复后重新读取群' });
+  await act(async () => finish([{ chat_id: 'oc_old', name: '暂停前迟到群' }]));
+  expect(screen.queryByRole('checkbox', { name: '暂停前迟到群' })).toBeNull();
+  expect(readPublishDraft('owner', 'meeting-a')).toEqual(before);
+  expect(publishToFeishu).not.toHaveBeenCalled();
+});
+
+it('a lost binding survives unmount without degrading to initial legacy capability', async () => {
+  const status = await feishuStatus();
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: 'a'.repeat(64), groups: ['oc_old'] });
+  const view = openPanel(); await verifyDestination();
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: undefined });
+  fireEvent.click(screen.getByRole('button', { name: createLabel }));
+  await screen.findByRole('button', { name: '重新核验飞书连接' });
+  view.unmount(); openPanel();
+  await screen.findByRole('button', { name: '重新核验飞书连接' });
+  expect(screen.getByRole('button', { name: '创建文档' })).toBeDisabled();
+  expect(publishToFeishu).not.toHaveBeenCalled();
+});
+
+it('initial legacy status still permits one explicitly confirmed manual publication without inventing a binding', async () => {
+  vi.mocked(publishToFeishu).mockRejectedValue(new Error('旧协议明确提交结果未知'));
+  openPanel(); await verifyDestination();
+  fireEvent.click(screen.getByRole('button', { name: createLabel }));
+  await screen.findByText('旧协议明确提交结果未知');
+  expect(publishToFeishu).toHaveBeenCalledTimes(1);
+  const { readPublishDraft } = await import('@/lib/feishuPublishReceipt');
+  expect(readPublishDraft('owner', 'meeting-a')).not.toHaveProperty('connectionBindingHash');
+});
+
+it('an account A-B-A transition cannot accept the original A group request', async () => {
+  const status = await feishuStatus();
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, connection_binding_hash: 'a'.repeat(64), groups: ['oc_old'] });
+  let finish!: (value: Awaited<ReturnType<typeof feishuGroups>>) => void;
+  vi.mocked(feishuGroups).mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue([]);
+  const view = openPanel(); await verifyDestination();
+  await waitFor(() => expect(feishuGroups).toHaveBeenCalledTimes(1));
+  localStorage.setItem('vinote:connector-plugins:v1:other', JSON.stringify({ version: 1, feishu: { installed: true, enabled: true } }));
+  changeOwner('other');
+  view.rerender(<MemoryRouter><FeishuDelivery noteId="meeting-a" title="另一个账号" content="另一正文" /></MemoryRouter>);
+  await waitFor(() => expect(deliveryStatus).toHaveBeenCalledTimes(2));
+  changeOwner('owner');
+  view.rerender(<MemoryRouter><FeishuDelivery noteId="meeting-a" title="会议" content="# 纪要" /></MemoryRouter>);
+  await waitFor(() => expect(deliveryStatus).toHaveBeenCalledTimes(3));
+  await act(async () => finish([{ chat_id: 'oc_old', name: '账号回环迟到群' }]));
+  expect(screen.queryByRole('checkbox', { name: '账号回环迟到群' })).toBeNull();
+  expect(publishToFeishu).not.toHaveBeenCalled();
+  expect(retryDelivery).not.toHaveBeenCalled();
 });

@@ -428,3 +428,7 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 连接绑定候选接线后，实际账号位置选择器不再显示未核验警告，收藏按钮启用；主线添加个人云文档本机收藏、取消位置试选后重开仍保留，截图feishu-location-favorite-reopen-native.png。没有改变发布目的地/自动开关或创建文档/通知。该正例不证明连接变代安全：独审仍发现binding丢失回环P2，功能写集继续修复，暂不提交或合并。
 
 全量前端136文件/1617测试67.64秒通过，生产构建11.70秒通过；包含此布局及当时功能候选，不能抵消独立P2。这里只提交已独审/原生通过的单文件布局，不把未完成的功能校验一并放行。
+
+### 飞书位置绑定与手动交付的变代修复闭环
+
+状态投影已有owner/connection/sender/app/tenant绑定的用途域hash（非授权凭据，不新造连接），两处host接入同scope位置缓存。手动未提交草稿记scope提示，首次legacy无hash显式手动能力保留；已核验binding丢失立即阻断旧选择/旧异步请求，回到A也不恢复旧operation。typed暂不可用保留草稿但使旧异步世代失效，accepted/unknown仅查原receipt不重发。原独审6fail历史保留；新增delta13＋既有10正反例通过，106定向组件、44后端、TS通过，五文件最终SHA匹配。布局独审与原生收藏重开正例已另记；完整FE回归后续记录，不把先前1617算作增量最终源。

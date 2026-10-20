@@ -159,9 +159,13 @@ class FeishuService:
             can_write = bool(scopes & {"docx:document", "docx:document:write_only"})
             can_create_doc = bool(scopes & {"docx:document", "docx:document:create"}) and can_write
             destination = preferences.get("destination_config", {"kind": "personal"})
-            saved_policy = auto_policy.saved(preferences, auto_policy.binding(owner, row, preferences, self.config))
+            current_binding = auto_policy.binding(owner, row, preferences, self.config)
+            saved_policy = auto_policy.saved(preferences, current_binding)
             enabled = bool(connected and saved_policy and saved_policy['enabled'] and preferences.get('auto_publish') is True)
             return {"configured": self.configured(), "setup": self.setup_status(),
+                    **({"connection_binding_hash": auto_policy.fingerprint({
+                        "purpose": "feishu-destination-cache/v1", "binding": current_binding})}
+                       if connected and current_binding and all(value.strip() for value in current_binding.values()) else {}),
                     "automatic_delivery_protocol": auto_policy.PROTOCOL,
                     "automatic_delivery": {"policy_id": saved_policy['id'] if saved_policy else None,
                         "enabled": enabled, "enabled_at": saved_policy['enabled_at'] if saved_policy else None},

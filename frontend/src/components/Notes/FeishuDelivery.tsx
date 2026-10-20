@@ -74,6 +74,12 @@ const recipientLabels: Record<string, string> = {
   unknown: "发送结果未知，需外部核验",
   permission_unknown: "阅读权限结果未知",
 };
+// A UI scope hint, never authorization to publish or replay an operation.
+type BoundPublishDraft = PublishDraft & { connectionBindingHash?: string };
+const destinationBinding = (status: FeishuStatus | null) =>
+  status?.connected && !status.expired && !feishuVerificationUnavailable(status)
+    && typeof status.connection_binding_hash === 'string' && /^[a-f0-9]{64}$/.test(status.connection_binding_hash)
+    ? status.connection_binding_hash : undefined;
 
 export function FeishuDelivery({
   noteId,
@@ -126,6 +132,8 @@ export function FeishuDelivery({
   const [groupsLoaded, setGroupsLoaded] = useState(false);
   const connectionSequence = useRef(0), groupSequence = useRef(0), contactSequence = useRef(0);
   const connectionInitialized = useRef(false);
+  const connectionIdentity = useRef<{ owner: string; binding: string; lost?: boolean }>();
+  const connectionEpoch = useRef(0);
   const groupLock = useRef(false);
   const groupAttempted = useRef(false);
   const [contactQuery, setContactQuery] = useState('');
@@ -152,9 +160,9 @@ export function FeishuDelivery({
   const [retryReads, setRetryReads] = useState(0);
   const retryReadAbort = useRef<AbortController | null>(null);
   const sequence = useRef(0);
-  const [receipt, setReceipt] = useState<PublishDraft | null>(null);
-  const receiptRef = useRef<PublishDraft | null>(null);
-  const remember = (value: PublishDraft | null) => { receiptRef.current = value; setReceipt(value); };
+  const [receipt, setReceipt] = useState<BoundPublishDraft | null>(null);
+  const receiptRef = useRef<BoundPublishDraft | null>(null);
+  const remember = (value: BoundPublishDraft | null) => { receiptRef.current = value; setReceipt(value); };
   const frozen = !!receipt && receipt.state !== "draft";
   const running = job && ["queued", "processing"].includes(job.status);
   const verificationUnavailable = feishuVerificationUnavailable(preferences);
@@ -171,7 +179,9 @@ export function FeishuDelivery({
     ...selectedContacts.map(contact => contact.name?.trim() || '联系人姓名待核验'),
   ].join('、');
   const draftOptions = (): PublishDraft['options'] => ({ destination_config: destination, permission_policy: destination.kind === 'personal' ? 'private' : 'inherit', notify_self: notifySelf, groups: selectedGroups, ...(selectedContacts.length ? { contacts: selectedContacts } : {}), ...(grantingRecipients ? { recipient_access_policy: 'grant_view_and_notify' as const } : {}) });
-  const selectionDisabled = busy || frozen || uncertain || !!running || verificationUnavailable || !preferences?.connected || preferences.expired;
+  const connectionKey = destinationBinding(preferences);
+  const bindingLost = connectionIdentity.current?.owner === owner && connectionIdentity.current?.lost === true;
+  const selectionDisabled = busy || frozen || uncertain || !!running || verificationUnavailable || bindingLost || !preferences?.connected || preferences.expired;
   const checkedTarget = !!checked?.can_attempt_create && checked.kind === destination.kind &&
     (destination.kind !== 'folder' || checked.kind === 'folder' && checked.folder_token === destination.folder_token) &&
     (destination.kind !== 'wiki' || checked.kind === 'wiki' && checked.space_id === destination.space_id && checked.node_token === destination.node_token);
@@ -204,6 +214,36 @@ export function FeishuDelivery({
     } catch (cause) { if (request === groupSequence.current) setGroupError((cause as Error).message); }
     finally { if (request === groupSequence.current) { groupLock.current = false; setGroupsLoading(false); } }
   };
+  const acceptConnection = (status: FeishuStatus) => {
+    const binding = destinationBinding(status);
+    const saved = receiptRef.current;
+    const previous = connectionIdentity.current?.owner === owner ? connectionIdentity.current
+      : owner && saved?.connectionBindingHash && /^[a-f0-9]{64}$/.test(saved.connectionBindingHash)
+        ? { owner, binding: saved.connectionBindingHash } : undefined;
+    const unavailable = feishuVerificationUnavailable(status);
+    const changed = binding ? !!(previous && (previous.binding !== binding || previous.lost)
+      || saved?.state === 'draft' && saved.connectionBindingHash !== binding)
+      : !!previous && (!unavailable || !!previous.lost);
+    if (binding && owner) connectionIdentity.current = { owner, binding };
+    else if (previous) connectionIdentity.current = { ...previous, lost: changed };
+    setPreferences(status);
+    if (changed || !binding && previous) {
+      // A -> unavailable/missing -> A must not revive work started before the gap.
+      connectionEpoch.current++;
+      groupSequence.current++; contactSequence.current++;
+      groupLock.current = false; setGroups([]); setGroupsLoaded(false); setGroupsLoading(false); setGroupError('');
+      setContactQuery(''); setContactItems([]); setContactPage(''); setContactHasMore(false);
+      setContactLoaded(false); setContactLoading(false); setContactError(''); setChecked(null);
+      // Never replace accepted/unknown receipts or their frozen selections.
+      if (changed && (!saved || saved.state === 'draft')) {
+        remember(null); setDestination({ kind: 'personal' }); setNotifySelf(false);
+        setSelectedGroups([]); setSelectedContacts([]); setShowRecipients(false);
+        connectionInitialized.current = true;
+        setError('飞书连接已变化或原草稿未绑定当前连接，已清除未提交的位置与通知选择；请重新核验后确认。');
+      }
+    }
+    return changed;
+  };
   const loadConnection = async () => {
     if (!owner) return;
     const request = ++connectionSequence.current;
@@ -212,7 +252,7 @@ export function FeishuDelivery({
       const guard = publishScope(owner);
       const status = await feishuStatus(); guard();
       if (request !== connectionSequence.current) return;
-      setPreferences(status);
+      const changed = acceptConnection(status);
       if (!connectionInitialized.current) {
         const saved = receiptRef.current;
         setNotifySelf(saved?.options.notify_self ?? status.notify_self);
@@ -222,7 +262,7 @@ export function FeishuDelivery({
         setShowRecipients(savedRecipients(status));
         connectionInitialized.current = true;
       }
-      if (status.connected && !status.expired && !feishuVerificationUnavailable(status) && (showRecipients || savedRecipients(status))) void loadGroups();
+      if (!changed && status.connected && !status.expired && !feishuVerificationUnavailable(status) && (showRecipients || savedRecipients(status))) void loadGroups();
     } catch (cause) { if (request === connectionSequence.current) setConnectionError((cause as Error).message); }
     finally { if (request === connectionSequence.current) setConnectionLoading(false); }
   };
@@ -321,11 +361,12 @@ export function FeishuDelivery({
     try {
       const options = draftOptions();
       const draft = receiptRef.current || newPublishDraft(owner, noteId, snapshot, options);
-      const next = { ...draft, options };
+      const binding = connectionKey || (connectionIdentity.current?.owner === owner ? connectionIdentity.current.binding : undefined);
+      const next = { ...draft, options, ...(binding ? { connectionBindingHash: binding } : {}) };
       persistPublishDraft(next);
       remember(next);
     } catch (cause) { setError((cause as Error).message); setUncertain(true); }
-  }, [open, ready, owner, preferences, destination, notifySelf, selectedGroups, selectedContacts, frozen, busy]);
+  }, [open, ready, owner, preferences, destination, notifySelf, selectedGroups, selectedContacts, frozen, busy, connectionKey]);
   useEffect(() => {
     if (!open || busy || loading || !running || retryPending) return;
     // Schedule after the previous read completes; never overlap polls.
@@ -347,11 +388,18 @@ export function FeishuDelivery({
     let attempt: PublishAttempt | undefined;
     try {
       if (!owner) throw new Error('请重新登录');
-      const guard = publishScope(owner);
+      const scope = publishScope(owner), connectionRead = connectionSequence.current, epoch = connectionEpoch.current;
+      const binding = connectionIdentity.current?.binding;
+      const guard = () => {
+        scope();
+        if (connectionRead !== connectionSequence.current || epoch !== connectionEpoch.current || binding !== connectionIdentity.current?.binding)
+          throw new Error('飞书连接正在变化，请重新核验；原交付回执保留。');
+      };
       const service = await feishuStatus();
       guard();
       if (request !== sequence.current) return;
       if (service.publish_receipt_protocol !== 1) throw new Error('飞书服务需要升级发布回执协议；尚未提交，原草稿保留');
+      if (acceptConnection(service)) throw new Error('飞书账号或连接已变化，请重新核验并确认；原交付回执保留。');
       if (feishuVerificationUnavailable(service)) throw new Error(feishuVerificationMessage);
       if (!service.configured || !service.connected || service.expired) throw new Error('请先连接飞书，再创建文档');
       if (!retry && selectedContacts.length && (service.contact_selection_protocol !== 1 || service.capabilities?.contact_search !== true)) throw new Error('飞书服务尚未支持当前联系人选择，尚未提交；原选择保留');
@@ -368,9 +416,9 @@ export function FeishuDelivery({
         if (intent && intent.state !== 'draft') throw new Error('请明确准备新的发布草稿；原交付保留');
         const options = draftOptions();
         intent ??= newPublishDraft(owner, noteId, snapshot, options);
-        intent = { ...intent, options, state: 'draft' };
+        intent = { ...intent, options, state: 'draft', ...(connectionKey ? { connectionBindingHash: connectionKey } : {}) };
         persistPublishDraft(intent);
-        attempt = beginPublishAttempt(intent, () => { if (request !== sequence.current) throw new Error('发布面板已变化，原草稿保留'); });
+        attempt = beginPublishAttempt(intent, () => { guard(); if (request !== sequence.current) throw new Error('发布面板已变化，原草稿保留'); });
         intent = { ...intent, state: 'unknown' };
         persistPublishDraft(intent);
         remember(intent);
@@ -379,6 +427,7 @@ export function FeishuDelivery({
         setRetryPending(beginRetryReceipt(owner, noteId, job.id));
         setRetryReads(12);
       }
+      guard();
       dispatched = true;
       const next =
         retry && job
@@ -506,12 +555,12 @@ export function FeishuDelivery({
               </AlertDescription>
             </Alert>
           )}
-          {preferences && (verificationUnavailable || !preferences.connected || preferences.expired) && (
+          {preferences && (verificationUnavailable || bindingLost || !preferences.connected || preferences.expired) && (
             <Alert>
               <AlertDescription>
-                {verificationUnavailable ? feishuVerificationMessage : "需连接或重新授权飞书。当前发布内容保留，完成授权后重新打开发布面板核验。"}
+                {verificationUnavailable ? feishuVerificationMessage : bindingLost ? '连接身份尚未核验，原发布回执保留；请重新核验后确认位置与通知对象。' : "需连接或重新授权飞书。当前发布内容保留，完成授权后重新打开发布面板核验。"}
               </AlertDescription>
-              {verificationUnavailable && <Button variant="outline" disabled={busy || loading} onClick={() => void loadConnection()}>重新核验飞书连接</Button>}
+              {(verificationUnavailable || bindingLost) && <Button variant="outline" disabled={busy || loading} onClick={() => void loadConnection()}>重新核验飞书连接</Button>}
             </Alert>
           )}
           {job && (
@@ -584,7 +633,7 @@ export function FeishuDelivery({
                   {recipient.status === "failed" && !permissionUnknown(recipient) && (
                     <Button
                       variant="outline"
-                      disabled={verificationUnavailable || busy || loading || uncertain || permissionRecovery || hasUnknownMessage || !!retryPending || preferences?.publish_receipt_protocol !== 1}
+                      disabled={verificationUnavailable || bindingLost || busy || loading || uncertain || permissionRecovery || hasUnknownMessage || !!retryPending || preferences?.publish_receipt_protocol !== 1}
                       onClick={() => void act(true, [id])}
                     >
                       仅重试此失败接收人
@@ -623,18 +672,13 @@ export function FeishuDelivery({
           </section>
           <section className="flex flex-col gap-3 border-b pb-4">
             <FeishuDestinationPicker
-              key={`${owner}:${noteId}`}
+              key={JSON.stringify([owner, noteId, connectionKey])}
+              connectionKey={connectionKey}
               autoCheck
               value={destination}
               onChange={setDestination}
               capabilities={verificationUnavailable ? undefined : preferences?.capabilities}
-              disabled={
-                verificationUnavailable || busy ||
-                frozen || uncertain ||
-                !!running ||
-                !preferences?.connected ||
-                preferences.expired
-              }
+              disabled={selectionDisabled}
               onChecked={setChecked}
             />
             <p className="text-xs text-muted-foreground">
@@ -648,13 +692,7 @@ export function FeishuDelivery({
           }}>
           <summary className="cursor-pointer break-words text-sm font-medium">{recipientSummary ? `通知 · ${recipientSummary}` : '通知（可选）'}</summary>
           <FieldSet className="mt-4" hidden={!showRecipients}
-            disabled={
-              verificationUnavailable || busy ||
-              frozen || uncertain ||
-              !!running ||
-              !preferences?.connected ||
-              preferences.expired
-            }
+            disabled={selectionDisabled}
           >
             <FieldLegend className="sr-only">通知收件人</FieldLegend>
             <p className="text-sm text-muted-foreground">{frozen && receipt?.options.recipient_access_policy !== 'grant_view_and_notify'
@@ -779,7 +817,7 @@ export function FeishuDelivery({
             <Button
               variant="outline"
               disabled={
-                busy ||
+                bindingLost || busy ||
                 loading ||
                 uncertain ||
                 permissionRecovery ||
@@ -816,7 +854,7 @@ export function FeishuDelivery({
           <DialogFooter className="shrink-0 border-t pt-4">
           {frozen && job?.status === 'completed' && job.document_url ? <Button onClick={() => void openExternal(job.document_url).catch(cause => setError((cause as Error).message))}>打开飞书文档</Button> : <Button
             disabled={
-              verificationUnavailable || busy ||
+              verificationUnavailable || bindingLost || busy ||
               loading ||
               !ready ||
               !preferences?.configured ||
