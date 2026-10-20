@@ -448,6 +448,51 @@ def test_actual_service_format_depth_hook_produces_readable_child_labels(setup, 
     assert len(setup.service.calls) == 1  # Synthetic parent adapter, no CLI/network.
 
 
+@pytest.mark.parametrize('damage', [
+    'missing', 'malformed', 'foreign_task', 'wrong_protocol', 'foreign_owner',
+    'missing_form', 'missing_depth', 'invalid_form', 'invalid_depth', 'non_string_form',
+    'protocol_true', 'protocol_false', 'protocol_float', 'protocol_string',
+])
+def test_actual_grouping_hook_never_guesses_missing_or_unverified_presentation(setup, monkeypatch, tmp_path, damage):
+    from app.db_models import NoteDB
+    from app.services import feishu_service, task_artifact_service
+    artifacts = task_artifact_service.TaskArtifactService(tmp_path / 'artifacts')
+    folder = artifacts.create_task_dir(TASK)
+    (folder / 'recording_owner').write_text('another-owner' if damage == 'foreign_owner' else OWNER,
+                                          encoding='utf-8')
+    (folder / '.task_id').write_text(TASK, encoding='utf-8')
+    payload = dict(protocol=1, task_id=TASK, presentation='html', content_depth='concise')
+    if damage == 'foreign_task': payload['task_id'] = str(uuid.uuid4())
+    if damage == 'wrong_protocol': payload['protocol'] = 9
+    invalid_protocols = dict(protocol_true=True, protocol_false=False, protocol_float=1.0, protocol_string='1')
+    if damage in invalid_protocols: payload['protocol'] = invalid_protocols[damage]
+    if damage == 'missing_form': payload.pop('presentation')
+    if damage == 'missing_depth': payload.pop('content_depth')
+    if damage == 'invalid_form': payload['presentation'] = 'guessed'
+    if damage == 'invalid_depth': payload['content_depth'] = None
+    if damage == 'non_string_form': payload['presentation'] = []
+    if damage != 'missing':
+        (folder / 'summary_presentation.json').write_text(
+            '{' if damage == 'malformed' else json.dumps(payload), encoding='utf-8')
+    job = setup.job()
+    with setup.sessions() as db:
+        db.add(NoteDB(id=job.note_key, created_by=OWNER, task_id=TASK, title=job.title,
+                      content=job.content, scope='personal', status='done', source_type='meeting_video'))
+    monkeypatch.setattr(feishu_service, 'session_scope', setup.sessions)
+    monkeypatch.setattr(task_artifact_service, 'TaskArtifactService', lambda: artifacts)
+    monkeypatch.setattr(wiki, 'context_for_saved_note', lambda owner, job, **metadata:
+                        setup.service.context.model_copy(update=metadata))
+    monkeypatch.setattr(setup.service, 'meeting_wiki_context', lambda owner, job:
+                        FeishuService.meeting_wiki_context(setup.service, owner, job))
+    with pytest.raises(FeishuError) as caught:
+        wiki.grouped_creation(OWNER, job, ROOT, setup.service)
+    assert caught.value.code == 'meeting_context_unverified'
+    assert setup.service.calls == []
+    with setup.sessions() as db:
+        assert db.query(FeishuMeetingWikiContainerDB).count() == 0
+        assert db.query(FeishuMeetingWikiChildDB).count() == 0
+
+
 @pytest.mark.parametrize('form,label', list(wiki.FORMAT_LABELS.items()))
 def test_legacy_single_format_labels_remain_compatible(setup, form, label):
     setup.service.context = setup.service.context.model_copy(update={'summary_format': form})

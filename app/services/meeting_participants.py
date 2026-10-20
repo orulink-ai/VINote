@@ -613,6 +613,9 @@ def resolve_saved_meeting(service, owner, note_key, *, title, content):
         result["confirmation_status"] = "stale"
         result["unresolved"].append(_unresolved("attendance_confirmation_changed"))
         return result
+    # Internal acceptance scope, never a directory proof or a public receipt.
+    # The caller must lock/recheck this confirmation before creating a delivery.
+    result["_confirmation_binding_hash"] = feishu_object_hotwords.binding_hash(binding)
     if result["contacts"]:
         confirmed_ids = {item["open_id"] for item in result["contacts"]}
         resolved_candidates = set()

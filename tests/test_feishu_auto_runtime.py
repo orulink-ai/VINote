@@ -82,6 +82,23 @@ def test_unconfirmed_attendees_wait_without_repeated_submission(queue, monkeypat
 
 
 def test_attendee_confirmation_resumes_only_original_waiting_intent(queue, monkeypatch):
+    from app.services import meeting_participants
+    from app.services.feishu_service import FeishuService
+    binding = dict(owner='alice', connection_id='synthetic-connection', sender_open_id='ou_sender',
+                   app_id='cli_synthetic', tenant_key='synthetic-tenant')
+    service = SimpleNamespace(contact_binding=lambda owner: binding)
+    monkeypatch.setattr(FeishuService, 'for_owner', lambda self, owner: service)
+    view = dict(can_confirm=True, canonical_task_id=str(uuid.uuid4()), evidence_revision='e' * 64,
+                confirmation={'status': 'confirmed', 'revision': 1})
+
+    def confirmed(current_service, owner, note):
+        assert current_service is service and owner == 'alice' and note == queue.note
+        return view
+
+    # Resume requires a verified same-meeting assertion; an authenticated note
+    # alone is not confirmation. Keep the test independent of device CLI state.
+    monkeypatch.setattr(meeting_participants, 'get_meeting_participants', confirmed)
+    monkeypatch.setattr(runtime, 'wake', lambda: None)
     with queue.scope() as db:
         db.get(FeishuAutoOutboxDB, queue.operation).status = 'waiting_participants'
     original = row(queue).payload
@@ -89,10 +106,13 @@ def test_attendee_confirmation_resumes_only_original_waiting_intent(queue, monke
     assert row(queue).status == 'queued'
     assert row(queue).payload == original
     assert row(queue).id == queue.operation
-    monkeypatch.setattr(runtime, '_request', lambda r, **kw: receipt(queue))
+    submitted = []
+    monkeypatch.setattr(runtime, '_request', lambda r, **kw: submitted.append(r.id) or receipt(queue))
     runtime.run_once()
     runtime.resume_participants('alice', queue.note)
+    runtime.run_once()
     assert row(queue).status == 'accepted'
+    assert submitted == [queue.operation]
 
 
 @pytest.mark.parametrize('state', ['unknown', 'submitting', 'accepted', 'failed', 'cancelled'])

@@ -1043,6 +1043,26 @@ class FeishuService:
             if previous:
                 receipts.bind_operation(db, owner, operation_id, request_hash, previous)
                 return {**self.serialize(previous, db=db), **({"operation_id": operation_id, "_dispatch_required": False} if operation_id else {})}
+            if automatic_policy_id is not None and saved_automatic.get('notify_participants'):
+                from app.models.meeting_participants import MeetingParticipantConfirmationDB
+                from app.services.feishu_object_hotwords import binding_hash
+
+                view = attendance if isinstance(attendance, dict) else {}
+                current_binding = binding_hash(dict(owner=owner,
+                    connection_id=preferences.get('connection_id'), sender_open_id=account.open_id,
+                    app_id=self.config.feishu_app_id, tenant_key=self.config.feishu_tenant_key))
+                # SQLite's writer lock above and this PostgreSQL row lock hold
+                # through the delivery/operation commit, including cleared lists.
+                confirmation = db.scalar(select(MeetingParticipantConfirmationDB).where(
+                    MeetingParticipantConfirmationDB.owner == owner,
+                    MeetingParticipantConfirmationDB.task_id == view.get('canonical_task_id'),
+                    MeetingParticipantConfirmationDB.binding_hash == current_binding).with_for_update())
+                if (view.get('_confirmation_binding_hash') != current_binding
+                        or type(view.get('confirmation_revision')) is not int
+                        or confirmation is None or confirmation.revision != view['confirmation_revision']
+                        or confirmation.evidence_revision != view.get('evidence_revision')):
+                    raise FeishuError("本会议参会人确认已变化，请重新核验；尚未创建文档或通知", 409,
+                                      code="attendance_confirmation_required")
             targets = ([account.open_id] if notify_self else []) + groups + [item["open_id"] for item in contacts or []]
             if not targets and not enhanced:
                 raise FeishuError("请先设置通知对象")
@@ -1157,10 +1177,13 @@ class FeishuService:
             if not note or note.created_by != owner or not note.task_id:
                 raise FeishuError("缺少已保存的会议来源，未建立知识库目录", 409, code="meeting_source_unverified")
             task = note.task_id
-        presentation = read_presentation(TaskArtifactService(), owner, task) or {}
-        format_name = presentation.get('presentation', 'text')
-        depth = presentation.get('content_depth', 'detailed')
-        if format_name not in {'text', 'illustrated', 'html', 'comic', 'infographic'} or depth not in {'brief', 'concise', 'detailed'}:
+        presentation = read_presentation(TaskArtifactService(), owner, task)
+        format_name = presentation.get('presentation') if isinstance(presentation, dict) else None
+        depth = presentation.get('content_depth') if isinstance(presentation, dict) else None
+        if (not isinstance(presentation, dict) or type(presentation.get('protocol')) is not int
+                or presentation['protocol'] != 1
+                or not isinstance(format_name, str) or format_name not in {'text', 'illustrated', 'html', 'comic', 'infographic'}
+                or not isinstance(depth, str) or depth not in {'brief', 'concise', 'detailed'}):
             raise FeishuError("纪要形式尚不能核验", 409, code="meeting_context_unverified")
         # The canonical capture clock names the meeting container. Generated
         # content titles never establish its identity or recording time.

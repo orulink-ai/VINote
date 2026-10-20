@@ -3,6 +3,7 @@ import json
 import sys
 from types import SimpleNamespace
 from unittest.mock import Mock
+from uuid import uuid4
 
 import pytest
 
@@ -53,16 +54,27 @@ def test_grouping_scope_is_frozen_in_accepted_delivery(contact_service, monkeypa
 
 
 def test_participant_resolution_runs_once_and_freezes_only_public_evidence(contact_service, monkeypatch):
+    from app.models.meeting_participants import MeetingParticipantConfirmationDB
+    from app.services.feishu_object_hotwords import binding_hash
+    monkeypatch.setattr(module.settings, 'feishu_app_id', 'cli_review_test')
     chosen = enable(contact_service, monkeypatch, notify_participants=True)
+    canonical = str(uuid4())
+    fingerprint = binding_hash(contact_service.contact_binding('a'))
+    with module.session_scope() as db:
+        db.add(MeetingParticipantConfirmationDB(owner='a', task_id=canonical, binding_hash=fingerprint,
+            note_key='synthetic-new-meeting', evidence_revision='e' * 64, revision=1,
+            participants_json='[]', confirmed_at=1))
     resolver = Mock(return_value={'contacts': [], 'candidates': [], 'confirmation_status': 'cleared',
-        'unresolved': [{'reason': 'attendance_identity_unverified'}], 'evidence_revision': 'frozen'})
+        'unresolved': [{'reason': 'attendance_identity_unverified'}], 'evidence_revision': 'e' * 64,
+        'canonical_task_id': canonical, 'confirmation_revision': 1, '_confirmation_binding_hash': fingerprint})
     monkeypatch.setitem(sys.modules, 'app.services.meeting_participants', SimpleNamespace(resolve_saved_meeting=resolver))
     accepted = submit(contact_service, policy_id(chosen))
     resolver.assert_called_once()
     with module.session_scope() as db:
         snapshot = json.loads(db.get(FeishuDeliveryDestinationDB, accepted['id']).snapshot)
     assert 'contacts' not in snapshot['meeting_attendance']
-    assert snapshot['meeting_attendance']['evidence_revision'] == 'frozen'
+    assert snapshot['meeting_attendance']['evidence_revision'] == 'e' * 64
+    assert '_confirmation_binding_hash' not in snapshot['meeting_attendance']
     contact_service.delivery_by_operation('a', accepted['operation_id'])
     assert resolver.call_count == 1
 
