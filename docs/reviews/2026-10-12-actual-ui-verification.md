@@ -275,3 +275,6 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 实际弹窗保持“复用已有转写”和“沿用所选纪要模型”默认，显示原版本 codex/gpt-6-luna；详略和五种呈现形式可见。未点击确认生成、未提交新任务或ASR。
 - 此次实际暴露后续版本 bug：HTML 新子任务的视频证据未能沿用，GET 返回 summary_visual_evidence_unavailable，外层提供 fresh capability 导致 reuse=false。保留原件和126076字节转写。主线正在修复来源绑定；未改为自动 fresh 或读取旧纪要正文。
 - UI补充复用不可用原因及“不会自动重新识别”，避免只有disabled确认按钮。组件与详情组合83 passed，TypeScript通过；不据此宣称上述后端关联bug已修复。
+
+- 后续来源修复候选实读：A原父任务、B原父任务和新HTML1173均返回reuse.available=true、原Luna verified=true；旧转写与manifest未迁移或覆盖。原生新HTML再次打开弹窗，复用选项及确认按钮均可用；未点击确认提交。
+- 1280×822原生弹窗曾将“取消”放到窗口范围外。改为原组件独立滚动选项区，DialogHeader与DialogFooter保留可见；不修改共享Dialog或全局层级。实际截图确认底部“取消/确认生成新版本”均完整可见，点击取消完成，不调用模型。组件47项通过，原入口及原因测试保留；前端生产构建通过（既有大chunk/Browserslist提示）。

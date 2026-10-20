@@ -5,7 +5,7 @@ import { useAuthStore } from '@/stores/authStore'
 import { useAppModeStore } from '@/stores/appModeStore'
 import type { WorkspaceSelection } from '@/stores/teamStore'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Field, FieldGroup, FieldLabel, FieldDescription } from '@/components/ui/field'
 import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { NativeSelect } from '@/components/ui/native-select'
@@ -203,7 +203,8 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
     </div>}
     {error && !confirmation && <p role="alert" className="text-sm text-destructive">{error}</p>}
     <Dialog open={!!confirmation} onOpenChange={open => { if (!open && !busy) setConfirmation(null) }}>
-      <DialogContent className="max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] overflow-y-auto overscroll-contain" closeLabel="关闭" onCloseAutoFocus={restoreOpener}><DialogHeader><DialogTitle>确认生成新版本</DialogTitle><DialogDescription>{asrMode === 'reuse' ? '复用原始 ASR 转写、独立说话人及可用画面证据，不以上一版纪要为输入，不重新转录。' : '明确重新识别原录制并生成纪要，将额外使用 ASR 与 LLM 额度。'}新纪要独立保存，已有记录和原文件保留；总结可能产生模型费用。</DialogDescription></DialogHeader>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] flex-col !overflow-hidden" closeLabel="关闭" onCloseAutoFocus={restoreOpener}><DialogHeader className="shrink-0 pr-6"><DialogTitle>确认生成新版本</DialogTitle><DialogDescription>{asrMode === 'reuse' ? '复用原始 ASR 转写、独立说话人及可用画面证据，不以上一版纪要为输入，不重新转录。' : '明确重新识别原录制并生成纪要，将额外使用 ASR 与 LLM 额度。'}新纪要独立保存，已有记录和原文件保留；总结可能产生模型费用。</DialogDescription></DialogHeader>
+        <div data-testid="meeting-version-options" className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain pr-1">
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <FieldGroup>
           <Field><FieldLabel id="summary-asr-mode">语音识别</FieldLabel>
@@ -259,8 +260,11 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
           </Field>
         </FieldGroup>
         <p className="text-sm">来源类型：{['video', 'meeting_video'].includes(confirmation?.context.source.type || '') ? '视频' : ['audio', 'meeting_audio', 'meeting_recording'].includes(confirmation?.context.source.type || '') ? '音频' : '已保留资料'}。仅使用已核验的证据，不将缺失内容当作静音。</p>
-        <Button disabled={busy || loadingModels || disabled || !modelName || llmMode === 'inherit' && confirmation?.context.original_llm.verified === false || asrMode === 'fresh' && (!asrModel || !asrConsent) || asrMode === 'reuse' && !confirmation?.context.asr_modes.reuse.available} onClick={() => void confirm()}>{busy ? '正在提交…' : '确认生成新版本'}</Button>
+        </div>
+        <DialogFooter className="shrink-0 border-t pt-4">
         <Button variant="outline" disabled={busy} onClick={() => setConfirmation(null)}>取消</Button>
+        <Button disabled={busy || loadingModels || disabled || !modelName || llmMode === 'inherit' && confirmation?.context.original_llm.verified === false || asrMode === 'fresh' && (!asrModel || !asrConsent) || asrMode === 'reuse' && !confirmation?.context.asr_modes.reuse.available} onClick={() => void confirm()}>{busy ? '正在提交…' : '确认生成新版本'}</Button>
+        </DialogFooter>
       </DialogContent>
     </Dialog>
   </div>
