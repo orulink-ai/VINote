@@ -170,7 +170,7 @@ it('shows the latest original processing stage without synthesizing a percentage
   api.json.mockImplementation(async (path, init) => path === '/api/task/A-child'
     ? { task_id: 'A-child', status: 'summarizing', stage: 'analyzing_video' } : fallback(path, init))
   show()
-  expect(await screen.findByText('核对共享画面与发言')).toBeVisible()
+  expect(await screen.findByText('整理共享画面与发言资料')).toBeVisible()
   expect(screen.queryByText(/\d+%/)).toBeNull()
 })
 

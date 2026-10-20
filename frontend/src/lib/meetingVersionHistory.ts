@@ -14,7 +14,7 @@ export type VersionHistory = {
 const stages: Record<string, string> = {
   queued: '排队中', preparing: '准备会议资料', preparing_media: '准备会议资料',
   transcribing: '语音转写', parallel_analysis: '转写与说话人分析', diarizing: '说话人分析',
-  aligning: '核对转写', transcript_ready: '转写已就绪', analyzing_video: '核对共享画面与发言',
+  aligning: '核对转写', transcript_ready: '转写已就绪', analyzing_video: '整理共享画面与发言资料',
   summarizing: '生成与事实复核', generating: '生成与事实复核', screenshots: '整理画面引用',
   saving: '保存结果', saving_result: '保存结果',
 }

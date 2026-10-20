@@ -189,8 +189,8 @@ it.each([undefined, NaN, Infinity, -1, 1.2])('does not invent a speaker percenta
 
 it('shows video verification after ready ASR without inventing a video percentage or completing the minutes', () => {
   render(<GenerateProgress meeting videoSource status="processing" currentStep="analyzing_video" processedSeconds={900} totalSeconds={900} receivedSeconds={900} speakersReady progress={80} />)
-  expect(screen.getByRole('heading', { name: '核对共享画面与发言' })).toBeVisible()
-  expect(screen.getByRole('listitem', { name: '核对共享画面与发言：进行中' })).toHaveAttribute('aria-current', 'step')
+  expect(screen.getByRole('heading', { name: '整理共享画面与发言资料' })).toBeVisible()
+  expect(screen.getByRole('listitem', { name: '整理共享画面与发言资料：进行中' })).toHaveAttribute('aria-current', 'step')
   expect(screen.getByRole('listitem', { name: '转写与说话人分析：已完成' })).toBeVisible()
   expect(screen.getByRole('listitem', { name: '生成并核对会议纪要：待开始' })).toBeVisible()
   expect(screen.getByRole('listitem', { name: '保存会议纪要：待开始' })).toBeVisible()
@@ -210,7 +210,7 @@ it.each(['preparing', 'summarizing', 'transcribing'])('shows reused transcript a
 
 it.each([
   ['正在核对音视频材料并组织会议纪要…', '正在核对事实与来源，尚未保存完成稿。'],
-  ['正在核对会议画面文字…', '正在核对会议画面文字。'],
+  ['正在核对会议画面文字…', '正在整理会议画面文字资料。'],
   ['暂时无法获取任务进度，正在重试；请勿重复提交。', '暂时无法获取任务进度，正在重新查询；请勿重复提交。'],
 ])('shows safe product feedback from the actual status message %s', (message, expected) => {
   render(<GenerateProgress meeting reuseTranscript status="processing" currentStep="summarizing" message={message} />)

@@ -432,3 +432,11 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 ### 飞书位置绑定与手动交付的变代修复闭环
 
 状态投影已有owner/connection/sender/app/tenant绑定的用途域hash（非授权凭据，不新造连接），两处host接入同scope位置缓存。手动未提交草稿记scope提示，首次legacy无hash显式手动能力保留；已核验binding丢失立即阻断旧选择/旧异步请求，回到A也不恢复旧operation。typed暂不可用保留草稿但使旧异步世代失效，accepted/unknown仅查原receipt不重发。原独审6fail历史保留；新增delta13＋既有10正反例通过，106定向组件、44后端、TS通过，五文件最终SHA匹配。布局独审与原生收藏重开正例已另记；完整FE回归后续记录，不把先前1617算作增量最终源。
+
+### V14 原生生成、进度文案及最终回归
+
+原生开发窗口通过既有新版本对话框一次提交A详细文字：默认复用ASR、沿用所选DeepSeek；实际operation4231b4b2-3f5c-4223-8379-801300f6c9f1，task a585e436-ef60-4e23-bdbc-3a33fd23906d，617.5秒成功。UI自动保存并打开note791e1cf6-6519-52f3-bee2-91d9c5dde9b3，随后只读回查已有行，正文与原raw/result逐字一致，SHA0c8c6d3113b6f988a96b18993df93b0ae4fcbf56a9c23ca6003302ac25d69467；没有用程序保存代替原生自动保存。原视频实际显示28:32；这里只证明时长及首画面，不声称完整播放验收。原生进程没有ASR monkeypatch，summary-only请求、needs_stt=false和无child ASR checkpoint分别留证。
+
+原进度第二步在LLM仍生成时显示“核对共享画面与发言：已完成”，含义超出材料准备。七文件只改展示文案为“整理共享画面与发言资料”，所有阶段key/状态判断/请求/消息allowlist键保持，最终生成核对及保存仍独立。187项既有定向测试、TS通过，独立机械还原逐字相同并复验8项，无阻断；原生HMR实际截图A-text-native-material-preparation-copy.png，完成截图A-text-native-saved.png。文案修正不等于改善模型内容分。
+
+最终前端136文件/1628项通过，70.41秒，生产构建12.00秒通过。V14完整后端4434 passed、3 skipped、19 subtests、362 warnings，638.40秒；385个Python源码开始/结束指纹一致，虽然期间提交从08664ee变245bf93，测试源码没有变化。后端与前端回归、原生运行、模型内容评分及正式安装包/知识库交付是不同验收范围；没有合并、发布、部署或追加真实通知。

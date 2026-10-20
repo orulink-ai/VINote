@@ -46,7 +46,7 @@ export function GenerateProgress({
   reuseTranscript = false,
 }: GenerateProgressProps) {
   const { copy } = useI18n();
-  const videoStep = videoSource || currentStep === 'analyzing_video' ? [{ key: 'analyzing_video', label: '核对共享画面与发言' }] : [];
+  const videoStep = videoSource || currentStep === 'analyzing_video' ? [{ key: 'analyzing_video', label: '整理共享画面与发言资料' }] : [];
   const steps = documentSource ? [
     { key: "preparing", label: "读取来源正文" },
     { key: "summarizing", label: "生成总结笔记" },
@@ -110,21 +110,21 @@ export function GenerateProgress({
       style={value !== undefined ? { width: `${value}%` } : undefined} />
   </div>;
   const stageTitle = status === 'success' ? copy.progress.completed : status === 'failed' ? copy.progress.failed
-    : phase === 'analyzing_video' ? '核对共享画面与发言' : meeting ? '正在生成会议纪要' : analysis ? '语音转写' : stepLabels[phase] || copy.progress.preparing;
+    : phase === 'analyzing_video' ? '整理共享画面与发言资料' : meeting ? '正在生成会议纪要' : analysis ? '语音转写' : stepLabels[phase] || copy.progress.preparing;
   const statusCopy = analysis
     ? savedTranscript && speakersReady ? (meeting ? '音频分析已完成，接下来生成纪要。' : '转写已完成，接下来生成笔记。')
       : receivedMeasured && receivedSeconds! >= totalSeconds! && !savedTranscript ? '音频已提交，正在等待最终逐字稿。'
       : meeting ? '转写和说话人分析完成后，将生成纪要；返回后可继续查看。'
       : '转写完成后，将生成笔记；返回后可继续查看。'
-    : phase === 'analyzing_video' ? '正在核对共享画面与发言，完成后继续生成纪要。逐字稿已就绪不代表纪要已完成。'
+    : phase === 'analyzing_video' ? '正在整理共享画面与发言资料，完成后继续生成纪要。逐字稿已就绪不代表纪要已完成。'
     : phase === 'saving' ? '正在保存生成内容，请稍候。'
     : phase === 'summarizing' ? meeting ? '正在整理并核对会议纪要。' : '正在整理笔记。'
     : '正在准备来源，完成后继续处理。';
   // Unknown model/provider/chunk messages stay diagnostic, not reader copy.
   const safeMessages: Record<string, string> = {
     '正在核对音视频材料并组织会议纪要…': '正在核对事实与来源，尚未保存完成稿。',
-    '正在核对共享画面与发言…': '正在核对共享画面与发言。',
-    '正在核对会议画面文字…': '正在核对会议画面文字。',
+    '正在核对共享画面与发言…': '正在整理共享画面与发言资料。',
+    '正在核对会议画面文字…': '正在整理会议画面文字资料。',
     '正在整理正文与媒体引用…': '正在整理正文与画面引用。',
     '正在保存生成结果…': '正在保存生成内容，请稍候。',
     '暂时无法获取任务进度，正在重试；请勿重复提交。': '暂时无法获取任务进度，正在重新查询；请勿重复提交。',

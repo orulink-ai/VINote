@@ -360,7 +360,7 @@ describe('NoteGenerator failed generation recovery', () => {
     renderGenerator()
     const list = await screen.findByRole('list', { name: '会议纪要处理步骤' })
     expect(within(list).getAllByRole('listitem')).toHaveLength(steps)
-    expect(screen.queryByRole('listitem', { name: /核对共享画面与发言/ }) !== null).toBe(classified === 'meeting_video')
+    expect(screen.queryByRole('listitem', { name: /整理共享画面与发言资料/ }) !== null).toBe(classified === 'meeting_video')
     cleanup()
     libraryMock.saveNote.mockResolvedValue({ id: 'saved-classified' })
     apiMock.apiJson.mockResolvedValue({ task_id: 'classified-child', status: 'success', result: { task_id: 'classified-child', title: '2026-10-19 15:41 | Source topic', markdown: '# Synthetic summary' } })
@@ -1266,7 +1266,7 @@ describe('meeting shared-video verification stage', () => {
   afterEach(() => { cleanup(); localStorage.clear(); queryMock.value = '' })
   it('honors analyzing_video substage ahead of a retained transcribing status and only reads the task', async () => {
     renderGenerator()
-    await screen.findByRole('heading', { name: '核对共享画面与发言' })
+    await screen.findByRole('heading', { name: '整理共享画面与发言资料' })
     expect(useNoteGenerationStore.getState().currentStep).toBe('analyzing_video')
     expect(useNoteGenerationStore.getState().status).toBe('processing')
     expect(screen.getByRole('listitem', { name: '保存会议纪要：待开始' })).toBeVisible()
