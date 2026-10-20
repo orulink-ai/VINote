@@ -40,9 +40,10 @@ def bind_video_material(evidence, capabilities):
 
 
 def video_user_content(prompt: str) -> str | list[dict]:
+    from app.llm.meeting_source_bundle import SourcePrompt, chronological_content
     binding = _material.get()
     if binding is None:
-        return prompt
+        return chronological_content(prompt) if isinstance(prompt, SourcePrompt) else prompt
     evidence, capabilities = binding
     return evidence.user_content(prompt, capabilities=capabilities)
 
@@ -56,7 +57,10 @@ def anthropic_user_content(prompt: str) -> list[dict]:
         if block['type'] == 'text':
             result.append(block)
         else:
-            encoded = block['image_url']['url'].split(',', 1)[1]
-            result.append({'type': 'image', 'source': {'type': 'base64', 'media_type': 'image/jpeg',
+            header, encoded = block['image_url']['url'].split(';base64,', 1)
+            media_type = header.removeprefix('data:')
+            if media_type not in {'image/jpeg', 'image/webp'}:
+                raise ValueError('Unsupported video image media type')
+            result.append({'type': 'image', 'source': {'type': 'base64', 'media_type': media_type,
                                                      'data': encoded}})
     return result

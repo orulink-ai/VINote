@@ -2,6 +2,7 @@
 
 from app.llm.prompts import normalize_output_language
 from app.llm.meeting_prompt_contract import meeting_system_base
+from app.llm.source_references import source_prompt
 
 
 def build_meeting_review_prompts(
@@ -80,11 +81,11 @@ Keep offsets internal unless the user explicitly requests recording references. 
     if structured:
         # The working interpretation must not replace the original as the last
         # source text the reviewer sees. Keep both complete, without another call.
-        user_prompt = (
+        user_prompt = source_prompt(
             f"Fallible working draft to audit (not evidence):\n{draft}\n\n"
             f"Explicit context and terminology:\n{extras or '(none)'}\n\n"
-            f"{source_label}:\n{source}\n\n"
-            "Use the original material to correct the working interpretation, then select the report "
+            f"{source_label}:\n", source,
+            "\n\nUse the original material to correct the working interpretation, then select the report "
             "at the requested depth. Account for every frozen original claim outside the report blocks."
         )
     return {

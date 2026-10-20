@@ -6,6 +6,40 @@ import re
 _indices = ContextVar('meeting_source_indices', default=None)
 _texts = ContextVar('meeting_original_asr_texts', default=None)
 _draft_observer = ContextVar('meeting_working_draft_observer', default=None)
+_bundle = ContextVar('meeting_chronological_source', default=None)
+
+
+@contextmanager
+def bind_chronological_source(segments, render, *, enabled=True):
+    if not enabled:
+        token = _bundle.set(None)
+        try:
+            yield None
+        finally:
+            _bundle.reset(token)
+        return
+    from app.llm.meeting_source_bundle import freeze_source
+    active = True
+    bundle = freeze_source(segments, render, segment_reference,
+                           lambda: active and _bundle.get() is bundle)
+    token = _bundle.set(bundle)
+    try:
+        yield bundle
+    finally:
+        active = False
+        _bundle.reset(token)
+
+
+def source_prompt(prefix: str, source: str, suffix: str):
+    """Standalone/legacy builders stay strings; admitted meetings get a typed slot."""
+    bundle = _bundle.get()
+    if bundle is None:
+        return prefix + source + suffix
+    from app.llm.meeting_source_bundle import SourcePrompt, SourceSlot
+    bundle.validate()
+    if source != bundle.original_text:
+        raise ValueError('Meeting source changed before prompt construction')
+    return SourcePrompt(SourceSlot(prefix, bundle, suffix))
 
 
 @contextmanager

@@ -5,6 +5,7 @@ working material is never a public report template or independent evidence.
 """
 from app.llm.prompts import normalize_output_language
 from app.llm.meeting_prompt_contract import meeting_system_base
+from app.llm.source_references import source_prompt
 
 
 def build_meeting_draft_prompts(*, title: str, source: str, extras: str | None,
@@ -28,11 +29,11 @@ These working notes do not impose headings, a table, field labels or a fixed num
         rules += '\n\n' + DRAFT_MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + DRAFT_PROTOCOL
     return {
         'system_prompt': meeting_system_base(language, structured=structured) + '\n\n' + rules,
-        'user_prompt': (
+        'user_prompt': source_prompt(
             f'Source title (not proof of meeting facts):\n{title}\n\n'
             f'Explicit context and requirements:\n{extras or "(none)"}\n\n'
-            f'Complete original transcript:\n{source}\n\n'
-            + ('Produce the complete automatic flat-claim JSON. Write interpretive titles and claim text in '
+            f'Complete original transcript:\n', source,
+            '\n\n' + ('Produce the complete automatic flat-claim JSON. Write interpretive titles and claim text in '
              if presentation_state() and presentation_state().depth else 'Produce only the source-preservation working notes in ')
             + ('Simplified Chinese.' if language == 'zh-CN' else 'English.')
             + (' Preserve evidence quotes and verbatim names exactly in their original source language.'
