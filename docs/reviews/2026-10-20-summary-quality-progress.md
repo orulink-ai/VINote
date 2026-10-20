@@ -278,3 +278,7 @@ B分镜首错在原串中部的字符串引号，非已证明截断/多对象；
 LLM实例从现有frozen source选择一次，draft/review保持同参数，每次发送前复核owner/Origin/model及已有连接字段。真实P12来源无connection_id，明确为legacy_source（owner+exactOrigin+model），不补当前连接/凭据、不声称具体连接被冻结；explicit_connection有字段则须一致。policy不是执行授权，原鉴权和来源gate保持，未知模型/非结构化payload不变，失败不能去参数或切模型重试。每实例多一次现有catalog GET，无额外LLM探测。
 
 独立53反例＋331联合回归通过，三文件SHA一致；覆盖source变代、legacy/explicit切换、共享实例并发、权限撤销、错误/空/unknown不重试。未改factory/快照schema/原source，未实际调用provider。JSON只约束语法，不保证结构/事实/完整终止或质量100。P6与本项是两个独立机械改进，组合后不作单变量因果宣称，最终整合源码另冻结。
+
+### V13 联合冻结，实际结果另记
+
+HEAD d4f2611整合P6、native-json/1与sse_terminal/1；完整执行清单45项，SHA `424f55d4a70627642fe2a5c796d84f35bdd8524975d0e813fa8a2c75b3e43d14`。仅两场精简信息图先行，新的operation与目录，旧V12保持终态不重放。受控runner在真实chat调用前断言所选DeepSeek、stream/json_object及至多原两阶段调用；ASR入口禁止执行。完整后端回归、联合离线输入和跨组审查并行；本段不是实际模型接受或稿件质量结论。
