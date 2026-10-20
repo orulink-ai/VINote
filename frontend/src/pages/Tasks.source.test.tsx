@@ -132,7 +132,8 @@ it('distinguishes concurrent typed versions by frozen title/model/form and submi
   expect(a.querySelector('time')).toHaveAttribute('datetime', '2026-10-20T12:00:00Z')
   expect(b.querySelector('time')).toHaveAttribute('datetime', '2026-10-20T13:00:00Z')
   expect(within(a).getByRole('link')).toHaveAttribute('href', '/generate?mode=file&meeting=1&operation=A')
-  expect(api.json).not.toHaveBeenCalled()
+  await waitFor(() => expect(screen.getByRole('button', { name: '刷新状态' })).toBeEnabled())
+  expect(api.json.mock.calls.map(([path]) => path)).toEqual(['/api/source-requests/A', '/api/source-requests/B'])
 })
 
 it('retains typed nonacceptance audits in history with their original operation route', async () => {
@@ -158,7 +159,8 @@ it.each(['unknown', 'accepted', 'reserved'])('reads the separate audit without h
   if (state === 'unknown') expect(screen.getByRole('link', { name: '查看未受理记录' })).toBeVisible()
   else expect(screen.queryByRole('link', { name: '查看未受理记录' })).toBeNull()
   expect(localStorage.getItem(key)).toBe(raw)
-  expect(api.json).not.toHaveBeenCalled()
+  if (state === 'unknown') expect(api.json).not.toHaveBeenCalled()
+  else expect(api.json.mock.calls.map(([path]) => path)).toEqual(['/api/source-requests/separate'])
 })
 
 it.each([{ owner: 'other' }, { origin: 'https://changed.invalid' }, { createdAt: 'invalid' }])(
