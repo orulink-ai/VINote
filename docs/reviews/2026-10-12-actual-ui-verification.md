@@ -353,3 +353,11 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 离线复现P2：缺失、不可信形式metadata曾默认text/detailed建立知识库版本。现归组前要求可信完整形式/详略及严格整数protocol=1；`true`、`false`、`1.0`、`"1"`均不得分配节点。历史节点、ordinal与冻结标题保持。布尔protocol绕过由独审发现并追加修复，而非声称首版修复已完整。
 - 新真实service链测试覆盖认证HTTP保存→事务outbox→原策略受理→共用会议父节点/多形式子版本→权限核验→正文写入→收件人阅读权限→通知；只模拟CLI执行边界，临时SQLite和合成资料，无真实外发。通知明确失败后重试不重建/重写，unknown不重放，撤销连接/权限阻止写入。新增5例加既有保存链2例通过。
 - 最后协议修复后104项通过（67.87秒）；独审再跑14项metadata＋5项全链通过，7文件SHA一致，无残留P1/P2。此前301/146项属于前阶段，不能相加当最终唯一全套。实际并发测试为SQLite；PostgreSQL只核对真实生成的锁SQL，未做实库验收。未修改凭据、生产DB、真实知识库或通知，实际目标节点交付仍待完成。
+
+### v10 来源序列化与完整回归
+
+- `8b90a3c`后的 `pytest tests -q` 完整仓库后端 **3608 passed、2 skipped、19 subtests passed**（475.05秒）；23项桌面脚本通过；文档构建通过（8.70秒）。前端最终134文件/1534项及TypeScript/生产构建的前述记录仍有效，随后未改前端源。这些分别执行了verify脚本要求的组件检查，不冒充执行了单条`yarn verify`。
+- 最初误从仓库根无目录运行pytest，收集到ignored data里的旧baseline/work副本，出现重复模块和缺失脚本的439项collection错误，未执行成完整测试；保留`v10-backend-full-tests.log`，随后按项目验证脚本的明确tests目录执行，最终结果在`v10-backend-tests-directory.log`。没有删除旧副本或把收集错误冒充产品回归失败。
+- 38项模型/formatter源码在四项真实候选运行期间保持冻结，终态核验无漂移。A/B精简信息图分别在656.0/638.9秒成功，后续原样普通保存为 `7ff061c3-ca67-5132-bd75-e5f9b74d78b7` / `0a9e1c52-fd26-50d8-9500-b767e1b19b56`，归入原canonical会议；不是原生生成提交。A详细文字912.0秒成功后普通保存至 `8922158a-629f-5d13-b605-bf3b8c6ae495`。
+- B详细文字是原生一次提交operation `02fb5d59-4569-48e1-a704-fe8ee0f90f4b`，界面明确显示复用转写及生成反馈；接受快照needs_stt=false，实际ASR方法未在原生进程内替换。678.6秒成功后，原生自动保存ACK并打开note `35ee53c3-2287-5751-a7c8-ad31a2164172`，显示详细·文字及26:25视频；只读DB与raw/result正文相同，独评87/100。截图为 `B-text-v10-before-submit.png`、`B-text-v10-native-saved.png`，不是只用runner或测试推定原生链路。
+- 两份V10信息图分别从原会议档案打开，实际通过系统SaveAs保存SVG/PNG，界面反馈“图形已保存到所选位置”。A5645/95324字节，B5323/85571字节，原生截图 `A-info-v10-native-export.png`、`B-info-v10-native-export.png`；B完整8卡片独评75/100，A正文75/90加实际呈现7分、总82/100。导出没有改写模型正文/连线。A播放器28:32、B26:25均可见；本轮不把时长显示冒充连续全片播放。正式安装包、所有形式100分及最终知识库交付仍未验收。
