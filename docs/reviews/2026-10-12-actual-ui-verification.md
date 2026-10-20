@@ -376,3 +376,10 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 - 实现者对三组真实accepted sidecar只读离线渲染：A分镜8 scenes/2页、A信息图4节点4边、B信息图8节点共四页；原稿/截图/相关DB行摘要不变，未改旧评分。独审实看四页及合成平行/反向/自环、原图两角，PNG字节/语义与增强前一致，未以renderer保真抵消模型错误。
 - 独审最终6项SHA匹配，89项renderer与4项旧PNG恢复测试通过；不同新进程/hash seed的identity一致，替换内存函数/常量会改变identity，恢复后复原。实际PyInstaller隔离探针再次执行，与source identity/PNG hash/semantic一致，font/OFL/README包内hash匹配，模块.py/.pyc不在包内。这只是隔离探针，**不是正式VINote安装包或实际飞书图片交付验收**。
 - 主线三份新测试联合 **221 passed、1 skipped**（99.06秒），跳过仅为无frame信息图不适用截图篡改组合；日志 `graphic-joint-final-tests.log`。结果早于正在修复的形式metadata权威性残留P2，不能据此放行完整飞书适配。适配源码独审仍在进行，未真实创建知识库节点或发通知；还需验证完整图片journal、回读、权限和最终交付。
+
+### v11 原生成品读取与后段播放
+
+- V11四项终态的38文件快照无漂移，三项成功后经普通保存，未冒称原生提交。A/B详细文字分别从原会议档案打开note `07d19b8b-9790-5e4b-bb11-d446cb24c6d2` / `cea20266-6162-5cf8-8c49-ca30a122398a`，显示详细·文字及28:32/26:25。raw/result/DB逐字一致；87/75分为独立模型原稿评分，不因成功打开加分。
+- A精简信息图note `7d5e74b3-dd8b-5f1e-a993-a8cdef0e0ba2` 实际系统另存SVG5150字节、PNG88839字节。SVG SHA256 `8f46331ac77b874fd78a1f48d4861474afc5003293611f5c1567cc1661f908de`，PNG `b062c47f6b0ef2948b6910ef9d7a17b53760a7991a18d00eb58480f772d6c257`，与renderer逐字节/逐像素一致，4节点3边无裁切和共线歧义。独评正文82/90＋呈现10/10，总92。B信息图没有合法成品，完整raw正文60/90不能归一化为100或用旧版本替换。
+- 原生A信息图首次GET失败后，显式重新读取形式与图形及重新加载视频恢复；B详细文字也复现已显示26:25时长但旧读取失败banner仍残留，显式重新加载后原画面及提示恢复。同期有开发API源码热重载，仅为相关现象，尚未证明release根因；此异常仍进入后续审查。B随后实际seek至20:12并播放，截图确认20:56后暂停；UIA滑块值未随播放同步刷新，不能用该静态值推断卡顿。后段截图另存 `B-text-v11-native-late-playback.png`，不冒充全片连续观看。截图保留于ignored `native-v8-evidence/A-text-v11-native-open.png`、`B-text-v11-native-open.png`、`A-info-v11-native-export.png`。
+- 本轮没有重跑ASR、改写原稿、追加真实飞书写入或通知。完整图形交付仍待形式metadata权威性残余P2关闭及真实外部验收；新protocol5是后续独立候选，不追改V11终态或评分。
