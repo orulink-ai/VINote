@@ -270,3 +270,11 @@ B分镜首错在原串中部的字符串引号，非已证明截断/多对象；
 原V12模型在块内从P1重新编号，导致全局part引用契约失败；新调用明确选protocol6，parts改为字符串数组，label_ref为block_id/严格整数part_index/claim_ids。选择完整原字符串，保持精确可见位置、真实claim/frame、原ledger4、raw与body/sidecar回读一致，不从claim猜scope、不改ID或修旧raw5。非part全局ID规则保持；公共规则不再要求空diagram，分镜/信息图各自只有合法布局例子。非图形仍原4，历史4/5各自原分支，旧5独立模块字节不变。
 
 独审6runtime＋8test SHA一致，750定向测试通过，另12投影/4ledger反例拒绝、8组共同合法5/6投影等价；实际A/B离线adapter graphic各两调用，全125帧source/wire及全文与V11一致。响应为合成fixture，不是新模型结果。P6仅解决机械引用负担，尚未证明语义、延迟、成本或真实运行收益；独审子清单不是完整执行清单，需与原生JSON及诊断的独立冻结清单整合后才开始新operation。
+
+### 原生JSON输出选择：版本native-json/1
+
+当前两模型调用虽要求JSON，但之前没有HTTP response_format。依据[阿里云DeepSeek调用说明](https://help.aliyun.com/zh/model-studio/deepseek-api)及[DeepSeek JSON Output](https://api-docs.deepseek.com/guides/json_mode/)，仅精确catalog providerId=aliyun-token-plan-openai/providerModel=deepseek-v4.1-flash的typed结构化阶段增加json_object，不按显示名猜支持，不假设json_schema或改变思考/temperature/max_tokens。只读核对既有网关OpenAI分支原payload转发，未修改服务器；实际部署接受仍需新调用。
+
+LLM实例从现有frozen source选择一次，draft/review保持同参数，每次发送前复核owner/Origin/model及已有连接字段。真实P12来源无connection_id，明确为legacy_source（owner+exactOrigin+model），不补当前连接/凭据、不声称具体连接被冻结；explicit_connection有字段则须一致。policy不是执行授权，原鉴权和来源gate保持，未知模型/非结构化payload不变，失败不能去参数或切模型重试。每实例多一次现有catalog GET，无额外LLM探测。
+
+独立53反例＋331联合回归通过，三文件SHA一致；覆盖source变代、legacy/explicit切换、共享实例并发、权限撤销、错误/空/unknown不重试。未改factory/快照schema/原source，未实际调用provider。JSON只约束语法，不保证结构/事实/完整终止或质量100。P6与本项是两个独立机械改进，组合后不作单变量因果宣称，最终整合源码另冻结。
