@@ -1052,9 +1052,10 @@ export function NoteEditor() {
                   <div className="flex min-h-0 flex-1 overflow-hidden">
                     <div
                       ref={previewRef}
-                      className="stealth-scroll min-w-0 flex-1 overflow-auto"
+                      className="stealth-scroll min-w-0 flex-1 overflow-auto [&:has(>[data-summary-html-preview])]:flex [&:has(>[data-summary-html-preview])]:min-h-0 [&:has(>[data-summary-html-preview])]:flex-col [&:has(>[data-summary-html-preview])>div:not([data-summary-html-preview])]:shrink-0"
                     >
                       <ResultPreview
+                        noteId={id}
                         taskId={currentNote?.taskId}
                         title={currentNote?.title}
                         exportContent={currentNote?.content}

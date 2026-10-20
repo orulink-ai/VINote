@@ -64,3 +64,24 @@ it('does not admit malicious raw HTML controls or scripts when preserving real G
   expect(doc.querySelector('meta[http-equiv="Content-Security-Policy"]')?.getAttribute('content')).toBe("default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'")
   expect(fetchImage).not.toHaveBeenCalled()
 })
+
+it('compacts only the embedded reader stylesheet without changing body, source images or CSP', async () => {
+  const task = '11111111-1111-4111-8111-111111111111'
+  const source = `/api/task/${task}/artifacts/screenshots/summary-source-0.jpg`
+  const markdown = `# 很长的真实纪要标题：硬件方案、采购条件与会议工具\n\n## 条件与安排\n\n${'保留完整正文、时间和条件。'.repeat(80)}\n\n- [x] 已标记\n- [ ] 未标记\n\n![实际原图](${source})\n\n最后一段不能截断。`
+  const fetchImage = vi.fn().mockResolvedValue('data:image/jpeg;base64,YWJj')
+  const standalone = await buildSummaryHtml(markdown, '标题', task, fetchImage)
+  const preview = await buildSummaryHtml(markdown, '标题', task, fetchImage, undefined, 'preview')
+  const exported = await buildSummaryHtml(markdown, '标题', task, fetchImage, undefined, 'export')
+  const parse = (html: string) => new DOMParser().parseFromString(html, 'text/html')
+  const a = parse(standalone), b = parse(preview)
+  expect(exported).toBe(standalone)
+  expect(b.body.innerHTML).toBe(a.body.innerHTML)
+  expect(b.querySelector('main')?.textContent).toContain('最后一段不能截断。')
+  expect(b.querySelector('img')?.getAttribute('src')).toBe('data:image/jpeg;base64,YWJj')
+  expect(b.querySelector('style')?.textContent).toContain('h1{font-size:1.25rem;line-height:1.4;margin:0 0 .75rem}')
+  expect(a.querySelector('style')?.textContent).not.toContain('font-size:1.25rem')
+  expect(b.querySelector('meta[http-equiv="Content-Security-Policy"]')?.outerHTML).toBe(a.querySelector('meta[http-equiv="Content-Security-Policy"]')?.outerHTML)
+  expect(b.querySelector('script, iframe, input, form, [hidden], [inert]')).toBeNull()
+  expect(fetchImage.mock.calls.map(call => call[0])).toEqual([source, source, source])
+})

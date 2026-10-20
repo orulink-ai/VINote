@@ -446,3 +446,23 @@ sherpa-onnx 1.13.8 官方 Python 绑定的 OfflineSpeakerDiarization.process 未
 A信息图note e064a2a8-c205-5ef5-8353-d66086ee6eed关联canonical原录屏；真实播放器在14:17 seek后播放出淘宝画面，随后定位28:00持续播放至28:17，并实际自然到28:32末帧停止，滑块1712.530秒。不是仅读取metadata或逐字稿时间跳转；没有从头连续观看全片，也没有把UIA一帧落后的时间值当真实画面。证据A-video-mid-play.png、A-video-end-playback.png。
 
 展开“原视频文件”，实际显示“在文件夹中显示”“另存为…”及187.8MB。点击定位原件后，资源管理器打开受验收来源目录并选中source_video.webm，而非.playback-preview派生目录；应用显示已打开并定位原文件，未启动视频外部播放器。证据A-original-selected-explorer.png，只读目录和选择核验，无文件删除/移动/覆盖。A/B信息图本轮SVG/PNG实际原生SaveAs及完整导出独评分别记录在质量进度，不以呈现成功抵消事实扣分。
+
+### V15 终态及完整后端回归
+
+46项模型runtime清单SHA `02b21d9d9a6f2af4f92576e897d97d00453c0d632d641f5622c6bec3dee11cdb`，两场信息图/画面分镜四个新operation全部终态后保存 `v15-all-four-terminal-snapshot.jsonl`，drift=[]。B信息图621.9秒、A分镜712.3秒成功，普通保存时逐字核对原raw/result/DB，自动交付策略仍禁用；这两项不是原生提交。A信息图699.4秒校验失败；B分镜864.4秒review以length结束，结果未确认且不可重试，无成品不补分、不保存失败稿。
+
+完整backend `pytest tests -q --tb=short` 4467 passed、3 skipped、19 subtests、362 warnings，737.91秒。387个Python文件起止清单一致（SHA `249adefbd06386224c08f296ff2b7cffbecd5a46d8285d4a0d05cc36f0db0a11`），46项runtime起止无漂移，未收集私有测试目录。私有完整日志/typed result位于 `v15-backend-regression/`。测试通过不证明模型事实、关系或完整覆盖；质量评审另列。
+
+### 原生知识库位置与 HTML 阅读/导出补验
+
+原生打开手动飞书发布面板，现有本机内置连接器曾为未启用状态。核对其仅保存当前账号的桌面安装/启用标记后启用，未下载软件、重新授权、创建凭据或启用自动发布。随后以键盘选知识库、浏览软件研发并选择会议纪要，添加本机收藏并确认位置；既有接口只读检查节点、编辑权限及祖先，面板显示“软件研发 / 会议纪要”。没有点击创建并通知、未改变全局默认目的地或产生实际文档/消息；截图 `feishu-manual-wiki-preflight.png` 是UI路径证据，不是该次请求token的记录或写入成功证明。
+
+A/B V14 HTML均从原生应用打开，实际系统SaveAs分别保存 `native-v14-evidence/A-html-v14.html` / `B-html-v14.html`，并显示“HTML纪要已保存到所选位置”。A实际导出SHA `5e3baa0c7c8f69d3ae389e3b68fbf1ed4e99373f6343ed14b30d42f64f193b64`，与旧builder在同一冻结正文上的默认导出逐字节相同。新的预览CSS没有混入独立导出；正文不因UI改造而被人工改写。
+
+原生1281×822正常窗口实际比较：收紧HTML标题/留白，右侧正文滚动到A补购末段及B发布会PPT末段，左侧原视频、侧边栏与底部交付状态保持可达。截图 `A-html-native-after-ux.png` / `A-html-native-bottom.png` / `B-html-native-after-ux.png` / `B-html-native-bottom.png`；与此前过大标题及双层滚动的before图分开保存。此为开发HMR验收，非发行安装包。切换纪要时短暂残留前一份导出提示已交实现者增加内容身份/异步结果隔离反例，独审和最终前端回归另列；本段不提前放行未完成的修复。
+
+HTML R2最终五文件增加noteId身份边界，切换到同task/body/title的另一份纪要也卸载旧实例，旧读取及导出回调不能附到新稿或账号ABA回环。97项现有定向及独立9例通过，五文件最终SHA匹配；独立隔离浏览器对A/B正文、三个正常视口及极矮窗口/展开底部状态均核全文可达，正常仅iframe滚正文，极矮时外层auto兜底。空sandbox/no-referrer/CSP及图片白名单保持，默认导出与旧builder逐字节一致。
+
+最终全量前端首轮1634通过、1个既有VILabConnectionSettings用例超过默认5000ms（5093ms），保留完整失败日志，未改测试断言/timeout或产品源码。随后明确`--maxWorkers=2`重跑相同136文件、**1635项全部通过，103.83秒**；TypeScript退出0、生产构建10.02秒通过。并行负载下的超时不能误报为功能断言失败，也不抹去首次非全绿记录。此回归包含R2，先前1628项是历史基线。
+
+两份HTML实际导出及原生顶部/底部呈现另经非实现者独立检查，A最终88/100（正文78＋呈现10），B73/100（正文63＋呈现10），正文扣分没有因界面变好而消失。新增成功稿保留在原两场会议档案，原生当前仍是2场，按录制时间命名，A28/B18个纪要对象不拆成新会议；待归档与旧失败内容未删除。

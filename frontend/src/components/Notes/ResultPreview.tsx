@@ -9,15 +9,18 @@ import { SummaryVisualPanel } from './visual/SummaryVisualPanel'
 import { downloadRecording } from '@/lib/recordingDownload'
 import { useSummaryExportScope } from '@/lib/useSummaryExportScope'
 import { resolveBackendOrigin } from '@/lib/runtimeConfig'
+import { cn } from '@/lib/utils'
 
-type Props = ComponentProps<typeof MarkdownContent> & { taskId?: string; title?: string; exportContent?: string }
+type Props = ComponentProps<typeof MarkdownContent> & { noteId?: string; taskId?: string; title?: string; exportContent?: string }
 
-export function ResultPreview({ taskId, title = '会议纪要', ...props }: Props) {
+export function ResultPreview({ noteId, taskId, title = '会议纪要', ...props }: Props) {
   const owner = useAuthStore(s => s.user?.id)
-  return <PresentationPreview key={JSON.stringify([owner, taskId, props.exportContent ?? props.content, resolveBackendOrigin()])} taskId={taskId} title={title} {...props} />
+  // Distinct saved notes can share the same task and body. A new note identity
+  // must retire all notices, pending reads and export closures, even on A→B→A.
+  return <PresentationPreview key={JSON.stringify([owner, noteId, taskId, title, props.exportContent ?? props.content, resolveBackendOrigin()])} noteId={noteId} taskId={taskId} title={title} {...props} />
 }
 
-function PresentationPreview({ taskId, title = '会议纪要', exportContent, ...props }: Props) {
+function PresentationPreview({ noteId, taskId, title = '会议纪要', exportContent, ...props }: Props) {
   const [metadata, setMetadata] = useState<SummaryPresentation | null>(null)
   const [html, setHtml] = useState('')
   const [error, setError] = useState('')
@@ -34,8 +37,8 @@ function PresentationPreview({ taskId, title = '会议纪要', exportContent, ..
   const origin = resolveBackendOrigin()
   const visual = visualState?.body === savedBody ? visualState.visual : undefined
   const exportClaim = useRef(false)
-  const captureExportScope = useSummaryExportScope([savedBody, title, taskId, origin])
-  const captureReadScope = useSummaryExportScope([savedBody, taskId, origin])
+  const captureExportScope = useSummaryExportScope([noteId, savedBody, title, taskId, origin])
+  const captureReadScope = useSummaryExportScope([noteId, savedBody, taskId, origin])
   const live = useRef(true)
   useEffect(() => { live.current = true; return () => { live.current = false } }, [])
   useEffect(() => {
@@ -86,17 +89,17 @@ function PresentationPreview({ taskId, title = '会议纪要', exportContent, ..
       }
     })()
     return () => { active = false }
-  }, [taskId, savedBody, origin, readRevision])
+  }, [noteId, taskId, savedBody, origin, readRevision])
   useEffect(() => {
     let active = true
     const scoped = captureExportScope()
     const current = () => active && scoped() && resolveBackendOrigin() === origin
     setHtml('')
-    if (metadata?.presentation === 'html') void buildSummaryHtml(props.content, title, taskId)
+    if (metadata?.presentation === 'html') void buildSummaryHtml(props.content, title, taskId, undefined, undefined, 'preview')
       .then(value => { if (current()) setHtml(value) })
       .catch(() => { if (current()) setError('HTML 预览准备失败，已保留 Markdown 正文。') })
     return () => { active = false }
-  }, [metadata, props.content, title, taskId, origin])
+  }, [noteId, metadata, props.content, title, taskId, origin])
   function reread() {
     if (readClaim.current) return
     readClaim.current = true
@@ -111,7 +114,9 @@ function PresentationPreview({ taskId, title = '会议纪要', exportContent, ..
       if (!current()) return
       const result = await downloadRecording(async () => {
         if (!current()) throw new Error('纪要或账号已变化')
-        const output = savedBody === props.content && html ? html : await buildSummaryHtml(savedBody, title, taskId, undefined, visual)
+        // Preview CSS is scoped to the embedded reader; export always rebuilds
+        // from the frozen saved body using the unchanged standalone stylesheet.
+        const output = await buildSummaryHtml(savedBody, title, taskId, undefined, visual)
         if (!current()) throw new Error('纪要或账号已变化')
         return new Blob([output], { type: 'text/html;charset=utf-8' })
       }, title, filename, current)
@@ -119,8 +124,9 @@ function PresentationPreview({ taskId, title = '会议纪要', exportContent, ..
     } catch { if (current()) setError('HTML 导出失败，请重试。') }
     finally { exportClaim.current = false; if (live.current) setExporting(false) }
   }
-  return <>
-    {metadata && <div className="flex flex-wrap items-center gap-3 px-6 pt-4">
+  const htmlPreview = metadata?.presentation === 'html' && !!html
+  return <div data-summary-html-preview={htmlPreview ? '' : undefined} className={cn(htmlPreview && 'flex min-h-40 min-w-0 flex-1 flex-col overflow-hidden')}>
+    {metadata && <div className={cn('flex shrink-0 flex-wrap items-center gap-3 px-6 pt-4', htmlPreview && 'gap-2 px-4 py-2')}>
       <p className="text-sm text-muted-foreground">{depthLabels[metadata.content_depth]} · {presentationLabels[metadata.presentation]}</p>
       <Button variant="outline" size="sm" disabled={exporting} onClick={() => void download()}>{exporting ? '正在准备导出…' : '导出 HTML'}</Button>
     </div>}
@@ -132,6 +138,6 @@ function PresentationPreview({ taskId, title = '会议纪要', exportContent, ..
     {exportStatus && <p role="status" className="px-6 text-sm text-muted-foreground">{exportStatus}</p>}
     {visualNotice && <p role="status" className="px-6 py-3 text-sm text-muted-foreground">{visualNotice}</p>}
     {visual && <SummaryVisualPanel key={JSON.stringify([visual.body_sha256, savedBody])} visual={visual} savedBody={savedBody} title={title} onVideoJump={props.onVideoJump} />}
-    {metadata?.presentation === 'html' && html ? <iframe title="安全 HTML 纪要预览" sandbox="" referrerPolicy="no-referrer" srcDoc={html} className="min-h-[65vh] w-full border-0" /> : <MarkdownContent {...props} />}
-  </>
+    {htmlPreview ? <iframe title="安全 HTML 纪要预览" sandbox="" referrerPolicy="no-referrer" srcDoc={html} className="block min-h-0 w-full flex-1 border-0" /> : <MarkdownContent {...props} />}
+  </div>
 }
