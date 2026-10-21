@@ -5,6 +5,8 @@ import math
 import os
 from uuid import UUID
 
+from sqlalchemy import update
+
 from fastapi import HTTPException
 from pydantic import Field, field_validator
 
@@ -286,6 +288,8 @@ class SummaryRegenerationService:
                     _preflight(row is not None and row.state == 'accepted' and row.task_id == claim.task_id
                         and row.fingerprint == _fingerprint(submission), 'summary_preflight_snapshot_changed')
                     bound = json.loads(row.receipt_json or '{}')
+                    from app.services.meeting_ocr_layout import POLICY
+                    bound['summary_ocr_layout_policy'] = POLICY
                     bound['summary_snapshot_sha256'] = _digest(snapshot)
                     bound['summary_visual_reference_sha256'] = _digest(visual_link) if visual_link is not None else None
                     row.receipt_json = json.dumps(bound)
@@ -295,6 +299,34 @@ class SummaryRegenerationService:
             except Exception:
                 self.artifacts.update_status(child, 'failed', '本次提交尚不能安全执行，请查询原回执。', retryable=False)
                 raise
+
+    def _bind_layout_revision(self, owner, task, body, link, frozen, snapshot_sha256):
+        # Only the same accepted first-claim operation may commit its new input view.
+        # Missing policy on an old receipt is deliberately never upgraded.
+        _preflight(frozen.owner == owner and frozen.task_id == task
+            and frozen.folder == self.artifacts.find_task_dir(task),
+            'summary_preflight_visual_changed')
+        with self.receipts.sessions() as db:
+            row = db.get(SourceRequestDB, (owner, str(body.operation_id)))
+            _preflight(row is not None and row.state == 'accepted' and row.task_id == task
+                and row.fingerprint == _fingerprint(_submission(link['parent_task_id'], body)),
+                'summary_preflight_visual_changed')
+            bound = json.loads(row.receipt_json or '{}')
+            _preflight(type(bound.get('summary_ocr_layout_policy')) is int
+                and bound['summary_ocr_layout_policy'] == 1
+                and bound.get('summary_snapshot_sha256') == snapshot_sha256
+                and 'summary_input_view_revision' not in bound and 'summary_ocr_layout_sha256' not in bound,
+                'summary_preflight_visual_changed')
+            bound['summary_input_view_revision'] = frozen.revision
+            bound['summary_ocr_layout_sha256'] = frozen.sidecar_sha256
+            changed = db.execute(update(SourceRequestDB).where(
+                SourceRequestDB.owner == owner, SourceRequestDB.operation_id == str(body.operation_id),
+                SourceRequestDB.task_id == task, SourceRequestDB.state == 'accepted',
+                SourceRequestDB.receipt_json == row.receipt_json,
+                SourceRequestDB.fingerprint == row.fingerprint,
+            ).values(receipt_json=json.dumps(bound)), execution_options={'synchronize_session': False})
+            _preflight(changed.rowcount == 1, 'summary_preflight_visual_changed')
+        return frozen.revision
 
     def run_once(self, task, owner, note_service=None):
         try:
@@ -317,7 +349,12 @@ class SummaryRegenerationService:
                 if (not row or row.state != 'accepted' or row.task_id != task
                         or row.fingerprint != _fingerprint(_submission(link['parent_task_id'], body))):
                     raise ValueError()  # Disk artifacts and arbitrary IDs never authorize execution.
-                accepted_snapshot_sha256 = json.loads(row.receipt_json or '{}').get('summary_snapshot_sha256')
+                accepted_bound = json.loads(row.receipt_json or '{}')
+                accepted_snapshot_sha256 = accepted_bound.get('summary_snapshot_sha256')
+                layout_policy = accepted_bound.get('summary_ocr_layout_policy')
+                _preflight('summary_ocr_layout_policy' not in accepted_bound
+                    or type(layout_policy) is int and layout_policy == 1,
+                    'summary_preflight_visual_changed')
                 _preflight(isinstance(accepted_snapshot_sha256, str) and len(accepted_snapshot_sha256) == 64,
                     'summary_preflight_snapshot_changed')
             try:
@@ -363,6 +400,15 @@ class SummaryRegenerationService:
                         'source_version': body.source_version,
                         'snapshot_sha256': accepted_snapshot_sha256,
                     })
+            if visual is not None and layout_policy is not None:
+                from app.services.meeting_ocr_layout import freeze_layout, attach_layout
+                frozen = freeze_layout(visual, task_dir=folder, owner=owner, task_id=task,
+                    context_binding={'context_revision': body.context_revision,
+                        'source_version': body.source_version, 'snapshot_sha256': accepted_snapshot_sha256},
+                    policy=layout_policy)
+                accepted_revision = self._bind_layout_revision(owner, task, body, link, frozen,
+                    accepted_snapshot_sha256)
+                attach_layout(visual, frozen, accepted_revision=accepted_revision)
             if note_service is None:
                 from app.services.note_service import NoteService
                 note_service = NoteService()
