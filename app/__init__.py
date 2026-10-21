@@ -79,18 +79,32 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api")
     from app.routers import files
     app.include_router(files.router, prefix="/api")
+    from app.routers import original_location
+    app.include_router(original_location.router, prefix="/api")
     app.include_router(note.router, prefix="/api")
     from app.routers.meeting_summary_regeneration import create_summary_regeneration_router
     app.include_router(create_summary_regeneration_router(
         note_service=note._note_service,
+        active=lambda task_id: task_id in note._ACTIVE_FILE_TASKS), prefix='/api')
+    from app.routers.summary_visual import create_summary_visual_router
+    app.include_router(create_summary_visual_router(
+        artifacts=note._note_service.artifact_service), prefix='/api')
+    from app.routers.meeting_version_context import create_meeting_version_router
+    from app.services.task_fresh_asr import FreshASRService
+    app.include_router(create_meeting_version_router(
+        note_service=note._note_service,
+        fresh_service=FreshASRService(),
         active=lambda task_id: task_id in note._ACTIVE_FILE_TASKS), prefix='/api')
     app.include_router(note_library.router, prefix="/api")
     from app.routers import feishu_auto_local
     app.include_router(feishu_auto_local.router, prefix="/api")
     app.include_router(feishu_auto_local.device_router, prefix="/api")
     if settings.desktop_runtime:
-        from app.routers import feishu_object_hotwords
+        from app.routers import feishu_object_hotwords, meeting_participants, meeting_source_link, feishu_meeting_wiki_recovery
         app.include_router(feishu_object_hotwords.router, prefix="/api")
+        app.include_router(meeting_participants.router, prefix="/api")
+        app.include_router(meeting_source_link.router, prefix="/api")
+        app.include_router(feishu_meeting_wiki_recovery.router, prefix="/api")
     app.include_router(share.private_router, prefix="/api")
     app.include_router(preferences.router, prefix="/api")
     app.include_router(model_profiles.router, prefix="/api")

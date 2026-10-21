@@ -7,11 +7,12 @@ import { cn } from '@/lib/utils'
 import { useAuthStore } from '@/stores/authStore'
 import { useMeetingRecorderStore } from '@/stores/meetingRecorderStore'
 import { useTeamStore } from '@/stores/teamStore'
+import { useNoteLibraryStore } from '@/stores/noteLibraryStore'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
 import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { Button } from '@/components/ui/button'
 import { AlertDialog as Dialog, AlertDialogContent as DialogContent, AlertDialogDescription as DialogDescription, AlertDialogFooter as DialogFooter, AlertDialogHeader as DialogHeader, AlertDialogTitle as DialogTitle } from '@/components/ui/alert-dialog'
-import { requestPageNavigation, settingsMenuParent } from '@/lib/navigation'
+import { contextualPageParent, requestPageNavigation, settingsMenuParent } from '@/lib/navigation'
 import { ErrorState } from '@/components/Feedback/ResourceState'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Sidebar as SidebarFrame, SidebarContent, SidebarFooter, SidebarHeader, useSidebar } from '@/components/ui/sidebar'
@@ -42,10 +43,12 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const closeMobile = () => { if (isMobile) setOpenMobile(false) }
   const captureRisk = ['requesting', 'recording', 'paused', 'stopping'].includes(recorder.phase)
     || recorder.hasRecoverableRecording && !recorder.localRecordingSaved
-  const returnTo = String(location.state?.returnTo || '')
+  const noteId = /^\/note\/([A-Za-z0-9_-]+)$/.exec(location.pathname)?.[1]
+  const noteSourceType = useNoteLibraryStore(s => noteId ? s.notes.find(note => note.id === noteId)?.sourceType : undefined)
+  const returnTo = contextualPageParent(location.pathname, location.search, location.state?.returnTo)
   const meetingContext = location.pathname === '/meetings'
     || location.pathname === '/generate' && new URLSearchParams(location.search).get('meeting') === '1'
-    || /^\/note\//.test(location.pathname) && returnTo.startsWith('/meetings')
+    || !!noteId && (noteSourceType ? noteSourceType.startsWith('meeting_') : returnTo?.split(/[?#]/)[0] === '/meetings')
   const navigation = [
     { id: 'meetings', path: '/meetings', icon: Mic2, label: zh ? '会议' : 'Meetings', active: meetingContext, children: [] },
     { id: 'notes', path: '/notes', icon: FileText, label: zh ? '笔记' : 'Notes', active: !meetingContext && (location.pathname === '/' || /^\/(notes|note|workspace|generate|write|archive|projects)(\/|$)/.test(location.pathname)), children: [] },

@@ -42,3 +42,13 @@ it('supports keyboard search and explicit Enter selection without a native selec
   fireEvent.change(search, { target: { value: '负责人' } }); fireEvent.keyDown(search, { key: 'ArrowDown' });
   expect(onChange).not.toHaveBeenCalled(); fireEvent.keyDown(search, { key: 'Enter' }); expect(onChange).toHaveBeenCalledExactlyOnceWith('ou_one');
 });
+
+it.each(['unknown', 'departed'])('ignores obsolete %s markers in cached objects and keeps explicit contact selection available', status => {
+  const onChange = vi.fn();
+  const cached = { ...objects[0], status, selectable: false };
+  render(<FeishuObjectPicker objects={[cached]} value="" onChange={onChange} disabled={false} isCurrent={() => true} />); open();
+  const option = screen.getByRole('option', { name: '项目负责人 · 联系人' });
+  expect(option).not.toHaveAttribute('aria-disabled', 'true');
+  expect(screen.queryByText(/状态未核验|已离职|重新授权获取状态/)).toBeNull();
+  fireEvent.click(option); expect(onChange).toHaveBeenCalledExactlyOnceWith('ou_one');
+});

@@ -5,6 +5,8 @@ import math
 import os
 from uuid import UUID
 
+from sqlalchemy import update
+
 from fastapi import HTTPException
 from pydantic import Field, field_validator
 
@@ -13,6 +15,7 @@ from app.db_models import SourceRequestDB
 from app.models.source_request import SourceInput, SourceSubmission
 from app.models.transcript import TranscriptResult, TranscriptSegment
 from app.services.meeting_evidence import original_asr_evidence
+from app.services.meeting_alias_context import capture_alias_context, alias_extras, alias_source_text
 from app.services.retained_task_source import SOURCE_LOCK, resolve_reference
 from app.services.source_request_service import SourceRequestService, _fingerprint
 from app.services.task_artifact_service import TaskArtifactService
@@ -21,11 +24,16 @@ from app.services.task_model_source import SNAPSHOT_FILE, validate_source
 from app.services.task_new_generation import NewGenerationConfirmation
 from app.services.task_original_service import TaskOriginalService
 from app.services.vilab_cloud_service import VILabCloudService
+from app.llm.meeting_presentation import ContentDepth, Presentation, presentation_availability
+from app.services.summary_visual_evidence import retained_visual_evidence, visual_version, visual_reference, REFERENCE_FILE
 
 
 class SummaryConfirmation(NewGenerationConfirmation):
     canonical_task_id: None = None  # v2 ASR donor selection is not summary input.
     model_name: str = Field(min_length=1, max_length=200)
+    content_depth: ContentDepth | None = None
+    presentation: Presentation | None = None
+    connection_id: str | None = Field(default=None, min_length=1, max_length=200)
 
     @field_validator('model_name')
     @classmethod
@@ -40,23 +48,41 @@ def _digest(value):
                                      allow_nan=False).encode()).hexdigest()
 
 
+class SummaryPreflightError(ValueError):
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
+
+
+def _preflight(condition, code):
+    if not condition:
+        raise SummaryPreflightError(code)
+
+
 def _submission(parent, body):
     return SourceSubmission(source=SourceInput(kind='retained_file',
         retained_file_id='task:' + parent, retained_file_version=body.source_version),
         options={'contract': 'meeting-summary-only-v1', 'parent_task_id': parent,
-                 'context_revision': body.context_revision, 'model_name': body.model_name})
+                 'context_revision': body.context_revision, 'model_name': body.model_name,
+                 **{key: getattr(body, key) for key in ('content_depth', 'presentation', 'connection_id')
+                    if getattr(body, key) is not None}})
 
 
 def _snapshot(owner, model):
-    return validate_source({'version': 1, 'owner': owner, 'mode': 'cloud',
-        'server_url': settings.vilab_server_url, 'asr_model': '',
+    connection = VILabCloudService().connection_snapshot(owner)
+    return validate_source({'version': 1, 'owner': owner,
+        **{key: value for key, value in connection.items()
+           if key in {'mode', 'server_url', 'connection_id', 'connection_auth_mode', 'asr_model', 'llm_model'}},
         'llm_model': model, 'needs_stt': False}, owner)
 
 
-def _options(saved):
+def _options(saved, body=None):
     return {**{key: saved['request'][key] for key in ('title', 'extras', 'output_language')
                if key in saved['request']}, 'workflow': 'meeting', 'style': 'meeting',
-            'summary_mode': 'default'}
+            'summary_mode': 'default',
+            **({'content_depth': body.content_depth or 'detailed',
+                'presentation': body.presentation or 'text'}
+               if body and (body.content_depth is not None or body.presentation is not None) else {})}
 
 
 def _evidence(folder):
@@ -178,10 +204,13 @@ class SummaryRegenerationService:
         if manifest.get('sha256') != version or reference and reference['source_version'] != version:
             _unavailable('source_changed', '原文件版本已变化，未开始重新总结。')
         transcript, transcript_version = _evidence(folder)
+        visual = retained_visual_evidence(self.artifacts, folder, canonical, source, owner, receipts=self.receipts)
         context = {'protocol': 1, 'parent_task_id': parent, 'canonical_task_id': canonical, 'workflow': 'meeting',
             'source': {'file_id': info['id'], 'title': info['title'], 'type': info['source_type'], 'version': version},
             'transcript_version': transcript_version, 'requires_confirmation': True,
             'can_regenerate_summary': True}
+        context['presentation_options'] = presentation_availability(has_visuals=visual is not None)
+        context['visual_evidence_version'] = visual_version(visual)
         context['context_revision'] = _digest({'owner': owner, 'context': context,
             'request': saved, 'snapshot': snapshot, 'source_reference': reference})
         return context, folder, source, transcript, saved
@@ -205,17 +234,27 @@ class SummaryRegenerationService:
             if (context['context_revision'] != body.context_revision
                     or context['source']['version'] != body.source_version):
                 _unavailable('summary_context_changed', '原文件或转写已变化，请重新核验并确认。')
+            option = context['presentation_options'][body.presentation or 'text']
+            if not option['available']:
+                _unavailable('summary_presentation_unavailable', option['reason'])
             cloud = VILabCloudService()
             if cloud.status(owner)['mode'] != 'cloud':
                 _unavailable('summary_cloud_required', '请明确选择云端总结模型后再确认。')
             snapshot = _snapshot(owner, body.model_name)
+            if body.connection_id is not None and body.connection_id != snapshot.get('connection_id'):
+                _unavailable('summary_connection_changed', '模型连接已变化，请重新核验并确认。')
             with cloud.task_snapshot(owner, snapshot=snapshot):
                 cloud.validate_ready(owner, needs_stt=False)
+            visual = retained_visual_evidence(self.artifacts, folder,
+                context['canonical_task_id'], source, owner, receipts=self.receipts)
+            if visual_version(visual) != context['visual_evidence_version']:
+                _unavailable('summary_context_changed', '会议画面已变化，请重新核验并确认。')
             claim = self.receipts.reserve(owner, operation, submission)
             if not claim.created:
                 return claim
             child = self.artifacts.create_task_dir(claim.task_id)
             try:
+                alias_context = capture_alias_context(owner)
                 self.artifacts.write_text(child / 'recording_owner', owner)
                 self.artifacts.write_text(child / '.task_id', claim.task_id)
                 # Install the query-only guard before exposing a retryable request.
@@ -224,8 +263,19 @@ class SummaryRegenerationService:
                     **body.model_dump(mode='json')})
                 self.artifacts.write_json(child / 'source_reference.json', {'version': 1, 'owner': owner,
                     'parent_task_id': context['canonical_task_id'], 'source_version': body.source_version})
+                visual_link = visual_reference(visual, owner=owner, task=claim.task_id,
+                    canonical=context['canonical_task_id'], source_version=body.source_version)
+                if visual_link is not None:
+                    self.artifacts.write_json(child / REFERENCE_FILE, visual_link)
                 self.artifacts.write_json(child / SNAPSHOT_FILE, snapshot)
-                self.artifacts.write_json(child / 'request.json', {'request': _options(saved)})
+                self.artifacts.write_json(child / 'request.json', {'request': _options(saved, body)})
+                self.artifacts.write_json(child / 'summary_presentation.json', {
+                    'protocol': 1, 'content_depth': body.content_depth or 'detailed',
+                    'presentation': body.presentation or 'text', 'operation_id': operation,
+                    'task_id': claim.task_id, 'parent_task_id': parent,
+                    'canonical_task_id': context['canonical_task_id'], 'model_name': body.model_name,
+                    'source_version': body.source_version, 'transcript_version': context['transcript_version'],
+                    'visual_evidence_version': context['visual_evidence_version']})
                 self.artifacts.save_transcript(child, transcript)
                 self.artifacts.write_text(child / 'generation_client', 'desktop')
                 if self.artifacts.resolve_source_media(child) != source or self.artifacts._sha256(source) != body.source_version:
@@ -233,11 +283,53 @@ class SummaryRegenerationService:
                 self.artifacts.update_status(child, 'preparing', '已确认重新总结，正在准备已保存的转写。', retryable=False)
                 receipt = self.receipts.accept(owner, operation, claim.task_id,
                     status='preparing', source_type=context['source']['type'])
+                # Server-owned accepted receipt binds every frozen source field.
+                # Disk JSON and the mutable global selection cannot self-authorize.
+                with self.receipts.sessions() as db:
+                    row = db.get(SourceRequestDB, (owner, operation))
+                    _preflight(row is not None and row.state == 'accepted' and row.task_id == claim.task_id
+                        and row.fingerprint == _fingerprint(submission), 'summary_preflight_snapshot_changed')
+                    bound = json.loads(row.receipt_json or '{}')
+                    from app.services.meeting_ocr_layout import POLICY
+                    bound['summary_ocr_layout_policy'] = POLICY
+                    bound['summary_snapshot_sha256'] = _digest(snapshot)
+                    bound['summary_alias_context'] = alias_context
+                    bound['summary_visual_reference_sha256'] = _digest(visual_link) if visual_link is not None else None
+                    row.receipt_json = json.dumps(bound)
+                    db.flush()
                 background.add_task(self.run_once, claim.task_id, owner, note_service)
                 return receipt
             except Exception:
                 self.artifacts.update_status(child, 'failed', '本次提交尚不能安全执行，请查询原回执。', retryable=False)
                 raise
+
+    def _bind_layout_revision(self, owner, task, body, link, frozen, snapshot_sha256):
+        # Only the same accepted first-claim operation may commit its new input view.
+        # Missing policy on an old receipt is deliberately never upgraded.
+        _preflight(frozen.owner == owner and frozen.task_id == task
+            and frozen.folder == self.artifacts.find_task_dir(task),
+            'summary_preflight_visual_changed')
+        with self.receipts.sessions() as db:
+            row = db.get(SourceRequestDB, (owner, str(body.operation_id)))
+            _preflight(row is not None and row.state == 'accepted' and row.task_id == task
+                and row.fingerprint == _fingerprint(_submission(link['parent_task_id'], body)),
+                'summary_preflight_visual_changed')
+            bound = json.loads(row.receipt_json or '{}')
+            _preflight(type(bound.get('summary_ocr_layout_policy')) is int
+                and bound['summary_ocr_layout_policy'] == 1
+                and bound.get('summary_snapshot_sha256') == snapshot_sha256
+                and 'summary_input_view_revision' not in bound and 'summary_ocr_layout_sha256' not in bound,
+                'summary_preflight_visual_changed')
+            bound['summary_input_view_revision'] = frozen.revision
+            bound['summary_ocr_layout_sha256'] = frozen.sidecar_sha256
+            changed = db.execute(update(SourceRequestDB).where(
+                SourceRequestDB.owner == owner, SourceRequestDB.operation_id == str(body.operation_id),
+                SourceRequestDB.task_id == task, SourceRequestDB.state == 'accepted',
+                SourceRequestDB.receipt_json == row.receipt_json,
+                SourceRequestDB.fingerprint == row.fingerprint,
+            ).values(receipt_json=json.dumps(bound)), execution_options={'synchronize_session': False})
+            _preflight(changed.rowcount == 1, 'summary_preflight_visual_changed')
+        return frozen.revision
 
     def run_once(self, task, owner, note_service=None):
         try:
@@ -249,9 +341,10 @@ class SummaryRegenerationService:
         folder = self.artifacts.find_task_dir(task)
         if not folder or folder.is_symlink() or folder.resolve().parent != self.artifacts.output_dir.resolve():
             return
+        preparing = True
         try:
             link = _read_json(folder / 'new_generation.json')
-            body = SummaryConfirmation(**{key: link[key] for key in SummaryConfirmation.model_fields})
+            body = SummaryConfirmation(**{key: link[key] for key in SummaryConfirmation.model_fields if key in link})
             if link.get('contract') != 'meeting-summary-only-v1':
                 raise ValueError()
             with self.receipts.sessions() as db:
@@ -259,6 +352,15 @@ class SummaryRegenerationService:
                 if (not row or row.state != 'accepted' or row.task_id != task
                         or row.fingerprint != _fingerprint(_submission(link['parent_task_id'], body))):
                     raise ValueError()  # Disk artifacts and arbitrary IDs never authorize execution.
+                accepted_bound = json.loads(row.receipt_json or '{}')
+                alias_context = accepted_bound.get('summary_alias_context')
+                accepted_snapshot_sha256 = accepted_bound.get('summary_snapshot_sha256')
+                layout_policy = accepted_bound.get('summary_ocr_layout_policy')
+                _preflight('summary_ocr_layout_policy' not in accepted_bound
+                    or type(layout_policy) is int and layout_policy == 1,
+                    'summary_preflight_visual_changed')
+                _preflight(isinstance(accepted_snapshot_sha256, str) and len(accepted_snapshot_sha256) == 64,
+                    'summary_preflight_snapshot_changed')
             try:
                 with (folder / 'summary_generation_started').open('x', encoding='utf-8') as marker:
                     marker.write('claimed')
@@ -273,27 +375,58 @@ class SummaryRegenerationService:
             except FileExistsError:
                 return
             with SOURCE_LOCK:
-                context, _, source, transcript, saved = self._context(owner, link['parent_task_id'])
+                context, parent_folder, source, transcript, saved = self._context(owner, link['parent_task_id'])
                 snapshot = validate_source(_read_json(folder / SNAPSHOT_FILE), owner)
-                if ((folder / 'recording_owner').is_symlink()
-                        or (folder / 'recording_owner').read_text(encoding='utf-8') != owner
-                        or (folder / '.task_id').is_symlink()
-                        or (folder / '.task_id').read_text(encoding='utf-8') != task
-                        or context['context_revision'] != body.context_revision
-                        or context['source']['version'] != body.source_version
-                        or self.artifacts.resolve_source_media(folder) != source
-                        or _read_json(folder / 'source_reference.json') != {'version': 1, 'owner': owner,
-                            'parent_task_id': context['canonical_task_id'], 'source_version': body.source_version}
-                        or _read_json(folder / 'request.json') != {'request': _options(saved)}
-                        or snapshot != _snapshot(owner, body.model_name)):
-                    raise ValueError()
+                _preflight(not (folder / 'recording_owner').is_symlink()
+                    and (folder / 'recording_owner').read_text(encoding='utf-8') == owner, 'summary_preflight_owner_changed')
+                _preflight(not (folder / '.task_id').is_symlink()
+                    and (folder / '.task_id').read_text(encoding='utf-8') == task, 'summary_preflight_task_changed')
+                _preflight(context['context_revision'] == body.context_revision, 'summary_preflight_context_changed')
+                _preflight(context['source']['version'] == body.source_version
+                    and self.artifacts.resolve_source_media(folder) == source, 'summary_preflight_source_changed')
+                _preflight(_read_json(folder / 'source_reference.json') == {'version': 1, 'owner': owner,
+                    'parent_task_id': context['canonical_task_id'], 'source_version': body.source_version}, 'summary_preflight_reference_changed')
+                _preflight(_read_json(folder / 'request.json') == {'request': _options(saved, body)}, 'summary_preflight_request_changed')
+                _preflight(_digest(snapshot) == accepted_snapshot_sha256
+                    and snapshot['mode'] == 'cloud' and snapshot.get('needs_stt') is False
+                    and snapshot['llm_model'] == body.model_name
+                    and (body.connection_id is None or body.connection_id == snapshot.get('connection_id')),
+                    'summary_preflight_snapshot_changed')
+                visual = retained_visual_evidence(self.artifacts, folder,
+                    context['canonical_task_id'], source, owner, receipts=self.receipts)
+                _preflight(visual_version(visual) == context['visual_evidence_version'], 'summary_preflight_visual_changed')
+            if visual is not None:
+                from app.services.meeting_video_ocr import prepare_meeting_video_ocr
+                self.artifacts.update_status(folder, 'summarizing', '正在核对会议画面文字…')
+                visual = prepare_meeting_video_ocr(visual, task_dir=folder, task_id=task,
+                    owner=owner, context_binding={
+                        'context_revision': body.context_revision,
+                        'source_version': body.source_version,
+                        'snapshot_sha256': accepted_snapshot_sha256,
+                    })
+            if visual is not None and layout_policy is not None:
+                from app.services.meeting_ocr_layout import freeze_layout, attach_layout
+                frozen = freeze_layout(visual, task_dir=folder, owner=owner, task_id=task,
+                    context_binding={'context_revision': body.context_revision,
+                        'source_version': body.source_version, 'snapshot_sha256': accepted_snapshot_sha256},
+                    policy=layout_policy)
+                accepted_revision = self._bind_layout_revision(owner, task, body, link, frozen,
+                    accepted_snapshot_sha256)
+                attach_layout(visual, frozen, accepted_revision=accepted_revision)
             if note_service is None:
                 from app.services.note_service import NoteService
                 note_service = NoteService()
+            options = _options(saved, body)
+            extras = alias_extras(owner, options.get('extras'), alias_context,
+                                  source_text=alias_source_text(transcript, visual))
+            if extras != options.get('extras'):
+                options['extras'] = extras
             with VILabCloudService().task_snapshot(owner, snapshot=snapshot):
+                preparing = False
                 note_service.generate_from_transcript(transcript=transcript, task_id=task, user_id=owner,
-                    **{key: value for key, value in _options(saved).items() if key != 'workflow'})
-        except Exception:
+                    **({'video_evidence': visual} if visual is not None else {}),
+                    **{key: value for key, value in options.items() if key != 'workflow'})
+        except Exception as error:
             try:
                 status = _read_json(folder / 'status.json')
             except HTTPException:
@@ -305,4 +438,8 @@ class SummaryRegenerationService:
                     self.artifacts.write_json(folder / 'status.json', {**status, 'retryable': False})
                 return
             self.artifacts.update_status(folder, 'failed', '本次总结结果尚未确认，请查询原任务，未自动重试。',
-                                         retryable=False, failed_stage=status.get('stage') or 'summarizing')
+                retryable=False, failed_stage=status.get('stage') or ('preparing' if preparing else 'summarizing'),
+                **({'error_code': error.code if isinstance(error, SummaryPreflightError) else
+                    'summary_preflight_visual_unavailable' if isinstance(error, HTTPException)
+                        and isinstance(error.detail, dict) and error.detail.get('code') == 'summary_visual_evidence_unavailable'
+                    else 'summary_preflight_unconfirmed'} if preparing else {}))

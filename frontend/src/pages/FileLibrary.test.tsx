@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const mocks = vi.hoisted(() => ({ api: vi.fn(), recordings: vi.fn(), owner: 'owner' }))
 vi.mock('@/lib/api', () => ({ apiJson: mocks.api }))
 vi.mock('@/lib/audioStorage', () => ({ listPendingMeetings: mocks.recordings }))
-vi.mock('@/stores/authStore', () => ({ useAuthStore: Object.assign(() => mocks.owner, { getState: () => ({ user: { id: mocks.owner } }) }) }))
+vi.mock('@/stores/authStore', () => ({ useAuthStore: Object.assign(() => mocks.owner, { getState: () => ({ user: { id: mocks.owner } }), subscribe: () => () => undefined }) }))
 vi.mock('@/stores/teamStore', () => ({ useTeamStore: { getState: () => ({ currentWorkspace: { scope: 'personal' } }) } }))
 vi.mock('@/components/MeetingRecorder/LocalRecordingPreview', () => ({ LocalRecordingPreview: () => null }))
 import { FileLibrary } from './FileLibrary'
@@ -279,7 +279,7 @@ it('reclassifies the original without losing its Sheet, format, selection or gen
   mount('/files?purpose=note&type=document&q=test&file=file-1'); const sheet = await screen.findByRole('dialog');
   await userEvent.selectOptions(within(sheet).getByLabelText('资料用途'), 'meeting');
   await waitFor(() => expect(within(screen.getByRole('dialog')).getByLabelText('资料用途')).toHaveValue('meeting'));
-  expect(screen.getByLabelText('文件库地址')).toHaveTextContent('purpose=meeting&type=document&q=test&file=file-1');
+  await waitFor(() => expect(screen.getByLabelText('文件库地址')).toHaveTextContent('purpose=meeting&type=document&q=test&file=file-1'));
   const writes = mocks.api.mock.calls.filter(([, init]) => init?.method); expect(writes).toHaveLength(1);
   expect(writes[0][0]).toBe('/api/files/file-1'); expect(writes[0][1].method).toBe('PATCH'); expect(JSON.parse(writes[0][1].body)).toEqual({ purpose: 'meeting' });
   await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '删除原始文件' })); await userEvent.click(screen.getByRole('button', { name: '取消' }));

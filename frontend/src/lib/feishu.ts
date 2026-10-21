@@ -21,10 +21,13 @@ export type DestinationCheck = FeishuDestination & {
   error_code: string;
 };
 export type FeishuStatus = {
+  connection_binding_hash?: string;
   transport?: 'cli' | 'http';
   automatic_delivery_protocol?: number;
   automatic_delivery?: { policy_id: string | null; enabled: boolean };
   device_auto_enabled?: boolean;
+  notify_participants?: boolean;
+  group_meeting_versions?: boolean;
   contacts?: FeishuPreferenceContact[];
   publish_receipt_protocol?: number;
   contact_selection_protocol?: number;
@@ -91,9 +94,9 @@ export function preferenceContacts(contacts: FeishuPreferenceContact[], saved: F
     return { open_id: contact.open_id, selection_token: contact.selection_token };
   });
 }
-type AutomaticTarget = Pick<FeishuStatus, 'auto_publish' | 'notify_self' | 'groups' | 'contacts' | 'destination_config' | 'permission_policy'>;
+type AutomaticTarget = Pick<FeishuStatus, 'auto_publish' | 'notify_self' | 'groups' | 'contacts' | 'destination_config' | 'permission_policy' | 'notify_participants' | 'group_meeting_versions'>;
 export function automaticConsentNeeded(next: AutomaticTarget, saved?: AutomaticTarget) {
-  const target = (value: AutomaticTarget) => JSON.stringify([value.destination_config || { kind: 'personal' }, value.permission_policy || 'private', value.notify_self, [...value.groups].sort(), (value.contacts || []).map(contact => contact.open_id).sort()]);
+  const target = (value: AutomaticTarget) => JSON.stringify([value.destination_config || { kind: 'personal' }, value.permission_policy || 'private', value.notify_self, [...value.groups].sort(), (value.contacts || []).map(contact => contact.open_id).sort(), !!value.notify_participants, !!value.group_meeting_versions]);
   const contactIds = (value?: AutomaticTarget) => JSON.stringify([...new Set((value?.contacts || []).map(contact => contact.open_id))].sort());
   return contactIds(next) !== contactIds(saved) || next.auto_publish && (!saved?.auto_publish || target(next) !== target(saved));
 }
@@ -156,7 +159,7 @@ export const feishuGroups = () => apiJson<FeishuGroup[]>("/api/feishu/groups");
 export const deliveryStatus = (key: string) =>
   apiJson<Delivery | null>("/api/feishu/deliveries/" + encodeURIComponent(key));
 export type AutomaticDeliveryLocal = {
-  status: 'queued' | 'submitting' | 'unknown' | 'accepted' | 'failed' | 'cancelled';
+  status: 'queued' | 'submitting' | 'unknown' | 'accepted' | 'failed' | 'cancelled' | 'waiting_participants';
   error?: string; job_id?: string | null; operation_id?: string; can_check?: boolean;
 };
 async function automaticDeliveryLocal(noteId: string, check: boolean): Promise<AutomaticDeliveryLocal | null> {

@@ -27,6 +27,16 @@ def create_summary_regeneration_router(service=None, principal=None, note_servic
     active = active or (lambda task: False)
     router = APIRouter(tags=['notes'])
 
+    @router.get('/task/{task_id}/summary-presentation')
+    def presentation(task_id: str, response: Response, user=Depends(principal)):
+        from app.services.summary_presentation_artifact import read_presentation
+        from fastapi import HTTPException
+        payload = read_presentation(service.artifacts, user.user_id, task_id)
+        if payload is None:
+            raise HTTPException(404, 'Presentation not found')
+        response.headers['Cache-Control'] = 'private, no-store'
+        return payload
+
     @router.get('/task/{task_id}/summary-context')
     def context(task_id: str, response: Response, user=Depends(principal)):
         response.headers['Cache-Control'] = 'private, no-store'

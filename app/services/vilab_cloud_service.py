@@ -158,18 +158,12 @@ class VILabCloudService:
 
 
     def request(self, user_id, method, path, **kwargs):
-        if not settings.vilab_server_url:
+        config = self.status(user_id)
+        server_url = config.get("server_url") or settings.vilab_server_url
+        if not server_url:
             raise HTTPException(503, "云端模型服务尚未配置，请联系管理员")
-        server_url = self.status(user_id).get("server_url") or settings.vilab_server_url
-        headers = {}
-        if settings.content_cloud_runtime:
-            from app.services.cloud_content_identity import content_bearer
-            headers["Authorization"] = "Bearer " + content_bearer(user_id)
-        elif settings.cloud_auth_url:
-            from app.services.cloud_account_service import CloudAccountService
-            headers["Authorization"] = "Bearer " + CloudAccountService().access_token(user_id)
-        elif settings.vilab_api_key:
-            headers["Authorization"] = "Bearer " + settings.vilab_api_key
+        headers = self.authorization(user_id, server_url, config.get("connection_id"), config.get("connection_auth_mode"))
+        kwargs.setdefault("follow_redirects", False)
         try:
             timeout = kwargs.pop("timeout", 300)
             if path == "/openai/v1/chat/completions" and (kwargs.get("json") or {}).get("stream") is True:
@@ -209,16 +203,43 @@ class VILabCloudService:
             raise HTTPException(502, f"云端模型请求失败（HTTP {response.status_code}）")
         return response.json()
 
+    def authorization(self, user_id, server_url, connection_id=None, auth_mode=None):
+        """Resolve auth only for the exact immutable owner/Origin binding."""
+        from app.services.vilab_connection_service import VILabConnectionService
+        connections = VILabConnectionService(session_scope)
+        if connection_id:
+            return connections.authorization(user_id, server_url, connection_id, auth_mode)
+        if server_url.rstrip("/") != settings.vilab_server_url.rstrip("/"):
+            raise HTTPException(409, "原任务服务来源未绑定，未向其他服务发送账号令牌")
+        headers = {}
+        if settings.content_cloud_runtime:
+            from app.services.cloud_content_identity import content_bearer
+            headers["Authorization"] = "Bearer " + content_bearer(user_id)
+        elif settings.cloud_auth_url:
+            from app.services.cloud_account_service import CloudAccountService
+            headers["Authorization"] = "Bearer " + CloudAccountService().access_token(user_id)
+        elif settings.vilab_api_key:
+            headers["Authorization"] = "Bearer " + settings.vilab_api_key
+        return headers
+
     def status(self, user_id):
         snapshot = _task_source.get()
         if snapshot and snapshot[0] == user_id:
             return dict(snapshot[1])
         with session_scope() as db:
             row = db.get(VILabPreferenceDB, user_id)
-            return {"configured": bool(settings.vilab_server_url),
+            defaults = {"configured": bool(settings.vilab_server_url),
                     "server_url": settings.vilab_server_url,
                     "mode": row.mode if row else ("cloud" if settings.vilab_server_url else "local"),
                     "asr_model": row.asr_model if row else "", "llm_model": row.llm_model if row else ""}
+        from app.services.vilab_connection_service import VILabConnectionService
+        return VILabConnectionService(session_scope).current(user_id, defaults)
+
+    def connection_snapshot(self, user_id):
+        """Read selected connection, without catalog access or credential export."""
+        config = self.status(user_id)
+        return {key: config[key] for key in ("configured", "mode", "server_url", "asr_model", "llm_model", "connection_id", "connection_auth_mode")
+                if key in config}
 
     @contextmanager
     def task_snapshot(self, user_id, *, snapshot=None):
@@ -238,6 +259,10 @@ class VILabCloudService:
 
     def models(self, user_id):
         data = self.request(user_id, "GET", "/v1/models")
+        return self.catalog(data)
+
+    @staticmethod
+    def catalog(data):
         return [{"id": m["id"], "modelType": m["modelType"], "runtimeStatus": m.get("runtimeStatus", ""),
                  **({"availability": m["availability"]} if "availability" in m else {}),
                  **({"capabilities": m["capabilities"]} if isinstance(m.get("capabilities"), dict) else {}),
@@ -247,9 +272,15 @@ class VILabCloudService:
                     and not any(ord(char) < 32 or ord(char) == 127 for char in value)}}
                 for m in data.get("data", []) if isinstance(m, dict) and isinstance(m.get("id"), str) and m.get("modelType") in {"asr", "llm"}]
 
-    def select(self, user_id, mode, asr_model, llm_model):
+    def select(self, user_id, mode, asr_model, llm_model, *, connection_id=None, connection_revision=None):
+        config = self.status(user_id) if mode == "cloud" else {}
+        if mode == "cloud" and (connection_revision is not None or connection_id is not None) and (
+                connection_revision != config.get("connection_revision") or
+                (connection_id or None) != config.get("connection_id")):
+            raise HTTPException(409, "模型连接已变化，请重新读取后选择模型")
         if mode == "cloud":
-            models = self.models(user_id)
+            with self.task_snapshot(user_id, snapshot=config):
+                models = self.models(user_id)
             for name, kind in [(asr_model, "asr"), (llm_model, "llm")]:
                 if name:
                     self._validate_selection(models, name, kind)
@@ -260,7 +291,22 @@ class VILabCloudService:
                 db.add(row)
             row.mode = mode
             if mode == "cloud":
-                row.asr_model, row.llm_model = asr_model, llm_model
+                from app.db_models import VILabConnectionDB, VILabConnectionStateDB
+                state = db.get(VILabConnectionStateDB, user_id)
+                if ((getattr(state, "connection_id", "") or None) != config.get("connection_id") or
+                        getattr(state, "revision", "") != config.get("connection_revision", "")):
+                    raise HTTPException(409, "模型连接已变化，请重新读取后选择模型")
+                if state:
+                    import uuid
+                    from sqlalchemy import update
+                    changed = db.execute(update(VILabConnectionStateDB).where(
+                        VILabConnectionStateDB.user_id == user_id,
+                        VILabConnectionStateDB.revision == config["connection_revision"]
+                    ).values(revision=str(uuid.uuid4())))
+                    if changed.rowcount != 1:
+                        raise HTTPException(409, "模型连接已变化，请重新读取后选择模型")
+                selected = db.get(VILabConnectionDB, state.connection_id) if getattr(state, "connection_id", "") else row
+                selected.asr_model, selected.llm_model = asr_model, llm_model
         return self.status(user_id)
 
     def set_mode(self, user_id, mode):

@@ -2,7 +2,9 @@ import { useMeetingTaskStates } from '@/hooks/useMeetingTaskStates';
 import { ImportedMeetingSources } from '@/components/MeetingRecorder/ImportedMeetingSources';
 import { TextReveal } from "@/components/ui/motion";
 import { isMeetingProcessing } from "../lib/meetingProcessing";
-import { MeetingWorkbench } from "../components/MeetingRecorder/MeetingWorkbench";
+import { MeetingWorkbench, type MeetingArchiveView, type MeetingLocator } from "../components/MeetingRecorder/MeetingWorkbench";
+import { PageReturn } from '@/components/Layout/PageReturn';
+import { resolvePageParent } from '@/lib/navigation';
 import { useLibraryNotes, libraryNoteUrl } from "@/hooks/useLibraryNotes";
 import { publishToFeishu } from "../lib/feishu";
 import {
@@ -55,10 +57,38 @@ import { MicrophoneCheck } from '../components/MeetingRecorder/MicrophoneCheck';
 
 const capturePhases = ["requesting", "recording", "paused", "stopping"];
 
+function meetingLocator(params: URLSearchParams, state: unknown, ownerId: string | undefined, requestId: string): MeetingLocator | undefined {
+  const saved = state && typeof state === 'object' && 'meetingLocator' in state ? state.meetingLocator : undefined;
+  const fields = { noteId: 'locate_note', taskId: 'locate_task', recordingId: 'locate_recording' } as const;
+  if (!saved && ![...Object.values(fields), 'locate_focus'].some(key => params.has(key))) return undefined;
+  const record = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved as Record<string, unknown> : {};
+  let invalid = !!saved && (!Object.keys(record).length || record.ownerId !== ownerId);
+  const target: MeetingLocator = { requestId, ownerId };
+  for (const [field, key] of Object.entries(fields) as [keyof typeof fields, string][]) {
+    const fromUrl = params.get(key), fromState = record[field];
+    if (params.getAll(key).length > 1 || fromUrl !== null && fromState !== undefined && fromUrl !== fromState) invalid = true;
+    const value = fromUrl ?? fromState;
+    if (value !== undefined && value !== null) {
+      if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(value)) invalid = true;
+      else target[field] = value;
+    }
+  }
+  const fromUrl = params.get('locate_focus'), fromState = record.focus;
+  if (params.getAll('locate_focus').length > 1 || fromUrl !== null && fromState !== undefined && fromUrl !== fromState) invalid = true;
+  const focus = params.has('locate_focus') ? fromUrl : fromState;
+  if (focus !== undefined) {
+    if (focus !== 'meeting') invalid = true;
+    else target.focus = focus;
+  }
+  return { ...target, invalid };
+}
+
 export function Meetings() {
   const [params, setParams] = useSearchParams();
   const location = useLocation();
-  const archived = params.get('archived') === '1';
+  // Old ?archived= links still open the complete meeting collection. Personal
+  // archive metadata no longer defines whether content has a meeting dossier.
+  const meetingView: MeetingArchiveView = params.get('view') === 'pending' ? 'pending' : 'meetings';
   const userId = useAuthStore((state) => state.user?.id);
   const [pending, setPending] = useState<PendingMeeting[]>([]);
   const [options, setOptions] = useState(DEFAULT_CAPTURE_OPTIONS);
@@ -88,6 +118,22 @@ export function Meetings() {
   const { loading, error: notesError, loadNotes } = useNoteLibraryStore();
   const notes = useLibraryNotes();
   const { currentWorkspace, teams } = useTeamStore();
+  const readScope = JSON.stringify([userId, currentWorkspace]);
+  const [readiness, setReadiness] = useState({ scope: '', ready: false });
+  const locator = meetingLocator(params, location.state, userId, JSON.stringify([location.key, location.search, readScope]));
+  const filesParent = [params.get('returnTo'), params.get('sourceReturnTo'), location.state?.returnTo, location.state?.sourceReturnTo]
+    .map(value => resolvePageParent(value, '')).find(value => value.split(/[?#]/)[0] === '/files');
+  const readonlyArchiveVisit = !!locator || !!filesParent;
+  const withoutLocatorState = () => {
+    const state = location.state && typeof location.state === 'object' ? { ...location.state } : {};
+    delete state.meetingLocator;
+    return state;
+  };
+  const clearLocator = () => {
+    const next = new URLSearchParams(params);
+    for (const key of ['locate_note', 'locate_task', 'locate_recording', 'locate_focus']) next.delete(key);
+    navigate({ pathname: location.pathname, search: next.toString() ? '?' + next.toString() : '', hash: location.hash }, { replace: true, state: withoutLocatorState() });
+  };
   const session = useMeetingRecorderStore();
   const isCapturing = capturePhases.includes(session.phase);
   const busy = isMeetingBusy(session);
@@ -111,14 +157,15 @@ export function Meetings() {
   );
   const meetingNotes = notes.filter(
     (note) =>
-      ["meeting_recording", "meeting_video"].includes(note.sourceType || ""),
+      !!note.meetingSource && note.meetingSource.ownerId === userId || ["meeting_recording", "meeting_video"].includes(note.sourceType || ""),
   );
 
   const meetingTaskStates = useMeetingTaskStates(meetingNotes, JSON.stringify([location.key, location.pathname, location.search, currentWorkspace]));
 
   useEffect(() => {
-    void loadNotes(currentWorkspace);
     let active = true;
+    setReadiness({ scope: readScope, ready: false });
+    void Promise.resolve(loadNotes(currentWorkspace)).finally(() => { if (active) setReadiness({ scope: readScope, ready: true }); });
     setPending([]);
     setHistoryError("");
     setHistoryLoading(!!userId);
@@ -143,6 +190,9 @@ export function Meetings() {
     };
   }, [currentWorkspace, loadNotes, session.phase, userId, zh, historyAttempt]);
   useEffect(() => {
+    // File-library navigation only reads the dossier. It must not activate the
+    // legacy restore event or pending Feishu publication while locating it.
+    if (readonlyArchiveVisit) return;
     let active = true;
     let refreshing = false;
     const refresh = () => {
@@ -260,7 +310,7 @@ export function Meetings() {
       active = false;
       window.clearInterval(timer);
     };
-  }, [userId, session.recordingId, session.phase]);
+  }, [userId, session.recordingId, session.phase, readonlyArchiveVisit]);
   useEffect(() => {
     void apiJson<{ diarization: { available: boolean } }>(
       "/api/meeting-capabilities",
@@ -340,6 +390,7 @@ export function Meetings() {
 
   return (
     <div className="workspace-page pb-24">
+      {filesParent && <PageReturn contextual={false} to={filesParent} label="返回文件库" />}
       <SavedRecordingChoice />
       <header className="flex items-start justify-between gap-4">
         <div>
@@ -435,13 +486,21 @@ export function Meetings() {
           key={userId + JSON.stringify(currentWorkspace)}
           recordings={workspacePending}
           notes={meetingNotes}
-          archived={archived}
-          onArchiveChange={(value) => setParams(previous => {
-            const next = new URLSearchParams(previous);
-            value ? next.set('archived', '1') : next.delete('archived');
-            return next;
-          })}
-          loading={loading || historyLoading}
+          view={meetingView}
+          locator={locator}
+          locateError={notesError || historyError}
+          onLocateRetry={() => setHistoryAttempt(value => value + 1)}
+          onClearLocator={clearLocator}
+          associationContextKey={JSON.stringify([location.key, location.pathname, location.search, location.hash, currentWorkspace])}
+          onAssociated={() => loadNotes(currentWorkspace)}
+          onViewChange={value => {
+            const next = new URLSearchParams(params);
+            next.delete('archived');
+            for (const key of ['locate_note', 'locate_task', 'locate_recording', 'locate_focus']) next.delete(key);
+            value === 'pending' ? next.set('view', 'pending') : next.delete('view');
+            navigate({ pathname: location.pathname, search: next.toString() ? '?' + next.toString() : '', hash: location.hash }, { state: withoutLocatorState() });
+          }}
+          loading={loading || historyLoading || !!locator && (readiness.scope !== readScope || !readiness.ready)}
           onOpenNote={(id, edit) => {
             const note = notes.find((n) => n.id === id);
             const target = new URL(note ? libraryNoteUrl(note) : "/note/" + encodeURIComponent(id), 'https://vinote.invalid');
@@ -470,7 +529,10 @@ export function Meetings() {
           }
         />
       )}
-      {!isCapturing && <ImportedMeetingSources owner={userId} coveredTasks={[...notes.map(note => note.taskId), ...pending.map(record => record.taskId)].filter((id): id is string => !!id)} returnTo={location.pathname + location.search + location.hash} />}
+      {!isCapturing && meetingView === 'meetings' && <ImportedMeetingSources owner={userId} coveredTasks={[
+        ...notes.flatMap(note => [note.taskId, note.meetingSource && note.meetingSource.ownerId === userId ? note.meetingSource.canonicalTaskId : undefined]),
+        ...pending.map(record => record.taskId),
+      ].filter((id): id is string => !!id)} returnTo={location.pathname + location.search + location.hash} />}
     </div>
   );
 }

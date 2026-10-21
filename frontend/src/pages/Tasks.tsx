@@ -1,11 +1,12 @@
 import { sourceHistoryAction } from '@/lib/taskRecoveryView';
+import { isRejectedVersionReceipt, readVersionReceipt, meetingVersionDetails } from '@/lib/meetingVersionRecovery';
+import { depthLabels, presentationLabels } from '@/lib/summaryPresentation';
+import { readMeetingVersionHistory, unverifiedVersionHistory, versionHistoryTitle, type VersionHistory } from '@/lib/meetingVersionHistory';
 import { useEffect, useState } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
 import { RefreshCw } from "lucide-react";
-import { apiJson } from "@/lib/api";
 import { listPendingMeetings, type PendingMeeting } from "@/lib/audioStorage";
 import { useAuthStore } from "@/stores/authStore";
-import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { deliveryStatus, type Delivery } from "@/lib/feishu";
 import { listMCPRuns, mcpRunLabel, type MCPRun } from "@/lib/mcpConnections";
 import { useLibraryNotes, libraryNoteUrl } from "@/hooks/useLibraryNotes";
@@ -21,16 +22,12 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
-type Job = {
-  id: string;
-  note_key: string;
-  status: string;
-  error: string;
-  model: string;
-  updated_at: string;
-  has_result: boolean;
-};
 export function Tasks() {
+  const owner = useAuthStore((s) => s.user?.id);
+  return <TasksPage key={owner || 'signed-out'} owner={owner} />;
+}
+
+function TasksPage({ owner }: { owner?: string }) {
   const [params, setParams] = useSearchParams();
   const historyReturn = `/tasks${params.toString() ? `?${params.toString()}` : ''}`;
   const tab = ["generation", "feishu", "mcp"].includes(
@@ -38,14 +35,12 @@ export function Tasks() {
   )
     ? params.get("tab")!
     : "generation";
-  const owner = useAuthStore((s) => s.user?.id);
   const notes = useLibraryNotes();
-  const sync = useWorkspaceStore();
   const legacySync = params.get('tab') === 'sync';
   const [recordings, setRecordings] = useState<PendingMeeting[]>([]);
   type SourceImport = { id?: string; operationId?: string; meeting: boolean; mode?: string; submissionState?: string };
   const [imports, setImports] = useState<SourceImport[]>([]);
-  const [jobs, setJobs] = useState<Job[]>([]);
+  const [versionStates, setVersionStates] = useState<Record<string, VersionHistory>>({});
   const [runs, setRuns] = useState<MCPRun[]>([]);
   const [deliveries, setDeliveries] = useState<
     { noteId: string; title: string; url: string; job: Delivery }[]
@@ -56,11 +51,14 @@ export function Tasks() {
   useEffect(() => {
     if (legacySync) return;
     let active = true;
+    const controller = new AbortController();
     setLoading(true);
     setError("");
+    setVersionStates({});
     const load = async () => {
       if (tab === "generation") {
         const accepted = new Map<string, SourceImport>();
+        const snapshots = new Map<string, { key: string; raw: string }>();
         const keys = owner ? ['note', 'meeting'].map(kind => `vinote:import-receipt:${owner}:${kind}`) : [];
         if (owner) for (let index = 0; index < localStorage.length; index++) {
           const key = localStorage.key(index);
@@ -69,15 +67,35 @@ export function Tasks() {
         for (const key of keys) {
           const raw = localStorage.getItem(key);
           if (raw) {
-            const saved = JSON.parse(raw);
-            if ((typeof saved.id === 'string' && saved.id || typeof saved.operationId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(saved.operationId)) && typeof saved.meeting === 'boolean') accepted.set(saved.operationId || saved.id, saved);
+            const saved = owner && key.startsWith(`vinote:source-receipt:${owner}:`)
+              ? readVersionReceipt(localStorage, owner, key.slice(`vinote:source-receipt:${owner}:`.length)) as SourceImport
+              : JSON.parse(raw);
+            if (!saved) continue;
+            if ((typeof saved.id === 'string' && saved.id || typeof saved.operationId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(saved.operationId)) && typeof saved.meeting === 'boolean') {
+              const identity = saved.operationId || saved.id;
+              accepted.set(identity, saved);
+              snapshots.set(identity, { key, raw });
+            }
           }
         }
         if (active) setImports([...accepted.values()]);
-        const local = owner ? await listPendingMeetings(owner) : [];
-        if (active) setRecordings(local);
-        const remote = await apiJson<Job[]>("/api/workspace/jobs");
-        if (active) setJobs(remote);
+        const statuses = async () => {
+          for (const [identity, item] of accepted) {
+            if (!active) return;
+            if (!meetingVersionDetails(item, owner) || isRejectedVersionReceipt(item, owner)) continue;
+            const snapshot = snapshots.get(identity)!;
+            const current = () => active && localStorage.getItem(snapshot.key) === snapshot.raw;
+            const status = await readMeetingVersionHistory(item, controller.signal, current);
+            if (status && current()) setVersionStates(previous => ({ ...previous, [identity]: status }));
+          }
+        };
+        const device = async () => {
+          const local = owner ? await listPendingMeetings(owner) : [];
+          if (active) setRecordings(local);
+        };
+        const results = await Promise.allSettled([statuses(), device()]);
+        const failed = results.find(result => result.status === 'rejected');
+        if (failed?.status === 'rejected') throw failed.reason;
       } else if (tab === "mcp") {
         const next = await listMCPRuns();
         if (active) setRuns(next.runs);
@@ -107,8 +125,9 @@ export function Tasks() {
       });
     return () => {
       active = false;
+      controller.abort();
     };
-  }, [owner, tab, attempt, legacySync]);
+  }, [owner, tab, attempt, legacySync, historyReturn]);
   if (legacySync) return <Navigate replace to={'/settings/storage?' + new URLSearchParams({ returnTo: resolvePageParent(params.get('returnTo')) })} />;
   return (
     <div className="workspace-page max-w-5xl">
@@ -122,7 +141,7 @@ export function Tasks() {
             disabled={loading}
             onClick={() => setAttempt((n) => n + 1)}
           >
-            <RefreshCw />
+            <RefreshCw data-icon="inline-start" />
             刷新状态
           </Button>
         }
@@ -148,16 +167,33 @@ export function Tasks() {
       {loading && <LoadingState rows={1} label="正在更新任务状态…" />}
       {tab === "generation" && (
         <>
-          {imports.map((item) => <article key={item.operationId || item.id} className="grid gap-2 border-b pb-4">
-            <h2 className="font-medium">{item.meeting ? '会议导入任务' : '资料整理任务'}</h2>
-            <p className="text-sm text-muted-foreground">{item.operationId && item.submissionState !== 'accepted' ? item.submissionState === 'reserved' ? '已收到提交，排队状态待确认；请查询原任务。' : '提交状态待确认，原来源已保留，请查询原任务。' : '任务已接收，请查询原结果，避免重复生成。'}</p>
+          {imports.map((item) => {
+            const version = meetingVersionDetails(item, owner);
+            const rejected = isRejectedVersionReceipt(item, owner);
+            const status = version && !rejected ? versionStates[item.operationId || item.id || ''] || unverifiedVersionHistory() : null;
+            const operationUrl = `/generate?mode=${item.mode === 'url' ? 'url' : 'file'}${item.meeting ? '&meeting=1' : ''}${item.operationId ? `&operation=${encodeURIComponent(item.operationId)}` : item.id ? `&task=${encodeURIComponent(item.id)}` : ''}`;
+            const target = status?.noteId ? `/note/${encodeURIComponent(status.noteId)}`
+              : status?.taskId && !status.saveable && !status.failed ? `/generate?mode=file&meeting=1&task=${encodeURIComponent(status.taskId)}` : operationUrl;
+            return <article key={item.operationId || item.id} className="grid gap-2 border-b pb-4">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h2 className="text-balance font-medium">{version ? `${versionHistoryTitle(status?.title || version.title)} · 新版本` : item.meeting ? '会议导入任务' : '资料整理任务'}</h2>
+              {status && <Badge variant={status.failed ? 'destructive' : 'secondary'}>{status.label}</Badge>}
+            </div>
+            {version && <dl className="grid gap-2 text-sm sm:grid-cols-2">
+              {status?.title && <div><dt className="text-muted-foreground">录制来源</dt><dd>{versionHistoryTitle(version.title)}</dd></div>}
+              <div><dt className="text-muted-foreground">本次选择的总结模型</dt><dd className="break-words">{version.model}</dd></div>
+              <div><dt className="text-muted-foreground">内容与形式</dt><dd>{depthLabels[version.depth]} · {presentationLabels[version.presentation]}</dd></div>
+              <div><dt className="text-muted-foreground">语音识别</dt><dd>{version.reuse ? '复用已有转写' : '重新识别（已确认）'}</dd></div>
+              <div><dt className="text-muted-foreground">提交时间</dt><dd><time className="tabular-nums" dateTime={version.createdAt}>{new Date(version.createdAt).toLocaleString('zh-CN', { hour12: false })}</time></dd></div>
+            </dl>}
+            <p className="text-pretty text-sm text-muted-foreground">{rejected ? '本次未受理，未创建任务。失败记录已保留，重新生成需要返回来源再次核验确认。' : status ? status.detail : item.operationId && item.submissionState !== 'accepted' ? item.submissionState === 'reserved' ? '已收到提交，排队状态待确认；请查询原任务。' : '提交状态待确认，原来源已保留，请查询原任务。' : '任务已接收，请查询原结果，避免重复生成。'}</p>
             {import.meta.env.DEV && <details className="text-xs text-muted-foreground"><summary>开发诊断</summary>{item.operationId && <p>提交编号：{item.operationId}</p>}{item.id && <p>任务编号：{item.id}</p>}</details>}
-            <Button variant="outline" className="w-fit" asChild><Link to={`/generate?mode=${item.mode === 'url' ? 'url' : 'file'}${item.meeting ? '&meeting=1' : ''}${item.operationId ? `&operation=${encodeURIComponent(item.operationId)}` : item.id ? `&task=${encodeURIComponent(item.id)}` : ''}`} state={{ returnTo: historyReturn }}>{sourceHistoryAction(item)}</Link></Button>
-          </article>)}
+            <Button variant="outline" className="w-fit" asChild><Link to={target} state={{ returnTo: historyReturn }}>{rejected ? '查看未受理记录' : status?.action || sourceHistoryAction(item)}</Link></Button>
+          </article>})}
           {recordings.map((r) => (
             <article key={r.id} className="flex flex-col gap-2 border-b pb-4">
               <div className="flex justify-between gap-3">
-                <h2 className="font-medium">{r.options.title}</h2>
+                <h2 className="font-medium">{versionHistoryTitle(r.options.title)}</h2>
                 <Badge
                   variant={
                     r.processingStatus === "failed"
@@ -184,7 +220,7 @@ export function Tasks() {
                 </Badge>
               </div>
               <p className="text-xs text-muted-foreground">
-                原录音已保留 · {r.taskId ? "正在处理" : "尚未生成纪要"}
+                原录音已保留 · {r.noteId ? '纪要已保存' : r.processingStatus === 'completed' ? '生成已完成' : r.processingStatus === 'failed' ? '处理未完成' : r.taskId ? '查看处理记录' : '尚未生成纪要'}
               </p>
               {r.processingError && (
                 <p className="text-sm text-destructive">{r.processingError}</p>
@@ -198,33 +234,7 @@ export function Tasks() {
               </Button>
             </article>
           ))}
-          {jobs.map((job) => (
-            <article key={job.id} className="flex flex-col gap-2 border-b pb-4">
-              <h2 className="font-medium">
-                {sync.details[job.note_key]?.title || "纪要生成任务"}
-              </h2>
-              <p className="text-sm">
-                {(
-                  {
-                    completed: "已完成",
-                    succeeded: "已完成",
-                    failed: "失败",
-                    running: "处理中",
-                    processing: "处理中",
-                    queued: "排队中",
-                  } as Record<string, string>
-                )[job.status] || job.status}{" "}
-                · 共享内容服务
-              </p>
-              {job.error && (
-                <p className="text-sm text-destructive">{job.error}</p>
-              )}
-              <Button variant="outline" className="w-fit" asChild>
-                <Link to={`/workspace/${job.note_key}`} state={{ returnTo: historyReturn }}>查看内容与版本</Link>
-              </Button>
-            </article>
-          ))}
-          {!loading && !error && !recordings.length && !jobs.length && !imports.length && (
+          {!loading && !error && !recordings.length && !imports.length && (
             <EmptyState
               title="暂无生成任务"
               description="录制或导入资料，保存后可开始生成。"

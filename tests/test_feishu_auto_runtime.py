@@ -66,6 +66,70 @@ def receipt(c):
     return {'id': c.job, 'operation_id': c.operation, 'status': 'queued'}
 
 
+def test_unconfirmed_attendees_wait_without_repeated_submission(queue, monkeypatch):
+    calls = []
+
+    def prepare(row, **kwargs):
+        calls.append(row.id)
+        raise runtime.HandoffError('请确认本会议参会人', waiting_participants=True)
+
+    monkeypatch.setattr(runtime, '_request', prepare)
+    runtime.run_once()
+    runtime.run_once()
+    assert calls == [queue.operation]
+    assert row(queue).status == 'waiting_participants'
+    assert not row(queue).job_id
+
+
+def test_attendee_confirmation_resumes_only_original_waiting_intent(queue, monkeypatch):
+    from app.services import meeting_participants
+    from app.services.feishu_service import FeishuService
+    binding = dict(owner='alice', connection_id='synthetic-connection', sender_open_id='ou_sender',
+                   app_id='cli_synthetic', tenant_key='synthetic-tenant')
+    service = SimpleNamespace(contact_binding=lambda owner: binding)
+    monkeypatch.setattr(FeishuService, 'for_owner', lambda self, owner: service)
+    view = dict(can_confirm=True, canonical_task_id=str(uuid.uuid4()), evidence_revision='e' * 64,
+                confirmation={'status': 'confirmed', 'revision': 1})
+
+    def confirmed(current_service, owner, note):
+        assert current_service is service and owner == 'alice' and note == queue.note
+        return view
+
+    # Resume requires a verified same-meeting assertion; an authenticated note
+    # alone is not confirmation. Keep the test independent of device CLI state.
+    monkeypatch.setattr(meeting_participants, 'get_meeting_participants', confirmed)
+    monkeypatch.setattr(runtime, 'wake', lambda: None)
+    with queue.scope() as db:
+        db.get(FeishuAutoOutboxDB, queue.operation).status = 'waiting_participants'
+    original = row(queue).payload
+    runtime.resume_participants('alice', queue.note)
+    assert row(queue).status == 'queued'
+    assert row(queue).payload == original
+    assert row(queue).id == queue.operation
+    submitted = []
+    monkeypatch.setattr(runtime, '_request', lambda r, **kw: submitted.append(r.id) or receipt(queue))
+    runtime.run_once()
+    runtime.resume_participants('alice', queue.note)
+    runtime.run_once()
+    assert row(queue).status == 'accepted'
+    assert submitted == [queue.operation]
+
+
+@pytest.mark.parametrize('state', ['unknown', 'submitting', 'accepted', 'failed', 'cancelled'])
+def test_attendee_confirmation_cannot_replay_other_delivery_states(queue, state):
+    with queue.scope() as db:
+        db.get(FeishuAutoOutboxDB, queue.operation).status = state
+    runtime.resume_participants('alice', queue.note)
+    assert row(queue).status == state
+
+
+def test_attendee_confirmation_cannot_resume_another_owner(queue):
+    with queue.scope() as db:
+        db.get(FeishuAutoOutboxDB, queue.operation).status = 'waiting_participants'
+    runtime.resume_participants('bob', queue.note)
+    assert row(queue).status == 'waiting_participants'
+
+
 def test_queue_survives_caller_exit_and_is_dispatched_once(queue, monkeypatch):
     c, calls = queue, []
     monkeypatch.setattr(runtime, '_request', lambda r, **kw: calls.append((r.payload, kw)) or receipt(c))
@@ -201,8 +265,11 @@ def test_owner_scoped_local_status_and_check_are_http_readback_only(queue, monke
         assert calls == []
 
 
-def test_manual_post_can_cancel_only_queued_auto_intent(queue):
+@pytest.mark.parametrize('status', ['queued', 'waiting_participants'])
+def test_manual_post_can_cancel_only_definitely_unsent_auto_intent(queue, status):
     c = queue
+    with c.scope() as db:
+        db.get(FeishuAutoOutboxDB, c.operation).status = status
     runtime.guard_manual_publish(('alice', 'alice'), c.note)
     assert row(c).status == 'cancelled'
 

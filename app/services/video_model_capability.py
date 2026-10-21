@@ -3,9 +3,11 @@ import base64
 import hashlib
 import io
 import json
+import logging
 import math
 import os
 import re
+import stat
 import threading
 import time
 import uuid
@@ -17,6 +19,7 @@ from PIL import Image, ImageDraw
 _LOCK = threading.Lock()
 _TTL = 7 * 86400
 _RECEIPT_PROTOCOL = 2  # Completed requires a checked, non-refusal stop response.
+_logger = logging.getLogger(__name__)
 
 
 def _probe_answer(payload):
@@ -73,8 +76,46 @@ def _capability_lock(path):
         os.close(descriptor)
 
 
+def _completed_receipt(path, identity):
+    """Only a stable, fully validated terminal receipt is reusable without a lock.
+
+    None means absent, never pending/unknown/expired. Invalid existing records
+    must not authorize a new paid request or a rewrite of historical evidence.
+    """
+    try:
+        before = path.lstat()
+    except FileNotFoundError:
+        return None
+    try:
+        if (not stat.S_ISREG(before.st_mode) or before.st_nlink != 1 or before.st_size > 4096
+                or getattr(path, 'is_junction', lambda: False)()):
+            raise ValueError('Invalid receipt')
+        with path.open('rb') as handle:
+            opened = os.fstat(handle.fileno())
+            data = handle.read(4097)
+            after = os.fstat(handle.fileno())
+        stamp = lambda info: (info.st_dev, info.st_ino, info.st_mode, info.st_nlink,
+                              info.st_size, info.st_mtime_ns)
+        if (len(data) > 4096 or stamp(before) != stamp(opened) or stamp(opened) != stamp(after)
+                or stamp(path.lstat()) != stamp(before)):
+            raise ValueError('Unstable receipt')
+        saved = json.loads(data)
+        if (not isinstance(saved, dict) or saved.get('identity') != identity
+                or type(saved.get('protocol')) is not int or saved['protocol'] != _RECEIPT_PROTOCOL
+                or saved.get('state') != 'completed' or type(saved.get('supported')) is not bool
+                or saved.get('finish_reason') != 'stop'):
+            raise ValueError('Invalid receipt')
+        checked, now = saved.get('checked_at'), time.time()
+        if (type(checked) not in (int, float) or not math.isfinite(checked)
+                or checked > now or not 0 <= now - checked < _TTL):
+            raise ValueError('Invalid or expired receipt')
+        return saved['supported']
+    except (OSError, KeyError, TypeError, ValueError):
+        raise ValueError('画面能力核验记录不能确认，未重复调用') from None
+
+
 def verify_image_input(owner: str, model: str, *, root: Path | None = None, cloud=None,
-                       catalog_entry: dict | None = None) -> bool:
+                       catalog_entry: dict | None = None, image_format: str = 'png') -> bool:
     """Never infer multimodal support from a model name or replay an unknown probe.
 
     Only a synthetic image is sent. Meeting media is not used for capability
@@ -83,6 +124,8 @@ def verify_image_input(owner: str, model: str, *, root: Path | None = None, clou
     from app.config import settings
     from app.services.vilab_cloud_service import VILabCloudService
     from app.services.video_evidence_service import supports_images
+    if image_format not in {'png', 'webp'}:
+        raise ValueError('不支持的图片核验格式')
     cloud = cloud or VILabCloudService()
     entry = catalog_entry or next((row for row in cloud.models(owner)
                   if row.get('id') == model and row.get('modelType') == 'llm'), None)
@@ -92,37 +135,35 @@ def verify_image_input(owner: str, model: str, *, root: Path | None = None, clou
     vision = capabilities.get('vision')
     if (isinstance(vision, bool) or isinstance(vision, dict) and
             (isinstance(vision.get('supported'), bool) or vision.get('status') in {'supported', 'unsupported'})):
-        return supports_images(capabilities)
+        # General image support does not establish acceptance of another MIME.
+        if image_format == 'png' or not supports_images(capabilities):
+            return supports_images(capabilities)
     origin = cloud.status(owner)['server_url'].rstrip('/')
-    identity = hashlib.sha256(json.dumps([owner, origin, model], ensure_ascii=False).encode()).hexdigest()
+    parts = [owner, origin, model]
+    if image_format != 'png':
+        parts.append('image/' + image_format)
+    # Preserve every existing PNG receipt identity and its query-only outcome.
+    identity = hashlib.sha256(json.dumps(parts, ensure_ascii=False).encode()).hexdigest()
     folder = Path(root) if root is not None else Path(settings.data_dir) / 'image-input-checks'
-    if folder.is_symlink():
+    if folder.is_symlink() or getattr(folder, 'is_junction', lambda: False)():
         raise ValueError('画面能力核验位置异常')
     folder.mkdir(parents=True, exist_ok=True)
     path = folder / f'{identity}.json'
+    try:
+        cached = _completed_receipt(path, identity)
+    except (OSError, ValueError):
+        # Only validated completed evidence bypasses the claim. All other
+        # states still enter the original nonblocking lock and revalidate.
+        cached = None
+    if cached is not None:
+        return cached
     with _LOCK, _capability_lock(folder / f'{identity}.lock'):
-        if path.is_symlink():
-            raise ValueError('画面能力核验记录异常')
-        if path.exists():
-            try:
-                if path.stat().st_size > 4096:
-                    raise ValueError('Invalid receipt')
-                saved = json.loads(path.read_text(encoding='utf-8'))
-                if (saved.get('identity') != identity or saved.get('protocol') != _RECEIPT_PROTOCOL
-                        or type(saved.get('supported')) is not bool or saved.get('finish_reason') != 'stop'):
-                    raise ValueError('Invalid receipt')
-                if saved.get('state') != 'completed':
-                    raise ValueError('上次画面能力核验结果尚未确认，未重复调用')
-                checked = saved['checked_at']
-                if type(checked) not in (int, float) or not math.isfinite(checked) or checked > time.time():
-                    raise ValueError('Invalid receipt')
-                if time.time() - checked < _TTL:
-                    return saved['supported']
-            except (OSError, KeyError, TypeError, ValueError):
-                raise ValueError('画面能力核验记录不能确认，未重复调用') from None
+        cached = _completed_receipt(path, identity)
+        if cached is not None:
+            return cached
         record = {'protocol': _RECEIPT_PROTOCOL, 'identity': identity, 'state': 'pending', 'checked_at': time.time()}
         # Reserve before the paid request. Unknown transport outcomes remain pending.
-        with path.open('w', encoding='utf-8') as handle:
+        with path.open('x', encoding='utf-8') as handle:
             json.dump(record, handle)
             handle.flush()
             os.fsync(handle.fileno())
@@ -131,8 +172,8 @@ def verify_image_input(owner: str, model: str, *, root: Path | None = None, clou
         draw.ellipse((30, 30, 150, 150), fill=(220, 30, 30))
         draw.rectangle((260, 30, 380, 150), fill=(20, 70, 220))
         buffer = io.BytesIO()
-        picture.save(buffer, format='PNG')
-        image = 'data:image/png;base64,' + base64.b64encode(buffer.getvalue()).decode()
+        picture.save(buffer, format=image_format.upper(), **({'quality': 80, 'method': 4} if image_format == 'webp' else {}))
+        image = f'data:image/{image_format};base64,' + base64.b64encode(buffer.getvalue()).decode()
         payload = cloud.request(owner, 'POST', '/openai/v1/chat/completions', timeout=180,
             json={'model': model, 'stream': False, 'messages': [{'role': 'user', 'content': [
                 {'type': 'text', 'text': 'Describe only the color and shape on the LEFT and RIGHT of this image. Answer in English. Do not guess if image input is unavailable.'},
@@ -147,3 +188,23 @@ def verify_image_input(owner: str, model: str, *, root: Path | None = None, clou
         temporary.write_text(json.dumps(record), encoding='utf-8')
         os.replace(temporary, path)
         return supported
+
+
+def verify_optional_webp_input(owner: str, model: str, *, image_input_verified: bool,
+                               root: Path | None = None, cloud=None,
+                               catalog_entry: dict | None = None) -> bool:
+    """Optional wire encoding never overrides the required image-input check.
+
+    A separate MIME-bound synthetic check can authorize WebP. Its pending/error
+    receipt remains untouched and is never replayed; using the already-admitted
+    original JPEG representation is not a probe retry or model fallback.
+    """
+    if image_input_verified is not True:
+        return False
+    try:
+        return verify_image_input(owner, model, root=root, cloud=cloud,
+                                  catalog_entry=catalog_entry, image_format='webp')
+    except Exception as error:
+        _logger.info('Optional WebP check unconfirmed; retaining original image encoding: kind=%s',
+                     type(error).__name__)
+        return False

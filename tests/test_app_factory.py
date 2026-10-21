@@ -25,6 +25,10 @@ class AppFactoryTest(unittest.TestCase):
 
         self.assertNotIn("/api/stt-profiles/local-support/install", route_paths)
 
+    def test_summary_visual_read_route_is_registered(self):
+        app = create_app()
+        self.assertEqual(1, sum(route.path == '/api/task/{task_id}/summary-visual' for route in app.routes))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -1,5 +1,6 @@
 """Synthetic media only: full-timeline selection and honest evidence transport."""
 from pathlib import Path
+import json
 from unittest.mock import Mock
 
 import pytest
@@ -54,6 +55,12 @@ def test_scan_covers_beginning_middle_tail_and_detects_small_whiteboard_edits(mo
     prompt = evidence.text_material()
     assert 'A proposal' not in prompt  # Do not duplicate or mutate full speech source.
     assert 'temporal overlap does not establish' in prompt
+    material = json.loads(prompt.split('\n')[-1])
+    assert [row['source_ref'] for row in material['frames']] == [
+        f'[FRAME:{index + 1:04d}]' for index in range(len(evidence.frames))]
+    for row, actual in zip(material['frames'], evidence.frames):
+        assert row['offset_seconds'] == actual.timestamp
+        assert row['visible_text'] == actual.ocr_text
     assert source.read_bytes() == b'retained-original'
 
 
@@ -154,6 +161,75 @@ def test_verified_task_source_cache_reuses_frames_and_refreshes_alignment(monkey
     saved = json.loads((folder / 'video_evidence.json').read_text(encoding='utf-8'))
     assert saved['frames'][0]['speech_indices'] == [0]
     assert str(source) not in str(saved)
+
+
+@pytest.mark.parametrize('cached', [False, True], ids=['fresh', 'cached'])
+@pytest.mark.parametrize('allow_webp', [False, True], ids=['jpeg', 'webp'])
+def test_collected_manifest_hash_blocks_mutation_before_first_send(monkeypatch, tmp_path, cached, allow_webp):
+    from app.services import video_input_encoding
+    service, source, _ = configure_local(monkeypatch, tmp_path, list(synthetic_scan(1)), duration=1)
+    folder = tmp_path / 'task'
+    evidence = service.collect(local_video_path=source, task_dir=folder, transcript_segments=[])
+    if cached:
+        evidence = service.collect(local_video_path=source, task_dir=folder, transcript_segments=[])
+    assert evidence.cache_hit is cached
+    manifest = (folder / 'video_evidence.json').read_bytes()
+    # Change only JFIF metadata: same length, complete JPEG, same decoded image.
+    frame = evidence.frames[0].image_path
+    original = frame.read_bytes()
+    changed = bytearray(original)
+    changed[original.index(b'JFIF\x00') + 7] ^= 1
+    frame.write_bytes(changed)
+    encode = Mock(side_effect=AssertionError('changed source must fail before encoding'))
+    monkeypatch.setattr(video_input_encoding, 'encode_video_input', encode)
+    with pytest.raises(VideoEvidenceError, match='变化'):
+        evidence.user_content('first draft', capabilities={
+            'vision': True, '_vinote_webp_verified': allow_webp})
+    encode.assert_not_called()
+    assert evidence.input_receipt() is None
+    assert (folder / 'video_evidence.json').read_bytes() == manifest
+
+
+def test_fresh_hash_snapshot_is_not_rebound_from_mutable_manifest(monkeypatch, tmp_path):
+    import hashlib
+    service, source, _ = configure_local(monkeypatch, tmp_path, list(synthetic_scan(1)), duration=1)
+    evidence = service.collect(local_video_path=source, task_dir=tmp_path/'task', transcript_segments=[])
+    frame = evidence.frames[0].image_path
+    Image.new('RGB', (64, 36), 'red').save(frame, format='JPEG')
+    evidence._manifest_payload['frames'][0]['image_sha256'] = hashlib.sha256(frame.read_bytes()).hexdigest()
+    with pytest.raises(VideoEvidenceError, match='变化'):
+        evidence.user_content('draft', capabilities={'vision': True})
+
+
+@pytest.mark.parametrize('cached', [False, True], ids=['fresh', 'cached'])
+def test_collected_input_cannot_switch_to_unbound_frame_path(monkeypatch, tmp_path, cached):
+    service, source, _ = configure_local(monkeypatch, tmp_path, list(synthetic_scan(1)), duration=1)
+    folder = tmp_path/'task'
+    evidence = service.collect(local_video_path=source, task_dir=folder, transcript_segments=[])
+    if cached:
+        evidence = service.collect(local_video_path=source, task_dir=folder, transcript_segments=[])
+    other = tmp_path/'unbound.jpg'
+    other.write_bytes(evidence.frames[0].image_path.read_bytes())
+    evidence.frames[0].image_path = other
+    with pytest.raises(VideoEvidenceError, match='变化'):
+        evidence.user_content('draft', capabilities={'vision': True})
+
+
+def test_collected_hashes_match_manifest_and_stay_stable_through_alignment(monkeypatch, tmp_path):
+    import base64
+    service, source, _ = configure_local(monkeypatch, tmp_path, list(synthetic_scan(1)), duration=1)
+    folder = tmp_path/'task'
+    for cached in (False, True):
+        evidence = service.collect(local_video_path=source, task_dir=folder, transcript_segments=[])
+        assert evidence.cache_hit is cached
+        saved = json.loads((folder/'video_evidence.json').read_text(encoding='utf-8'))
+        expected = {frame.image_path: row['image_sha256'] for frame, row in zip(evidence.frames, saved['frames'])}
+        assert evidence._summary_frame_hashes == expected
+        evidence.align([TranscriptSegment(0, 1, 'synthetic source')])
+        assert evidence._summary_frame_hashes == expected
+        content = evidence.user_content('draft', capabilities={'vision': True})
+        encoded = next(row['image_url']['url'] for row in content if row['type']=='image_url')
+        assert base64.b64decode(encoded.split(',', 1)[1]) == evidence.frames[0].image_path.read_bytes()
 
 
 @pytest.mark.parametrize('change', ['source', 'path', 'task', 'owner', 'frame', 'manifest'])

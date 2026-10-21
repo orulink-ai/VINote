@@ -1,7 +1,7 @@
 import { expect, it, vi } from 'vitest'
 import type { LibraryNote } from '@/hooks/useLibraryNotes'
 import type { PendingMeeting } from './audioStorage'
-import { buildMeetingRows } from './meetingGroups'
+import { buildMeetingRows, meetingRecordingTitle } from './meetingGroups'
 const api = vi.hoisted(() => ({ json: vi.fn() }))
 vi.mock('./api', () => ({ apiJson: api.json }))
 import { useNoteLibraryStore } from '@/stores/noteLibraryStore'
@@ -101,12 +101,113 @@ it('carries the API canonical projection through the real note store into groupi
   api.json.mockResolvedValueOnce(['parent', 'summary-child', 'asr-child'].map(task => ({
     id: 'note-' + task, title: task, content: '保留正文', task_id: task, scope: 'personal', status: 'done',
     created_at: saved, updated_at: saved,
-    meeting_source: { owner_id: 'owner-a', canonical_task_id: 'parent' },
+    meeting_source: { owner_id: 'owner-a', canonical_task_id: 'parent', recording_started_at: '2026-10-19T07:41:05.355Z' },
   })))
   useNoteLibraryStore.getState().reset()
   await useNoteLibraryStore.getState().loadNotes()
   const notes = useNoteLibraryStore.getState().notes
   expect(notes.every(note => note.meetingSource?.canonicalTaskId === 'parent')).toBe(true)
   expect(buildMeetingRows([], notes)).toHaveLength(1)
+  expect(notes.every(note => note.meetingSource?.recordingStartedAt === '2026-10-19T07:41:05.355Z')).toBe(true)
+  expect(buildMeetingRows([], notes)[0].date).toBe('2026-10-19T07:41:05.355Z')
   useNoteLibraryStore.getState().reset()
+})
+
+it('identifies two proven meetings while keeping unlinked historical and synthetic objects outside the meeting list', () => {
+  const rows = buildMeetingRows([], [
+    note('first-original', { taskId: 'first', title: '原始会议一', meetingSource: source('first') }),
+    note('first-html', { taskId: 'html-child', title: '最新 HTML 稿', meetingSource: source('first') }),
+    note('second-original', { taskId: 'second', meetingSource: source('second') }),
+    note('old-manual', { title: '原始会议一' }),
+    note('synthetic-acceptance', { taskId: 'unproven-task', title: '原始会议一' }),
+  ], {}, 'owner-a')
+  expect(rows.filter(row => row.kind === 'meeting')).toHaveLength(2)
+  expect(rows.filter(row => row.kind === 'unlinked').flatMap(row => row.notes.map(note => note.id)).sort())
+    .toEqual(['old-manual', 'synthetic-acceptance'])
+})
+
+it('uses the canonical recording clock and stable identity instead of promoting a summary title', () => {
+  const original = note('original-note', { taskId: 'original', title: '待生成纪要', meetingSource: { ...source(), recordingStartedAt: '2026-10-19T07:41:05.355Z' } })
+  const latest = note('latest-summary', { taskId: 'new-child', title: '最新摘要的新标题',
+    meetingSource: source(), createdAt: '2026-10-20T08:00:00Z' })
+  const row = buildMeetingRows([], [latest, original], {}, 'owner-a')[0]
+  expect(row.title).toBe(meetingRecordingTitle('2026-10-19T07:41:05.355Z'))
+  expect(row.note?.id).toBe('latest-summary') // readability/status projection only
+  expect(row.key).toBe(buildMeetingRows([], [original], {}, 'owner-a')[0].key)
+})
+
+it('recognizes an exact retained recording task without requiring a canonical projection or guessing the title', () => {
+  const rows = buildMeetingRows([recording()], [note('legacy', { taskId: 'original', title: '完全不同的保存标题' })], {}, 'owner-a')
+  expect(rows).toHaveLength(1)
+  expect(rows[0].kind).toBe('meeting')
+  expect(rows[0].notes[0].id).toBe('legacy')
+})
+
+it('does not retain foreign-owner sources nested in a historical workspace projection', () => {
+  const projected = note('workspace-projection', { localSources: [
+    note('owned', { meetingSource: source('same-source') }),
+    note('foreign', { meetingSource: source('same-source', 'owner-b') }),
+  ] })
+  const rows = buildMeetingRows([recording('owner-b')], [projected], {}, 'owner-a')
+  expect(rows.flatMap(row => row.notes.map(note => note.id)).sort()).toEqual(['owned', 'workspace-projection'])
+  expect(rows.flatMap(row => row.recordings)).toEqual([])
+})
+
+it('prefers canonical capture time over device history and ignores note, filename and save clocks', () => {
+  const input = note('saved', { taskId: 'original', title: '2099-01-01 23:59｜待生成纪要',
+    recordingStartedAt: '2099-01-01T23:59:00Z',
+    meetingSource: { ...source(), recordingStartedAt: '2026-10-19T07:41:05.355Z' } })
+  const row = buildMeetingRows([recording()], [input])[0]
+  expect(row.date).toBe('2026-10-19T07:41:05.355Z')
+  expect(row.title).toBe(meetingRecordingTitle(row.date))
+  const unknown = buildMeetingRows([], [{ ...input, meetingSource: source() }])[0]
+  expect(unknown.title).toBe('录制时间未记录')
+  expect(unknown.date).toBe('')
+  expect(unknown.dateKind).toBe('unknown')
+})
+
+it('keeps conflicting canonical clocks unknown without falling back to a device or choosing by input order', () => {
+  const inputs = ['2026-10-19T07:41:05Z', '2026-10-19T10:02:18Z'].map((recordingStartedAt, index) =>
+    note(String(index), { taskId: 'original', meetingSource: { ...source(), recordingStartedAt } }))
+  for (const order of permutations(inputs)) {
+    const rows = buildMeetingRows([recording()], order)
+    expect(rows).toHaveLength(1)
+    expect(rows[0].title).toBe('录制时间未记录')
+  }
+})
+
+it.each(['2026-10-19', '2026-10-19T07:41:05', 'invalid'])('does not turn an incomplete capture clock %s into an exact recording time', recordingStartedAt => {
+  expect(buildMeetingRows([], [note('saved', { meetingSource: { ...source(), recordingStartedAt } })])[0].title).toBe('录制时间未记录')
+})
+
+it('does not merge different canonical recordings even when their verified start times match', () => {
+  const rows = buildMeetingRows([], ['a', 'b'].map(task => note(task, {
+    meetingSource: { ...source(task), recordingStartedAt: '2026-10-19T07:41:05Z' } })))
+  expect(rows).toHaveLength(2)
+  expect(rows[0].title).toBe(rows[1].title)
+})
+
+it('distinguishes canonical recordings starting in the same minute by their actual seconds in the user timezone', () => {
+  const rows = buildMeetingRows([], ['05', '48'].map(second => note(second, {
+    meetingSource: { ...source(second), recordingStartedAt: `2026-10-19T07:41:${second}.355Z` },
+  })))
+  const date = new Date('2026-10-19T07:41:05.355Z')
+  const pad = (part: number) => String(part).padStart(2, '0')
+  const localPrefix = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}:`
+  expect(rows.map(row => row.title)).toEqual([localPrefix + '48', localPrefix + '05'])
+  expect(rows[0].key).not.toBe(rows[1].key)
+})
+
+it('does not label a dossier with saved minutes as ungenerated because capture history is stale', () => {
+  const original = { ...recording(), processingStatus: 'idle' as const, noteId: undefined }
+  const saved = note('saved-child', { taskId: 'child', meetingSource: source() })
+  expect(buildMeetingRows([original], [saved])[0].state).toBe('已完成')
+  expect(buildMeetingRows([original], [saved], { original: 'complete' })[0].state).toBe('已完成')
+  expect(buildMeetingRows([original], [saved], { original: 'processing' })[0].state).toBe('处理中')
+  expect(buildMeetingRows([original], [saved], { original: 'failed' })[0].state).toBe('需处理')
+})
+
+it('does not claim saved minutes for a completed recording when no saved content is present', () => {
+  expect(buildMeetingRows([recording()], [])[0].state).toBe('纪要待保存')
+  expect(buildMeetingRows([{ ...recording(), processingStatus: 'idle' }], [])[0].state).toBe('未生成')
 })

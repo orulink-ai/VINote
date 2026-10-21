@@ -1,6 +1,8 @@
 """Ground meeting drafts in source evidence before returning the final note."""
 
-from app.llm.prompts import build_system_prompt, normalize_output_language
+from app.llm.prompts import normalize_output_language
+from app.llm.meeting_prompt_contract import meeting_system_base
+from app.llm.source_references import source_prompt
 
 
 def build_meeting_review_prompts(
@@ -9,6 +11,9 @@ def build_meeting_review_prompts(
     source_is_reviewed_notes: bool = False,
 ) -> dict[str, str]:
     language = normalize_output_language(output_language)
+    from app.llm.meeting_presentation import presentation_state
+    state = presentation_state()
+    structured = bool(not intermediate and state and state.depth)
     rules = """Review the meeting draft against the supplied evidence and return only the corrected Markdown.
 The draft may be source-preservation working notes rather than polished prose. Use them to check coverage, not as the final structure or independent evidence. Synthesize the final meeting report from the full original material, retaining supported concrete details and relationships; do not output a working-note ledger or repeat field labels mechanically.
 The draft is not evidence: independently check the full original material. Preserve important source-supported facts and their relationships; correct errors locally and restore omissions from the source. Do not delete or generalize away supported information, or alter its relationships, merely to polish the prose. Remove or correct unsupported claims and relationships without discarding the supported facts around them.
@@ -37,11 +42,68 @@ Keep offsets internal unless the user explicitly requests recording references. 
             "actions, constraints and evidence timestamps for the final merge. "
             "Do not produce a complete meeting overview from a partial chunk."
         )
+    if not intermediate:
+        from app.llm.meeting_presentation import depth_instructions
+        rules += '\n' + depth_instructions()
+        if state and state.depth:
+            graphic_protocol = 7 if state.presentation in {'comic', 'infographic'} else 4
+            state.expected_review_protocol = graphic_protocol
+            from app.llm.meeting_fact_material import REVIEW_MATERIALITY_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
+            from app.llm.meeting_final_review import review_protocol
+            rules = rules.replace('return only the corrected Markdown.', 'return protocol-4 report blocks and the final claim ledger.')
+            rules = rules.replace('The report field contains Markdown facts only;', 'Report blocks[].markdown contain Markdown facts only;')
+            rules = rules.replace('do not output a working-note ledger or repeat field labels mechanically.',
+                                  'keep reader-facing blocks free of working-note ledgers or mechanical field labels.')
+            rules = rules.replace(
+                'Return only the report, without the internal ASR/FRAME references or an evidence ledger.',
+                'Keep the reader-facing blocks free of internal ASR/FRAME references and evidence ledgers; '
+                'return the machine-readable final claim ledger required below outside those blocks.')
+            if graphic_protocol == 7:
+                rules = rules.replace('protocol-4 report blocks', 'protocol-7 report parts')
+                rules = rules.replace('Report blocks[].markdown contain Markdown facts only;',
+                                      'Report blocks[].parts[] strings contain plain text facts only;')
+                rules = rules.replace('Let the actual content determine headings, structure and length;',
+                                      'Let the actual content determine paragraph grouping, structure and length;')
+            rules += '\n\n' + REVIEW_MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + review_protocol(state.presentation, protocol=graphic_protocol)
+            from app.llm.meeting_presentation import final_depth_selection
+            rules += '\n' + final_depth_selection(state.depth)
+            if state.depth == 'brief':
+                rules += ('\nBRIEF READING BUDGET. To approach the 30–45-second reading goal, aim for roughly '
+                          + ('150–250 Chinese characters' if language == 'zh-CN' else '90–140 English words')
+                          + ' in reader-facing report blocks. This is a soft selection budget: do not pad to its lower '
+                          'bound or truncate to its upper bound. Prefer omitting lower-priority propositions to removing '
+                          "a selected fact's relationships or necessary qualifiers. The complete source material and "
+                          'claim ledger are outside this body-only budget.')
+            from app.llm.meeting_visual_review import visual_review_instructions
+            rules += visual_review_instructions(state.presentation, protocol=graphic_protocol)
+            if state.presentation == 'illustrated':
+                rules += ('\nIllustrated output: choose 1–8 genuinely relevant actual supplied frames during this review. '
+                    'Use figures entries {"frame_ref":"[FRAME:0001]","claim_ids":["C1"],'
+                    '"after_block_id":"B1",'
+                    '"caption":"brief supported description of the actual frame"}. '
+                    'Each selected frame must be in the cited included claim evidence and independently support its object/relationship; '
+                    'Use each after_block_id only once. Every listed claim_id must include that exact block in '
+                    'its block_ids and that exact frame_ref in its own evidence; a neighboring block or frame '
+                    'does not qualify. Choose fewer well-bound figures rather than filling a quota or attaching '
+                    'unmatched claims to a figure. '
+                    'timing proximity alone is insufficient. Return no arbitrary URL. No valid relevant frame means illustrated is incomplete, '
+                    'never select opening frames or decorative screenshots just to fill a quota.')
     source_label = "Reviewed chunk notes" if source_is_reviewed_notes else "Original transcript"
-    return {
-        "system_prompt": build_system_prompt(language) + "\n\n" + rules,
-        "user_prompt": (
+    user_prompt = (
+        f"Explicit context and terminology:\n{extras or '(none)'}\n\n"
+        f"{source_label}:\n{source}\n\nDraft to check:\n{draft}"
+    )
+    if structured:
+        # The working interpretation must not replace the original as the last
+        # source text the reviewer sees. Keep both complete, without another call.
+        user_prompt = source_prompt(
+            f"Fallible working draft to audit (not evidence):\n{draft}\n\n"
             f"Explicit context and terminology:\n{extras or '(none)'}\n\n"
-            f"{source_label}:\n{source}\n\nDraft to check:\n{draft}"
-        ),
+            f"{source_label}:\n", source,
+            "\n\nUse the original material to correct the working interpretation, then select the report "
+            "at the requested depth. Account for every frozen original claim outside the report blocks."
+        )
+    return {
+        "system_prompt": meeting_system_base(language, structured=structured) + "\n\n" + rules,
+        "user_prompt": user_prompt,
     }

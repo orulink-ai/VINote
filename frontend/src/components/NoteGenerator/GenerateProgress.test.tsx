@@ -189,12 +189,37 @@ it.each([undefined, NaN, Infinity, -1, 1.2])('does not invent a speaker percenta
 
 it('shows video verification after ready ASR without inventing a video percentage or completing the minutes', () => {
   render(<GenerateProgress meeting videoSource status="processing" currentStep="analyzing_video" processedSeconds={900} totalSeconds={900} receivedSeconds={900} speakersReady progress={80} />)
-  expect(screen.getByRole('heading', { name: '核对共享画面与发言' })).toBeVisible()
-  expect(screen.getByRole('listitem', { name: '核对共享画面与发言：进行中' })).toHaveAttribute('aria-current', 'step')
+  expect(screen.getByRole('heading', { name: '整理共享画面与发言资料' })).toBeVisible()
+  expect(screen.getByRole('listitem', { name: '整理共享画面与发言资料：进行中' })).toHaveAttribute('aria-current', 'step')
   expect(screen.getByRole('listitem', { name: '转写与说话人分析：已完成' })).toBeVisible()
   expect(screen.getByRole('listitem', { name: '生成并核对会议纪要：待开始' })).toBeVisible()
   expect(screen.getByRole('listitem', { name: '保存会议纪要：待开始' })).toBeVisible()
   expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow')
   expect(screen.queryByText(/100%|80%/)).toBeNull()
   expect(screen.getByRole('status')).toHaveTextContent('逐字稿已就绪不代表纪要已完成')
+})
+
+it.each(['preparing', 'summarizing', 'transcribing'])('shows reused transcript as reuse, never newly completed ASR, during %s', currentStep => {
+  render(<GenerateProgress meeting reuseTranscript status="processing" currentStep={currentStep} processedSeconds={80} totalSeconds={80} speakersReady />)
+  expect(screen.getByText('本次复用已有转写与说话人资料，不重新识别。')).toBeVisible()
+  expect(screen.getByText('核验已有会议资料')).toBeVisible()
+  expect(screen.queryByText('转写与说话人分析')).toBeNull()
+  expect(screen.queryByRole('heading', { name: '语音转写' })).toBeNull()
+  expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow')
+})
+
+it.each([
+  ['正在核对音视频材料并组织会议纪要…', '正在核对事实与来源，尚未保存完成稿。'],
+  ['正在核对会议画面文字…', '正在整理会议画面文字资料。'],
+  ['暂时无法获取任务进度，正在重试；请勿重复提交。', '暂时无法获取任务进度，正在重新查询；请勿重复提交。'],
+])('shows safe product feedback from the actual status message %s', (message, expected) => {
+  render(<GenerateProgress meeting reuseTranscript status="processing" currentStep="summarizing" message={message} />)
+  expect(screen.getByText(expected)).toHaveAttribute('role', 'status')
+  expect(screen.getByRole('listitem', { name: '保存会议纪要：待开始' })).toBeVisible()
+})
+
+it.each(['constructor', 'provider-debug https://invalid.test/private task-id', '<script>raw</script>'])('does not surface unrecognized diagnostics %s', message => {
+  render(<GenerateProgress meeting status="processing" currentStep="summarizing" message={message} />)
+  expect(screen.getByText('正在整理并核对会议纪要。')).toHaveAttribute('role', 'status')
+  expect(screen.queryByText(message)).toBeNull()
 })

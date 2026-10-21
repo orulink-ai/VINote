@@ -1,11 +1,14 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
 import { Sidebar } from './Sidebar'
 import { SidebarProvider } from '@/components/ui/sidebar'
+import { useNoteLibraryStore, type NoteRecord } from '@/stores/noteLibraryStore'
+import { apiJson } from '@/lib/api'
 
 vi.mock('@/lib/i18n', () => ({ useI18n: () => ({ locale: 'zh-CN' }) }))
+vi.mock('@/lib/api', () => ({ apiJson: vi.fn() }))
 vi.mock('@/hooks/use-mobile', () => ({ useIsMobile: () => false }))
 vi.mock('@/stores/authStore', () => ({ useAuthStore: () => ({ user: { id: 'owner', email: 'user@example.invalid' }, signOut: vi.fn() }) }))
 vi.mock('@/stores/meetingRecorderStore', () => ({ useMeetingRecorderStore: () => ({ phase: 'idle', hasRecoverableRecording: false, localRecordingSaved: false }) }))
@@ -13,10 +16,53 @@ vi.mock('@/stores/workspaceStore', () => ({ useWorkspaceStore: (select: (state: 
 const loadTeams = vi.hoisted(() => vi.fn())
 vi.mock('@/stores/teamStore', () => ({ useTeamStore: () => ({ teams: [], currentWorkspace: { scope: 'personal' }, loadTeams, selectPersonalWorkspace: vi.fn(), selectTeamWorkspace: vi.fn() }) }))
 
-function renderSidebar(path: string) {
-  render(<MemoryRouter initialEntries={[path]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><SidebarProvider><Sidebar onSearch={vi.fn()} /></SidebarProvider></MemoryRouter>)
+function renderSidebar(path: string, returnTo?: string) {
+  const url = new URL(path, 'https://vinote.invalid')
+  render(<MemoryRouter initialEntries={[{ pathname: url.pathname, search: url.search, hash: url.hash, state: returnTo ? { returnTo } : undefined }]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><SidebarProvider><Sidebar onSearch={vi.fn()} /></SidebarProvider></MemoryRouter>)
 }
+beforeEach(() => { useNoteLibraryStore.getState().reset(); vi.clearAllMocks() })
 afterEach(cleanup)
+
+describe('Sidebar loaded note identity', () => {
+  const note = (id: string, sourceType: string): NoteRecord => ({ id, sourceType, title: '同一个标题', content: '已保存正文', status: 'done', scope: 'personal', createdAt: '', updatedAt: '' })
+
+  it.each([undefined, '/tasks?tab=generation', '/generate?meeting=1&operation=source', '/note/parent?view=transcript', '/files?type=video'])(
+    'keeps a saved meeting selected after generation/recovery or reload regardless of return route %s', parent => {
+      useNoteLibraryStore.setState({ notes: [note('saved-meeting', 'meeting_video')] })
+      renderSidebar('/note/saved-meeting', parent)
+      expect(screen.getByRole('link', { name: '会议' })).toHaveAttribute('aria-current', 'page')
+      expect(screen.getByRole('link', { name: '笔记' })).not.toHaveAttribute('aria-current')
+      expect(apiJson).not.toHaveBeenCalled()
+    })
+
+  it('updates when the exact note detail is loaded without issuing another request', () => {
+    useNoteLibraryStore.setState({ notes: [note('unrelated', 'meeting_video')] })
+    renderSidebar('/note/loaded-later', '/tasks?tab=generation')
+    expect(screen.getByRole('link', { name: '笔记' })).toHaveAttribute('aria-current', 'page')
+    act(() => useNoteLibraryStore.setState({ notes: [note('loaded-later', 'meeting_recording')] }))
+    expect(screen.getByRole('link', { name: '会议' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: '笔记' })).not.toHaveAttribute('aria-current')
+    expect(apiJson).not.toHaveBeenCalled()
+  })
+
+  it('uses the saved nonmeeting type even when opened from meetings', () => {
+    useNoteLibraryStore.setState({ notes: [note('ordinary-note', 'video')] })
+    renderSidebar('/note/ordinary-note', '/meetings?q=kept')
+    expect(screen.getByRole('link', { name: '笔记' })).toHaveAttribute('aria-current', 'page')
+    expect(screen.getByRole('link', { name: '会议' })).not.toHaveAttribute('aria-current')
+  })
+
+  it.each(['/meetings-invalid', 'https://outside.invalid/meetings'])(
+    'does not classify an unknown note from an invalid meeting-prefix parent %s', parent => {
+      renderSidebar('/note/not-loaded', parent)
+      expect(screen.getByRole('link', { name: '笔记' })).toHaveAttribute('aria-current', 'page')
+    })
+
+  it('retains a validated meetings context while the exact note identity is loading', () => {
+    renderSidebar('/note/not-loaded', '/meetings?q=kept')
+    expect(screen.getByRole('link', { name: '会议' })).toHaveAttribute('aria-current', 'page')
+  })
+})
 
 describe('Sidebar settings return context', () => {
   it('shows meetings and notes as separate navigation destinations', () => {

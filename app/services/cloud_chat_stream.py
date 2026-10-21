@@ -2,7 +2,7 @@
 import json
 import time
 
-from app.services.summary_failure import SummaryResultUnconfirmed
+from app.services.summary_failure import SummaryResultUnconfirmed, sse_terminal_context
 
 
 def collect_chat_stream(response, *, started: float, max_seconds: float = 900) -> dict:
@@ -10,6 +10,7 @@ def collect_chat_stream(response, *, started: float, max_seconds: float = 900) -
     usage = {}
     model = None
     finish_reason = None
+    finish_observed = False
     size = 0
     event_lines = []
 
@@ -58,8 +59,10 @@ def collect_chat_stream(response, *, started: float, max_seconds: float = 900) -
                 if size > 8_000_000:
                     raise SummaryResultUnconfirmed()
                 parts.append(content)
+            finish_observed = finish_observed or choice.get("finish_reason") is not None
             finish_reason = choice.get("finish_reason") or finish_reason
     if not completed or finish_reason != "stop":
-        raise SummaryResultUnconfirmed()
+        raise SummaryResultUnconfirmed(terminal_diagnostic=sse_terminal_context(
+            done_seen=completed, finish_reason=finish_reason, finish_observed=finish_observed))
     return {"model": model, "usage": usage,
             "choices": [{"message": {"content": "".join(parts)}, "finish_reason": finish_reason}]}

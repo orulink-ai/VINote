@@ -2,7 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { OriginalDownloadButton } from './OriginalDownloadButton'
 import { apiFetch } from '@/lib/api'
-import { downloadOriginalFile, type DownloadResult } from '@/lib/recordingDownload'
+import { downloadOriginalFile, type DownloadProgressCallback, type DownloadResult } from '@/lib/recordingDownload'
 import { useAuthStore } from '@/stores/authStore'
 vi.mock('@/lib/api', () => ({ apiFetch: vi.fn() }))
 vi.mock('@/lib/recordingDownload', async original => ({ ...await original<typeof import('@/lib/recordingDownload')>(), downloadOriginalFile: vi.fn() }))
@@ -26,7 +26,17 @@ it('exports exact original URL on demand and locks repeated clicks until the res
   expect(button).toBeDisabled(); expect(button).toHaveAttribute('aria-busy', 'true')
   await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
   expect(downloadOriginalFile).toHaveBeenCalledOnce()
-  expect(downloadOriginalFile).toHaveBeenCalledWith('/api/task/canonical/artifacts/media.webm', 'media.webm', expect.any(Function), expect.any(AbortSignal))
+  expect(downloadOriginalFile).toHaveBeenCalledWith('/api/task/canonical/artifacts/media.webm', 'media.webm', expect.any(Function), expect.any(AbortSignal), expect.any(Function))
+  const progress = vi.mocked(downloadOriginalFile).mock.calls[0][4]!
+  act(() => progress({ stage: 'choosing_destination' }))
+  expect(screen.getByRole('status')).toHaveTextContent('请选择原文件保存位置')
+  act(() => progress({ stage: 'waiting_response' }))
+  expect(screen.getByRole('status')).toHaveTextContent('正在等待原文件响应')
+  act(() => progress({ stage: 'writing', writtenBytes: 1024 * 1024, totalBytes: 2 * 1024 * 1024 }))
+  expect(screen.getByRole('status')).toHaveTextContent('1.0 MB / 2.0 MB')
+  act(() => progress({ stage: 'finishing', writtenBytes: 2 * 1024 * 1024, totalBytes: 2 * 1024 * 1024 }))
+  expect(screen.getByRole('status')).toHaveTextContent('正在完成落盘')
+  expect(screen.getByRole('status')).not.toHaveTextContent('已保存')
   await act(async () => finish('saved'))
   expect(button).toBeEnabled(); expect(screen.getByRole('status')).toHaveTextContent('已保存')
 })
@@ -45,7 +55,9 @@ it('reports write failure with explicit retry and no success message', async () 
 it('invalidates an old owner/file result and its permission to write', async () => {
   let finish!: (result: DownloadResult) => void
   let current!: () => boolean
-  vi.mocked(downloadOriginalFile).mockImplementationOnce((_url, _filename, valid) => {
+  let progress!: DownloadProgressCallback
+  vi.mocked(downloadOriginalFile).mockImplementationOnce((_url, _filename, valid, _signal, onProgress) => {
+    progress = onProgress!
     current = valid!; return new Promise(resolve => { finish = resolve })
   })
   const view = render(<OriginalDownloadButton url="/api/notes/old/media" filename="old.webm" />)
@@ -53,6 +65,8 @@ it('invalidates an old owner/file result and its permission to write', async () 
   act(() => useAuthStore.setState({ user: { id: 'other' } as never }))
   view.rerender(<OriginalDownloadButton url="/api/notes/new/media" filename="new.webm" />)
   expect(current()).toBe(false)
+  act(() => progress({ stage: 'writing', writtenBytes: 1000 }))
+  expect(screen.queryByRole('status')).toBeNull()
   await act(async () => finish('saved'))
   expect(screen.queryByRole('status')).toBeNull()
   expect(screen.getByRole('button', { name: '导出原文件' })).toBeEnabled()
@@ -68,4 +82,5 @@ it('offers cancellation during export and reports cancelled rather than failed o
   await vi.waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('已取消导出'))
   expect(screen.queryByRole('alert')).toBeNull()
   expect(screen.getByRole('button', { name: '导出原文件' })).toBeEnabled()
+  await vi.waitFor(() => expect(screen.getByRole('button', { name: '导出原文件' })).toHaveFocus())
 })

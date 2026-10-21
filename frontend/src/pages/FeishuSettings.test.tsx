@@ -261,6 +261,8 @@ it("retains failed settings across page changes and removes the draft only after
         notify_self: false,
         groups: [],
         auto_publish: false,
+        notify_participants: false,
+        group_meeting_versions: false,
         destination_config: { kind: "personal" },
         permission_policy: "private",
       }),

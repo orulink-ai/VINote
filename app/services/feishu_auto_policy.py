@@ -41,10 +41,19 @@ def binding(owner, account, preferences, config):
     return result if all(isinstance(v, str) and v for v in result.values()) else None
 
 
-def spec(current_binding, destination, notify_self, groups, permission_policy, contacts):
-    return dict(binding=current_binding, destination=destination, notify_self=notify_self,
+def spec(current_binding, destination, notify_self, groups, permission_policy, contacts,
+         *, notify_participants=False, group_meeting_versions=False):
+    result = dict(binding=current_binding, destination=destination, notify_self=notify_self,
                 groups=sorted(groups), permission_policy=permission_policy,
                 contacts=sorted(contacts, key=lambda item: item['open_id']))
+    # Preserve old fingerprints and consent until a new scope is explicitly enabled.
+    for key, value in (("notify_participants", notify_participants),
+                       ("group_meeting_versions", group_meeting_versions)):
+        if type(value) is not bool:
+            raise ValueError('Invalid automatic delivery option')
+        if value:
+            result[key] = True
+    return result
 
 
 def saved(preferences, current_binding, *, enabled=False):
@@ -73,6 +82,11 @@ def saved(preferences, current_binding, *, enabled=False):
                     not isinstance(contact.get('name'), str) or not contact['name'].strip() or len(contact['name']) > 500):
                 return None
         content = {key: policy[key] for key in _FIELDS}
+        for key in ('notify_participants', 'group_meeting_versions'):
+            if key in policy:
+                if type(policy[key]) is not bool:
+                    return None
+                content[key] = policy[key]
         if fingerprint(content) != policy.get('fingerprint'):
             return None
         if enabled and (not policy['enabled'] or preferences.get('auto_publish') is not True):

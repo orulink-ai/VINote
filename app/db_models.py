@@ -106,6 +106,36 @@ class VILabPreferenceDB(Base):
     llm_model: Mapped[str] = mapped_column(String(200), default="")
 
 
+class VILabConnectionDB(Base):
+    """Immutable owner/Origin/credential binding; only model choices may change."""
+    __tablename__ = "vilab_connections"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    server_url: Mapped[str] = mapped_column(String(2048))
+    credential: Mapped[str] = mapped_column(Text, default="")
+    asr_model: Mapped[str] = mapped_column(String(200), default="")
+    llm_model: Mapped[str] = mapped_column(String(200), default="")
+
+
+class VILabConnectionStateDB(Base):
+    __tablename__ = "vilab_connection_states"
+
+    user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    connection_id: Mapped[str] = mapped_column(String(36), default="")
+    revision: Mapped[str] = mapped_column(String(36), default=lambda: str(uuid.uuid4()))
+
+
+class VILabConnectionAuthDB(Base):
+    """Additive immutable account grant metadata; never stores session tokens."""
+    __tablename__ = "vilab_connection_auth"
+
+    connection_id: Mapped[str] = mapped_column(String(36), ForeignKey("vilab_connections.id", ondelete="CASCADE"), primary_key=True)
+    mode: Mapped[str] = mapped_column(String(16))
+    issuer: Mapped[str] = mapped_column(String(500), default="")
+    subject: Mapped[str] = mapped_column(String(100), default="")
+
+
 class UserPreferenceDB(Base):
     __tablename__ = "user_preferences"
 

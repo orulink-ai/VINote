@@ -13,14 +13,17 @@ import { ModelSourcePanel } from '../Settings/ModelSourcePanel'
 import { useAppModeStore } from '../../stores/appModeStore'
 import { useModelProfileStore } from '../../stores/modelProfileStore'
 import { useSTTProfileStore } from '../../stores/sttProfileStore'
-import { downloadRecording, downloadResultMessage } from '../../lib/recordingDownload'
+import { downloadRecording, downloadProgressMessage, downloadResultMessage } from '../../lib/recordingDownload'
 import { useI18n } from '../../lib/i18n'
+import { OriginalLocationButton } from '@/components/OriginalLocationButton'
+import { useAuthStore } from '@/stores/authStore'
 
 interface LocalRecordingPreviewProps { recording: PendingMeeting; onDeleted: () => void; onOpenNote?: (noteId: string) => void; confirmOnOpen?: boolean; onRecordingUpdated?: (recording: PendingMeeting) => void }
-const stageCopy: Record<PendingMeeting['processingStatus'], string> = { idle: '尚未生成纪要', queued: '等待处理', preparing_media: '准备和校验媒体', transcribing: '云端转写完整音频', diarizing: '区分说话人', parallel_analysis: '转写与说话人分析同时进行', aligning: '对齐逐字稿', analyzing_video: '核对共享画面与发言', generating: '生成并校验纪要', saving_result: '保存结果', completed: '纪要已完成', failed: '处理失败' }
+const stageCopy: Record<PendingMeeting['processingStatus'], string> = { idle: '尚未生成纪要', queued: '等待处理', preparing_media: '准备和校验媒体', transcribing: '云端转写完整音频', diarizing: '区分说话人', parallel_analysis: '转写与说话人分析同时进行', aligning: '对齐逐字稿', analyzing_video: '整理共享画面与发言资料', generating: '生成并校验纪要', saving_result: '保存结果', completed: '纪要已完成', failed: '处理失败' }
 
 export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confirmOnOpen = false, onRecordingUpdated }: LocalRecordingPreviewProps) {
   const { locale } = useI18n(); const zh = locale.startsWith('zh')
+  const owner = useAuthStore(state => state.user?.id)
   const [url, setUrl] = useState(''); const [error, setError] = useState(''); const [deleting, setDeleting] = useState(false); const [expanded, setExpanded] = useState(false)
   const [renamedTitle, setRenamedTitle] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -37,10 +40,16 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
   const models = useModelProfileStore()
   const speech = useSTTProfileStore()
   const request = useRef(0)
+  useEffect(() => useAuthStore.subscribe((next, previous) => {
+    if (next.user?.id !== previous.user?.id) {
+      ++request.current; downloadAbort.current?.abort(); mediaLock.current = false
+      setUrl(''); setExpanded(false); setError(''); setLoading(false); setDownloadStatus('')
+    }
+  }), [])
   useEffect(() => {
     request.current += 1; setUrl(''); setExpanded(false); setError(''); setLoading(false); setDownloadStatus(''); setConfirmGeneration(false); setGenerating(false); setGenerationStatus(''); setFrozenSelection(null)
     return () => { request.current += 1; downloadAbort.current?.abort() }
-  }, [recording.id, recording.ownerId])
+  }, [recording.id, recording.ownerId, owner])
   useEffect(() => { setRenamedTitle('') }, [recording.options.title])
   useEffect(() => {
     if (confirmOnOpen && recording.processingStatus !== 'completed') { setConfirmGeneration(true); void loadMode() }
@@ -51,10 +60,11 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
   useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
   const load = async (download: boolean) => {
     if (mediaLock.current) return
+    if (useAuthStore.getState().user?.id !== recording.ownerId) { setError(zh ? '账号已变化，请重新打开当前账号的录制文件。' : 'Account changed. Open a recording from the current account.'); return }
     mediaLock.current = true
     const current = request.current; setError(''); setLoading(true); setDownloadStatus('')
     const controller = new AbortController(); downloadAbort.current = controller
-    const active = () => request.current === current
+    const active = () => request.current === current && useAuthStore.getState().user?.id === recording.ownerId
     const valid = () => active() && !controller.signal.aborted
     try {
       const read = async () => {
@@ -64,7 +74,9 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
       }
       if (download) {
         setDownloadStatus(zh ? '正在准备并导出原文件…' : 'Preparing and exporting original…')
-        const result = await downloadRecording(read, title, recording.fileName, valid)
+        const result = await downloadRecording(read, title, recording.fileName, valid, undefined, progress => {
+          if (valid()) setDownloadStatus(downloadProgressMessage(progress, zh))
+        })
         if (active()) setDownloadStatus(downloadResultMessage(result, zh))
       } else {
         const blob = await read()
@@ -72,7 +84,7 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
       }
     } catch (cause) {
       if (active()) { if (controller.signal.aborted) setDownloadStatus(downloadResultMessage('cancelled', zh)); else { setDownloadStatus(''); setError(cause instanceof Error ? cause.message : String(cause)) } }
-    } finally { mediaLock.current = false; if (active()) setLoading(false) }
+    } finally { if (request.current === current) { mediaLock.current = false; setLoading(false) } }
   }
 
   const playbackFailed = () => { setUrl(''); setError(zh ? '文件暂时无法播放，请重新加载；也可以下载后使用播放器打开。' : 'Playback failed. Reload the file or download it to play.') }
@@ -130,7 +142,8 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
         {needsConfirmation && !processing && recording.processingStatus !== 'completed' && <p className="text-xs text-muted-foreground">点击后选择并确认本次模型，确认前不会开始处理。</p>}
         <div className="flex flex-wrap gap-1">
           <Button variant="outline" size="sm" disabled={loading || deleting} onClick={() => void load(false)}><Play />{loading ? (zh ? '正在读取…' : 'Loading…') : (zh ? '预览' : 'Preview')}</Button>
-          <Button variant="outline" size="sm" disabled={loading || deleting} aria-busy={loading && !!downloadStatus} onClick={() => void load(true)}><Download />{loading && downloadStatus ? (zh ? '正在导出…' : 'Exporting…') : (zh ? '下载文件' : 'Download file')}</Button>
+          {recording.taskId && <OriginalLocationButton taskId={recording.taskId} disabled={loading || deleting} zh={zh} />}
+          <Button variant="outline" size="sm" disabled={loading || deleting} aria-busy={loading && !!downloadStatus} onClick={() => void load(true)}><Download />{loading && downloadStatus ? (zh ? '正在保存…' : 'Saving…') : (zh ? '另存为…' : 'Save as…')}</Button>
           {loading && downloadStatus && <Button variant="ghost" size="sm" onClick={() => downloadAbort.current?.abort()}>{zh ? '取消导出' : 'Cancel export'}</Button>}
           <AlertDialog open={confirmDelete} onOpenChange={value => { if (!deleting) { setConfirmDelete(value); setError('') } }}>
             <AlertDialogTrigger asChild><Button variant="ghost" size="sm" disabled={processing || deleting || loading} className="text-destructive hover:text-destructive"><Trash2 />{zh ? '删除录制文件' : 'Delete recording'}</Button></AlertDialogTrigger>
