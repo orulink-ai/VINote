@@ -28,6 +28,44 @@ class VILabLLM(_BasePromptLLM):
         self._source_read_error = None
         self._source_review_started = False
         self._source_post_count = 0
+        self._window_evidence_version = None
+        self._window_summary_started = False
+        self._window_binding = None
+
+    def configure_window_evidence(self, *, version=1):
+        """Freeze the optional citation policy on a fresh bound instance."""
+        with self._source_reads_lock:
+            if (type(version) is not int or version != 1 or self._calls_started
+                    or self._window_summary_started or self._output_binding is None):
+                raise ValueError('Window evidence requires policy v1 on a fresh frozen instance')
+            self._window_evidence_version = version
+
+    def summarize(self, title, segments, style='detailed', summary_mode='default', extras=None,
+                  output_language='zh-CN', progress_callback=None, video_evidence=None):
+        args = (title, segments, style, summary_mode, extras, output_language,
+                progress_callback, video_evidence)
+        if self._window_evidence_version is None:
+            return super().summarize(*args)
+        from app.llm.prompts import normalize_summary_mode
+        from app.llm.meeting_window_evidence import window_evidence_scope
+        state = presentation_state()
+        with self._source_reads_lock:
+            if (self._window_summary_started or self._calls_started or style != 'meeting'
+                    or normalize_summary_mode(summary_mode) == 'accurate' or state is None
+                    or state.depth != 'detailed' or state.presentation != 'text'):
+                raise ValueError('Window evidence requires a fresh detailed text meeting')
+            self._verify_output_binding()
+            self._window_summary_started = True
+            self._window_binding = copy.deepcopy((self.user_id, self.model, _task_source.get()))
+        with window_evidence_scope(version=self._window_evidence_version):
+            return super().summarize(*args)
+
+    def _verify_window_binding(self):
+        from app.llm.meeting_window_evidence import validate_window_source
+        self._verify_output_binding()
+        if (self.user_id, self.model, _task_source.get()) != self._window_binding:
+            raise ValueError('Window evidence frozen binding changed')
+        validate_window_source()
 
     def configure_source_reading(self, *, groups=3):
         """Research-only, instance-local opt-in; never execution authority."""
@@ -114,6 +152,10 @@ class VILabLLM(_BasePromptLLM):
                                       partition=self.source_reading_enabled)
 
     def _complete_content(self, *, system_prompt, user_prompt, partition):
+        if self._window_evidence_version is not None:
+            from app.llm.meeting_window_evidence import bind_window_source
+            bind_window_source(user_prompt)
+            self._verify_window_binding()
         cloud = VILabCloudService()
         output_policy = self._structured_output_policy(cloud)
         output_parameters = output_policy.parameters() if output_policy is not None else {}
@@ -126,6 +168,9 @@ class VILabLLM(_BasePromptLLM):
             "可以按文档记录保留，不要求语音逐项重复确认；但不能升级为口头一致同意、实名发言或现实中已经完成。"
             "完整保留重要且有依据的内容，不用笼统概括或反复的来源免责声明代替具体信息。"
         )
+        if self._window_evidence_version is not None:
+            from app.llm.meeting_window_evidence import WINDOW_EVIDENCE_RULE
+            system_prompt += WINDOW_EVIDENCE_RULE
         record_model_parameters({"stream": True, **output_parameters})
         metadata = {"prompt_version": hashlib.sha256(system_prompt.encode()).hexdigest()[:16]}
         if output_policy is not None:
@@ -143,6 +188,8 @@ class VILabLLM(_BasePromptLLM):
 
     def _send_prepared(self, cloud, system_prompt, content, output_parameters, *, raw_observer=None,
                        verify_binding=True):
+        if self._window_evidence_version is not None:
+            self._verify_window_binding()
         payload = {
             "model": self.model, "stream": True,
             "stream_options": {"include_usage": True},
@@ -191,6 +238,8 @@ class VILabLLM(_BasePromptLLM):
                 {'index': index, 'state': 'prepared', 'allowed_refs': sorted(part.allowed_refs),
                  'payload_sha256': part.input_sha256, 'root_input_sha256': part.root_input_sha256}
                 for index, part in enumerate(parts)]}
+            if self._window_evidence_version is not None:
+                self._source_reads['window_evidence_policy'] = self._window_evidence_version
             self._notify_source_reads()
 
         def read(index):

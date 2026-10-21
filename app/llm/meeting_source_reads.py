@@ -225,6 +225,14 @@ def combine_source_reads(rawstrings, allowed_refs):
             for evidence in claim['evidence']:
                 _require(isinstance(evidence, dict))
                 kind, ref = evidence.get('kind'), evidence.get('source_ref')
+                if kind == 'asr_window':
+                    from app.llm.meeting_window_evidence import resolve_window_evidence
+                    from app.llm.meeting_fact_protocol import _evidence
+                    _require(set(evidence) == {'kind', 'source_ref'}
+                             and isinstance(ref, str) and ref in refs
+                             and ref.startswith('[ASR:'), 'Evidence outside this source read')
+                    resolve_window_evidence(evidence, _evidence)
+                    continue  # Raw stays untouched; only IDs are namespaced.
                 _require(kind in ('asr_span', 'ocr_span', 'frame_observation')
                          and isinstance(ref, str) and ref in refs, 'Evidence outside this source read')
                 key = 'observation' if kind == 'frame_observation' else 'quote'

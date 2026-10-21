@@ -20,7 +20,7 @@ def _text(value):
     return isinstance(value, str) and bool(value.strip())
 
 
-def _evidence(rows):
+def _evidence(rows, *, allow_windows=True):
     _require(isinstance(rows, list) and bool(rows))
     asr, visual = original_asr_texts(), visual_source_bindings()
     result = []
@@ -29,6 +29,11 @@ def _evidence(rows):
         row = dict(row)
         ref, kind = row.get('source_ref'), row.get('kind')
         _require(isinstance(ref, str))
+        if kind == 'asr_window':
+            from app.llm.meeting_window_evidence import resolve_window_evidence
+            _require(allow_windows)
+            result.append(resolve_window_evidence(row, _evidence))
+            continue
         if kind == 'asr_span':
             raw = asr.get(ref)
         elif kind == 'ocr_span':
@@ -77,6 +82,11 @@ def _prepare_flat(value):
         _require(isinstance(rows, list) and bool(rows))
         checked = []
         for row in rows:
+            if isinstance(row, dict) and row.get('kind') == 'asr_window':
+                # Window policy errors fail closed, never become an unverified
+                # legacy span and never authorize a search or quote repair.
+                checked.extend(_evidence([row]))
+                continue
             _require(isinstance(row, dict) and isinstance(row.get('source_ref'), str)
                      and isinstance(row.get('kind'), str) and row['kind'] in {'asr_span', 'ocr_span', 'frame_observation'}
                      and _text(row.get('observation' if row['kind'] == 'frame_observation' else 'quote')))
@@ -107,7 +117,7 @@ def prepare(value):
         for claim in fact['claims']:
             _require(isinstance(claim.get('field'), str) and claim['field'] in FIELDS and _text(claim.get('text'))
                      and _text(claim.get('anchor')) and type(claim.get('material')) is bool)
-            claim['evidence'] = _evidence(claim.get('evidence'))
+            claim['evidence'] = _evidence(claim.get('evidence'), allow_windows=False)
             _require(any(claim['anchor'] in (row['observation'] if row['kind'] == 'frame_observation' else row['quote']) for row in claim['evidence']))
             refs.update(row['source_ref'] for row in claim['evidence'])
             claims.append(claim)

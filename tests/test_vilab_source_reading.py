@@ -84,9 +84,12 @@ def test_three_parallel_reads_one_full_review_real_guard_and_v2_artifact(case, m
         calls.append((image_count, copy.deepcopy(payload)))
         if image_count == 1:
             assert 'SOURCE READ SCOPE:' in payload['messages'][0]['content']
-            assert (json.loads((case.folder / 'meeting_source_reads.json').read_text())['reads']
-                    [next(i for i in range(3) if f'[ASR:{i + 1:04d}]' in json.dumps(content))]['state']
-                    == 'dispatched')
+            # Serialize the diagnostic assertion with its writer: Windows
+            # readers do not share delete access with atomic os.replace.
+            with llm._source_reads_lock:
+                assert (json.loads((case.folder / 'meeting_source_reads.json').read_text())['reads']
+                        [next(i for i in range(3) if f'[ASR:{i + 1:04d}]' in json.dumps(content))]['state']
+                        == 'dispatched')
             ref = next(f'[ASR:{i + 1:04d}]' for i in range(3) if f'[ASR:{i + 1:04d}]' in json.dumps(content))
             index = int(ref[5:9]) - 1
             barrier.wait(timeout=5)
