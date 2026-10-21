@@ -502,3 +502,9 @@ V16四个新受控operation全部终态，47项runtime无漂移；仅A精简信�
 独立审查通过后四文件落地，120项定向测试通过（16.96秒）；完整前端137文件、1685项全部通过（113.56秒，maxWorkers=2），TypeScript退出0、生产构建13.62秒。未改后端或模型运行清单。
 
 原生1281×822窗口从B source_video.webm详情点击新入口，定位18:02:18会议档案标题，默认展开18条关联纪要；键盘Shift+Tab显示档案标题焦点框，Tab可到关联披露。返回文件库恢复同一文件详情、meeting用途与原查询，播放器仍显示26:25。截图位于私有native-v17-evidence的file-library-dossier-primary、file-library-dossier-header-focused、file-library-dossier-next-keyboard-focus、file-library-dossier-header-keyboard-outline及file-library-return-restored；UIA焦点对象只报RootWebArea，具体键盘位置以实际可见焦点框及测试共同核验，不将其冒称精确UIA焦点证据。没有触发生成、ASR或飞书写入。
+
+### V17 成品原生导出及未完成结果
+
+A信息图task901a1a1b-d682-48a7-b9eb-c767fdc5bcb2受控service运行607.4秒成功，普通保存为notee672c530-b9ab-5d8f-9d6d-489c9389c6bb；raw7/result/保存正文SHA一致为 `f918694a12c644584e6b4e02a434b8838f50032e9f895f777bfa2984e5ec855d`。从原生快速查找打开确切note，原录屏28:32仍可见；实际系统SaveAs保存native-v17-evidence/A-info-v17.svg（3656字节，SHA `81656af7804c803b56f721dcebaf97a530033577001f2d2e54a35ab724c8288b`）及A-info-v17.png（98858字节，SHA `e4189112a7f904cd1ec9c68dd06a8d99e467c2044ced52b7eaac1aa9d32dda12`），两次均显示保存反馈，截图分别保留。独评实际1104×492图形、两个完整标签和顺序与sidecar一致，无裁切；呈现10，正文77保持，总87/100。普通保存不冒充原生提交/自动保存，独立离线比较不替代实际导出。
+
+B分镜782.5秒后以length结束，结果未确认、不可重试，无完整review和成品，不补分。两任务终态runtime47无漂移、无ASR执行；未改旧稿、追加飞书文档或通知。当前开发应用仍运行HMR，发行包和目标Wiki最终交付未验收。
