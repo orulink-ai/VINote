@@ -34,7 +34,7 @@ def images(content):
     return [row['image_url']['url'] for row in content if row['type'] == 'image_url']
 
 
-def test_optimized_request_keeps_all_frames_timeline_ocr_and_originals(tmp_path):
+def test_original_jpeg_request_keeps_all_frames_timeline_ocr_and_originals(tmp_path):
     evidence, original = case(tmp_path)
     before = evidence.text_material()
     content = evidence.user_content('source task', capabilities={'vision': True, '_vinote_webp_verified': True})
@@ -43,13 +43,15 @@ def test_optimized_request_keeps_all_frames_timeline_ocr_and_originals(tmp_path)
     receipt = evidence.input_receipt()
     assert receipt['state'] == 'prepared' and receipt['requests_prepared'] == 1
     assert receipt['frame_count'] == 3 and receipt['mode'] == 'images'
-    assert receipt['wire_image_bytes'] <= receipt['source_image_bytes']
+    assert receipt['wire_image_bytes'] == receipt['source_image_bytes']
     for index, (image_url, row) in enumerate(zip(images(content), receipt['images'])):
         assert row['source_ref'] == f'[FRAME:{index+1:04}]'
         assert row['offset_seconds'] == index*35.5
         mime, encoded = image_url.split(';base64,')
         data = base64.b64decode(encoded)
-        assert mime == 'data:'+row['mime_type']
+        assert mime == 'data:image/jpeg' and row['mime_type'] == 'image/jpeg'
+        assert row['policy'] == 'jpeg-original-v1'
+        assert data == original
         assert row['source_sha256'] == hashlib.sha256(original).hexdigest()
         assert row['wire_sha256'] == hashlib.sha256(data).hexdigest()
         with Image.open(io.BytesIO(data)) as image:
@@ -93,13 +95,16 @@ def test_changed_source_does_not_reuse_or_replace_prepared_evidence(tmp_path):
     assert evidence.input_receipt() == before
 
 
-def test_changed_encoding_policy_cannot_silently_change_review_images(tmp_path):
+def test_optional_webp_proof_does_not_change_original_jpeg_review_images(tmp_path):
     evidence, _ = case(tmp_path)
-    evidence.user_content('draft', capabilities={'vision': True})
+    first = evidence.user_content('draft', capabilities={'vision': True})
     before = evidence.input_receipt()
-    with pytest.raises(VideoEvidenceError, match='版本已变化'):
-        evidence.user_content('review', capabilities={'vision': True, '_vinote_webp_verified': True})
-    assert evidence.input_receipt() == before
+    second = evidence.user_content('review', capabilities={'vision': True, '_vinote_webp_verified': True})
+    assert images(first) == images(second)
+    after = evidence.input_receipt()
+    assert after['requests_prepared'] == 2
+    assert {k: v for k, v in after.items() if k != 'requests_prepared'} == {
+        k: v for k, v in before.items() if k != 'requests_prepared'}
 
 
 def test_text_only_material_never_encodes_or_claims_images(tmp_path, monkeypatch):

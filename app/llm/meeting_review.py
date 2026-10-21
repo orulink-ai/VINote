@@ -67,6 +67,13 @@ Keep offsets internal unless the user explicitly requests recording references. 
             rules += '\n\n' + REVIEW_MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + review_protocol(state.presentation, protocol=graphic_protocol)
             from app.llm.meeting_presentation import final_depth_selection
             rules += '\n' + final_depth_selection(state.depth)
+            if state.depth == 'brief':
+                rules += ('\nBRIEF READING BUDGET. To approach the 30–45-second reading goal, aim for roughly '
+                          + ('150–250 Chinese characters' if language == 'zh-CN' else '90–140 English words')
+                          + ' in reader-facing report blocks. This is a soft selection budget: do not pad to its lower '
+                          'bound or truncate to its upper bound. Prefer omitting lower-priority propositions to removing '
+                          "a selected fact's relationships or necessary qualifiers. The complete source material and "
+                          'claim ledger are outside this body-only budget.')
             from app.llm.meeting_visual_review import visual_review_instructions
             rules += visual_review_instructions(state.presentation, protocol=graphic_protocol)
             if state.presentation == 'illustrated':

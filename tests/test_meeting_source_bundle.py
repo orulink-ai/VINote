@@ -136,6 +136,9 @@ def test_actual_vilab_two_calls_interleave_complete_windows_ocr_and_original_wir
             encoded = base64.b64decode(image['url'].split(',', 1)[1])
             receipt = next(r for r in receipts[0]['images'] if r['source_ref'] == record['source_ref'])
             assert hashlib.sha256(encoded).hexdigest() == receipt['wire_sha256']
+            assert encoded == frame.image_path.read_bytes()
+            assert receipt['mime_type'] == 'image/jpeg' and receipt['policy'] == 'jpeg-original-v1'
+            assert receipt['source_sha256'] == receipt['wire_sha256']
             with Image.open(io.BytesIO(encoded)) as decoded:
                 assert decoded.size == (1920, 1080)
         phases.append([(r, text, content[i + 1] if r['source_ref'].startswith('[FRAME:') else None)
@@ -303,7 +306,7 @@ def test_plain_nonmeeting_and_legacy_keep_original_wire_order(source, monkeypatc
             assert [b['text'].split(' ', 1)[0] for b in content[1::2]] == [f'[FRAME:{i:04d}]' for i in range(1, 5)]
 
 
-def test_anthropic_keeps_actual_webp_media_type_in_both_chronological_calls(source, monkeypatch):
+def test_anthropic_keeps_original_jpeg_media_type_in_both_chronological_calls(source, monkeypatch):
     payloads = []
     def request(**kwargs):
         payloads.append(kwargs['json_body'])
@@ -318,9 +321,10 @@ def test_anthropic_keeps_actual_webp_media_type_in_both_chronological_calls(sour
         pictures = [b for b in payload['messages'][0]['content'] if b['type'] == 'image']
         assert len(pictures) == 4
         for picture in pictures:
-            assert picture['source']['media_type'] == 'image/webp'
+            assert base64.b64decode(picture['source']['data']) in [f.image_path.read_bytes() for f in source.evidence.frames]
+            assert picture['source']['media_type'] == 'image/jpeg'
             with Image.open(io.BytesIO(base64.b64decode(picture['source']['data']))) as image:
-                assert image.format == 'WEBP' and image.size == (1920, 1080)
+                assert image.format == 'JPEG' and image.size == (1920, 1080)
 
 
 def test_guard_failure_does_not_create_an_extra_call(source, monkeypatch):

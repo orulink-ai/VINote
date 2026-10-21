@@ -96,7 +96,7 @@ def test_plain_image_serialization_is_byte_identical_to_prior_packet_shape(mater
     content = evidence.user_content('PLAIN', capabilities={'vision': True, '_vinote_webp_verified': webp})
     expected = [{'type': 'text', 'text': 'PLAIN\n\n' + evidence.text_material()}]
     for i, frame in enumerate(evidence.frames):
-        encoded = evidence._input_cache[(hashlib.sha256(frame.image_path.read_bytes()).hexdigest(), webp)]
+        encoded = evidence._input_cache[(hashlib.sha256(frame.image_path.read_bytes()).hexdigest(), False)]
         expected.extend([
             {'type': 'text', 'text': packet_description(i, frame) + RULE},
             {'type': 'image_url', 'image_url': {'detail': 'high', 'url': f'data:{encoded.mime_type};base64,'

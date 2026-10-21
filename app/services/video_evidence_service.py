@@ -232,7 +232,8 @@ class VideoEvidence:
             return content
         content = [{'type': 'text', 'text': prompt + '\n\n' + material}]
         from app.services.video_input_encoding import encode_video_input
-        allow_webp = (capabilities or {}).get('_vinote_webp_verified') is True
+        # Preserve retained JPEG bytes; verified WebP support does not require transcoding.
+        allow_webp = False
         inputs = []
         # Read only selected bounded JPEGs, never the full video or a full decoded timeline.
         actual_bytes = 0
