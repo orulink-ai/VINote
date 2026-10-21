@@ -604,7 +604,7 @@ class NoteService:
                                            if turn["end"] > segment.start and turn["start"] < segment.end]
         video_kwargs = {}
         if getattr(context, 'video_evidence', None) is not None:
-            from app.services.video_model_capability import verify_image_input, verify_optional_webp_input
+            from app.services.video_model_capability import verify_image_input
             model = getattr(llm, 'model', None)
             if context.user_id and getattr(llm, 'user_id', None) == context.user_id:
                 from app.services.vilab_cloud_service import VILabCloudService
@@ -613,10 +613,8 @@ class NoteService:
                 if entry is None:
                     raise ValueError('所选模型不在当前服务目录，未提交画面')
                 verified = verify_image_input(context.user_id, model, catalog_entry=entry)
-                webp_verified = verify_optional_webp_input(context.user_id, model,
-                    image_input_verified=verified, catalog_entry=entry)
-                llm.configure_video_capabilities(entry.get('capabilities'), image_input_verified=verified,
-                                                 webp_input_verified=webp_verified)
+                # Meeting wire images retain original JPEGs; no optional codec probe is needed.
+                llm.configure_video_capabilities(entry.get('capabilities'), image_input_verified=verified)
             video_kwargs['video_evidence'] = context.video_evidence.align(
                 summary_segments, transcript.metadata.get('speaker_evidence', []))
         from app.llm.source_references import capture_working_draft

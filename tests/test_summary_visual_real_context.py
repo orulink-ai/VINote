@@ -4,6 +4,7 @@ Only model responses, image-capability probing and the DB session destination
 are substituted. Context assignment, claim checks, rendering, screenshot copy,
 artifact authorization, persistence and authenticated reads use production code.
 """
+import base64
 import copy
 import hashlib
 import json
@@ -187,3 +188,86 @@ def test_real_context_keeps_failed_raw_review_without_publishing_visual(case, mo
     assert json.loads((c.folder / 'meeting_fact_review.json').read_bytes())['raw_response'] == raw4
     assert not (c.folder / SIDECAR).exists() and frame.read_bytes() == original
     runner.transcription_service.transcribe.assert_not_called()
+
+
+def test_jpeg_pipeline_uses_required_image_check_without_optional_webp_probe(case, monkeypatch):
+    runner, context, transcript, automatic, _, _, _, frame, original = pipeline(
+        case, monkeypatch, 'infographic', 'detailed')
+    required = Mock(return_value=True)
+    optional = Mock(side_effect=AssertionError('Original JPEG must not probe optional WebP'))
+    monkeypatch.setattr('app.services.video_model_capability.verify_image_input', required)
+    monkeypatch.setattr('app.services.video_model_capability.verify_optional_webp_input', optional)
+    complete = automatic._complete
+    wire_images = []
+
+    def capture_wire(**prompts):
+        from app.llm.video_material import video_user_content
+        content = video_user_content(prompts['user_prompt'])
+        images = [row['image_url']['url'] for row in content if row['type'] == 'image_url']
+        assert len(images) == 1
+        assert images[0].startswith('data:image/jpeg;base64,')
+        assert base64.b64decode(images[0].split(',', 1)[1]) == original
+        wire_images.append(images)
+        return complete(**prompts)
+
+    monkeypatch.setattr(automatic, '_complete', capture_wire)
+    assert runner._summarize_audio(context, transcript) == SOURCE
+    required.assert_called_once_with(case.owner, context.model_name, catalog_entry={
+        'id': context.model_name, 'modelType': 'llm', 'capabilities': {'vision': True}})
+    optional.assert_not_called()
+    assert len(automatic.calls) == 2 and wire_images[0] == wire_images[1]
+    receipt = json.loads((case.folder / 'video_model_input.json').read_bytes())
+    assert receipt['requests_prepared'] == 2 and receipt['images'][0]['mime_type'] == 'image/jpeg'
+    assert receipt['images'][0]['source_sha256'] == receipt['images'][0]['wire_sha256']
+    assert '_vinote_webp_verified' not in automatic._video_capabilities
+    assert frame.read_bytes() == original
+
+
+def test_jpeg_pipeline_keeps_required_unsupported_image_rejection(case, monkeypatch):
+    from app.services.video_model_capability import verify_image_input
+    from app.services.video_evidence_service import VideoEvidenceError
+    runner, context, transcript, automatic, _, _, _, frame, original = pipeline(
+        case, monkeypatch, 'infographic', 'detailed')
+    entry = {'id': context.model_name, 'modelType': 'llm', 'capabilities': {'vision': False}}
+    monkeypatch.setattr(VILabCloudService, 'models', Mock(return_value=[entry]))
+    required = Mock(wraps=verify_image_input)
+    optional = Mock(side_effect=AssertionError('Unsupported images must not probe optional WebP'))
+    monkeypatch.setattr('app.services.video_model_capability.verify_image_input', required)
+    monkeypatch.setattr('app.services.video_model_capability.verify_optional_webp_input', optional)
+
+    with pytest.raises(VideoEvidenceError, match='未确认支持图片'):
+        runner._summarize_audio(context, transcript)
+    required.assert_called_once_with(case.owner, context.model_name, catalog_entry=entry)
+    optional.assert_not_called()
+    assert context.video_evidence.input_receipt() is None
+    assert automatic.calls == [] and frame.read_bytes() == original
+
+
+@pytest.mark.parametrize('state', ['pending', 'unknown'])
+def test_jpeg_pipeline_preserves_unconfirmed_required_image_receipt(case, monkeypatch, state):
+    from app.services.video_model_capability import verify_image_input
+    runner, context, transcript, automatic, _, _, _, frame, original = pipeline(
+        case, monkeypatch, 'infographic', 'detailed')
+    entry = {'id': context.model_name, 'modelType': 'llm', 'capabilities': {}}
+    monkeypatch.setattr(VILabCloudService, 'models', Mock(return_value=[entry]))
+    cloud = Mock()
+    cloud.status.return_value = {'server_url': 'https://fixture.invalid'}
+    cloud.request.side_effect = AssertionError('Unconfirmed required check must not replay')
+    checks = case.tmp_path / 'image-checks'
+    checks.mkdir()
+    identity = hashlib.sha256(json.dumps([case.owner, 'https://fixture.invalid', context.model_name],
+                                        ensure_ascii=False).encode()).hexdigest()
+    path = checks / f'{identity}.json'
+    saved = json.dumps({'protocol': 2, 'identity': identity, 'state': state, 'checked_at': time.time()}).encode()
+    path.write_bytes(saved)
+    required = Mock(side_effect=lambda owner, model, **kwargs: verify_image_input(
+        owner, model, root=checks, cloud=cloud, **kwargs))
+    optional = Mock(side_effect=AssertionError('No optional check after required failure'))
+    monkeypatch.setattr('app.services.video_model_capability.verify_image_input', required)
+    monkeypatch.setattr('app.services.video_model_capability.verify_optional_webp_input', optional)
+    with pytest.raises(ValueError, match='未重复调用'):
+        runner._summarize_audio(context, transcript)
+    required.assert_called_once_with(case.owner, context.model_name, catalog_entry=entry)
+    optional.assert_not_called()
+    cloud.request.assert_not_called()
+    assert automatic.calls == [] and path.read_bytes() == saved and frame.read_bytes() == original
