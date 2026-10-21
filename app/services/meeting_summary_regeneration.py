@@ -15,6 +15,7 @@ from app.db_models import SourceRequestDB
 from app.models.source_request import SourceInput, SourceSubmission
 from app.models.transcript import TranscriptResult, TranscriptSegment
 from app.services.meeting_evidence import original_asr_evidence
+from app.services.meeting_alias_context import capture_alias_context, alias_extras, alias_source_text
 from app.services.retained_task_source import SOURCE_LOCK, resolve_reference
 from app.services.source_request_service import SourceRequestService, _fingerprint
 from app.services.task_artifact_service import TaskArtifactService
@@ -253,6 +254,7 @@ class SummaryRegenerationService:
                 return claim
             child = self.artifacts.create_task_dir(claim.task_id)
             try:
+                alias_context = capture_alias_context(owner)
                 self.artifacts.write_text(child / 'recording_owner', owner)
                 self.artifacts.write_text(child / '.task_id', claim.task_id)
                 # Install the query-only guard before exposing a retryable request.
@@ -291,6 +293,7 @@ class SummaryRegenerationService:
                     from app.services.meeting_ocr_layout import POLICY
                     bound['summary_ocr_layout_policy'] = POLICY
                     bound['summary_snapshot_sha256'] = _digest(snapshot)
+                    bound['summary_alias_context'] = alias_context
                     bound['summary_visual_reference_sha256'] = _digest(visual_link) if visual_link is not None else None
                     row.receipt_json = json.dumps(bound)
                     db.flush()
@@ -350,6 +353,7 @@ class SummaryRegenerationService:
                         or row.fingerprint != _fingerprint(_submission(link['parent_task_id'], body))):
                     raise ValueError()  # Disk artifacts and arbitrary IDs never authorize execution.
                 accepted_bound = json.loads(row.receipt_json or '{}')
+                alias_context = accepted_bound.get('summary_alias_context')
                 accepted_snapshot_sha256 = accepted_bound.get('summary_snapshot_sha256')
                 layout_policy = accepted_bound.get('summary_ocr_layout_policy')
                 _preflight('summary_ocr_layout_policy' not in accepted_bound
@@ -412,11 +416,16 @@ class SummaryRegenerationService:
             if note_service is None:
                 from app.services.note_service import NoteService
                 note_service = NoteService()
+            options = _options(saved, body)
+            extras = alias_extras(owner, options.get('extras'), alias_context,
+                                  source_text=alias_source_text(transcript, visual))
+            if extras != options.get('extras'):
+                options['extras'] = extras
             with VILabCloudService().task_snapshot(owner, snapshot=snapshot):
                 preparing = False
                 note_service.generate_from_transcript(transcript=transcript, task_id=task, user_id=owner,
                     **({'video_evidence': visual} if visual is not None else {}),
-                    **{key: value for key, value in _options(saved, body).items() if key != 'workflow'})
+                    **{key: value for key, value in options.items() if key != 'workflow'})
         except Exception as error:
             try:
                 status = _read_json(folder / 'status.json')
