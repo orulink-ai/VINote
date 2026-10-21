@@ -619,6 +619,11 @@ class NoteService:
                 summary_segments, transcript.metadata.get('speaker_evidence', []))
         from app.llm.source_references import capture_working_draft
         from app.services.meeting_draft_artifact import save_working_draft
+        source_reads_enabled = getattr(llm, 'source_reading_enabled', False) is True
+        if source_reads_enabled:
+            from app.services.meeting_draft_artifact import save_source_reads
+            llm.attach_source_reads_observer(lambda diagnostic: save_source_reads(
+                self.artifact_service, context.task_dir, {'task_id': context.task_id, **diagnostic}))
         # Diagnostic working material only: never a saved result, a checkpoint
         # authorizing another model call, or evidence of a successful review.
         from app.llm.meeting_presentation import presentation_scope
@@ -649,6 +654,16 @@ class NoteService:
                         if not original_failure:
                             raise
                         logger.warning('Raw review could not be persisted: kind=%s', type(error).__name__)
+                if source_reads_enabled:
+                    try:
+                        diagnostic = llm.source_reads_diagnostic()
+                        if diagnostic is not None:
+                            save_source_reads(self.artifact_service, context.task_dir,
+                                              {'task_id': context.task_id, **diagnostic})
+                    except Exception as error:
+                        if not original_failure:
+                            raise
+                        logger.warning('Source reading metadata could not be persisted: kind=%s', type(error).__name__)
                 visual = video_kwargs.get('video_evidence')
                 if visual is not None:
                     prepared_input = visual.input_receipt()

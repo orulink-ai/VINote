@@ -1,8 +1,10 @@
 """Internal, typed source slots; ordering is a view, never new evidence."""
 from dataclasses import asdict, dataclass, field
+import copy
+import hashlib
 import json
 import math
-from typing import Callable
+from typing import Callable, Literal
 
 
 @dataclass(frozen=True)
@@ -88,6 +90,86 @@ class SourcePrompt(str):
         return self._slot
 
 
+@dataclass(frozen=True)
+class SourceUnit:
+    kind: Literal['asr', 'frame']
+    source_ref: str
+    block_start: int
+    block_stop: int  # Exclusive; the complete unit is indivisible.
+    start_seconds: float
+    end_seconds: float
+    sample_offsets: tuple[float, ...] = ()
+
+    @property
+    def offset_seconds(self):
+        return self.start_seconds if self.kind == 'frame' else None
+
+
+def source_content_sha256(content):
+    return hashlib.sha256(json.dumps(list(content), ensure_ascii=False,
+                                    allow_nan=False).encode('utf-8')).hexdigest()
+
+
+class PreparedSourceContent(list):
+    """Normal wire list with frozen, non-wire source metadata.
+
+    Payload blocks remain ordinary list/dicts for existing adapters. Mutations
+    are detected by validate(); metadata never authorizes source execution.
+    """
+    __slots__ = ('_units', '_duration_seconds', '_root_sha256', '_validate_source',
+                 '_header_index', '_footer_index')
+
+    def __init__(self, content, *, units, duration_seconds, validate_source):
+        super().__init__(content)
+        object.__setattr__(self, '_units', tuple(units))
+        object.__setattr__(self, '_duration_seconds', duration_seconds)
+        object.__setattr__(self, '_root_sha256', source_content_sha256(self))
+        object.__setattr__(self, '_validate_source', validate_source)
+        object.__setattr__(self, '_header_index', 0)
+        object.__setattr__(self, '_footer_index', len(self) - 1)
+
+    def __setattr__(self, name, value):
+        raise AttributeError('Prepared source metadata is read-only')
+
+    units = property(lambda self: self._units)
+    duration_seconds = property(lambda self: self._duration_seconds)
+    root_sha256 = property(lambda self: self._root_sha256)
+    header_index = property(lambda self: self._header_index)
+    footer_index = property(lambda self: self._footer_index)
+
+    def validate(self):
+        self._validate_source()
+        if source_content_sha256(self) != self.root_sha256:
+            raise ValueError('Prepared source payload changed')
+
+    def __deepcopy__(self, memo):
+        self.validate()
+        result = type(self)(copy.deepcopy(list(self), memo), units=self.units,
+                            duration_seconds=self.duration_seconds,
+                            validate_source=self._validate_source)
+        memo[id(self)] = result
+        return result
+
+    def __copy__(self):
+        self.validate()
+        return type(self)(list(self), units=self.units, duration_seconds=self.duration_seconds,
+                          validate_source=self._validate_source)
+
+
+def _source_duration(visual_header):
+    # The existing trusted video header embeds _text_metadata's JSON. Do not
+    # infer whole-recording duration from sampled frames or ASR coverage.
+    marker = '{"duration_seconds":'
+    if visual_header.count(marker) != 1:
+        return None
+    try:
+        value, _ = json.JSONDecoder().raw_decode(visual_header[visual_header.index(marker):])
+        duration = value['duration_seconds']
+        return duration if type(duration) in (int, float) and math.isfinite(duration) and duration > 0 else None
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
 def chronological_content(prompt: SourcePrompt, *, visual_header='', records=(), packets=()):
     """Move complete windows/frame packets; never split text or infer attribution."""
     slot = prompt.slot
@@ -118,8 +200,22 @@ def chronological_content(prompt: SourcePrompt, *, visual_header='', records=(),
               'Zero-length windows retain unknown duration, not a precisely timed utterance or silence. '
               'Ordering connects input context only, not final report chapters.\n')
     content = [{'type': 'text', 'text': slot.prefix + header + visual_header}]
-    for _, _, _, blocks in sorted(events, key=lambda event: event[:3]):
+    units = []
+    for _, kind, index, blocks in sorted(events, key=lambda event: event[:3]):
+        start = len(content)
         content.extend(blocks)
+        if images:
+            if kind == 0:
+                window = slot.bundle.windows[index]
+                units.append(SourceUnit('asr', window.source_ref, start, len(content),
+                                        window.start, window.end))
+            else:
+                record = records[index]
+                units.append(SourceUnit('frame', record['source_ref'], start, len(content),
+                                        record['offset_seconds'], record['offset_seconds'],
+                                        tuple(record.get('sample_offsets', ()))))
     content.append({'type': 'text', 'text': slot.suffix})
     slot.bundle.validate()
-    return content if images else '\n\n'.join(block['text'] for block in content)
+    return (PreparedSourceContent(content, units=units, duration_seconds=_source_duration(visual_header),
+                                  validate_source=slot.bundle.validate) if images else
+            '\n\n'.join(block['text'] for block in content))
