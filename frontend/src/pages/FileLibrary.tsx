@@ -21,6 +21,7 @@ import { ErrorState, LoadingState, EmptyState } from '@/components/Feedback/Reso
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { originalPurpose, fileGenerationPath, purposeLabel, originalFormat, formatFilter, type FilePurpose, type FilePurposeView } from '@/lib/filePurpose'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
+import { versionHistoryTitle } from '@/lib/meetingVersionHistory'
 
 type StoredFile = { id: string; filename: string; purpose?: FilePurposeView; source_type?: string; processing_status?: string; error_code?: string; retryable?: boolean; title?: string; category: string; size_bytes: number; created_at: string; available: boolean; note_id?: string; task_id?: string; content_url: string; location: string; media_type: string; can_delete: boolean; can_generate: boolean }
 type FileRow = { id: string; title: string; category: string; purpose: FilePurposeView; date: string; recording?: PendingMeeting; file?: StoredFile }
@@ -90,8 +91,8 @@ export function FileLibrary() {
       const files = result[1].status === 'fulfilled' ? result[1].value.items : previous.flatMap(row => row.file ? [row.file] : [])
       const localTasks = new Set(recordings.map(r => r.taskId).filter(Boolean))
       return [
-        ...recordings.map(r => ({ id: 'recording:' + r.id, title: r.options.title || '未命名录制', purpose: 'meeting' as const, category: r.options.screen || r.options.meetingType === 'video' ? 'screen' : 'recording', date: r.startedAt, recording: r })),
-        ...files.filter(f => !f.task_id || !localTasks.has(f.task_id)).map(f => ({ id: f.id, title: f.title || f.filename, purpose: originalPurpose(f), category: f.category, date: f.created_at, file: f })),
+        ...recordings.map(r => ({ id: 'recording:' + r.id, title: versionHistoryTitle(r.options.title || '未命名录制'), purpose: 'meeting' as const, category: r.options.screen || r.options.meetingType === 'video' ? 'screen' : 'recording', date: r.startedAt, recording: r })),
+        ...files.filter(f => !f.task_id || !localTasks.has(f.task_id)).map(f => ({ id: f.id, title: originalPurpose(f) === 'meeting' ? versionHistoryTitle(f.title || f.filename) : f.title || f.filename, purpose: originalPurpose(f), category: f.category, date: f.created_at, file: f })),
       ].sort((a, b) => b.date.localeCompare(a.date))
     })
     const failures = result.filter(r => r.status === 'rejected').length
@@ -214,7 +215,7 @@ export function FileLibrary() {
   }
   const sourceRows = sourceNote ? rows.filter(row => row.file?.note_id === sourceNote || row.recording?.noteId === sourceNote) : rows
   const purposeRows = sourceRows.filter(row => row.purpose === purpose)
-  const visible = sourceNote ? sourceRows : purposeRows.filter(r => (category === 'all' || originalFormat(r.category) === category) && `${r.title} ${r.file?.filename || ''}`.toLowerCase().includes(query.trim().toLowerCase()))
+  const visible = sourceNote ? sourceRows : purposeRows.filter(r => (category === 'all' || originalFormat(r.category) === category) && `${r.title} ${r.file?.filename || ''} ${r.file?.title || r.recording?.options.title || ''}`.toLowerCase().includes(query.trim().toLowerCase()))
   const contentTarget = (noteId: string, row = selected, focus?: 'meeting') => {
     if (row?.purpose === 'meeting') {
       const target = new URL(parent.split(/[?#]/)[0] === '/meetings' ? parent : '/meetings', 'https://vinote.invalid')
