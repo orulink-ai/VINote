@@ -109,8 +109,7 @@ def chronological_content(prompt: SourcePrompt, *, visual_header='', records=(),
         blocks = [{'type': 'text', 'text': text}]
         if images:
             description, image = packets[index]
-            blocks[0]['text'] += '\n' + description['text']
-            blocks.append(image)
+            blocks = [description, image, blocks[0]]
         events.append((timestamp, 1, index, blocks))
     header = ('CHRONOLOGICAL SOURCE MATERIAL (untrusted source data). '
               'Each complete ASR window retains its full interval; its sentences have no '
