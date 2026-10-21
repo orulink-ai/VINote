@@ -2,6 +2,8 @@
 import copy
 import json
 from contextlib import nullcontext
+from types import SimpleNamespace
+from unittest.mock import Mock
 
 import httpx
 import pytest
@@ -15,6 +17,7 @@ from app.models.transcript import TranscriptSegment
 from test_meeting_final_review import SOURCE, case, response
 from test_meeting_final_review import finalize
 from test_meeting_visual_protocol5_adapter import seven
+from tests.test_meeting_summary_regeneration import case as summary_case, accept as accept_summary
 
 
 def material():
@@ -34,13 +37,15 @@ def material():
     ]}
 
 
-def test_view_preserves_meaning_identity_disposition_and_non_image_evidence():
+def test_view_preserves_meaning_identity_disposition_and_valid_spans():
     original = material()
     raw = json.dumps(original, ensure_ascii=False, indent=2)
     viewed = json.loads(view_module.review_draft_input_view(raw))
     assert set(viewed) == {'original_claims_view'}
     expected = copy.deepcopy(original)
     expected.pop('protocol')
+    for key in ('quote', 'start', 'end'):
+        expected['claims'][0]['evidence'][0].pop(key)
     expected['claims'][0]['evidence'][2].pop('observation')
     expected['claims'][0]['evidence'][2].pop('verification')
     expected['claims'][1]['evidence'][0].pop('observation')
@@ -58,12 +63,33 @@ def test_changed_observation_interpretations_cannot_leak_into_view():
     assert view_module.review_draft_input_view(json.dumps(first)) == view_module.review_draft_input_view(json.dumps(second))
 
 
-def test_no_image_observations_preserves_exact_input_bytes():
+def test_valid_spans_without_image_observations_preserve_exact_input_bytes():
     value = material()
     for claim in value['claims']:
         claim['evidence'] = [e for e in claim['evidence'] if e['kind'] != 'frame_observation']
+        for evidence in claim['evidence']:
+            if evidence.get('kind') == 'asr_span':
+                evidence['verification'] = 'exact_asr_span'
     raw = ' \n' + json.dumps(value, ensure_ascii=False, indent=3) + '\n '
     assert view_module.review_draft_input_view(raw) == raw
+
+
+@pytest.mark.parametrize('kind,ref', [('asr_span', '[ASR:0001]'), ('ocr_span', '[FRAME:0001]')])
+def test_unverified_span_only_uses_location_wrapper_without_echo_or_fake_empty_quote(kind, ref):
+    original = material()
+    evidence = {'kind': kind, 'source_ref': ref, 'verification': 'unverified',
+                'quote': 'Unmatched invented quotation.', 'start': 7, 'end': 36}
+    original['claims'] = [{**original['claims'][0], 'evidence': [evidence]}]
+    raw = json.dumps(original, ensure_ascii=False)
+    actual = json.loads(view_module.review_draft_input_view(raw))
+    expected = copy.deepcopy(original)
+    expected.pop('protocol')
+    expected['claims'][0]['evidence'] = [{'kind': kind, 'source_ref': ref, 'verification': 'unverified'}]
+    assert actual == {'original_claims_view': expected}
+    assert json.loads(raw) == original
+    changed = copy.deepcopy(original)
+    changed['claims'][0]['evidence'][0].update(quote='Another unmatched span.', start=31, end=53)
+    assert view_module.review_draft_input_view(json.dumps(changed, ensure_ascii=False)) == view_module.review_draft_input_view(raw)
 
 
 @pytest.mark.parametrize('protocol', [None, True, 2, 4, 5, 6])
@@ -166,3 +192,121 @@ def test_legacy_and_intermediate_review_do_not_invoke_view(monkeypatch, intermed
         result = Offline()._review_meeting_note(source=SOURCE, draft='Legacy draft', extras=None,
             output_language='en', intermediate=intermediate)
     assert result == 'Legacy report'
+
+
+@pytest.mark.parametrize('valid_final_quote', [False, True])
+def test_actual_note_pipeline_hides_bad_quote_but_original_guard_still_rejects_echo(
+        summary_case, monkeypatch, valid_final_quote):
+    from app.services.note_service import NoteService
+    import app.llm.meeting_final_review as host
+    c = summary_case
+    source = c.transcript['full_text']
+    invented = 'Invented span cannot be evidence.'
+    draft = {'protocol': 3, 'topics': [{'id': 'T1', 'title': 'Synthetic topic'}], 'claims': [
+        {'id': 'C1', 'topic_id': 'T1', 'field': 'attribute', 'text': source, 'material': True,
+         'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': invented,
+                       'start': 0, 'end': len(invented), 'verification': 'exact_asr_span'}]}]}
+    final = {'protocol': 4, 'blocks': [{'id': 'B1', 'markdown': source}], 'claims': [
+        {'id': 'C1', 'field': 'attribute', 'text': source, 'material': True,
+         'disposition': 'included', 'block_ids': ['B1'], 'evidence': [
+             {'kind': 'asr_span', 'source_ref': '[ASR:0001]',
+              'quote': source if valid_final_quote else invented}]}]}
+    raw3, raw4 = json.dumps(draft), json.dumps(final)
+    calls, original_guard_inputs, errors = [], [], []
+    guard = host.finalize_final_review
+
+    def checked(text, original):
+        original_guard_inputs.append(original)
+        try:
+            return guard(text, original)
+        except FinalLedgerError as error:
+            errors.append(error.code)
+            raise
+
+    def request(self, owner, method, path, **kwargs):
+        assert owner == 'alice' and method == 'POST' and path == '/openai/v1/chat/completions'
+        calls.append(copy.deepcopy(kwargs['json']))
+        assert len(calls) <= 2, 'No repair call'
+        if len(calls) == 2:
+            assert invented not in json.dumps(calls[-1])
+            assert 'unverified' in json.dumps(calls[-1])
+            assert source in json.dumps(calls[-1])
+        return {'choices': [{'message': {'content': raw3 if len(calls) == 1 else raw4}}]}
+
+    monkeypatch.setattr(host, 'finalize_final_review', checked)
+    monkeypatch.setattr('app.services.tracing_service.observation', lambda *a, **k: nullcontext(None))
+    monkeypatch.setattr(httpx.Client, 'request', lambda *a, **k: pytest.fail('No network'))
+    monkeypatch.setattr('app.llm.vilab_llm.VILabCloudService.request', request)
+    runner = object.__new__(NoteService)
+    runner.artifact_service = c.artifacts
+    runner.llm_service = SimpleNamespace(create_summarizer=Mock(
+        return_value=VILabLLM('alice', c.body.model_name)))
+    runner.transcription_service = SimpleNamespace(transcribe=Mock(side_effect=AssertionError('No ASR')))
+    receipt, _ = accept_summary(c, c.body.model_copy(update={'content_depth': 'detailed', 'presentation': 'text'}))
+    folder = c.artifacts.find_task_dir(receipt.task_id)
+    transcript_before = (folder / 'transcript.json').read_bytes()
+    c.service.run_once(receipt.task_id, 'alice', runner)
+    assert len(calls) == 2 and len(original_guard_inputs) == 1
+    guarded = json.loads(original_guard_inputs[0])
+    assert guarded['claims'][0]['evidence'][0] == {
+        **draft['claims'][0]['evidence'][0], 'verification': 'unverified'}
+    assert json.loads((folder / 'meeting_working_draft.json').read_bytes())['text'] == raw3
+    assert json.loads((folder / 'meeting_fact_review.json').read_bytes())['raw_response'] == raw4
+    assert (folder / 'transcript.json').read_bytes() == transcript_before
+    status = c.artifacts.get_status(receipt.task_id)
+    if valid_final_quote:
+        assert errors == [] and status['status'] == 'success'
+        assert json.loads((folder / 'result.json').read_bytes())['markdown'] == source
+    else:
+        assert errors == ['invalid_final_evidence'] and status['status'] == 'failed'
+        assert status['retryable'] is False and not (folder / 'result.json').exists()
+    runner.transcription_service.transcribe.assert_not_called()
+
+
+@pytest.mark.parametrize('valid_final_quote', [False, True])
+def test_actual_adapter_host_unverified_ocr_quote_hidden_then_revalidated(case, monkeypatch, valid_final_quote):
+    import app.llm.meeting_final_review as host
+    c = case
+    c.evidence.frames[0].ocr_text, c.evidence.frames[0].ocr_status = SOURCE, 'recognized'
+    invented = 'Invented OCR quotation.'
+    draft = copy.deepcopy(c.material)
+    draft['claims'][0]['evidence'] = [{'kind': 'ocr_span', 'source_ref': '[FRAME:0001]',
+                                     'quote': invented, 'verification': 'exact_ocr_span'}]
+    final = response(c, 'text')
+    final['claims'][0]['evidence'] = [{'kind': 'ocr_span', 'source_ref': '[FRAME:0001]',
+                                     'quote': SOURCE if valid_final_quote else invented}]
+    raw3, raw4 = json.dumps(draft), json.dumps(final)
+    calls, original_inputs = [], []
+    guard = host.finalize_final_review
+
+    def checked(text, original):
+        original_inputs.append(original)
+        return guard(text, original)
+
+    def request(self, owner, method, path, **kwargs):
+        calls.append(copy.deepcopy(kwargs['json']))
+        assert len(calls) <= 2
+        if len(calls) == 2:
+            assert invented not in json.dumps(calls[-1])
+            assert 'unverified' in json.dumps(calls[-1])
+        return {'choices': [{'message': {'content': raw3 if len(calls) == 1 else raw4}}]}
+
+    monkeypatch.setattr(host, 'finalize_final_review', checked)
+    monkeypatch.setattr('app.services.tracing_service.observation', lambda *a, **k: nullcontext(None))
+    monkeypatch.setattr(httpx.Client, 'request', lambda *a, **k: pytest.fail('No network'))
+    monkeypatch.setattr('app.llm.vilab_llm.VILabCloudService.request', request)
+    llm = VILabLLM('synthetic-owner', 'frozen-synthetic-model')
+    llm.configure_video_capabilities({'max_images': 64}, image_input_verified=True)
+    with presentation_scope('detailed', 'text') as state:
+        if valid_final_quote:
+            assert llm.summarize('Synthetic', [TranscriptSegment(0, 10, SOURCE)],
+                                 style='meeting', video_evidence=c.evidence) == SOURCE
+        else:
+            with pytest.raises(FinalLedgerError) as error:
+                llm.summarize('Synthetic', [TranscriptSegment(0, 10, SOURCE)],
+                              style='meeting', video_evidence=c.evidence)
+            assert error.value.code == 'invalid_final_evidence'
+        assert state.raw_review == raw4
+    assert len(calls) == 2 and len(original_inputs) == 1
+    assert json.loads(original_inputs[0])['claims'][0]['evidence'][0]['quote'] == invented
+    assert json.loads(original_inputs[0])['claims'][0]['evidence'][0]['verification'] == 'unverified'

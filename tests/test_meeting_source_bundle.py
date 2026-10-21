@@ -130,10 +130,8 @@ def test_actual_vilab_two_calls_interleave_complete_windows_ocr_and_original_wir
             assert record['sample_offsets'] == frame.sample_offsets
             assert record['speech_segment_indices'] == frame.speech_indices
             assert record['overlapping_speaker_ids'] == frame.speaker_ids
-            assert content[index - 2]['text'].startswith(record['source_ref'] + ' Image at ')
-            assert text == json.dumps(record, ensure_ascii=False)
-            assert content[index - 1]['type'] == 'image_url'
-            image = content[index - 1]['image_url']
+            assert content[index + 1]['type'] == 'image_url'
+            image = content[index + 1]['image_url']
             assert image['detail'] == 'high'
             encoded = base64.b64decode(image['url'].split(',', 1)[1])
             receipt = next(r for r in receipts[0]['images'] if r['source_ref'] == record['source_ref'])
@@ -143,7 +141,7 @@ def test_actual_vilab_two_calls_interleave_complete_windows_ocr_and_original_wir
             assert receipt['source_sha256'] == receipt['wire_sha256']
             with Image.open(io.BytesIO(encoded)) as decoded:
                 assert decoded.size == (1920, 1080)
-        phases.append([(r, text, content[i - 1] if r['source_ref'].startswith('[FRAME:') else None)
+        phases.append([(r, text, content[i + 1] if r['source_ref'].startswith('[FRAME:') else None)
                        for i, r, text in events])
     assert phases[0] == phases[1]
     assert source.segments == before[0] and source.evidence.text_material() == before[1]

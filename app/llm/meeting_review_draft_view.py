@@ -18,6 +18,14 @@ def review_draft_input_view(draft: str) -> str:
         for evidence in claim['evidence']:
             if not isinstance(evidence, dict):
                 raise FinalLedgerError('invalid_draft')
+            if (evidence.get('kind') in {'asr_span', 'ocr_span'}
+                    and evidence.get('verification') == 'unverified'):
+                # Host prepare already checked this span. Do not expose its
+                # unmatched quotation/offsets as text for the reviewer to echo.
+                for key in ('quote', 'start', 'end'):
+                    evidence.pop(key, None)
+                changed = True
+                continue
             if evidence.get('kind') != 'frame_observation':
                 continue
             observation = evidence.get('observation')

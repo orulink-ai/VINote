@@ -74,10 +74,9 @@ def test_typed_images_relocate_rule_once_preserving_packets_and_two_stages(mater
                 i = int(record['source_ref'][7:11]) - 1
                 frame = evidence.frames[i]
                 assert record == evidence._frame_records()[i]
-                assert block['text'] == json.dumps(record, ensure_ascii=False)
-                assert content[pos - 2] == {'type': 'text', 'text': packet_description(i, frame)}
-                assert content[pos - 1]['type'] == 'image_url'
-                image = content[pos - 1]['image_url']
+                assert block['text'] == json.dumps(record, ensure_ascii=False) + '\n' + packet_description(i, frame)
+                assert content[pos + 1]['type'] == 'image_url'
+                image = content[pos + 1]['image_url']
                 assert image['detail'] == 'high'
                 wire = base64.b64decode(image['url'].split(',', 1)[1])
                 assert hashlib.sha256(wire).hexdigest() == evidence.input_receipt()['images'][i]['wire_sha256']
