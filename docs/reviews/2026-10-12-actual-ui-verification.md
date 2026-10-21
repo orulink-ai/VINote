@@ -494,3 +494,11 @@ V16四个新受控operation全部终态，47项runtime无漂移；仅A精简信�
 实际两文件独审通过，呈现10分、正文80分保持，总90/100；只用相同实际SVG做离线光栅化对比，其PNG字节与实际导出PNG相同，不以离线重渲染替代原生导出。两张成功反馈是相同UI状态/相同截图hash，不另充两个独立点击证明。回到原生会议页仍只有2场，A29/B18个纪要对象；新稿位于原15:41:05档案，收起后两个时间档案均可见。截图 `meetings-v16-two-dossiers.png` / `meetings-v16-two-dossiers-collapsed.png`。
 
 最终P7全量后端复跑4572通过、3跳过、19 subtests，584.39秒；391个Python源码及47项runtime起止指纹不变。首次27失败、长测试路径归因及双字段夹具初修仍3失败均保留，详见质量进度；未放宽来源或交付guard。最终前端1654通过、桌面脚本23通过及文档构建通过（最新10.92秒）另列，全部为源码/开发应用验收，尚非正式安装包、100分内容或目标Wiki交付验收。
+
+### 文件库优先定位会议档案，而非某份旧纪要
+
+普通会议原件的主入口改为“查看会议档案”，仅该入口发送显式meeting焦点；保留原note/task身份校验，定位唯一对应档案并展开关联纪要，不按最新纪要猜会议。旧精确纪要深链、sourceNote及IndexedDB录制入口保持原语义。重复、空、冲突或未知焦点值拒绝恢复，待归档不虚构会议。
+
+独立审查通过后四文件落地，120项定向测试通过（16.96秒）；完整前端137文件、1685项全部通过（113.56秒，maxWorkers=2），TypeScript退出0、生产构建13.62秒。未改后端或模型运行清单。
+
+原生1281×822窗口从B source_video.webm详情点击新入口，定位18:02:18会议档案标题，默认展开18条关联纪要；键盘Shift+Tab显示档案标题焦点框，Tab可到关联披露。返回文件库恢复同一文件详情、meeting用途与原查询，播放器仍显示26:25。截图位于私有native-v17-evidence的file-library-dossier-primary、file-library-dossier-header-focused、file-library-dossier-next-keyboard-focus、file-library-dossier-header-keyboard-outline及file-library-return-restored；UIA焦点对象只报RootWebArea，具体键盘位置以实际可见焦点框及测试共同核验，不将其冒称精确UIA焦点证据。没有触发生成、ASR或飞书写入。

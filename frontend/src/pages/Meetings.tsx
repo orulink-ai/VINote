@@ -60,7 +60,7 @@ const capturePhases = ["requesting", "recording", "paused", "stopping"];
 function meetingLocator(params: URLSearchParams, state: unknown, ownerId: string | undefined, requestId: string): MeetingLocator | undefined {
   const saved = state && typeof state === 'object' && 'meetingLocator' in state ? state.meetingLocator : undefined;
   const fields = { noteId: 'locate_note', taskId: 'locate_task', recordingId: 'locate_recording' } as const;
-  if (!saved && !Object.values(fields).some(key => params.has(key))) return undefined;
+  if (!saved && ![...Object.values(fields), 'locate_focus'].some(key => params.has(key))) return undefined;
   const record = saved && typeof saved === 'object' && !Array.isArray(saved) ? saved as Record<string, unknown> : {};
   let invalid = !!saved && (!Object.keys(record).length || record.ownerId !== ownerId);
   const target: MeetingLocator = { requestId, ownerId };
@@ -72,6 +72,13 @@ function meetingLocator(params: URLSearchParams, state: unknown, ownerId: string
       if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,160}$/.test(value)) invalid = true;
       else target[field] = value;
     }
+  }
+  const fromUrl = params.get('locate_focus'), fromState = record.focus;
+  if (params.getAll('locate_focus').length > 1 || fromUrl !== null && fromState !== undefined && fromUrl !== fromState) invalid = true;
+  const focus = params.has('locate_focus') ? fromUrl : fromState;
+  if (focus !== undefined) {
+    if (focus !== 'meeting') invalid = true;
+    else target.focus = focus;
   }
   return { ...target, invalid };
 }
@@ -124,7 +131,7 @@ export function Meetings() {
   };
   const clearLocator = () => {
     const next = new URLSearchParams(params);
-    for (const key of ['locate_note', 'locate_task', 'locate_recording']) next.delete(key);
+    for (const key of ['locate_note', 'locate_task', 'locate_recording', 'locate_focus']) next.delete(key);
     navigate({ pathname: location.pathname, search: next.toString() ? '?' + next.toString() : '', hash: location.hash }, { replace: true, state: withoutLocatorState() });
   };
   const session = useMeetingRecorderStore();
@@ -489,7 +496,7 @@ export function Meetings() {
           onViewChange={value => {
             const next = new URLSearchParams(params);
             next.delete('archived');
-            for (const key of ['locate_note', 'locate_task', 'locate_recording']) next.delete(key);
+            for (const key of ['locate_note', 'locate_task', 'locate_recording', 'locate_focus']) next.delete(key);
             value === 'pending' ? next.set('view', 'pending') : next.delete('view');
             navigate({ pathname: location.pathname, search: next.toString() ? '?' + next.toString() : '', hash: location.hash }, { state: withoutLocatorState() });
           }}

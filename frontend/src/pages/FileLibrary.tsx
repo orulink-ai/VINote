@@ -215,11 +215,12 @@ export function FileLibrary() {
   const sourceRows = sourceNote ? rows.filter(row => row.file?.note_id === sourceNote || row.recording?.noteId === sourceNote) : rows
   const purposeRows = sourceRows.filter(row => row.purpose === purpose)
   const visible = sourceNote ? sourceRows : purposeRows.filter(r => (category === 'all' || originalFormat(r.category) === category) && `${r.title} ${r.file?.filename || ''}`.toLowerCase().includes(query.trim().toLowerCase()))
-  const contentTarget = (noteId: string, row = selected) => {
+  const contentTarget = (noteId: string, row = selected, focus?: 'meeting') => {
     if (row?.purpose === 'meeting') {
       const target = new URL(parent.split(/[?#]/)[0] === '/meetings' ? parent : '/meetings', 'https://vinote.invalid')
-      for (const key of ['capture', 'locate_note', 'locate_task', 'locate_recording']) target.searchParams.delete(key)
+      for (const key of ['capture', 'locate_note', 'locate_task', 'locate_recording', 'locate_focus']) target.searchParams.delete(key)
       target.searchParams.set('locate_note', noteId)
+      if (focus) target.searchParams.set('locate_focus', focus)
       const taskId = row.recording?.taskId || row.file?.task_id
       if (taskId) target.searchParams.set('locate_task', taskId)
       if (row.recording) target.searchParams.set('locate_recording', row.recording.id)
@@ -228,8 +229,8 @@ export function FileLibrary() {
     }
     return sourceNote === noteId && /^\/(workspace|note)\//.test(parent) ? parent : '/note/' + encodeURIComponent(noteId)
   }
-  const contentState = (noteId: string, row = selected) => ({ returnTo, ...(row?.purpose === 'meeting' ? {
-    meetingLocator: { ownerId: owner, noteId, taskId: row.recording?.taskId || row.file?.task_id, recordingId: row.recording?.id },
+  const contentState = (noteId: string, row = selected, focus?: 'meeting') => ({ returnTo, ...(row?.purpose === 'meeting' ? {
+    meetingLocator: { ownerId: owner, noteId, ...(focus ? { focus } : {}), taskId: row.recording?.taskId || row.file?.task_id, recordingId: row.recording?.id },
   } : {}) })
   return <div className="workspace-page">
     {parent.split(/[?#]/)[0] !== '/files' && <PageReturn to={parent} label={pageParentLabel(parent)} />}
@@ -263,7 +264,7 @@ export function FileLibrary() {
           {mediaError && <div role="alert" className="text-sm"><p>播放未成功。请重试读取，或导出后在系统播放器打开。</p><Button variant="outline" onClick={() => { setMediaError(false); setMediaAttempt(n => n + 1) }}>重试播放</Button></div>}
         </section>
         <section aria-labelledby="file-content-heading" className="grid gap-3 border-t pt-4"><h2 id="file-content-heading" className="text-sm font-medium">关联内容</h2>
-          {selected.file.note_id ? <><p className="text-sm text-muted-foreground">已有正文保留在会议与笔记中。这里管理来源原件，不复制笔记正文。</p><Button asChild><Link to={contentTarget(selected.file.note_id)} state={contentState(selected.file.note_id)} onClick={() => setSelected(null)}>查看关联内容</Link></Button></> : selected.file.task_id ? <><p className="text-sm text-muted-foreground">{selected.file.error_code === "unknown_result" || selected.file.error_code === "unknown_error" ? "处理结果尚未确认。原文件已保留，请查询原结果，不重复提交。" : "已有处理记录，先查询原结果，不再次提交此原件。"}</p><Button disabled={busy || selected.purpose === 'unknown'} onClick={() => void generate(selected.file!)}>{selected.purpose === 'meeting' ? '查看纪要生成进度' : '查看笔记生成进度'}</Button></> : selected.file.can_generate ? <><p className="text-sm text-muted-foreground">从这份已保存原件整理正文，原件继续保留。已有未确认资料处理会先恢复。</p><Button variant="outline" disabled={busy || !selected.file.available || selected.purpose === 'unknown'} onClick={() => void generate(selected.file!)}>{selected.purpose === 'meeting' ? '用此原件生成纪要' : '用此原件整理笔记'}</Button></> : <p className="text-sm text-muted-foreground">此格式目前只支持原件保存与导出，尚未接入正文整理。</p>}
+          {selected.file.note_id ? <><p className="text-sm text-muted-foreground">已有正文保留在会议与笔记中。这里管理来源原件，不复制笔记正文。</p><Button asChild><Link to={contentTarget(selected.file.note_id, selected, !sourceNote && selected.purpose === 'meeting' ? 'meeting' : undefined)} state={contentState(selected.file.note_id, selected, !sourceNote && selected.purpose === 'meeting' ? 'meeting' : undefined)} onClick={() => setSelected(null)}>{!sourceNote && selected.purpose === 'meeting' ? '查看会议档案' : '查看关联内容'}</Link></Button></> : selected.file.task_id ? <><p className="text-sm text-muted-foreground">{selected.file.error_code === "unknown_result" || selected.file.error_code === "unknown_error" ? "处理结果尚未确认。原文件已保留，请查询原结果，不重复提交。" : "已有处理记录，先查询原结果，不再次提交此原件。"}</p><Button disabled={busy || selected.purpose === 'unknown'} onClick={() => void generate(selected.file!)}>{selected.purpose === 'meeting' ? '查看纪要生成进度' : '查看笔记生成进度'}</Button></> : selected.file.can_generate ? <><p className="text-sm text-muted-foreground">从这份已保存原件整理正文，原件继续保留。已有未确认资料处理会先恢复。</p><Button variant="outline" disabled={busy || !selected.file.available || selected.purpose === 'unknown'} onClick={() => void generate(selected.file!)}>{selected.purpose === 'meeting' ? '用此原件生成纪要' : '用此原件整理笔记'}</Button></> : <p className="text-sm text-muted-foreground">此格式目前只支持原件保存与导出，尚未接入正文整理。</p>}
         </section>
         <section aria-labelledby="file-management-heading" className="grid gap-3 border-t pt-4"><h2 id="file-management-heading" className="text-sm font-medium">原件管理</h2>
           {selected.file.available ? <OriginalDownloadButton key={`${owner}:${selected.file.id}`} url={selected.file.content_url + (selected.file.id.startsWith('note:') || selected.file.id.startsWith('task:') ? '' : '?download=true')} filename={selected.file.filename} /> : <Button variant="outline" disabled>原件不可用，暂不能导出</Button>}

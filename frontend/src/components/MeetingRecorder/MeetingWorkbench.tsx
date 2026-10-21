@@ -144,7 +144,7 @@ function MeetingNoteItems({ notes, onOpenNote, taskStates, onAssociate, locatedN
   </ul>;
 }
 export type MeetingArchiveView = 'meetings' | 'pending';
-export type MeetingLocator = { requestId: string; ownerId?: string; noteId?: string; taskId?: string; recordingId?: string; invalid?: boolean };
+export type MeetingLocator = { requestId: string; ownerId?: string; noteId?: string; taskId?: string; recordingId?: string; focus?: 'meeting'; invalid?: boolean };
 const matchesNote = (note: NoteRecord, id: string) => note.id === id || note.localId === id || note.workspaceKey === id || note.sourceIds?.includes(id);
 
 export function MeetingWorkbench({
@@ -203,7 +203,7 @@ export function MeetingWorkbench({
   const allRows = buildMeetingRows(recordings.filter(row => !ownerId || row.ownerId === ownerId),
     notes.filter(note => !ownerId || !note.meetingSource || note.meetingSource.ownerId === ownerId), taskStates, ownerId);
   const locating = !!locator && locator.requestId !== dismissedLocator;
-  const invalidLocator = locator?.invalid || !!locator?.ownerId && locator.ownerId !== ownerId ||
+  const invalidLocator = locator?.invalid || locator?.focus !== undefined && locator.focus !== 'meeting' || !!locator?.ownerId && locator.ownerId !== ownerId ||
     !!locator && ![locator.noteId, locator.taskId, locator.recordingId].some(Boolean) ||
     [locator?.noteId, locator?.taskId, locator?.recordingId].some(id => id !== undefined && !/^[A-Za-z0-9_-]{1,160}$/.test(id));
   const candidates = locating && !invalidLocator && !loading && !locateError ? allRows.filter(row =>
@@ -214,6 +214,8 @@ export function MeetingWorkbench({
   const locatedRow = candidates.length === 1 ? candidates[0] : undefined;
   const locatedNote = locator?.noteId && locatedRow ? locatedRow.notes.find(note => note.id === locator.noteId) ||
     locatedRow.notes.find(note => matchesNote(note, locator.noteId!)) : undefined;
+  const focusMeeting = locator?.focus === 'meeting' && locatedRow?.kind === 'meeting';
+  const focusedNote = focusMeeting ? undefined : locatedNote;
   const activeView = locatedRow ? locatedRow.kind === 'meeting' ? 'meetings' : 'pending'
     : view || (storedView === 'pending' ? 'pending' : 'meetings');
   const pendingView = activeView === 'pending';
@@ -265,7 +267,7 @@ export function MeetingWorkbench({
     if (viewIds.some(id => ids.includes(id)) === open) return ids;
     return open ? [...new Set([...ids, ...viewIds])] : ids.filter(id => !viewIds.includes(id));
   });
-  const locatorContext = JSON.stringify([ownerId, locator?.requestId, associationContextKey]);
+  const locatorContext = JSON.stringify([ownerId, locator?.requestId, associationContextKey, locator?.focus]);
   useEffect(() => {
     if (!locatedRow || loading || expandedLocator.current === locatorContext) return;
     expandedLocator.current = locatorContext;
@@ -273,7 +275,7 @@ export function MeetingWorkbench({
   }, [locatorContext, locatedRow?.key, loading]);
   useEffect(() => {
     if (!locatedRow || loading || focusedLocator.current === locatorContext) return;
-    const element = locatedNote
+    const element = focusedNote
       ? listRef.current?.querySelector<HTMLElement>('[data-meeting-located="true"]')
       : Array.from(listRef.current?.querySelectorAll<HTMLElement>('[data-meeting-row-key]') || [])
         .find(node => node.dataset.meetingRowKey === locatedRow.key)?.querySelector<HTMLElement>('button');
@@ -285,7 +287,7 @@ export function MeetingWorkbench({
       element.focus({ preventScroll: true });
     });
     return () => cancelAnimationFrame(frame);
-  }, [locatorContext, locatedRow?.key, locatedNote?.id, expandedRows, loading]);
+  }, [locatorContext, locatedRow?.key, focusedNote?.id, expandedRows, loading]);
   const selected = pendingView ? undefined : rows.find((row) => row.key === selectedKey && row.recording);
   const previewRecording = selected?.recordings.find(row => row.id === previewRecordingId) || selected?.recording;
   const selectedRecordingTime = meetingTime(previewRecording?.startedAt);
@@ -348,7 +350,7 @@ export function MeetingWorkbench({
             <AlertDescription className="grid gap-2">
               <p role={loading || locatedRow ? 'status' : 'alert'}>{loading ? '正在读取并定位关联会议…' : locatedRow
                 ? locatedRow.kind === 'unlinked' ? '此纪要尚未关联到会议，已定位待归档内容。原筛选已保留。'
-                  : locatedNote ? '已定位原会议档案和关联纪要。原筛选已保留。' : '已定位原会议档案。原筛选已保留。'
+                  : focusedNote ? '已定位原会议档案和关联纪要。原筛选已保留。' : '已定位原会议档案。原筛选已保留。'
                 : invalidLocator ? '定位标识无效或账号已变化，请返回文件库重新选择。'
                   : '当前空间未找到唯一的会议关联，请重新读取记录或返回文件库。原文件和纪要均保留。'}</p>
               <div className="flex flex-wrap gap-2">
@@ -393,6 +395,8 @@ export function MeetingWorkbench({
                 key={row.key}
                 type="button"
                 aria-label={`${row.title.slice(0, 120)} · ${row.state}`}
+                data-meeting-located={focusMeeting && row.key === locatedRow?.key || undefined}
+                aria-current={focusMeeting && row.key === locatedRow?.key ? 'true' : undefined}
                 aria-expanded={expanded}
                 aria-controls={panelId}
                 onClick={() => setRowExpanded(viewIds, !expanded)}
@@ -430,7 +434,7 @@ export function MeetingWorkbench({
                   {row.notes.length > 0 && <section aria-label="关联纪要" className="grid gap-2">
                     <h3 className="font-medium">纪要</h3>
                     <p className="text-xs leading-5 text-muted-foreground">关联纪要分别保留自己的保存版本。</p>
-                    <MeetingNoteItems notes={row.notes} onOpenNote={onOpenNote} taskStates={taskStates} locatedNoteId={locatedNote?.id} ownerId={ownerId} expanded={expanded} />
+                    <MeetingNoteItems notes={row.notes} onOpenNote={onOpenNote} taskStates={taskStates} locatedNoteId={focusedNote?.id} ownerId={ownerId} expanded={expanded} />
                   </section>}
                   {row.recordings.length > 0 && <section aria-label="关联原录制" className="grid gap-2">
                     <h3 className="font-medium">原录制</h3>
@@ -458,7 +462,7 @@ export function MeetingWorkbench({
             );
           })}
           {pendingView && unlinked.length > 0 && <section aria-label="待归档内容" className="grid min-w-0 gap-3 py-3">
-            <MeetingNoteItems notes={unlinked} onOpenNote={onOpenNote} taskStates={taskStates} locatedNoteId={locatedNote?.id} ownerId={ownerId}
+            <MeetingNoteItems notes={unlinked} onOpenNote={onOpenNote} taskStates={taskStates} locatedNoteId={focusedNote?.id} ownerId={ownerId}
               onAssociate={ownerId && onAssociated ? note => setAssociating({ note, ownerId, context: associationContextKey }) : undefined} />
           </section>}
           {!pendingView && unlinked.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">

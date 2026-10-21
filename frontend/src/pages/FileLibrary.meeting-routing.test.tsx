@@ -34,6 +34,7 @@ vi.mock('@/lib/desktopMicrophonePermission', async original => ({ ...await origi
 import { FileLibrary } from './FileLibrary';
 import { Meetings } from './Meetings';
 
+const originalScroll = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollIntoView');
 const saved = '2026-10-19T12:00:00Z';
 const note = (id: string, taskId: string, canonical?: string): LibraryNote => ({ id, taskId, title: '完全相同的纪要标题', content: '完整保存稿',
   sourceType: 'meeting_video', status: 'done', scope: 'personal', createdAt: saved, updatedAt: saved,
@@ -54,6 +55,7 @@ const noWrites = () => {
   expect(state.update).not.toHaveBeenCalled(); expect(state.publish).not.toHaveBeenCalled();
 };
 beforeEach(() => {
+  Object.defineProperty(Element.prototype, 'scrollIntoView', { configurable: true, writable: true, value: vi.fn() });
   vi.clearAllMocks(); sessionStorage.clear(); localStorage.clear(); state.owner = 'owner'; state.error = ''; state.native = false;
   state.notes = [note('canonical-note', 'canonical-a', 'canonical-a'), note('saved-a', 'child-a', 'canonical-a'), note('other-note', 'other-task', 'canonical-b')];
   state.recordings = []; state.files = [file()]; state.load.mockResolvedValue(undefined); state.list.mockImplementation(async () => state.recordings);
@@ -61,20 +63,27 @@ beforeEach(() => {
   state.api.mockImplementation(async path => path === '/api/files' ? { items: state.files } : path.startsWith('/api/task/')
     ? { status: 'success', result: { title: '真实保存结果', markdown: '正文' } } : { diarization: { available: true } });
 });
-afterEach(cleanup);
+afterEach(() => { cleanup(); if (originalScroll) Object.defineProperty(Element.prototype, 'scrollIntoView', originalScroll); else delete (Element.prototype as Partial<Element>).scrollIntoView; });
 
-it('routes a meeting original to its exact dossier and child, preserves hidden filters, and visibly returns to the same selected file', async () => {
+it('routes the ordinary meeting-original primary link to its dossier header and returns to the same selected file', async () => {
   sessionStorage.setItem('vinote:view:owner:recordings-query', JSON.stringify('不匹配的旧搜索'));
   sessionStorage.setItem('vinote:view:owner:recordings-filter', JSON.stringify('未生成'));
+  state.notes.find(note => note.id === 'saved-a')!.status = 'failed';
   const filesPath = '/files?purpose=meeting&type=video&q=capture&file=note%3Asaved-a#chosen';
   mount(filesPath);
-  await userEvent.click(await screen.findByRole('link', { name: '查看关联内容' }));
-  await screen.findByText('已定位原会议档案和关联纪要。原筛选已保留。');
+  await userEvent.click(await screen.findByRole('link', { name: '查看会议档案' }));
+  await screen.findByText('已定位原会议档案。原筛选已保留。');
+  expect(snapshot().path).toContain('locate_focus=meeting');
+  expect(snapshot().state.meetingLocator).toMatchObject({ ownerId: 'owner', noteId: 'saved-a', taskId: 'child-a', focus: 'meeting' });
   expect(snapshot().path).toMatch(/^\/meetings\?/); expect(snapshot().path).toContain('locate_note=saved-a');
   expect(snapshot().path).toContain('locate_task=child-a'); expect(screen.queryByText('笔记详情')).not.toBeInTheDocument();
   const target = document.querySelector<HTMLElement>('[data-meeting-located="true"]')!;
-  expect(target.closest('details')).toHaveAttribute('open'); expect(target).toHaveAttribute('aria-current', 'true');
+  expect(target.closest('[data-meeting-row-key]')).toBeInTheDocument();
+  expect(target.closest('details')).toBeNull(); expect(target).toHaveAttribute('aria-expanded', 'true');
+  expect(document.querySelector('details [data-meeting-located="true"]')).toBeNull();
+  expect(document.querySelector('details [aria-current="true"]')).toBeNull();
   await waitFor(() => expect(target).toHaveFocus());
+  expect(target.scrollIntoView).toHaveBeenCalledWith({ block: 'center', behavior: 'auto' });
   expect(screen.getByText('2 份纪要')).toBeInTheDocument(); expect(document.querySelectorAll('[data-meeting-row-ids]')).toHaveLength(1);
   expect(screen.getByRole('textbox', { name: '搜索记录' })).toHaveValue('不匹配的旧搜索');
   expect(screen.getByRole('tab', { name: '未生成' })).toHaveAttribute('aria-selected', 'true');
@@ -90,11 +99,13 @@ it('routes a meeting original to its exact dossier and child, preserves hidden f
 it('locates an unassociated historical meeting note in pending instead of making a meeting or opening its editor', async () => {
   state.notes = [note('saved-a', 'child-a'), note('other-note', 'other-task', 'canonical-b')];
   mount('/files?purpose=meeting&file=note%3Asaved-a');
-  await userEvent.click(await screen.findByRole('link', { name: '查看关联内容' }));
+  await userEvent.click(await screen.findByRole('link', { name: '查看会议档案' }));
   await screen.findByText('此纪要尚未关联到会议，已定位待归档内容。原筛选已保留。');
   expect(screen.getByRole('tab', { name: '待归档' })).toHaveAttribute('aria-selected', 'true');
   expect(document.querySelectorAll('[data-meeting-row-ids]')).toHaveLength(0);
-  expect(document.querySelector('[data-meeting-located="true"]')).toBeInTheDocument(); noWrites();
+  const pendingNote = document.querySelector<HTMLElement>('[data-meeting-located="true"]')!;
+  expect(pendingNote).toHaveAttribute('data-meeting-return-target', 'personal::note:saved-a');
+  await waitFor(() => expect(pendingNote).toHaveFocus()); noWrites();
 });
 
 it('keeps note-purpose files on their note detail route', async () => {
@@ -181,4 +192,100 @@ it('uses derived playback only in the player while native download and reveal re
   await userEvent.click(within(dialog).getByRole('button', { name: '在文件夹中显示' }));
   await waitFor(() => expect(state.reveal).toHaveBeenCalledWith('/api/notes/saved-a/media', expect.any(Function), expect.any(AbortSignal)));
   noWrites();
+});
+
+
+it('preserves exact-child intent from the source-note original view', async () => {
+  mount('/files?note=saved-a&file=note%3Asaved-a&purpose=meeting&returnTo=' + encodeURIComponent('/note/saved-a'));
+  await userEvent.click(await screen.findByRole('link', { name: '查看关联内容' }));
+  await screen.findByText('已定位原会议档案和关联纪要。原筛选已保留。');
+  expect(snapshot().path).not.toContain('locate_focus');
+  expect(snapshot().state.meetingLocator).not.toHaveProperty('focus');
+  const child = document.querySelector<HTMLElement>('details [data-meeting-located="true"]')!;
+  await waitFor(() => expect(child).toHaveFocus());
+  noWrites();
+});
+
+it('keeps unscoped exact-child deep links focused on the requested old child even with a newer sibling', async () => {
+  state.notes.push({ ...note('newer-sibling', 'newer-task', 'canonical-a'), createdAt: '2026-10-21T23:00:00Z' });
+  mount('/meetings?locate_note=saved-a&locate_task=child-a');
+  await screen.findByText('已定位原会议档案和关联纪要。原筛选已保留。');
+  const child = document.querySelector<HTMLElement>('details [data-meeting-located="true"]')!;
+  expect(child).toHaveAttribute('data-meeting-return-target', 'personal::note:saved-a');
+  await waitFor(() => expect(child).toHaveFocus()); noWrites();
+});
+
+it.each(['url', 'state', 'both'])('supports explicit meeting focus without selecting any child (%s)', async mode => {
+  const params = mode === 'state' ? '' : '&locate_focus=meeting';
+  const routeState = mode === 'url' ? undefined : { meetingLocator: { ownerId: 'owner', noteId: 'saved-a', taskId: 'child-a', focus: 'meeting' } };
+  mount('/meetings?locate_note=saved-a&locate_task=child-a' + params, routeState);
+  await screen.findByText('已定位原会议档案。原筛选已保留。');
+  const header = document.querySelector<HTMLElement>('[data-meeting-row-key] > [data-meeting-located="true"]')!;
+  await waitFor(() => expect(header).toHaveFocus());
+  expect(header).toHaveAttribute('aria-expanded', 'true');
+  expect(document.querySelector('details [aria-current="true"]')).toBeNull(); noWrites();
+});
+
+it.each(['locate_focus=', 'locate_focus=note', 'locate_focus=latest', 'locate_focus=MEETING', 'locate_focus=%20meeting', 'locate_focus=meeting&locate_focus=meeting', 'locate_focus=meeting&locate_focus=note'])('rejects invalid or duplicate focus without focus/navigation fallback (%s)', async query => {
+  mount('/meetings?locate_note=saved-a&' + query);
+  await screen.findByText('定位标识无效或账号已变化，请返回文件库重新选择。');
+  expect(document.querySelector('[data-meeting-located="true"]')).toBeNull(); noWrites();
+});
+
+it.each(['note', '', null, false, 7, ['meeting']])('rejects malformed or URL-conflicting state focus (%j)', async focus => {
+  mount('/meetings?locate_note=saved-a&locate_focus=meeting', { meetingLocator: { ownerId: 'owner', noteId: 'saved-a', focus } });
+  await screen.findByText('定位标识无效或账号已变化，请返回文件库重新选择。');
+  expect(document.querySelector('[data-meeting-located="true"]')).toBeNull(); noWrites();
+});
+
+it.each(['locate_note=saved-a&locate_task=other-task', 'locate_note=saved-a&locate_recording=missing-recording', 'locate_note=missing'])('does not let meeting focus bypass note/task/recording identity (%s)', async target => {
+  mount('/meetings?' + target + '&locate_focus=meeting');
+  await screen.findByRole('button', { name: '重新读取关联' });
+  expect(document.querySelector('[data-meeting-located="true"]')).toBeNull(); noWrites();
+});
+
+it('rejects a stale-owner meeting-focus request and a focus without any identity', async () => {
+  const first = mount('/meetings?locate_note=saved-a&locate_focus=meeting', { meetingLocator: { ownerId: 'another-owner', noteId: 'saved-a', focus: 'meeting' } });
+  await screen.findByText('定位标识无效或账号已变化，请返回文件库重新选择。');
+  expect(document.querySelector('[data-meeting-located="true"]')).toBeNull(); first.unmount();
+  mount('/meetings?locate_focus=meeting');
+  await screen.findByText('定位标识无效或账号已变化，请返回文件库重新选择。'); noWrites();
+});
+
+it('clears the focus intent in URL and state on ending locate or changing archive view', async () => {
+  mount('/meetings?locate_note=saved-a&locate_focus=meeting&project=Research', { meetingLocator: { ownerId: 'owner', noteId: 'saved-a', focus: 'meeting' } });
+  await screen.findByText('已定位原会议档案。原筛选已保留。');
+  await userEvent.click(screen.getByRole('button', { name: '结束定位' }));
+  expect(snapshot().path).not.toContain('locate_');
+  expect(snapshot().path).toContain('project=Research');
+  expect(snapshot().state).not.toHaveProperty('meetingLocator');
+  noWrites();
+});
+
+
+it.each(['note', '', null, false, 7, ['meeting']])('rejects invalid state-only focus (%j)', async focus => {
+  mount('/meetings?locate_note=saved-a', { meetingLocator: { ownerId: 'owner', noteId: 'saved-a', focus } });
+  await screen.findByText('定位标识无效或账号已变化，请返回文件库重新选择。');
+  expect(document.querySelector('[data-meeting-located="true"]')).toBeNull(); noWrites();
+});
+
+it('clears meeting focus when deliberately switching to pending, preserving unrelated query', async () => {
+  mount('/meetings?locate_note=saved-a&locate_focus=meeting&project=Research', { meetingLocator: { ownerId: 'owner', noteId: 'saved-a', focus: 'meeting' } });
+  await screen.findByText('已定位原会议档案。原筛选已保留。');
+  await userEvent.click(screen.getByRole('tab', { name: '待归档' }));
+  expect(snapshot().path).not.toContain('locate_');
+  expect(snapshot().path).toContain('view=pending');
+  expect(snapshot().path).toContain('project=Research');
+  expect(snapshot().state).not.toHaveProperty('meetingLocator'); noWrites();
+});
+
+it('does not apply an old-owner group locator after its collection read finishes late', async () => {
+  let finish!: () => void;
+  const oldNotes = state.notes; state.notes = [];
+  state.load.mockImplementationOnce(() => new Promise<void>(resolve => { finish = resolve; }));
+  mount('/meetings?locate_note=saved-a&locate_focus=meeting', { meetingLocator: { ownerId: 'owner', noteId: 'saved-a', focus: 'meeting' } });
+  await screen.findByText('正在读取并定位关联会议…');
+  await act(async () => { state.owner = 'owner-b'; state.notes = oldNotes; finish(); });
+  await screen.findByText('定位标识无效或账号已变化，请返回文件库重新选择。');
+  expect(document.querySelector('[data-meeting-located="true"]')).toBeNull(); noWrites();
 });
