@@ -1050,3 +1050,23 @@ it('an account A-B-A transition cannot accept the original A group request', asy
   expect(publishToFeishu).not.toHaveBeenCalled();
   expect(retryDelivery).not.toHaveBeenCalled();
 });
+
+it.each(['failed', 'unknown'])('keeps the old grouping %s receipt and offers no new-publication escape', async phase => {
+  const { newPublishDraft, persistPublishDraft } = await import('@/lib/feishuPublishReceipt');
+  const draft = newPublishDraft('owner', 'meeting-a', { title: '会议', content: '# 纪要' }, {
+    destination_config: { kind: 'personal' }, permission_policy: 'private', notify_self: true, groups: [],
+  });
+  persistPublishDraft({ ...draft, state: 'acknowledged', jobId: 'original-unwritten' });
+  const originalKey = `vinote:owner:feishu-publish:meeting-a:${draft.operationId}`;
+  const originalReceipt = localStorage.getItem(originalKey);
+  vi.mocked(deliveryById).mockResolvedValue({ id: 'original-unwritten', status: 'failed', phase,
+    document_url: '', error: '原会议来源未核验', error_code: 'meeting_source_unverified', recipients: {} });
+  openPanel();
+  await screen.findByText(/关闭归组设置或另建操作不会恢复此记录/);
+  expect(screen.queryByRole('button', { name: retryLabel })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '准备新的发布草稿' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: createLabel })).toBeDisabled();
+  expect(publishToFeishu).not.toHaveBeenCalled();
+  expect(retryDelivery).not.toHaveBeenCalled();
+  expect(localStorage.getItem(originalKey)).toBe(originalReceipt);
+});

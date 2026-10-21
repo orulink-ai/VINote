@@ -980,6 +980,118 @@ class FeishuService:
                     return {**self.serialize(previous, db=db), 'operation_id': operation_id, '_dispatch_required': False}
             raise
 
+    @staticmethod
+    def _ordinary_saved_publication(db, owner, note_key, title, content, source=None):
+        """Positive ordinary-source evidence only; missing meeting proof is not ordinary."""
+        from app.db_models import NoteDB
+        note_id = note_key.removeprefix('publish:')
+        note = db.get(NoteDB, note_id)
+        if note is None:
+            # WriteNote -> device WorkspaceNote cache -> explicit local_snapshot is
+            # an existing manual-body contract, not a NoteDB save or meeting proof.
+            # Absence of a SERVER binding is checked before accepting that contract;
+            # failed validation of a known binding never enters this branch.
+            if (not isinstance(source, dict) or source.get('kind') != 'local_snapshot'
+                    or source.get('explicit') is not True or source.get('note_key') != note_key
+                    or source.get('version_id') is not None or source.get('revision_id') is not None
+                    or any(part in note_id for part in ('/', chr(92), ':', '..'))
+                    or db.get(WorkspaceNoteDB, (owner, note_id)) is not None
+                    or db.get(WorkspaceNoteDB, (owner, note_key)) is not None):
+                return False
+            try:
+                uuid.UUID(note_id)
+            except ValueError:
+                from app.services.task_artifact_service import TaskArtifactService
+                # A known artifact, including invalid/owner-mismatched metadata,
+                # is not an unbound cache-only writing object.
+                artifacts = TaskArtifactService()
+                direct = artifacts.output_dir / note_id
+                return (not direct.exists() and not direct.is_symlink()
+                        and artifacts.find_task_dir(note_id) is None)
+            return False  # An unbound task-shaped ID remains ambiguous, not ordinary.
+        if (not note or note.created_by != owner or note.scope != 'personal' or note.status != 'done'
+                or note.title != title or note.content != content
+                or (note.source_type or '').startswith('meeting_')):
+            return False
+        if not note.task_id:
+            return True
+        # A generated note must positively retain its owned non-meeting intake.
+        # Invalid/derived/missing meeting metadata never becomes an ordinary fallback.
+        from app.services.task_artifact_service import TaskArtifactService
+        import stat
+        try:
+            if str(uuid.UUID(note.task_id)) != note.task_id:
+                return False
+            artifacts = TaskArtifactService()
+            folder = artifacts.find_task_dir(note.task_id)
+            if (not folder or folder.is_symlink() or getattr(folder, 'is_junction', lambda: False)()
+                    or folder.resolve().parent != artifacts.output_dir.resolve()
+                    or (folder / 'source_reference.json').exists() or (folder / 'source_reference.json').is_symlink()):
+                return False
+            def metadata(filename):
+                path = folder / filename
+                info = path.lstat()
+                if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 65536
+                        or getattr(path, 'is_junction', lambda: False)()):
+                    raise ValueError()
+                return path.read_text(encoding='utf-8')
+            return (metadata('recording_owner') == owner and metadata('.task_id').strip() == note.task_id
+                    and json.loads(metadata('request.json'))['request']['workflow'] == 'note_organization')
+        except (OSError, ValueError, TypeError, KeyError, AttributeError):
+            return False
+
+    def _manual_meeting_grouping(self, db, owner, note_key, title, content, destination, preferences, source=None):
+        if destination.get('kind') != 'wiki' or preferences.get('group_meeting_versions') is not True:
+            return False
+        if self._ordinary_saved_publication(db, owner, note_key, title, content, source):
+            return False
+        from app.db_models import NoteDB
+        from app.routers.note_library import _with_meeting_source
+        from app.services.note_repository import NoteRepository
+        note = db.get(NoteDB, note_key.removeprefix('publish:'))
+        if (not note or note.created_by != owner or note.scope != 'personal' or note.status != 'done'
+                or note.title != title or note.content != content
+                or _with_meeting_source(NoteRepository._to_response(note), owner).meeting_source is None):
+            raise FeishuError('会议来源尚不能核验，未退为普通发布；请核对原来源', 409,
+                              code='meeting_source_unverified')
+        return True
+
+    @staticmethod
+    def _guard_grouping_history(db, owner, note_key, title, content):
+        # Adding grouping to the revision must not turn old/unknown writes into new intents.
+        # These are lookup aliases only; never rewrite any frozen note_key/operation.
+        canonical_key = note_key.removeprefix('publish:')
+        aliases = {note_key, canonical_key, 'publish:' + canonical_key}
+        rows = db.execute(select(FeishuDeliveryDB, FeishuDeliveryDestinationDB).outerjoin(
+            FeishuDeliveryDestinationDB, FeishuDeliveryDestinationDB.delivery_id == FeishuDeliveryDB.id).where(
+            FeishuDeliveryDB.owner == owner, FeishuDeliveryDB.note_key.in_(aliases),
+            FeishuDeliveryDB.title == title, FeishuDeliveryDB.content == content)).all()
+        for job, metadata in rows:
+            def blocked():
+                raise FeishuError('此正文已有原发布记录；设置变化或新操作不能绕过它。请查询原记录，未新建或重发',
+                                  409, code='grouping_prior_delivery_requires_review')
+            if metadata is None:
+                blocked()  # A legacy journal gap never proves absence of a write.
+            try:
+                snapshot, recipients = json.loads(metadata.snapshot), json.loads(job.recipients)
+                if (not isinstance(snapshot, dict) or not isinstance(snapshot.get('destination'), dict)
+                        or not isinstance(recipients, dict) or any(not isinstance(v, dict) for v in recipients.values())):
+                    blocked()
+            except (ValueError, TypeError):
+                blocked()
+            # Old records have no grouping-aware revision; never migrate or retry them here.
+            # New completed records can use normal revision deduplication. Every unfinished
+            # record stays on its original recovery path, including definite unwritten failures.
+            ambiguous = (job.document_id == '__creating__' or receipts.has_unknown_batch(db, job.id)
+                or any(item.get('status') in ('sending', 'unknown') for item in recipients.values())
+                or recipient_access.has_permission_unknown(recipients))
+            if job.status != 'completed' or metadata.phase != 'completed' or ambiguous:
+                blocked()
+            if snapshot['destination'].get('kind') == 'wiki' and (
+                    type(snapshot.get('meeting_grouping_protocol')) is not int
+                    or snapshot['meeting_grouping_protocol'] != 1):
+                blocked()
+
     def enqueue(self, owner, note_key, title=None, content=None, automatic=False, *, destination_config=None,
                 permission_policy=None, notify_self=None, groups=None, version_id=None, revision_id=None,
                 operation_id=None, source_mode=None, contacts=None, recipient_access_policy=None):
@@ -1028,10 +1140,15 @@ class FeishuService:
         available_groups = self.groups(owner) if enhanced and selected_groups else []
         if enhanced and any(g not in {item["chat_id"] for item in available_groups} for g in selected_groups):
             raise FeishuError("目标群不可用，请确认本人和机器人均在群内", 403, code="recipient_unavailable")
+        with session_scope() as db:
+            self._guard_grouping_history(db, owner, note_key, title, content)
+            group_meeting_versions = self._manual_meeting_grouping(db, owner, note_key, title, content, target, preferences, source)
         content_revision = hashlib.sha256((title + "\n" + content).encode()).hexdigest()
         context = {"destination": target, "permission_policy": policy, "notify_self": notify,
                    "connection_id": preferences.get("connection_id"),
                    "groups": sorted(selected_groups), "version_id": version_id, "revision_id": revision_id}
+        if target['kind'] == 'wiki':
+            context['group_meeting_versions'] = group_meeting_versions
         if selected_contacts:
             context["contacts"] = sorted(item["open_id"] for item in selected_contacts)
         if recipient_access_policy is not None:
@@ -1040,7 +1157,8 @@ class FeishuService:
         try:
             return self._enqueue(owner, note_key, title, content, automatic, enhanced, destination, policy,
                                  notify, selected_groups, available_groups, version_id, revision_id, content_revision, revision, source,
-                                 operation_id, request_hash, selected_contacts, recipient_access_policy)
+                                 operation_id, request_hash, selected_contacts, recipient_access_policy,
+                                 manual_group_meeting_versions=group_meeting_versions)
         except IntegrityError:
             # Cross-process duplicate requests converge on the DB unique constraint.
             with session_scope() as db:
@@ -1058,7 +1176,7 @@ class FeishuService:
     def _enqueue(self, owner, note_key, title, content, automatic, enhanced, destination, policy,
                  notify_self, groups, available_groups, version_id, revision_id, content_revision, revision, source,
                  operation_id=None, request_hash=None, contacts=None, recipient_access_policy=None,
-                 automatic_policy_id=None, attendance=None):
+                 automatic_policy_id=None, attendance=None, manual_group_meeting_versions=None):
         with _lock(owner), session_scope() as db:
             if db.get_bind().dialect.name == 'sqlite':
                 # SQLite ignores FOR UPDATE; take its writer lock before the final
@@ -1090,6 +1208,11 @@ class FeishuService:
             if automatic and not preferences.get("auto_publish"):
                 return None
             self.verify_source_unchanged(db, owner, source, title, content)
+            if manual_group_meeting_versions is not None:
+                self._guard_grouping_history(db, owner, note_key, title, content)
+                actual_grouping = self._manual_meeting_grouping(db, owner, note_key, title, content, destination, preferences, source)
+                if actual_grouping is not manual_group_meeting_versions:
+                    raise FeishuError('发布准备期间会议归组范围已变化，请重新核对', 409, code='grouping_selection_changed')
             # Auto publication is the first successful minutes only; edits are explicit.
             existing = db.scalar(select(FeishuDeliveryDB).where(FeishuDeliveryDB.owner == owner,
                 FeishuDeliveryDB.note_key == note_key).order_by(FeishuDeliveryDB.created_at.desc()))
@@ -1156,6 +1279,10 @@ class FeishuService:
                                 app_id=self.config.feishu_app_id, automatic_delivery_protocol=1)
             group_versions = (saved_automatic.get('group_meeting_versions', False)
                               if automatic_policy_id is not None else preferences.get('group_meeting_versions', False))
+            if manual_group_meeting_versions is not None:
+                group_versions = manual_group_meeting_versions
+                if destination.get('kind') == 'wiki':
+                    snapshot['meeting_grouping_protocol'] = 1
             if group_versions and destination.get('kind') == 'wiki':
                 snapshot.update(group_meeting_versions=True, app_id=self.config.feishu_app_id)
             if attendance is not None:

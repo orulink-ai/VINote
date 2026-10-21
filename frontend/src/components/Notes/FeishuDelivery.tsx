@@ -813,7 +813,7 @@ export function FeishuDelivery({
               </Button>
             </Field>
           )}
-          {job?.status === "failed" && (
+          {job?.status === "failed" && job.error_code !== "meeting_source_unverified" && (
             <Button
               variant="outline"
               disabled={
@@ -831,6 +831,9 @@ export function FeishuDelivery({
               {continueNotifications ? '继续通知' : '从失败步骤恢复，不重发成功通知'}
             </Button>
           )}
+          {job?.status === 'failed' && job.error_code === 'meeting_source_unverified' && <Alert><AlertDescription>
+            原发布的会议来源无法核验，记录已保留。关闭归组设置或另建操作不会恢复此记录；请先核对原来源。此处不会新建发布或重发。
+          </AlertDescription></Alert>}
           {uncertain && (
             <Alert>
               <AlertDescription>
