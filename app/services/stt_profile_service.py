@@ -265,7 +265,7 @@ class STTProfileService:
         if cloud["mode"] == "cloud":
             return [STTProfileResponse(
                 id="vilab-cloud", name="VILab · " + (cloud["asr_model"] or "待选择云端模型"),
-                provider="vliab-server", model_name=cloud["asr_model"], base_url=settings.vilab_server_url,
+                provider="vliab-server", model_name=cloud["asr_model"], base_url=cloud.get("server_url") or settings.vilab_server_url,
                 api_key_hint="", is_default=True, is_active=True,
             )]
         return self.repository.list_profiles(user_id)
@@ -346,7 +346,9 @@ class STTProfileService:
             cloud = service.status(user_id)
             if cloud["mode"] == "cloud" and cloud["asr_model"]:
                 return ResolvedSTTConfig(provider="vliab-server", base_url=cloud.get("server_url") or settings.vilab_server_url,
-                                         model_name=cloud["asr_model"], cloud_user_id=user_id)
+                                         model_name=cloud["asr_model"], cloud_user_id=user_id,
+                                         cloud_connection_id=cloud.get("connection_id"),
+                                         cloud_connection_auth_mode=cloud.get("connection_auth_mode"))
             if cloud["mode"] == "cloud":
                 raise HTTPException(400, "云端模式尚未选择转写模型，请在设置中选择，或切换到本地模式")
             if stt_profile_id == "vilab-cloud":

@@ -76,6 +76,7 @@ exec(py, ['-m', 'PyInstaller', '--noconfirm', '--onedir', '--name', profile.back
   '--copy-metadata', 'opentelemetry-api', '--copy-metadata', 'opentelemetry-sdk',
   '--add-data', `${join(staging, 'desktop-config.json')}${sep}.`,
   '--add-data', `${join(staging, 'models')}${sep}models`,
+  '--add-data', `${join(root, 'app/resources/fonts')}${sep}app/resources/fonts`,
   '--add-data', `${join(root, 'frontend/dist')}${sep}frontend`, '--add-binary', `${join(staging, 'bin/*')}${sep}bin`,
   join(root, 'scripts/desktop_backend.py')])
 const backendDir = join(staging, 'dist', profile.backendName)

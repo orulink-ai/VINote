@@ -41,8 +41,8 @@ export function FeishuObjectPicker({ objects, value, onChange, disabled, isCurre
         <p role="status" aria-live="polite" className="shrink-0 px-3 py-2 text-xs text-muted-foreground">找到 {matching.length} 个对象 · 联系人 {contacts.length} · 群 {groups.length}</p>
         <CommandList aria-label="匹配的飞书对象" className="max-h-[min(18rem,45vh)] min-h-0 overflow-y-auto overscroll-contain">
           <CommandEmpty>没有匹配的可见对象，请调整名称或类型。</CommandEmpty>
-          {!!contacts.length && <CommandGroup heading={`联系人（${contacts.length}）`}>{contacts.map(item => <CommandItem key={item.id} value={item.id} onSelect={() => select(item.id)} aria-label={label(item)}><span className="truncate">{label(item)}</span>{value === item.id && <Check aria-hidden="true" className="ml-auto" />}</CommandItem>)}</CommandGroup>}
-          {!!groups.length && <CommandGroup heading={`群（${groups.length}）`}>{groups.map(item => <CommandItem key={item.id} value={item.id} onSelect={() => select(item.id)} aria-label={label(item)}><span className="truncate">{label(item)}</span>{value === item.id && <Check aria-hidden="true" className="ml-auto" />}</CommandItem>)}</CommandGroup>}
+          {!!contacts.length && <CommandGroup heading={`联系人（${contacts.length}）`}>{contacts.map(item => <CommandItem key={item.id} value={item.id} onSelect={() => select(item.id)} aria-label={label(item)}><span className="min-w-0 break-words">{label(item)}</span>{value === item.id && <Check aria-hidden="true" className="ml-auto" />}</CommandItem>)}</CommandGroup>}
+          {!!groups.length && <CommandGroup heading={`群（${groups.length}）`}>{groups.map(item => <CommandItem key={item.id} value={item.id} onSelect={() => select(item.id)} aria-label={label(item)}><span className="min-w-0 break-words">{label(item)}</span>{value === item.id && <Check aria-hidden="true" className="ml-auto" />}</CommandItem>)}</CommandGroup>}
         </CommandList>
       </Command>
     </PopoverContent>

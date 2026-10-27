@@ -219,6 +219,7 @@ class NoteServiceTest(unittest.TestCase):
             from unittest.mock import Mock
             evidence = Mock()
             evidence.align.return_value = evidence
+            evidence.input_receipt.return_value = None  # Fake summarizer prepares no image request.
             with patch.object(service.llm_service.summarizer, "summarize", side_effect=check_summary_stage), patch.object(screenshots, "prepare_local_video", side_effect=AssertionError("Must not download")), patch("app.services.video_evidence_service.VideoEvidenceService.collect", return_value=evidence) as collect, patch("app.services.meeting_video_analysis_service.MeetingVideoAnalysisService.analyze", return_value="视觉证据：进度表") as vision:
                 result = service.generate_from_file(str(video), "screen-test", title="Screen meeting")
             collect.assert_called_once()
@@ -345,6 +346,110 @@ class NoteServiceTest(unittest.TestCase):
             self.assertIn("Uploaded Audio", str(transcribed_path))
             self.assertEqual(transcribed_path.name, "source_audio.wav")
             self.assertEqual(result.audio_meta.file_path, str(transcribed_path))
+
+
+    def test_input_metadata_write_failure_does_not_mask_unknown_model_outcome(self):
+        from PIL import Image
+        from app.services.video_evidence_service import VideoEvidence, VideoFrameEvidence
+        from app.services.summary_failure import SummaryResultUnconfirmed
+        with tempfile.TemporaryDirectory() as root:
+            frame = Path(root) / 'synthetic.jpg'
+            Image.new('RGB', (640, 360), 'white').save(frame, format='JPEG')
+            evidence = VideoEvidence(42, [VideoFrameEvidence(1, frame, ['timeline'], [1])], 42, True)
+            artifacts = TaskArtifactService(Path(root) / 'output')
+            transcriber, llm = FakeTranscriptionService(), FakeLLMService()
+            service = NoteService(transcription_service=transcriber, llm_service=llm, artifact_service=artifacts)
+            write = artifacts.write_json
+
+            def fail_metadata(path, payload):
+                if path.name == 'video_model_input.json':
+                    raise OSError('synthetic private storage location')
+                return write(path, payload)
+
+            def unknown(**kwargs):
+                kwargs['video_evidence'].user_content('controlled input', capabilities={'vision': True})
+                raise SummaryResultUnconfirmed('connection')
+
+            transcript = TranscriptResult(language='zh', full_text='synthetic source',
+                segments=[TranscriptSegment(start=0, end=2, text='synthetic source')])
+            with patch.object(llm.summarizer, 'summarize', side_effect=unknown), \
+                    patch.object(artifacts, 'write_json', side_effect=fail_metadata):
+                with self.assertRaises(SummaryResultUnconfirmed):
+                    service.generate_from_transcript(transcript, 'input-write-fail', video_evidence=evidence)
+            status = artifacts.get_status('input-write-fail')
+            self.assertEqual(status['error_code'], 'summary_result_unconfirmed')
+            self.assertFalse(status['retryable'])
+            self.assertEqual(transcriber.calls, [])
+
+    def test_raw_review_write_failure_preserves_unknown_outcome_and_input_receipt(self):
+        from PIL import Image
+        from app.llm.meeting_presentation import presentation_state
+        from app.services.video_evidence_service import VideoEvidence, VideoFrameEvidence
+        from app.services.summary_failure import SummaryResultUnconfirmed
+        with tempfile.TemporaryDirectory() as root:
+            frame = Path(root)/'synthetic.jpg'
+            Image.new('RGB', (64, 36), 'white').save(frame, format='JPEG')
+            evidence = VideoEvidence(42, [VideoFrameEvidence(1, frame, ['timeline'], [1])], 42, True)
+            artifacts = TaskArtifactService(Path(root)/'output')
+            transcriber, llm = FakeTranscriptionService(), FakeLLMService()
+            service = NoteService(transcription_service=transcriber, llm_service=llm, artifact_service=artifacts)
+            write = artifacts.write_json
+            failure = SummaryResultUnconfirmed('connection')
+
+            def fail_review(path, payload):
+                if path.name == 'meeting_fact_review.json':
+                    raise OSError('synthetic private storage path')
+                return write(path, payload)
+
+            def unknown(**kwargs):
+                kwargs['video_evidence'].user_content('controlled input', capabilities={'vision': True})
+                presentation_state().raw_review = 'synthetic private raw review'
+                raise failure
+
+            transcript = TranscriptResult(language='zh', full_text='synthetic source',
+                segments=[TranscriptSegment(start=0, end=2, text='synthetic source')])
+            with patch.object(llm.summarizer, 'summarize', side_effect=unknown), \
+                    patch.object(artifacts, 'write_json', side_effect=fail_review), \
+                    self.assertLogs('app.services.note_service', level='WARNING') as logs:
+                with self.assertRaises(SummaryResultUnconfirmed) as caught:
+                    service.generate_from_transcript(transcript, 'review-write-fail', video_evidence=evidence)
+            self.assertIs(caught.exception, failure)
+            status = artifacts.get_status('review-write-fail')
+            self.assertEqual(status['error_code'], 'summary_result_unconfirmed')
+            self.assertFalse(status['retryable'])
+            self.assertEqual(transcriber.calls, [])
+            self.assertTrue((artifacts.find_task_dir('review-write-fail')/'video_model_input.json').is_file())
+            joined = '\n'.join(logs.output)
+            self.assertIn('OSError', joined)
+            self.assertNotIn('synthetic private', joined)
+
+    def test_raw_review_write_failure_after_summary_success_is_not_suppressed(self):
+        from app.llm.meeting_presentation import presentation_state
+        with tempfile.TemporaryDirectory() as root:
+            artifacts = TaskArtifactService(Path(root)/'output')
+            transcriber, llm = FakeTranscriptionService(), FakeLLMService()
+            service = NoteService(transcription_service=transcriber, llm_service=llm, artifact_service=artifacts)
+            write = artifacts.write_json
+            failure = OSError('synthetic review storage failure')
+
+            def fail_review(path, payload):
+                if path.name == 'meeting_fact_review.json':
+                    raise failure
+                return write(path, payload)
+
+            def complete(**kwargs):
+                presentation_state().raw_review = 'synthetic raw review'
+                return '# Synthetic complete summary'
+
+            transcript = TranscriptResult(language='zh', full_text='synthetic source',
+                segments=[TranscriptSegment(start=0, end=2, text='synthetic source')])
+            with patch.object(llm.summarizer, 'summarize', side_effect=complete), \
+                    patch.object(artifacts, 'write_json', side_effect=fail_review):
+                with self.assertRaises(OSError) as caught:
+                    service.generate_from_transcript(transcript, 'review-success-write-fail')
+            self.assertIs(caught.exception, failure)
+            self.assertEqual(transcriber.calls, [])
+            self.assertEqual(artifacts.get_status('review-success-write-fail')['status'], 'failed')
 
 
 if __name__ == "__main__":

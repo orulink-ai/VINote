@@ -22,6 +22,14 @@ it('an absent automatic record stays quiet and preserves ordinary delivery reads
   await screen.findByText('飞书 · 尚未交付');
   expect(screen.queryByRole('alert')).toBeNull(); expect(checkAutomaticDelivery).not.toHaveBeenCalled();
 });
+it('shows attendee waiting as a preparation state without querying or retrying a write', async () => {
+  vi.mocked(readAutomaticDelivery).mockResolvedValue({ status: 'waiting_participants', error: '' });
+  render(<MemoryRouter><FeishuDocumentFooter noteId="saved-note" /></MemoryRouter>);
+  expect(await screen.findByText(/等待确认本会议参会人/)).toBeVisible();
+  expect(screen.queryByText(/自动交付失败/)).toBeNull();
+  expect(checkAutomaticDelivery).not.toHaveBeenCalled();
+  expect(deliveryById).not.toHaveBeenCalled();
+});
 it.each(['queued', 'failed'] as const)('shows %s without retrying or altering the original note', async status => {
   vi.mocked(readAutomaticDelivery).mockResolvedValue({ status, error: status === 'failed' ? '权限不足' : '' });
   render(<MemoryRouter><FeishuDocumentFooter noteId="saved-note" /></MemoryRouter>);

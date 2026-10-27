@@ -2,7 +2,8 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { SavedRecordingActions } from './SavedRecordingActions'
 import { apiJson, apiFetch } from '../../lib/api'
-import { downloadOriginalFile } from '../../lib/recordingDownload'
+import { downloadOriginalFile, type DownloadProgressCallback, type DownloadResult } from '../../lib/recordingDownload'
+import { useAuthStore } from '../../stores/authStore'
 
 vi.mock('../../lib/api', () => ({ apiJson: vi.fn(), apiFetch: vi.fn() }))
 vi.mock('../../lib/i18n', () => ({ useI18n: () => ({ locale: 'zh-CN' }) }))
@@ -22,6 +23,10 @@ it('keeps the player and note intact when deletion fails', async () => {
   expect(screen.getByTestId('original').getAttribute('src')).toBe('/api/notes/note-a/media')
   expect(deleted).not.toHaveBeenCalled()
   expect(screen.getByRole('button', { name: '导出原音频' })).toBeEnabled()
+  expect(screen.queryByRole('button', { name: '重试导出' })).toBeNull()
+  fireEvent.click(screen.getByRole('button', { name: '重新核验原文件' }))
+  await screen.findByText(/原文件已保留/)
+  expect(downloadOriginalFile).not.toHaveBeenCalled()
 })
 
 it('can retry a failed recording lookup without leaving the meeting', async () => {
@@ -36,9 +41,30 @@ it('labels video correctly and downloads the original endpoint, never its playba
   render(<SavedRecordingActions noteId="video-note" title="合成视频" mediaKind="video" onDeleted={vi.fn()} />);
   fireEvent.click(await screen.findByRole('button', { name: '导出原视频' }));
   await vi.waitFor(() => expect(downloadOriginalFile).toHaveBeenCalled());
-  expect(downloadOriginalFile).toHaveBeenCalledWith('/api/notes/video-note/media', 'meeting.m4a', expect.any(Function), expect.any(AbortSignal));
+  expect(downloadOriginalFile).toHaveBeenCalledWith('/api/notes/video-note/media', 'meeting.m4a', expect.any(Function), expect.any(AbortSignal), expect.any(Function));
   expect(await screen.findByRole('status')).toHaveTextContent('下载列表');
 });
+
+it.each(['owner', 'source', 'cancel'] as const)('shows written bytes without a fabricated total and rejects late progress after %s changes', async change => {
+  useAuthStore.setState({ user: { id: 'owner', email: 'owner@example.test' } })
+  let progress!: DownloadProgressCallback, finish!: (result: DownloadResult) => void
+  vi.mocked(downloadOriginalFile).mockImplementationOnce((_url, _filename, _current, _signal, onProgress) => {
+    progress = onProgress!; return new Promise(resolve => { finish = resolve })
+  })
+  const view = render(<SavedRecordingActions noteId="old-note" title="录制" onDeleted={vi.fn()} />)
+  fireEvent.click(await screen.findByRole('button', { name: '导出原音频' }))
+  act(() => progress({ stage: 'writing', writtenBytes: 1024 }))
+  expect(screen.getByRole('status')).toHaveTextContent('正在写入原文件：1.0 KB…')
+  expect(screen.getByRole('status')).not.toHaveTextContent(/%|已保存/)
+  if (change === 'owner') act(() => useAuthStore.setState({ user: { id: 'other', email: 'other@example.test' } }))
+  else if (change === 'source') view.rerender(<SavedRecordingActions noteId="new-note" title="新录制" onDeleted={vi.fn()} />)
+  else fireEvent.click(screen.getByRole('button', { name: '取消导出' }))
+  act(() => progress({ stage: 'finishing', writtenBytes: 1024 }))
+  expect(screen.getByRole('status')).not.toHaveTextContent('正在完成落盘')
+  await act(async () => finish(change === 'cancel' ? 'cancelled' : 'saved'))
+  expect(screen.getByRole('status')).not.toHaveTextContent('已保存')
+  if (change === 'cancel') expect(screen.getByRole('status')).toHaveTextContent('已取消导出')
+})
 
 it('keeps lookup failure distinct from missing or loading in compact mode', async () => {
   vi.mocked(apiJson).mockRejectedValueOnce(new Error('读取失败'));

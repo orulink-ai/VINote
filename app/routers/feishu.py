@@ -101,6 +101,8 @@ class Preferences(BaseModel):
     permission_policy: Literal["private", "inherit"] | None = None
     contacts: list[dict] | None = Field(default=None, max_length=20)
     automatic_delivery_consent: bool = False
+    notify_participants: bool | None = None
+    group_meeting_versions: bool | None = None
 
 
 class ContactSelection(BaseModel):

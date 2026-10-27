@@ -6,6 +6,7 @@ import sys
 from unittest.mock import Mock
 
 import pytest
+from fastapi import HTTPException
 
 from app.config import settings
 from app.services import asr_checkpoint_lock as locking
@@ -26,6 +27,12 @@ def args(folder, action):
 
 def setup_cache(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, 'data_dir', str(tmp_path))
+    # Exercise real Origin validation with a synthetic built-in account route;
+    # the credential provider and recognition transport stay mocked below.
+    monkeypatch.setattr(settings, 'vilab_server_url', 'https://offline.invalid')
+    monkeypatch.setattr(settings, 'cloud_auth_url', 'https://identity.invalid')
+    monkeypatch.setattr(settings, 'vilab_api_key', '')
+    monkeypatch.setattr(settings, 'content_cloud_runtime', False)
     audio = write_wav(tmp_path / 'one.wav', seconds=1)
     adapter = VILabTranscriber('https://offline.invalid', '', 'frozen-model', cloud_user_id='owner')
     identity = hashlib.sha256(json.dumps([adapter.base_url, 'owner', adapter.model],
@@ -133,23 +140,32 @@ def test_completed_cloud_cache_never_fetches_policy_or_token(tmp_path, monkeypat
 def test_complete_cache_not_reused_for_changed_identity(tmp_path, monkeypatch, field, value):
     adapter, audio, folder, token, recognize = setup_cache(tmp_path, monkeypatch)
     completed(folder)
+    before = (folder / 'recognition.json').read_bytes()
     setattr(adapter, field, value)
-    with pytest.raises(AssertionError, match='No token refresh'):
-        adapter._transcribe_stream(str(audio))
-    token.assert_called_once_with(adapter.cloud_user_id)
+    if field == 'base_url':
+        # A cache miss never grants another Origin the account's credentials.
+        with pytest.raises(HTTPException) as caught:
+            adapter._transcribe_stream(str(audio))
+        assert caught.value.status_code == 409
+        token.assert_not_called()
+    else:
+        with pytest.raises(AssertionError, match='No token refresh'):
+            adapter._transcribe_stream(str(audio))
+        token.assert_called_once_with(adapter.cloud_user_id)
+    assert (folder / 'recognition.json').read_bytes() == before
     recognize.assert_not_called()
 
 
 def test_remaining_audio_refreshes_token_and_keeps_selected_model(tmp_path, monkeypatch):
     from app.services.adaptive_asr_policy import RecordedAudioPolicy
     adapter, audio, folder, token, recognize = setup_cache(tmp_path, monkeypatch)
-    token.side_effect = None
-    token.return_value = 'fresh-token'
+    token.side_effect = ['policy-token', 'fresh-submit-token']
     recognize.side_effect = None
     recognize.return_value = {'text': 'new confirmed final'}
     catalog = Mock(return_value=RecordedAudioPolicy(32000))
     monkeypatch.setattr(adapter, '_recorded_audio_policy', catalog)
     assert adapter._transcribe_stream(str(audio)).full_text == 'new confirmed final'
-    catalog.assert_called_once_with('fresh-token')
-    assert recognize.call_args.args[1:3] == ('fresh-token', 'frozen-model')
+    catalog.assert_called_once_with('policy-token')
+    assert recognize.call_args.args[:3] == ('https://offline.invalid', 'fresh-submit-token', 'frozen-model')
     assert token.call_count == 2
+    assert all(call.args == ('owner',) for call in token.call_args_list)

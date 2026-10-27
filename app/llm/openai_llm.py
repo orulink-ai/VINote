@@ -17,7 +17,8 @@ from app.llm.meeting_review import build_meeting_review_prompts
 from app.llm.meeting_draft import build_meeting_draft_prompts
 from app.llm.video_material import bind_video_material, video_user_content, anthropic_user_content
 from app.llm.source_references import (bind_source_references, record_working_draft,
-                                      segment_reference, without_internal_references)
+                                      segment_reference, without_internal_references,
+                                      bind_chronological_source)
 from app.llm.prompts import (
     build_chunk_system_prompt,
     build_chunk_user_prompt,
@@ -46,14 +47,23 @@ class _BasePromptLLM(LLMSummarizer):
 
     def _review_meeting_note(self, *, source, draft, extras, output_language,
                              intermediate=False, source_is_reviewed_notes=False):
+        from app.llm.meeting_presentation import presentation_state
+        model_draft = draft
+        if not intermediate and presentation_state() and presentation_state().depth:
+            from app.llm.meeting_review_draft_view import review_draft_input_view
+            model_draft = review_draft_input_view(draft)
         review_name = "LLM｜核对会议分段" if intermediate else "LLM｜核对最终会议纪要"
         with generation_name(review_name):
             result = self._complete_review(**build_meeting_review_prompts(
-                source=source, draft=draft, extras=extras,
+                source=source, draft=model_draft, extras=extras,
                 output_language=output_language, intermediate=intermediate,
                 source_is_reviewed_notes=source_is_reviewed_notes,
             ))
-        result = (result or '').strip() if intermediate else without_internal_references(result or '')
+        if not intermediate and presentation_state() and presentation_state().depth:
+            from app.llm.meeting_final_review import finalize_final_review
+            result = finalize_final_review(result or '', draft)
+        else:
+            result = (result or '').strip() if intermediate else without_internal_references(result or '')
         if not result:
             raise RuntimeError("会议纪要事实复核未返回内容，请重试。")
         return result
@@ -157,6 +167,10 @@ class _BasePromptLLM(LLMSummarizer):
         if style != "meeting":
             return draft
         record_working_draft(draft)
+        from app.llm.meeting_presentation import presentation_state
+        if presentation_state() and presentation_state().depth:
+            from app.llm.meeting_final_review import prepare_final_draft
+            draft = prepare_final_draft(draft)
         if progress_callback:
             progress_callback("正在核对音视频材料并组织会议纪要…")
         return self._review_meeting_note(
@@ -259,8 +273,14 @@ class _BasePromptLLM(LLMSummarizer):
         if getattr(self, '_video_capability_model', None) != getattr(self, 'model', None):
             capabilities = {}  # Verification never transfers to another model.
         with bind_source_references(segments), bind_video_material(video_evidence, capabilities):
-            return self._summarize(title, segments, style, summary_mode, extras,
-                                   output_language, progress_callback)
+            from app.llm.meeting_presentation import presentation_state
+            state = presentation_state()
+            chronological = (style == 'meeting' and state and state.depth
+                             and normalize_summary_mode(summary_mode) != 'accurate')
+            with bind_chronological_source(segments, self._build_segment_text,
+                                           enabled=bool(chronological)):
+                return self._summarize(title, segments, style, summary_mode, extras,
+                                       output_language, progress_callback)
 
     def _summarize(
         self,

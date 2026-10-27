@@ -21,6 +21,7 @@ import { ErrorState, LoadingState, EmptyState } from '@/components/Feedback/Reso
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { originalPurpose, fileGenerationPath, purposeLabel, originalFormat, formatFilter, type FilePurpose, type FilePurposeView } from '@/lib/filePurpose'
 import { NativeSelect, NativeSelectOption } from '@/components/ui/native-select'
+import { versionHistoryTitle } from '@/lib/meetingVersionHistory'
 
 type StoredFile = { id: string; filename: string; purpose?: FilePurposeView; source_type?: string; processing_status?: string; error_code?: string; retryable?: boolean; title?: string; category: string; size_bytes: number; created_at: string; available: boolean; note_id?: string; task_id?: string; content_url: string; location: string; media_type: string; can_delete: boolean; can_generate: boolean }
 type FileRow = { id: string; title: string; category: string; purpose: FilePurposeView; date: string; recording?: PendingMeeting; file?: StoredFile }
@@ -32,6 +33,11 @@ const recordingDuration = (seconds: number) => { const total = Math.max(0, Math.
 const fileDate = (row: FileRow) => {
   const date = row.file ? serverTimestamp(row.date) : new Date(row.date)
   return Number.isFinite(date.getTime()) ? date.toLocaleString() : '时间未记录'
+}
+const playbackSource = (source: string) => {
+  const url = new URL(source, 'https://vinote.invalid')
+  url.searchParams.delete('download'); url.searchParams.set('playback', 'true')
+  return resolveContentUrl(source.startsWith('/') ? url.pathname + url.search + url.hash : url.toString())
 }
 
 export function FileLibrary() {
@@ -85,8 +91,8 @@ export function FileLibrary() {
       const files = result[1].status === 'fulfilled' ? result[1].value.items : previous.flatMap(row => row.file ? [row.file] : [])
       const localTasks = new Set(recordings.map(r => r.taskId).filter(Boolean))
       return [
-        ...recordings.map(r => ({ id: 'recording:' + r.id, title: r.options.title || '未命名录制', purpose: 'meeting' as const, category: r.options.screen || r.options.meetingType === 'video' ? 'screen' : 'recording', date: r.startedAt, recording: r })),
-        ...files.filter(f => !f.task_id || !localTasks.has(f.task_id)).map(f => ({ id: f.id, title: f.title || f.filename, purpose: originalPurpose(f), category: f.category, date: f.created_at, file: f })),
+        ...recordings.map(r => ({ id: 'recording:' + r.id, title: versionHistoryTitle(r.options.title || '未命名录制'), purpose: 'meeting' as const, category: r.options.screen || r.options.meetingType === 'video' ? 'screen' : 'recording', date: r.startedAt, recording: r })),
+        ...files.filter(f => !f.task_id || !localTasks.has(f.task_id)).map(f => ({ id: f.id, title: originalPurpose(f) === 'meeting' ? versionHistoryTitle(f.title || f.filename) : f.title || f.filename, purpose: originalPurpose(f), category: f.category, date: f.created_at, file: f })),
       ].sort((a, b) => b.date.localeCompare(a.date))
     })
     const failures = result.filter(r => r.status === 'rejected').length
@@ -209,8 +215,24 @@ export function FileLibrary() {
   }
   const sourceRows = sourceNote ? rows.filter(row => row.file?.note_id === sourceNote || row.recording?.noteId === sourceNote) : rows
   const purposeRows = sourceRows.filter(row => row.purpose === purpose)
-  const visible = sourceNote ? sourceRows : purposeRows.filter(r => (category === 'all' || originalFormat(r.category) === category) && `${r.title} ${r.file?.filename || ''}`.toLowerCase().includes(query.trim().toLowerCase()))
-  const contentTarget = (noteId: string) => sourceNote === noteId && /^\/(workspace|note)\//.test(parent) ? parent : '/note/' + encodeURIComponent(noteId)
+  const visible = sourceNote ? sourceRows : purposeRows.filter(r => (category === 'all' || originalFormat(r.category) === category) && `${r.title} ${r.file?.filename || ''} ${r.file?.title || r.recording?.options.title || ''}`.toLowerCase().includes(query.trim().toLowerCase()))
+  const contentTarget = (noteId: string, row = selected, focus?: 'meeting') => {
+    if (row?.purpose === 'meeting') {
+      const target = new URL(parent.split(/[?#]/)[0] === '/meetings' ? parent : '/meetings', 'https://vinote.invalid')
+      for (const key of ['capture', 'locate_note', 'locate_task', 'locate_recording', 'locate_focus']) target.searchParams.delete(key)
+      target.searchParams.set('locate_note', noteId)
+      if (focus) target.searchParams.set('locate_focus', focus)
+      const taskId = row.recording?.taskId || row.file?.task_id
+      if (taskId) target.searchParams.set('locate_task', taskId)
+      if (row.recording) target.searchParams.set('locate_recording', row.recording.id)
+      target.searchParams.set('returnTo', returnTo)
+      return target.pathname + target.search + target.hash
+    }
+    return sourceNote === noteId && /^\/(workspace|note)\//.test(parent) ? parent : '/note/' + encodeURIComponent(noteId)
+  }
+  const contentState = (noteId: string, row = selected, focus?: 'meeting') => ({ returnTo, ...(row?.purpose === 'meeting' ? {
+    meetingLocator: { ownerId: owner, noteId, ...(focus ? { focus } : {}), taskId: row.recording?.taskId || row.file?.task_id, recordingId: row.recording?.id },
+  } : {}) })
   return <div className="workspace-page">
     {parent.split(/[?#]/)[0] !== '/files' && <PageReturn to={parent} label={pageParentLabel(parent)} />}
     <PageHeading title={sourceNote ? '来源原文件' : '文件库'} description={sourceNote ? '查看这份内容关联的原文件。正文与版本保留在内容详情中。' : '按会议与笔记用途管理原件，正文与版本在会议与笔记中查看。'} actions={<><Button variant="outline" disabled={loading || busy} onClick={() => void load()} aria-label="重新读取文件库"><RefreshCw aria-hidden="true" /></Button>{!sourceNote && <Button disabled={busy} onClick={() => setImportOpen(true)}><Upload aria-hidden="true" />{busy ? '正在处理…' : '导入资料'}</Button>}</>} />
@@ -235,15 +257,15 @@ export function FileLibrary() {
     {!loading && !error && params.get('file') && !sourceRows.some(row => row.id === params.get('file')) && <p role="status" className="text-sm text-muted-foreground">这份原件未在当前设备关联文件列表中找到。<Button variant="ghost" onClick={closeDetails}>返回文件列表</Button></p>}
     <Sheet open={!!selected && !deletion} onOpenChange={value => { if (!busy && !value && !deletion) closeDetails() }}><SheetContent onOpenAutoFocus={event => { if (restoreDeletionFocus.current) { event.preventDefault(); restoreDeletionFocus.current = false; const target = deleteButton.current && !deleteButton.current.disabled ? deleteButton.current : detailTitle.current; target?.focus() } }} className="flex h-full min-h-0 w-full flex-col overflow-hidden sm:max-w-md"><SheetHeader className="shrink-0"><SheetTitle ref={detailTitle} tabIndex={-1} className="break-words pr-7">{selected?.title || '文件详情'}</SheetTitle><SheetDescription>{selected?.file?.location || '录制原件在当前电脑'}</SheetDescription></SheetHeader>
       <div data-testid="file-details-body" className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6">
-      {selected?.recording && <section aria-label="录制原件与关联内容" className="pt-6"><h2 className="mb-3 text-sm font-medium">录制原件与关联内容</h2><LocalRecordingPreview recording={selected.recording} onDeleted={() => { closeDetails(); void load() }} onOpenNote={id => { setSelected(null); navigate(contentTarget(id), { state: { returnTo } }) }} /></section>}
+      {selected?.recording && <section aria-label="录制原件与关联内容" className="pt-6"><h2 className="mb-3 text-sm font-medium">录制原件与关联内容</h2><LocalRecordingPreview recording={selected.recording} onDeleted={() => { closeDetails(); void load() }} onOpenNote={id => { const target = contentTarget(id), state = contentState(id); setSelected(null); navigate(target, { state }) }} /></section>}
       {selected?.file && <div className="flex flex-col gap-6 pt-6">
         <section aria-labelledby="file-info-heading" className="grid gap-3"><h2 id="file-info-heading" className="text-sm font-medium">文件信息</h2><p className="break-all text-sm">{selected.file.filename}</p><label htmlFor="original-purpose" className="text-sm">资料用途</label><NativeSelect id="original-purpose" aria-label="资料用途" value={selected.purpose} disabled={busy || selected.file.id.startsWith('note:') || selected.file.id.startsWith('task:')} onChange={event => { if (event.target.value === 'meeting' || event.target.value === 'note') void reclassify(selected.file!, event.target.value) }}><NativeSelectOption value="unknown" disabled>请选择资料用途</NativeSelectOption><NativeSelectOption value="meeting">会议资料</NativeSelectOption><NativeSelectOption value="note">笔记资料</NativeSelectOption></NativeSelect><p className="text-xs text-muted-foreground">用途只决定原件分组，不改动已有正文或版本。</p><p className="text-xs leading-6 text-muted-foreground">{formatLabel(selected.category)}{sourceBadge(selected) ? ` · ${sourceBadge(selected)}` : ''} · {fileSize(selected.file.size_bytes)} · {fileDate(selected)}<br />{selected.file.available ? '原件在当前电脑' : '文件暂不可用，请检查来源设备或重新读取文件库。'}</p>
-          {selected.file.available && selected.file.media_type.startsWith('video/') && <video aria-label="原文件视频回放" key={selected.id + mediaAttempt} src={resolveContentUrl(selected.file.content_url)} onError={() => setMediaError(true)} controls preload="none" className="w-full" />}
-          {selected.file.available && selected.file.media_type.startsWith('audio/') && <audio aria-label="原文件音频回放" key={selected.id + mediaAttempt} src={resolveContentUrl(selected.file.content_url)} onError={() => setMediaError(true)} controls preload="none" className="w-full" />}
+          {selected.file.available && selected.file.media_type.startsWith('video/') && <video aria-label="原文件视频回放" key={selected.id + mediaAttempt} src={playbackSource(selected.file.content_url)} onError={() => setMediaError(true)} controls preload="metadata" className="w-full" />}
+          {selected.file.available && selected.file.media_type.startsWith('audio/') && <audio aria-label="原文件音频回放" key={selected.id + mediaAttempt} src={playbackSource(selected.file.content_url)} onError={() => setMediaError(true)} controls preload="metadata" className="w-full" />}
           {mediaError && <div role="alert" className="text-sm"><p>播放未成功。请重试读取，或导出后在系统播放器打开。</p><Button variant="outline" onClick={() => { setMediaError(false); setMediaAttempt(n => n + 1) }}>重试播放</Button></div>}
         </section>
         <section aria-labelledby="file-content-heading" className="grid gap-3 border-t pt-4"><h2 id="file-content-heading" className="text-sm font-medium">关联内容</h2>
-          {selected.file.note_id ? <><p className="text-sm text-muted-foreground">已有正文保留在会议与笔记中。这里管理来源原件，不复制笔记正文。</p><Button asChild><Link to={contentTarget(selected.file.note_id)} state={{ returnTo }} onClick={() => setSelected(null)}>查看关联内容</Link></Button></> : selected.file.task_id ? <><p className="text-sm text-muted-foreground">{selected.file.error_code === "unknown_result" || selected.file.error_code === "unknown_error" ? "处理结果尚未确认。原文件已保留，请查询原结果，不重复提交。" : "已有处理记录，先查询原结果，不再次提交此原件。"}</p><Button disabled={busy || selected.purpose === 'unknown'} onClick={() => void generate(selected.file!)}>{selected.purpose === 'meeting' ? '查看纪要生成进度' : '查看笔记生成进度'}</Button></> : selected.file.can_generate ? <><p className="text-sm text-muted-foreground">从这份已保存原件整理正文，原件继续保留。已有未确认资料处理会先恢复。</p><Button variant="outline" disabled={busy || !selected.file.available || selected.purpose === 'unknown'} onClick={() => void generate(selected.file!)}>{selected.purpose === 'meeting' ? '用此原件生成纪要' : '用此原件整理笔记'}</Button></> : <p className="text-sm text-muted-foreground">此格式目前只支持原件保存与导出，尚未接入正文整理。</p>}
+          {selected.file.note_id ? <><p className="text-sm text-muted-foreground">已有正文保留在会议与笔记中。这里管理来源原件，不复制笔记正文。</p><Button asChild><Link to={contentTarget(selected.file.note_id, selected, !sourceNote && selected.purpose === 'meeting' ? 'meeting' : undefined)} state={contentState(selected.file.note_id, selected, !sourceNote && selected.purpose === 'meeting' ? 'meeting' : undefined)} onClick={() => setSelected(null)}>{!sourceNote && selected.purpose === 'meeting' ? '查看会议档案' : '查看关联内容'}</Link></Button></> : selected.file.task_id ? <><p className="text-sm text-muted-foreground">{selected.file.error_code === "unknown_result" || selected.file.error_code === "unknown_error" ? "处理结果尚未确认。原文件已保留，请查询原结果，不重复提交。" : "已有处理记录，先查询原结果，不再次提交此原件。"}</p><Button disabled={busy || selected.purpose === 'unknown'} onClick={() => void generate(selected.file!)}>{selected.purpose === 'meeting' ? '查看纪要生成进度' : '查看笔记生成进度'}</Button></> : selected.file.can_generate ? <><p className="text-sm text-muted-foreground">从这份已保存原件整理正文，原件继续保留。已有未确认资料处理会先恢复。</p><Button variant="outline" disabled={busy || !selected.file.available || selected.purpose === 'unknown'} onClick={() => void generate(selected.file!)}>{selected.purpose === 'meeting' ? '用此原件生成纪要' : '用此原件整理笔记'}</Button></> : <p className="text-sm text-muted-foreground">此格式目前只支持原件保存与导出，尚未接入正文整理。</p>}
         </section>
         <section aria-labelledby="file-management-heading" className="grid gap-3 border-t pt-4"><h2 id="file-management-heading" className="text-sm font-medium">原件管理</h2>
           {selected.file.available ? <OriginalDownloadButton key={`${owner}:${selected.file.id}`} url={selected.file.content_url + (selected.file.id.startsWith('note:') || selected.file.id.startsWith('task:') ? '' : '?download=true')} filename={selected.file.filename} /> : <Button variant="outline" disabled>原件不可用，暂不能导出</Button>}

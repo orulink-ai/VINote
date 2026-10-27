@@ -3,7 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { invoke } from '@tauri-apps/api/core'
 import { apiFetch } from './api'
 import { isTauriRuntime } from './desktopMicrophonePermission'
-import { downloadRecording, downloadOriginalFile, downloadResultMessage } from './recordingDownload'
+import { downloadRecording, downloadOriginalFile, downloadProgressMessage, downloadResultMessage, type DownloadProgressCallback } from './recordingDownload'
 
 vi.mock('./api', () => ({ apiFetch: vi.fn() }))
 vi.mock('@tauri-apps/api/core', () => ({ invoke: vi.fn() }))
@@ -133,16 +133,113 @@ it('cleans partial native output on an HTTP authorization failure and never fall
 
 it('aborts a streamed export as cancelled, removes partial output and does not finish', async () => {
   const abort = new AbortController()
+  const progress = vi.fn<DownloadProgressCallback>()
   const cancel = vi.fn()
   vi.mocked(invoke).mockImplementation(async cmd => {
     if (cmd === 'choose_original_destination') return 'session'
     if (cmd === 'append_original_bytes') abort.abort()
   })
-  vi.mocked(apiFetch).mockResolvedValueOnce({ ok: true, body: new ReadableStream<Uint8Array>({ pull(controller) { controller.enqueue(new Uint8Array([1])) }, cancel }) } as Response)
-  expect(await downloadOriginalFile('/api/notes/source/media', 'source.webm', () => true, abort.signal)).toBe('cancelled')
+  vi.mocked(apiFetch).mockResolvedValueOnce(new Response(new ReadableStream<Uint8Array>({ pull(controller) { controller.enqueue(new Uint8Array([1])) }, cancel })))
+  expect(await downloadOriginalFile('/api/notes/source/media', 'source.webm', () => true, abort.signal, progress)).toBe('cancelled')
   expect(cancel).toHaveBeenCalledOnce()
   expect(invoke).toHaveBeenCalledWith('cancel_original_download', { id: 'session' })
   expect(invoke).not.toHaveBeenCalledWith('finish_original_download', expect.anything())
+  expect(progress.mock.calls.map(([event]) => event.stage)).toEqual(['choosing_destination', 'waiting_response'])
+})
+
+it('reports picker, response, acknowledged writes and finalization without claiming saved early', async () => {
+  let choose!: (id: string) => void, respond!: (response: Response) => void, append!: () => void, finish!: () => void
+  vi.mocked(invoke).mockImplementation(command => {
+    if (command === 'choose_original_destination') return new Promise(resolve => { choose = resolve })
+    if (command === 'append_original_bytes') return new Promise<void>(resolve => { append = resolve })
+    if (command === 'finish_original_download') return new Promise<void>(resolve => { finish = resolve })
+    return Promise.resolve()
+  })
+  vi.mocked(apiFetch).mockImplementationOnce(() => new Promise(resolve => { respond = resolve }))
+  const progress = vi.fn<DownloadProgressCallback>(), saved = vi.fn()
+  const result = downloadOriginalFile('/api/notes/source/media', 'source.webm', () => true, undefined, progress).then(saved)
+  expect(progress.mock.calls.map(([event]) => event.stage)).toEqual(['choosing_destination'])
+  expect(apiFetch).not.toHaveBeenCalled()
+  choose('session')
+  await vi.waitFor(() => expect(respond).toBeTypeOf('function'))
+  expect(progress).toHaveBeenLastCalledWith({ stage: 'waiting_response' })
+  respond(new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1, 2, 3, 4])); controller.close() } }), { headers: { 'Content-Length': '4' } }))
+  await vi.waitFor(() => expect(append).toBeTypeOf('function'))
+  expect(progress).toHaveBeenLastCalledWith({ stage: 'waiting_response' })
+  expect(saved).not.toHaveBeenCalled()
+  append()
+  await vi.waitFor(() => expect(finish).toBeTypeOf('function'))
+  expect(progress.mock.calls.map(([event]) => event)).toEqual([
+    { stage: 'choosing_destination' }, { stage: 'waiting_response' },
+    { stage: 'writing', writtenBytes: 4, totalBytes: 4 },
+    { stage: 'finishing', writtenBytes: 4, totalBytes: 4 },
+  ])
+  expect(saved).not.toHaveBeenCalled()
+  expect(downloadProgressMessage(progress.mock.calls[3][0])).toContain('正在完成落盘')
+  finish(); await result
+  expect(saved).toHaveBeenCalledWith('saved')
+})
+
+it.each([
+  {}, { 'Content-Length': '-4' }, { 'Content-Length': '1.5' }, { 'Content-Length': '' },
+  { 'Content-Length': '9007199254740992' }, { 'Content-Length': '4x' },
+  { 'Content-Length': '4', 'Content-Encoding': 'gzip' },
+  { 'Content-Length': '4', 'Content-Encoding': 'identity' },
+])('does not invent a total or percentage for unavailable or encoded length %j', async headers => {
+  vi.mocked(invoke).mockResolvedValueOnce('session')
+  vi.mocked(apiFetch).mockResolvedValueOnce(new Response(new ReadableStream({ start(controller) { controller.enqueue(new Uint8Array([1, 2, 3, 4])); controller.close() } }), { headers: headers as HeadersInit }))
+  const progress = vi.fn<DownloadProgressCallback>()
+  expect(await downloadOriginalFile('/api/notes/source/media', 'source.webm', () => true, undefined, progress)).toBe('saved')
+  expect(progress).toHaveBeenCalledWith({ stage: 'writing', writtenBytes: 4 })
+  expect(progress).toHaveBeenLastCalledWith({ stage: 'finishing', writtenBytes: 4 })
+  expect(downloadProgressMessage({ stage: 'writing', writtenBytes: 4 })).toBe('正在写入原文件：4 B…')
+  for (const [event] of progress.mock.calls) expect(downloadProgressMessage(event)).not.toMatch(/%|NaN|undefined/)
+})
+
+it.each(['time', 'bytes'] as const)('bounds write progress updates by elapsed %s while retaining final byte count', async mode => {
+  const chunkSize = mode === 'bytes' ? 64 * 1024 : 1, count = mode === 'bytes' ? 20 : 5
+  let now = 0
+  vi.spyOn(Date, 'now').mockImplementation(() => now)
+  vi.mocked(invoke).mockImplementation(async command => {
+    if (command === 'choose_original_destination') return 'session'
+    if (command === 'append_original_bytes' && mode === 'time') now += 100
+  })
+  const stream = new ReadableStream<Uint8Array>({ start(controller) {
+    for (let i = 0; i < count; i++) controller.enqueue(new Uint8Array(chunkSize))
+    controller.close()
+  } })
+  const progress = vi.fn<DownloadProgressCallback>()
+  await downloadRecording(() => Promise.resolve(stream), 'source', 'source.webm', () => true, undefined, progress)
+  expect(progress.mock.calls.map(([event]) => event).filter(event => event.stage === 'writing')).toEqual(mode === 'bytes'
+    ? [{ stage: 'writing', writtenBytes: chunkSize }, { stage: 'writing', writtenBytes: 17 * chunkSize }]
+    : [{ stage: 'writing', writtenBytes: 1 }, { stage: 'writing', writtenBytes: 4 }])
+  expect(progress).toHaveBeenLastCalledWith({ stage: 'finishing', writtenBytes: count * chunkSize })
+})
+
+it('reports actual IndexedDB Blob size after writing through the same progress API', async () => {
+  vi.mocked(invoke).mockResolvedValueOnce('session')
+  const progress = vi.fn<DownloadProgressCallback>()
+  await downloadRecording(original(), 'source', 'source.webm', () => true, undefined, progress)
+  expect(progress).toHaveBeenCalledWith({ stage: 'writing', writtenBytes: 4, totalBytes: 4 })
+  expect(progress).toHaveBeenLastCalledWith({ stage: 'finishing', writtenBytes: 4, totalBytes: 4 })
+  expect(downloadProgressMessage({ stage: 'writing', writtenBytes: 4, totalBytes: 4 }, false)).toBe('Writing original: 4 B / 4 B…')
+})
+
+it('discards progress and completion after invalidation during an awaited native write', async () => {
+  let current = true, append!: () => void
+  vi.mocked(invoke).mockImplementation(command => {
+    if (command === 'choose_original_destination') return Promise.resolve('session')
+    if (command === 'append_original_bytes') return new Promise<void>(resolve => { append = resolve })
+    return Promise.resolve()
+  })
+  const progress = vi.fn<DownloadProgressCallback>()
+  const result = downloadRecording(original(), 'source', 'source.webm', () => current, undefined, progress)
+  await vi.waitFor(() => expect(append).toBeTypeOf('function'))
+  current = false; append()
+  expect(await result).toBe('cancelled')
+  expect(progress.mock.calls.map(([event]) => event.stage)).toEqual(['choosing_destination', 'waiting_response'])
+  expect(invoke).not.toHaveBeenCalledWith('finish_original_download', expect.anything())
+  expect(invoke).toHaveBeenCalledWith('cancel_original_download', { id: 'session' })
 })
 
 

@@ -24,3 +24,21 @@ it('keeps partial and basic format evidence distinct from native completion', ()
 it('ignores unknown or duplicate labels instead of rendering arbitrary service values', () => {
   expect(feishuFormattingMessage({ ...native, native_required: ['table', 'table', '__proto__', 'secret'] }, 'completed')).toBe('原生表格已确认写入。');
 });
+
+const images = { protocol: 'feishu-task-native-images-v1', status: 'written', native_write_confirmed: true,
+  images_embedded: true, image_source_preserved: false };
+it('requires verified image bindings and order before reporting native image completion', () => {
+  expect(feishuFormattingMessage(images, 'completed')).toBe('原生图文及段落顺序已回读核验。');
+});
+it.each([
+  ['completed', { ...images, images_embedded: false }],
+  ['completed', { ...images, images_embedded: undefined }],
+  ['completed', { ...images, native_write_confirmed: false }],
+  ['completed', { ...images, image_source_preserved: true }],
+  ['completed', { ...images, image_source_preserved: undefined }],
+  ['completed', { ...images, status: 'partial' }],
+  ['completed', { ...images, status: 'pending' }],
+  ['processing', images], ['failed', images], ['unknown', images],
+])('keeps incomplete image evidence unconfirmed even with successful text (%s)', (status, receipt) => {
+  expect(feishuFormattingMessage(receipt, status)).toBe('图文写入尚未完整核验，请查询原回执。');
+});

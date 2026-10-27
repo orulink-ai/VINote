@@ -16,6 +16,7 @@ from app.config import settings
 from app.db import Base
 from app.db_models import FeishuConnectionDB, FeishuDeliveryDB
 from app.models.feishu_destination import FeishuDeliveryDestinationDB
+from app.models.feishu_meeting_wiki import FeishuMeetingWikiChildDB, FeishuMeetingWikiContainerDB
 from app.services import feishu_auto_policy as policy
 from app.services import feishu_cli as cli
 from app.services import feishu_cli_service as module
@@ -250,11 +251,14 @@ def test_tenant_recovery_uses_only_fixed_cli_api_and_base_checks(delivery, host)
     "https://user@tenant.feishu.cn/docx/doc123", "https://@tenant.feishu.cn/docx/doc123",
     "https://tenant.feishu.cn:8443/docx/doc123", "https://tenant.feishu.cn:invalid/docx/doc123",
     "https://-tenant.feishu.cn/docx/doc123", "https://tenant..feishu.cn/docx/doc123",
-    "https://tenant.feishu.cn/wiki/doc123", "https://tenant.feishu.cn/docx/a%2Fb",
+    "https://tenant.feishu.cn/wiki/doc123/extra", "https://tenant.feishu.cn/docx/a%2Fb",
     "https://tenant.feishu.cn/docx/../doc123", "https://tenant.feishu.cn/docx/文档",
     "https://tenant.feishu.cn/docx/doc123/extra", "https://tenant.feishu.cn/docx/doc123\n",
-    "https://tenant.feishu.cn\\evil.invalid/docx/doc123"])
-def test_recovery_rejects_unsafe_links_before_cli_or_database_mutation(delivery, url):
+    "https://tenant.feishu.cn\\evil.invalid/docx/doc123", "https://tenant.feishu.cn/docx/%64oc123",
+    "https://tenant.feishu.cn/docx//doc123", "https://tenant.feishu.cn./docx/doc123"])
+@pytest.mark.parametrize("kind", ["docx", "wiki"])
+def test_recovery_rejects_unsafe_links_before_cli_or_database_mutation(delivery, url, kind):
+    url = url.replace('/docx/', '/' + kind + '/')
     recovery_job(delivery)
     with pytest.raises(FeishuError):
         delivery.service.recover_document("alice", "synthetic-job", url)
@@ -308,6 +312,82 @@ def test_recovery_retains_matching_frozen_destination(delivery, destination):
     result = delivery.service.recover_document("alice", "synthetic-job", "https://tenant.feishu.cn/docx/doc123")
     assert result["destination"] == destination and not result["needs_document_recovery"]
     assert all(c[0] == "GET" for c in delivery.calls)
+
+
+def wiki_recovery_job(delivery, monkeypatch, *, grouped):
+    from app.services import feishu_meeting_wiki as wiki
+
+    root = {"kind": "wiki", "space_id": "space1", "node_token": "parent1"}
+    snapshot = {**delivery.snapshot, "destination": root}
+    if grouped:
+        snapshot['group_meeting_versions'] = True
+    recovery_job(delivery, snapshot=snapshot)
+    monkeypatch.setattr(wiki, 'session_scope', delivery.scope)
+    if grouped:
+        with delivery.scope() as db:
+            db.add(FeishuMeetingWikiContainerDB(scope_key='a' * 64, owner='alice',
+                scope_json=json.dumps({'destination': root}), title='合成会议容器', state='confirmed',
+                lease_id='synthetic-lease', lease_until=0, node_token='meetingParent',
+                document_id='containerDoc', document_url='https://www.feishu.cn/wiki/meetingParent', error_code=''))
+            db.add(FeishuMeetingWikiChildDB(delivery_id='synthetic-job', scope_key='a' * 64,
+                snapshot='{}', summary_format='text:detailed', ordinal=2, title='文字｜V2'))
+    parent = 'meetingParent' if grouped else 'parent1'
+    title = '文字｜V2' if grouped else '合成纪要'
+
+    def response(method, path, **kwargs):
+        result = recovery_response(method, path, **kwargs)
+        if path == 'wiki/v2/spaces/get_node':
+            result['node']['parent_node_token'] = parent
+        if 'document' in result:
+            result['document']['title'] = title
+        return result
+
+    return root, response
+
+
+@pytest.mark.parametrize('grouped', [False, True])
+def test_wiki_link_recovery_preserves_kind_and_checks_actual_parent_without_fetching_tenant(delivery, monkeypatch, grouped):
+    root, response = wiki_recovery_job(delivery, monkeypatch, grouped=grouped)
+    delivery.response = response
+    result = delivery.service.recover_document('alice', 'synthetic-job',
+        'https://tenant.department.feishu.cn/wiki/node123?from=copylink#section')
+    assert result['needs_document_recovery'] is False
+    assert result['document_url'] == 'https://www.feishu.cn/wiki/node123'
+    assert result['destination'] == root  # immutable root is not rewritten as the effective parent
+    assert [call[1] for call in delivery.calls] == ['wiki/v2/spaces/get_node',
+        'docx/v1/documents/doc123', 'docx/v1/documents/doc123/blocks/doc123/children']
+    assert delivery.calls[0][2]['params'] == {'token': 'node123', 'obj_type': 'wiki'}
+    assert all(call[0] == 'GET' and 'https:' not in repr(call)
+               and 'tenant.department.feishu.cn' not in repr(call) for call in delivery.calls)
+
+
+@pytest.mark.parametrize('damage', ['root_parent', 'space', 'shadow_node', 'wrong_title', 'body', 'more', 'connection'])
+def test_grouped_wiki_recovery_keeps_all_base_checks_and_never_uses_root_as_effective_parent(delivery, monkeypatch, damage):
+    _, original = wiki_recovery_job(delivery, monkeypatch, grouped=True)
+    if damage == 'connection':
+        with delivery.scope() as db:
+            row = db.get(FeishuConnectionDB, 'alice')
+            saved = json.loads(row.preferences); saved['connection_id'] = 'replacement'
+            row.preferences = json.dumps(saved)
+
+    def response(method, path, **kwargs):
+        result = original(method, path, **kwargs)
+        if 'node' in result:
+            if damage == 'root_parent': result['node']['parent_node_token'] = 'parent1'
+            if damage == 'space': result['node']['space_id'] = 'otherSpace'
+            if damage == 'shadow_node': result['node']['node_type'] = 'shortcut'
+        if damage == 'wrong_title' and 'document' in result: result['document']['title'] = '合成纪要'
+        if path.endswith('/children'):
+            if damage == 'body': result['items'] = [{'block_id': 'existing'}]
+            if damage == 'more': result['has_more'] = True
+        return result
+
+    delivery.response = response
+    with pytest.raises(FeishuError):
+        delivery.service.recover_document('alice', 'synthetic-job', 'https://tenant.feishu.cn/wiki/node123')
+    with delivery.scope() as db:
+        assert db.get(FeishuDeliveryDB, 'synthetic-job').document_id == '__creating__'
+    assert all(call[0] == 'GET' for call in delivery.calls)
 
 
 def test_private_permission_receipt_does_not_claim_organization_or_superior_policy(delivery):

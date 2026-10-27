@@ -71,6 +71,8 @@ class LocalSTTSupportStatus(BaseModel):
 
 class ResolvedSTTConfig(BaseModel):
     cloud_user_id: Optional[str] = None
+    cloud_connection_id: Optional[str] = None
+    cloud_connection_auth_mode: Optional[str] = None
     provider: STTProviderType
     model_name: Optional[str] = None
     base_url: Optional[str] = None

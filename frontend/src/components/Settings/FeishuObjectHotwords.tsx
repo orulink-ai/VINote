@@ -76,7 +76,7 @@ export function FeishuObjectHotwords({ connectionKey, connectionCurrent }: { con
       {!pending && !error && !data.objects.length && <p className="text-sm text-muted-foreground">当前没有可见对象，可更新后再试。</p>}
       <h3 className="text-sm font-medium">已保存别称</h3>
       {!data.aliases.length && !error && <p className="text-sm text-muted-foreground">尚未绑定别称。</p>}
-      <ul aria-label="已保存别称" className="flex flex-col gap-3">{data.aliases.map(item => <li key={item.id} className="flex items-center justify-between gap-3"><span className="text-sm">{item.alias} → {item.target_name} · {item.kind === 'group' ? '群' : '联系人'}</span><Button variant="ghost" disabled={!available} aria-label={`删除别称${item.alias}`} onClick={() => { if (readable()) void run('delete', () => deleteFeishuObjectAlias(item.id)) }}>删除</Button></li>)}</ul>
+      <ul aria-label="已保存别称" className="flex flex-col gap-3">{data.aliases.map(item => <li key={item.id} className="flex items-center justify-between gap-3"><span className="min-w-0 break-words text-sm">{item.alias} → {item.target_name} · {item.kind === 'group' ? '群' : '联系人'}</span><Button variant="ghost" disabled={!available} aria-label={`删除别称${item.alias}`} onClick={() => { if (readable()) void run('delete', () => deleteFeishuObjectAlias(item.id)) }}>删除</Button></li>)}</ul>
     </>}
   </section>;
 }

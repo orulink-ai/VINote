@@ -1,0 +1,22 @@
+[
+  {
+    "Path": "D:\\projects\\VINote\\app\\services\\task_fresh_asr.py",
+    "Hash": "8513531BD1DEC1FEEC6563E394A9F0FEB9727B611C9CA9737E88C186FEDD13F7"
+  },
+  {
+    "Path": "D:\\projects\\VINote\\app\\services\\asr_execution_binding.py",
+    "Hash": "C3C7027C486069F1BA12CAF849CDE21B4A97C5E652A6F03D2DB06098AFF6BA44"
+  },
+  {
+    "Path": "D:\\projects\\VINote\\app\\transcribers\\vilab_transcriber.py",
+    "Hash": "E89274B6DB44A1F7F72A186E6FBBA6CF14D5D3914AD22F138729E1640E564962"
+  },
+  {
+    "Path": "D:\\projects\\VINote\\tests\\test_fresh_asr_execution.py",
+    "Hash": "25B6C4D0AA3E0D683854D882E24C93E4E73C21DAAA035CCD1A88B4974F04C4C8"
+  },
+  {
+    "Path": "D:\\projects\\VINote\\tests\\test_asr_direct_transport.py",
+    "Hash": "C801B9C1FB3887312F2135C519989A2E248EFB34A0B3B1F62398164074C8959D"
+  }
+]

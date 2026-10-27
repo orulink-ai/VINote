@@ -10,7 +10,11 @@ export function useNoteMediaPlayback(sourceUrl: string | undefined, identity: st
   const sequence = useRef(0)
   const probe = useRef<AbortController | null>(null)
   const scope = useRef({ sourceUrl, identity })
-  scope.current = { sourceUrl, identity }
+  // Keep one token per visit, independent of request/ready/reload sequence changes.
+  if (scope.current.sourceUrl !== sourceUrl || scope.current.identity !== identity) {
+    scope.current = { sourceUrl, identity }
+  }
+  const visit = scope.current
   const position = useRef(0)
   const resume = useRef<{ element: HTMLMediaElement; seconds: number; rate: number; playing: boolean } | null>(null)
 
@@ -82,6 +86,12 @@ export function useNoteMediaPlayback(sourceUrl: string | undefined, identity: st
     element.load()
   }
   const metadata = (element: HTMLMediaElement) => {
+    if (scope.current !== visit) return
+    // Metadata supersedes earlier read failures, but does not prove decodable playback.
+    sequence.current++
+    probe.current?.abort()
+    setMessage('')
+    setPhase(current => current === 'ready' ? current : 'loading')
     const saved = resume.current
     if (!saved || saved.element !== element) return
     resume.current = null
