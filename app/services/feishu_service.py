@@ -856,7 +856,7 @@ class FeishuService:
         from app.services.task_artifact_service import TaskArtifactService
 
         note = db.scalar(select(NoteDB).where(
-            NoteDB.id == note_key, NoteDB.created_by == owner).with_for_update())
+            NoteDB.id == note_key.removeprefix('publish:'), NoteDB.created_by == owner).with_for_update())
         if not note or not note.task_id:
             return  # Unrelated legacy text snapshots need no graphical proof.
         artifacts = TaskArtifactService()
@@ -1075,20 +1075,28 @@ class FeishuService:
             try:
                 snapshot, recipients = json.loads(metadata.snapshot), json.loads(job.recipients)
                 if (not isinstance(snapshot, dict) or not isinstance(snapshot.get('destination'), dict)
+                        or snapshot['destination'].get('kind') not in ('personal', 'folder', 'wiki')
                         or not isinstance(recipients, dict) or any(not isinstance(v, dict) for v in recipients.values())):
                     blocked()
             except (ValueError, TypeError):
                 blocked()
             # Old records have no grouping-aware revision; never migrate or retry them here.
-            # New completed records can use normal revision deduplication. Every unfinished
-            # record stays on its original recovery path, including definite unwritten failures.
+            # Exact revision reuse has already returned without dispatch. New
+            # intents cannot bypass any unknown side effect or unfinished Wiki.
             ambiguous = (job.document_id == '__creating__' or receipts.has_unknown_batch(db, job.id)
+                or job.status == 'processing' or metadata.phase in ('unknown', 'permission_unknown')
                 or any(item.get('status') in ('sending', 'unknown') for item in recipients.values())
                 or recipient_access.has_permission_unknown(recipients))
-            if job.status != 'completed' or metadata.phase != 'completed' or ambiguous:
+            if ambiguous:
                 blocked()
-            if snapshot['destination'].get('kind') == 'wiki' and (
-                    type(snapshot.get('meeting_grouping_protocol')) is not int
+            # Ordinary explicit publication revisions (for example a newly
+            # confirmed reader grant) retain their existing independent intent.
+            # Wiki history alone needs the additional grouping migration gate.
+            if snapshot['destination'].get('kind') != 'wiki':
+                continue
+            if job.status != 'completed' or metadata.phase != 'completed':
+                blocked()
+            if (type(snapshot.get('meeting_grouping_protocol')) is not int
                     or snapshot['meeting_grouping_protocol'] != 1):
                 blocked()
 
@@ -1141,8 +1149,13 @@ class FeishuService:
         if enhanced and any(g not in {item["chat_id"] for item in available_groups} for g in selected_groups):
             raise FeishuError("目标群不可用，请确认本人和机器人均在群内", 403, code="recipient_unavailable")
         with session_scope() as db:
-            self._guard_grouping_history(db, owner, note_key, title, content)
-            group_meeting_versions = self._manual_meeting_grouping(db, owner, note_key, title, content, target, preferences, source)
+            # Compute the candidate revision without authorizing a new write.
+            # Existing revisions are receipt-only even if their source is now
+            # unavailable. Strict source/graphic checks follow deduplication in
+            # the locked acceptance transaction below.
+            group_meeting_versions = (target['kind'] == 'wiki'
+                and preferences.get('group_meeting_versions') is True
+                and not self._ordinary_saved_publication(db, owner, note_key, title, content, source))
         content_revision = hashlib.sha256((title + "\n" + content).encode()).hexdigest()
         context = {"destination": target, "permission_policy": policy, "notify_self": notify,
                    "connection_id": preferences.get("connection_id"),
@@ -1170,7 +1183,8 @@ class FeishuService:
                     FeishuDeliveryDB.note_key == note_key, FeishuDeliveryDB.revision == revision))
                 if previous:
                     receipts.bind_operation(db, owner, operation_id, request_hash, previous)
-                    return {**self.serialize(previous, db=db), **({"operation_id": operation_id, "_dispatch_required": False} if operation_id else {})}
+                    return {**self.serialize(previous, db=db), "_dispatch_required": False,
+                            **({"operation_id": operation_id} if operation_id else {})}
             raise
 
     def _enqueue(self, owner, note_key, title, content, automatic, enhanced, destination, policy,
@@ -1208,23 +1222,25 @@ class FeishuService:
             if automatic and not preferences.get("auto_publish"):
                 return None
             self.verify_source_unchanged(db, owner, source, title, content)
-            if manual_group_meeting_versions is not None:
-                self._guard_grouping_history(db, owner, note_key, title, content)
-                actual_grouping = self._manual_meeting_grouping(db, owner, note_key, title, content, destination, preferences, source)
-                if actual_grouping is not manual_group_meeting_versions:
-                    raise FeishuError('发布准备期间会议归组范围已变化，请重新核对', 409, code='grouping_selection_changed')
             # Auto publication is the first successful minutes only; edits are explicit.
             existing = db.scalar(select(FeishuDeliveryDB).where(FeishuDeliveryDB.owner == owner,
                 FeishuDeliveryDB.note_key == note_key).order_by(FeishuDeliveryDB.created_at.desc()))
             if existing and (automatic or existing.revision == revision):
                 receipts.bind_operation(db, owner, operation_id, request_hash, existing)
-                return {**self.serialize(existing, db=db), **({"operation_id": operation_id, "_dispatch_required": False} if operation_id else {})}
+                return {**self.serialize(existing, db=db), "_dispatch_required": False,
+                        **({"operation_id": operation_id} if operation_id else {})}
             previous = db.scalar(select(FeishuDeliveryDB).where(FeishuDeliveryDB.owner == owner,
                 FeishuDeliveryDB.note_key == note_key, FeishuDeliveryDB.revision == revision))
             if previous:
                 receipts.bind_operation(db, owner, operation_id, request_hash, previous)
-                return {**self.serialize(previous, db=db), **({"operation_id": operation_id, "_dispatch_required": False} if operation_id else {})}
+                return {**self.serialize(previous, db=db), "_dispatch_required": False,
+                        **({"operation_id": operation_id} if operation_id else {})}
             graphic = self._guard_graphic_delivery(db, owner, note_key, content)
+            if manual_group_meeting_versions is not None:
+                self._guard_grouping_history(db, owner, note_key, title, content)
+                actual_grouping = self._manual_meeting_grouping(db, owner, note_key, title, content, destination, preferences, source)
+                if actual_grouping is not manual_group_meeting_versions:
+                    raise FeishuError('发布准备期间会议归组范围已变化，请重新核对', 409, code='grouping_selection_changed')
             if automatic_policy_id is not None and saved_automatic.get('notify_participants'):
                 from app.models.meeting_participants import MeetingParticipantConfirmationDB
                 from app.services.feishu_object_hotwords import binding_hash

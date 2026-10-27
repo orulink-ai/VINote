@@ -1,6 +1,7 @@
 """Actual draft3/review4-or-6 host and ReactMarkdown/GFM parity."""
 import copy
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -92,7 +93,7 @@ def graphic7_fixture(value):
 @pytest.fixture(scope='module')
 def react_render():
     frontend = Path(__file__).resolve().parents[1] / 'frontend'
-    node = shutil.which('node')
+    node = _node_executable()
     if not node or not (frontend / 'node_modules/react-markdown/package.json').is_file():
         pytest.skip('ReactMarkdown/GFM parity requires the existing frontend dependencies and Node')
 
@@ -113,6 +114,71 @@ console.log(JSON.stringify(bodies.map(body => renderToStaticMarkup(
         return json.loads(result.stdout)
 
     return render
+
+
+def _node_executable():
+    # Yarn prepends node.cmd to PATH on Windows. A batch shim loses multiline
+    # -e arguments with exit code zero, so invoke the native runtime directly.
+    return shutil.which('node.exe' if os.name == 'nt' else 'node')
+
+
+@pytest.mark.skipif(os.name != 'nt', reason='Windows batch-shim regression')
+def test_renderer_selects_native_node_before_path_batch_shim(tmp_path, monkeypatch):
+    native = shutil.which('node.exe')
+    if not native:
+        pytest.skip('Native Node runtime is required')
+    shim = tmp_path / 'node.cmd'
+    shim.write_text('@exit /b 0\n', encoding='utf-8')
+    monkeypatch.setenv('PATH', str(tmp_path) + os.pathsep + os.environ.get('PATH', ''))
+    assert Path(shutil.which('node')) == shim
+    assert _node_executable() == native
+    result = subprocess.run([_node_executable(), '--input-type=module', '-e',
+                             '\nconsole.log(JSON.stringify(["native output"]));\n'],
+                            text=True, encoding='utf-8', capture_output=True, check=True, timeout=20)
+    assert json.loads(result.stdout) == ['native output']
+
+
+@pytest.mark.parametrize('presentation', ['comic', 'infographic'])
+def test_single_tilde_strikethrough_cannot_authorize_plain_graphic_parts(case, presentation, react_render):
+    body = SOURCE.replace('34.625', '~34.625~')
+    assert '<del>34.625</del>' in react_render([body])[0]
+    value = response(case, presentation)
+    value['blocks'][0]['markdown'] = body
+    value = graphic7_fixture(value)
+    llm, raw_review = automatic(case, value)
+    with presentation_scope('detailed', presentation) as state:
+        with pytest.raises(FinalLedgerError) as error:
+            summarize(llm, case)
+        assert error.value.code == 'invalid_body_part_visibility'
+        assert state.raw_review == raw_review and state.visual_review is None
+    assert len(llm.calls) == 2
+
+
+@pytest.mark.parametrize('presentation', ['comic', 'infographic'])
+def test_triple_tilde_literals_remain_unchanged_plain_graphic_parts(case, presentation, react_render):
+    body = SOURCE.replace('34.625', '~~~34.625~~~')
+    assert '<del>' not in react_render([body])[0]
+    value = response(case, presentation)
+    value['blocks'][0]['markdown'] = body
+    value = graphic7_fixture(value)
+    llm, raw_review = automatic(case, value)
+    with presentation_scope('detailed', presentation) as state:
+        assert summarize(llm, case) == body
+        assert state.raw_review == raw_review
+    assert len(llm.calls) == 2
+
+
+@pytest.mark.parametrize('presentation', ['text', 'html'])
+def test_single_tilde_remains_valid_formatted_markdown(case, presentation, react_render):
+    body = SOURCE.replace('34.625', '~34.625~')
+    value = response(case, presentation)
+    value['blocks'][0]['markdown'] = body
+    llm, raw_review = automatic(case, value)
+    with presentation_scope('detailed', presentation) as state:
+        assert summarize(llm, case) == body
+        assert state.raw_review == raw_review
+    assert '<del>34.625</del>' in react_render([body])[0]
+    assert len(llm.calls) == 2
 
 
 @pytest.mark.parametrize('presentation', ['text', 'html'])

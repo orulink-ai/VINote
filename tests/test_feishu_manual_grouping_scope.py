@@ -96,7 +96,7 @@ def test_missing_or_damaged_meeting_is_never_ordinary(scenario, tmp_path, monkey
         if damage == 'derived': (folder / 'source_reference.json').write_text('{}', encoding='utf-8')
     with pytest.raises(module.FeishuError) as caught:
         submit(service, key)
-    assert caught.value.code == 'meeting_source_unverified'
+    assert caught.value.code == 'meeting_context_unverified'
     assert not events
     with module.session_scope() as db:
         assert db.query(module.FeishuDeliveryDB).count() == 0
@@ -152,6 +152,8 @@ def test_settings_and_new_operation_never_bypass_original_record(scenario, state
             snapshot.pop('meeting_grouping_protocol')
             snapshot.update(group_meeting_versions=True, app_id=service.config.feishu_app_id)
             metadata.snapshot = json.dumps(snapshot)
+            # Historical Wiki revisions did not commit a grouping boolean.
+            job.revision = 'legacy-revision-without-grouping'
             job.status, job.lease_until, metadata.phase = 'failed', '0', 'failed'
             metadata.error_code = 'meeting_source_unverified'
             if state == 'legacy-completed': job.status, metadata.phase = 'completed', 'completed'
@@ -170,6 +172,18 @@ def test_settings_and_new_operation_never_bypass_original_record(scenario, state
     service.save_preferences('a', dict(auto_publish=False, notify_self=False, groups=[],
         destination_config=ROOT, permission_policy='inherit', group_meeting_versions=False))
     assert submit(service, key, operation)['id'] == accepted['id']
+    if not target_changed and not state.startswith('legacy'):
+        # Exact revision lookup is query-only in every delivery state. Binding
+        # a new operation to that receipt never grants another dispatch.
+        duplicate_operation = str(uuid.uuid4())
+        duplicate = submit(service, key, duplicate_operation)
+        assert duplicate['id'] == accepted['id'] and duplicate['_dispatch_required'] is False
+        after = frozen(accepted['id'])
+        assert after[:2] == before[:2]
+        assert all(receipt in after[2] for receipt in before[2])
+        assert len(after[2]) == len(before[2]) + 1 and not events
+        assert service.delivery_by_operation('a', duplicate_operation)['id'] == accepted['id']
+        return
     with pytest.raises(module.FeishuError) as caught:
         submit(service, key, target={'kind': 'personal'} if target_changed else ROOT)
     assert caught.value.code == 'grouping_prior_delivery_requires_review'
@@ -237,7 +251,8 @@ def test_explicit_snapshot_never_demotes_a_known_or_ambiguous_source(scenario, t
                 source_type='meeting_recording', task_id=str(uuid.uuid4())))
     with pytest.raises(module.FeishuError) as caught:
         submit(service, 'publish:' + key)
-    assert caught.value.code == 'meeting_source_unverified' and not events
+    expected = 'meeting_context_unverified' if binding == 'damaged-note' else 'meeting_source_unverified'
+    assert caught.value.code == expected and not events
 
 
 def journal_state(job_id):
@@ -272,14 +287,17 @@ def test_cache_aliases_and_missing_metadata_preserve_unknown_journals(scenario, 
     assert journal_state(old['id']) == before and not events
 
 
-@pytest.mark.parametrize('damage', ['invalid-json', 'nonobject', 'missing-destination'])
+@pytest.mark.parametrize('damage', ['invalid-json', 'nonobject', 'missing-destination',
+    'missing-kind', 'unknown-kind'])
 def test_malformed_legacy_metadata_is_not_an_absent_delivery(scenario, damage):
     service, events = scenario
     key = note()
     old = submit(service, key)
     with module.session_scope() as db:
         metadata = db.get(FeishuDeliveryDestinationDB, old['id'])
-        metadata.snapshot = {'invalid-json': '{', 'nonobject': 'null', 'missing-destination': '{}'}[damage]
+        metadata.snapshot = {'invalid-json': '{', 'nonobject': 'null', 'missing-destination': '{}',
+            'missing-kind': '{"destination": {}}',
+            'unknown-kind': '{"destination": {"kind": "unknown"}}'}[damage]
     before = journal_state(old['id'])
     with pytest.raises(module.FeishuError): submit(service, 'publish:' + key, target={'kind': 'personal'})
     assert journal_state(old['id']) == before and not events

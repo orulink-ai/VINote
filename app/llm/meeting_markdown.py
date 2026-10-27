@@ -32,7 +32,11 @@ def _reject_footnote_block(state, start_line, end_line, silent):
 
 
 def _parse(text):
-    parser = MarkdownIt('commonmark', {'maxNesting': _MAX_NESTING}).enable(['table', 'strikethrough'])
+    # remark-gfm accepts ~single~ and ~~double~~ delimiters, while runs of
+    # three or more are literal. Plain-part visibility must use the same rules.
+    parser = MarkdownIt('commonmark', {
+        'maxNesting': _MAX_NESTING, 'strikethrough_single_tilde': True,
+    }).enable(['table', 'strikethrough'])
     parser.block.ruler.before('reference', 'reject_footnote', _reject_footnote_block)
     parser.inline.ruler.before('link', 'reject_footnote', _reject_footnote_inline)
     try:

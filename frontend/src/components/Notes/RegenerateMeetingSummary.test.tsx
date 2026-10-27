@@ -375,6 +375,21 @@ it('ignores old context after an account ABA change', async () => {
   await act(async () => resolve(context))
   expect(screen.queryByRole('dialog')).toBeNull()
 })
+it('discards pending context across a same-batch account ABA and allows a fresh explicit read', async () => {
+  let resolve!: (value: unknown) => void
+  mock.mockImplementation(() => new Promise(r => { resolve = r }))
+  show(); fireEvent.click(screen.getByRole('button', { name: '生成新版本' }))
+  act(() => {
+    useAuthStore.setState({ user: { id: 'other' } as never })
+    useAuthStore.setState({ user: { id: 'owner' } as never })
+  })
+  await act(async () => resolve(context))
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(mock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+  mock.mockResolvedValue(context)
+  await open()
+  expect(screen.getByRole('combobox', { name: '本次总结模型' })).toHaveValue(context.original_llm.model_name)
+})
 it('retains the original Origin when global Origin changes without submitting', async () => {
   show(); await open()
   act(() => useAppModeStore.setState({ config: { ...config, server_url: 'https://other.invalid' } }))
@@ -648,4 +663,243 @@ it.each(['before-prepare', 'before-confirm', 'task-became-unconfirmed'])('revali
   await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('operation=' + (change === 'task-became-unconfirmed' ? 'failed-operation' : 'newer-operation')))
   expect(localStorage.getItem(failedRecordKey)).not.toBeNull()
   expect(mock.mock.calls.every(([, init]) => !init?.method)).toBe(true)
+})
+
+it('revokes an old replacement confirmation synchronously during account ABA before dispatch', async () => {
+  failedFixture(); show()
+  fireEvent.click(await exposeFailedAction()); await screen.findByRole('dialog')
+  const original = mock.getMockImplementation()!
+  let resolve!: (value: unknown) => void
+  mock.mockImplementation((path, init) => path === '/api/source-requests/failed-operation'
+    ? new Promise(r => { resolve = r }) : original(path, init))
+  const record = localStorage.getItem(failedRecordKey)
+  fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+  expect(resolve).toBeTypeOf('function')
+  act(() => {
+    useAuthStore.setState({ user: { id: 'other' } as never })
+    useAuthStore.setState({ user: { id: 'owner' } as never })
+  })
+  await act(async () => resolve({ operation_id: 'failed-operation', task_id: 'failed-child', state: 'accepted' }))
+  expect(mock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(0)
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(localStorage.getItem(failedRecordKey)).toBe(record)
+  expect(localStorage.getItem(failedPointer)).toBe('failed-operation')
+})
+
+const versionPointer = 'vinote:meeting-version-operation:owner:note:parent'
+const versionRecordKey = (operation: string) => `vinote:source-receipt:owner:${operation}`
+function versionFixture(operation: string, overrides: object = {}) {
+  const value = { operationId: operation, owner: 'owner', parentTaskId: 'parent', summaryNoteId: 'note',
+    workspace: { scope: 'personal' }, meeting: true, meetingVersion: true, independentGeneration: true,
+    summaryOnly: true, asrMode: 'reuse', origin: context.original_llm.server_url,
+    modelConnection: context.original_llm, meetingVersionContext: context, submissionState: 'unknown', ...overrides }
+  const raw = JSON.stringify(value)
+  localStorage.setItem(versionRecordKey(operation), raw)
+  return raw
+}
+function rejectedFixture() {
+  const raw = versionFixture('rejected')
+  localStorage.setItem(versionPointer, 'rejected')
+  localStorage.setItem(versionRejectionKey('owner', 'rejected'), JSON.stringify({ pending: raw,
+    rejection: { protocol: 1, status: 409, code: 'meeting_version_context_changed', message: 'changed' } }))
+}
+function savedVersionReadback(path: string) {
+  if (path === '/api/source-requests/historical') return { operation_id: 'historical', task_id: 'saved-child', state: 'accepted' }
+  if (path === '/api/task/saved-child') return { task_id: 'saved-child', status: 'success' }
+  if (path === '/api/notes?scope=personal') return [{ id: 'saved-note', task_id: 'saved-child' }]
+  return context
+}
+
+it('does not let a saved historical version block a fresh confirmed version after definite rejection', async () => {
+  // Keep insertion order realistic: the older successful record predates rejection.
+  const historical = versionFixture('historical', { id: 'saved-child', submissionState: 'accepted' })
+  rejectedFixture()
+  const audit = localStorage.getItem(versionRejectionKey('owner', 'rejected'))
+  mock.mockImplementation(async (path, init) => {
+    if (init?.method === 'POST') return { operation_id: JSON.parse(init.body as string).operation_id, task_id: 'new-child', state: 'accepted' }
+    return savedVersionReadback(path)
+  })
+  show(); await open()
+  expect(mock.mock.calls.map(([path]) => path)).toContain('/api/notes?scope=personal')
+  expect(mock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+  fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+  await waitFor(() => expect(mock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1))
+  expect(localStorage.getItem(versionRecordKey('historical'))).toBe(historical)
+  expect(localStorage.getItem(versionRejectionKey('owner', 'rejected'))).toBe(audit)
+  expect(localStorage.getItem(versionPointer)).toBe('rejected')
+})
+
+it.each(['unknown', 'reserved', 'success-unsaved', 'receipt-unread', 'task-unread', 'notes-unread', 'failed'])(
+  'keeps a %s version protected after traversing a saved historical version', async state => {
+    versionFixture('historical', { id: 'saved-child', submissionState: 'accepted' })
+    rejectedFixture()
+    const record = versionFixture('protected', state === 'unknown' || state === 'reserved'
+      ? { submissionState: state } : { id: 'protected-child', submissionState: 'accepted' })
+    let protectedRead = false
+    mock.mockImplementation(async path => {
+      if (path === '/api/source-requests/protected') {
+        protectedRead = true
+        if (state === 'receipt-unread') throw new Error('receipt unread')
+        return { operation_id: 'protected', task_id: 'protected-child', state: 'accepted' }
+      }
+      if (path === '/api/task/protected-child') {
+        if (state === 'task-unread') throw new Error('task unread')
+        return { task_id: 'protected-child', status: state === 'failed' ? 'failed' : 'success', failed_stage: 'summarizing', retryable: false }
+      }
+      if (path === '/api/notes?scope=personal' && protectedRead && state === 'notes-unread') throw new Error('notes unread')
+      return savedVersionReadback(path)
+    })
+    show(); fireEvent.click(screen.getByRole('button', { name: '生成新版本' }))
+    await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('operation=protected'))
+    expect(localStorage.getItem(versionRecordKey('protected'))).toBe(record)
+    expect(localStorage.getItem(versionPointer)).toBe('rejected')
+    expect(screen.queryByRole('dialog')).toBeNull()
+    expect(mock.mock.calls.some(([path, init]) => path.endsWith('/meeting-version-context') || init?.method === 'POST')).toBe(false)
+  })
+
+it.each(['prepare', 'confirm'] as const)('rechecks storage after %s awaits saved-version verification', async phase => {
+  versionFixture('historical', { id: 'saved-child', submissionState: 'accepted' })
+  rejectedFixture()
+  mock.mockImplementation(async path => savedVersionReadback(path))
+  show()
+  if (phase === 'confirm') await open()
+  let resolve!: (value: unknown) => void
+  mock.mockImplementation(path => path === '/api/notes?scope=personal'
+    ? new Promise(r => { resolve = r }) : Promise.resolve(savedVersionReadback(path)))
+  fireEvent.click(screen.getByRole('button', { name: phase === 'prepare' ? '生成新版本' : '确认生成新版本' }))
+  await waitFor(() => expect(resolve).toBeTypeOf('function'))
+  const replacement = versionFixture('historical') // Another view has an unresolved execution now.
+  await act(async () => resolve([{ id: 'saved-note', task_id: 'saved-child' }]))
+  await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('operation=historical'))
+  expect(localStorage.getItem(versionRecordKey('historical'))).toBe(replacement)
+  expect(localStorage.getItem(versionPointer)).toBe('rejected')
+  expect(mock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+})
+
+it.each(['prepare', 'confirm'] as const)('protects a new receipt appended while %s verifies an old saved version', async phase => {
+  versionFixture('historical', { id: 'saved-child', submissionState: 'accepted' })
+  rejectedFixture()
+  mock.mockImplementation(async path => savedVersionReadback(path))
+  show()
+  if (phase === 'confirm') await open()
+  let resolve!: (value: unknown) => void
+  mock.mockImplementation(path => path === '/api/notes?scope=personal'
+    ? new Promise(r => { resolve = r }) : Promise.resolve(savedVersionReadback(path)))
+  fireEvent.click(screen.getByRole('button', { name: phase === 'prepare' ? '生成新版本' : '确认生成新版本' }))
+  await waitFor(() => expect(resolve).toBeTypeOf('function'))
+  const later = versionFixture('later')
+  await act(async () => resolve([{ id: 'saved-note', task_id: 'saved-child' }]))
+  await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('operation=later'))
+  expect(localStorage.getItem(versionRecordKey('later'))).toBe(later)
+  expect(mock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+})
+
+it.each(['prepare', 'confirm'] as const)('rechecks the rejected pointer and its receipt after %s awaits', async phase => {
+  versionFixture('historical', { id: 'saved-child', submissionState: 'accepted' })
+  rejectedFixture()
+  mock.mockImplementation(async path => savedVersionReadback(path))
+  show()
+  if (phase === 'confirm') await open()
+  let resolve!: (value: unknown) => void
+  mock.mockImplementation(path => path === '/api/notes?scope=personal'
+    ? new Promise(r => { resolve = r }) : Promise.resolve(savedVersionReadback(path)))
+  fireEvent.click(screen.getByRole('button', { name: phase === 'prepare' ? '生成新版本' : '确认生成新版本' }))
+  await waitFor(() => expect(resolve).toBeTypeOf('function'))
+  localStorage.setItem(versionPointer, 'newer-operation')
+  const accepted = versionFixture('rejected', { id: 'other-window-child', submissionState: 'accepted' })
+  await act(async () => resolve([{ id: 'saved-note', task_id: 'saved-child' }]))
+  await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('operation=newer-operation'))
+  expect(localStorage.getItem(versionPointer)).toBe('newer-operation')
+  expect(localStorage.getItem(versionRecordKey('rejected'))).toBe(accepted)
+  expect(mock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+})
+
+it('rescans previously saved records after a later saved record finishes verification', async () => {
+  versionFixture('earlier', { id: 'earlier-child', submissionState: 'accepted' })
+  versionFixture('historical', { id: 'saved-child', submissionState: 'accepted' })
+  rejectedFixture()
+  let historicalRead = false, resolve!: (value: unknown) => void
+  const saved = [{ id: 'earlier-note', task_id: 'earlier-child' }, { id: 'saved-note', task_id: 'saved-child' }]
+  mock.mockImplementation(async path => {
+    if (path === '/api/source-requests/earlier') return { operation_id: 'earlier', task_id: 'earlier-child', state: 'accepted' }
+    if (path === '/api/task/earlier-child') return { task_id: 'earlier-child', status: 'success' }
+    if (path === '/api/source-requests/historical') historicalRead = true
+    if (path === '/api/notes?scope=personal') return historicalRead ? new Promise(r => { resolve = r }) : saved
+    return savedVersionReadback(path)
+  })
+  show(); fireEvent.click(screen.getByRole('button', { name: '生成新版本' }))
+  await waitFor(() => expect(resolve).toBeTypeOf('function'))
+  const replacement = versionFixture('earlier')
+  await act(async () => resolve(saved))
+  await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('operation=earlier'))
+  expect(localStorage.getItem(versionRecordKey('earlier'))).toBe(replacement)
+  expect(mock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+})
+
+it('revokes a displayed confirmation across same-batch account ABA without dispatch', async () => {
+  show(); await open()
+  act(() => {
+    useAuthStore.setState({ user: { id: 'other' } as never })
+    useAuthStore.setState({ user: { id: 'owner' } as never })
+  })
+  expect(screen.queryByRole('dialog')).toBeNull()
+  expect(mock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+  expect(localStorage.getItem(versionPointer)).toBeNull()
+})
+
+it('allows a new explicit action after an idle same-batch account ABA', async () => {
+  show()
+  act(() => {
+    useAuthStore.setState({ user: { id: 'other' } as never })
+    useAuthStore.setState({ user: { id: 'owner' } as never })
+  })
+  await open()
+  expect(mock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false)
+})
+
+it('keeps an already dispatched operation protected when its response arrives after account ABA', async () => {
+  let resolve!: (value: unknown) => void
+  mock.mockImplementation(async (path, init) => {
+    if (init?.method === 'POST') return new Promise(r => { resolve = r })
+    return context
+  })
+  show(); await open()
+  fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+  await waitFor(() => expect(resolve).toBeTypeOf('function'))
+  const operation = localStorage.getItem(versionPointer)!
+  const original = localStorage.getItem(versionRecordKey(operation))
+  act(() => {
+    useAuthStore.setState({ user: { id: 'other' } as never })
+    useAuthStore.setState({ user: { id: 'owner' } as never })
+  })
+  await act(async () => resolve({ operation_id: operation, task_id: 'accepted-child', state: 'accepted' }))
+  expect(localStorage.getItem(versionPointer)).toBe(operation)
+  expect(localStorage.getItem(versionRecordKey(operation))).toBe(original)
+  expect(JSON.parse(original!)).toMatchObject({ submissionState: 'unknown' })
+  expect(screen.getByTestId('route')).not.toHaveTextContent('operation=')
+  mock.mockImplementation(async path => {
+    if (path === `/api/source-requests/${operation}`) return { operation_id: operation, task_id: 'accepted-child', state: 'accepted' }
+    return { task_id: 'accepted-child', status: 'preparing' }
+  })
+  fireEvent.click(screen.getByRole('button', { name: '生成新版本' }))
+  await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('operation=' + operation))
+  expect(mock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1)
+})
+
+it('does not let a revoked read release the busy guard of the next account visit', async () => {
+  let oldRead!: (value: unknown) => void, newRead!: (value: unknown) => void
+  mock.mockImplementationOnce(() => new Promise(r => { oldRead = r }))
+    .mockImplementationOnce(() => new Promise(r => { newRead = r }))
+  show(); fireEvent.click(screen.getByRole('button', { name: '生成新版本' }))
+  act(() => {
+    useAuthStore.setState({ user: { id: 'other' } as never })
+    useAuthStore.setState({ user: { id: 'owner' } as never })
+  })
+  fireEvent.click(screen.getByRole('button', { name: '生成新版本' }))
+  expect(newRead).toBeTypeOf('function')
+  await act(async () => oldRead(context))
+  expect(screen.getByRole('button', { name: '正在核验…' })).toBeDisabled()
+  expect(screen.queryByRole('dialog')).toBeNull()
+  await act(async () => newRead(context))
+  expect(screen.getByRole('dialog')).toBeInTheDocument()
 })

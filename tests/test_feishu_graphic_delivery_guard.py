@@ -262,11 +262,20 @@ def test_unverifiable_bound_form_outbox_fails_without_remote_write_or_repeated_a
         assert db.get(FeishuAutoOutboxDB, operation).payload == payload
 
 
-def test_another_owners_note_cannot_supply_graphic_identity_for_text_snapshot(chain):
+@pytest.mark.parametrize('grouped', [False, True])
+def test_another_owners_note_cannot_supply_graphic_identity_for_text_snapshot(chain, grouped):
     c = chain
+    if not grouped:
+        configure_target(c, 'wiki')
     note, operation, body, _ = saved_source(c)
     with c.scope() as db:
         db.get(NoteDB, note).created_by = 'bob'
+    if grouped:
+        with pytest.raises(FeishuError) as rejected:
+            submit(c, note, operation, body, False)
+        assert rejected.value.code == 'meeting_source_unverified'
+        assert_no_delivery(c)
+        return
     result = submit(c, note, operation, body, False)
     assert result['_dispatch_required'] is True
     assert all(call[0] == 'GET' for call in c.calls)
@@ -309,6 +318,7 @@ def test_graphic_words_in_title_body_and_nearby_task_do_not_trigger_guard(chain,
     body = 'comic infographic 漫画 信息图 are ordinary words here.'
     with c.scope() as db:
         db.get(NoteDB, note).task_id = None
+        db.get(NoteDB, note).source_type = 'text'
         db.get(NoteDB, note).title = '漫画 infographic'
         db.get(NoteDB, note).content = body
     result = (submit(c, note, operation, body, True) if automatic else
@@ -316,6 +326,22 @@ def test_graphic_words_in_title_body_and_nearby_task_do_not_trigger_guard(chain,
                                 operation_id=str(uuid4()), source_mode='local_snapshot'))
     assert result['_dispatch_required'] is True
     assert all(call[0] == 'GET' for call in c.calls)
+
+
+@pytest.mark.parametrize('form', ['comic', 'infographic'])
+@pytest.mark.parametrize('grouped', [False, True])
+def test_publish_alias_cannot_bypass_owned_graphic_source_guard(chain, form, grouped):
+    c = chain
+    if not grouped:
+        configure_target(c, 'wiki')
+    note, _, body, folder = saved_source(c, form)
+    before = artifact_hashes(folder)
+    with pytest.raises(FeishuError) as rejected:
+        c.service.enqueue(OWNER, 'publish:' + note, 'Synthetic saved meeting', body,
+                          operation_id=str(uuid4()), source_mode='local_snapshot')
+    assert rejected.value.code == 'unsupported_graphic_delivery'
+    assert_no_delivery(c)
+    assert artifact_hashes(folder) == before
 
 
 def database_receipts(c):

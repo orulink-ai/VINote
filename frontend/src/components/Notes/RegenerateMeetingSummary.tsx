@@ -51,9 +51,23 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
   const lock = useRef(false)
   const mounted = useRef(true)
   const opener = useRef<HTMLButtonElement | null>(null)
+  const accountEpoch = useRef(0)
+  const [renderedEpoch, setRenderedEpoch] = useState(0)
   const legacyOrigin = useAppModeStore.getState().config?.server_url
-  const active = () => mounted.current && owner === useAuthStore.getState().user?.id
-  useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false } }, [])
+  const active = () => mounted.current && renderedEpoch === accountEpoch.current && owner === useAuthStore.getState().user?.id
+  useLayoutEffect(() => {
+    mounted.current = true
+    // Revoke synchronously, including A→B→A before React renders. This only
+    // retires UI consent; dispatched operations retain their durable receipts.
+    const unsubscribe = useAuthStore.subscribe((next, previous) => {
+      if (next.user?.id === previous.user?.id) return
+      setRenderedEpoch(++accountEpoch.current)
+      catalogSequence.current++; lock.current = false; opener.current = null
+      setConfirmation(null); setCatalog(null); setFailedOperation(null)
+      setBusy(false); setLoadingModels(false); setError('')
+    })
+    return () => { mounted.current = false; unsubscribe() }
+  }, [])
   const pointerKey = meetingVersionOperationKey(owner || '', taskId, noteId)
   const legacyPointerKey = summaryOperationKey(owner || '', legacyOrigin, taskId, noteId)
   const pointerReadKey = useRef(pointerKey)
@@ -105,24 +119,42 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
     return isRejectedVersionReceipt(value, owner) && value.parentTaskId === taskId && value.summaryNoteId === noteId
   }
 
-  // Rejected pointers stay untouched. Any later execution record for this same
-  // source protects itself even when another window retained the old pointer.
-  function activeSuccessor(rejected: string): string | undefined {
-    for (let index = 0; index < localStorage.length; index++) {
-      const key = localStorage.key(index)
-      if (!key?.startsWith(`vinote:source-receipt:${owner}:`)) continue
-      const operation = key.slice(`vinote:source-receipt:${owner}:`.length)
-      if (operation === rejected) continue
-      try {
-        const value = readVersionReceipt(localStorage, owner!, operation) as Record<string, unknown> | null
-        if (isMeetingVersionReceipt(value, owner) && value?.parentTaskId === taskId
-            && value.summaryNoteId === noteId && !isRejectedVersionReceipt(value, owner)) return operation
-      } catch { return operation } // Unread execution state cannot authorize a new submission.
+  // Keep rejected pointers/receipts intact. Only a stable, independently verified
+  // saved result can be skipped; unknown, unread and unsaved records protect work.
+  async function activeSuccessor(rejected: string): Promise<string | undefined> {
+    const savedRecords = new Map<string, string>()
+    const prefix = `vinote:source-receipt:${owner}:`
+    while (active()) {
+      let checked = false
+      for (let index = 0; index < localStorage.length; index++) {
+        const key = localStorage.key(index)
+        if (!key?.startsWith(prefix)) continue
+        const operation = key.slice(prefix.length)
+        if (operation === rejected) continue
+        try {
+          const raw = localStorage.getItem(key)
+          const value = readVersionReceipt(localStorage, owner!, operation) as Record<string, unknown> | null
+          if (localStorage.getItem(key) !== raw) return operation
+          if (!isMeetingVersionReceipt(value, owner) || value?.parentTaskId !== taskId
+              || value.summaryNoteId !== noteId || isRejectedVersionReceipt(value, owner)) continue
+          if (!raw || value.operationId !== operation || value.submissionState !== 'accepted' || !value.id) return operation
+          if (savedRecords.get(operation) === raw) continue
+          const state = await inspectOperation(operation)
+          if (!active()) return
+          if (localStorage.getItem(key) !== raw || state.kind !== 'saved') return operation
+          savedRecords.set(operation, raw)
+          // Every await can replace an earlier record or append new work. Scan
+          // again instead of releasing protection from a stale key inventory.
+          checked = true
+          break
+        } catch { return operation } // Unread execution state cannot authorize a new submission.
+      }
+      if (!checked) return
     }
   }
 
   async function prepare(replaces?: FailedOperation, trigger?: HTMLButtonElement) {
-    if (!owner || disabled || lock.current) return
+    if (!owner || disabled || lock.current || !active()) return
     if (trigger) opener.current = trigger
     lock.current = true; setBusy(true); setError('')
     try {
@@ -132,7 +164,10 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
       if (replaces && previous !== replaces.operationId) { openOperation(previous || replaces.operationId); return }
       const rejected = previous && rejectedOperation(previous) ? previous : undefined
       if (rejected) {
-        const successor = activeSuccessor(rejected)
+        const successor = await activeSuccessor(rejected)
+        if (!active()) return
+        const current = localStorage.getItem(pointerKey) || localStorage.getItem(readKey)
+        if (current !== previous || !rejectedOperation(rejected)) { openOperation(current || rejected); return }
         if (successor) { openOperation(successor); return }
       }
       if (previous && !rejected) {
@@ -157,11 +192,11 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
       setContentDepth('concise'); setPresentation('text')
     } catch (cause) {
       if (active()) setError(cause instanceof ApiError && cause.status === 409 ? '当前资料不可重新生成纪要，请保留原文件与已有处理记录。' : cause instanceof Error ? cause.message : '无法核验来源，请稍后重试。')
-    } finally { lock.current = false; if (active()) setBusy(false) }
+    } finally { if (active()) { lock.current = false; setBusy(false) } }
   }
 
   async function chooseModels(mode: 'inherit' | 'select', asr = asrMode) {
-    if (!confirmation || busy) return
+    if (!confirmation || busy || !active()) return
     setLlmMode(mode); setError(''); setAsrConsent(false)
     const sequence = ++catalogSequence.current
     if (mode === 'inherit' && asr === 'reuse') { setLoadingModels(false); setCatalog(null); setModelName(confirmation.context.original_llm.model_name); return }
@@ -196,9 +231,12 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
       const existing = localStorage.getItem(pointerKey) || localStorage.getItem(readKey)
       if (confirmation.rejectedOperation) {
         const rejected = confirmation.rejectedOperation
-        const successor = activeSuccessor(rejected)
-        if (existing !== rejected || !rejectedOperation(rejected) || successor) {
-          openOperation(successor || existing || rejected); return
+        if (existing !== rejected || !rejectedOperation(rejected)) { openOperation(existing || rejected); return }
+        const successor = await activeSuccessor(rejected)
+        if (!active()) return
+        const current = localStorage.getItem(pointerKey) || localStorage.getItem(readKey)
+        if (current !== rejected || !rejectedOperation(rejected) || successor) {
+          openOperation(current !== rejected ? current || rejected : successor || rejected); return
         }
       } else if (confirmation.replaces) {
         const previous = confirmation.replaces
@@ -241,7 +279,7 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
       }
       if (protectedOperation) openOperation(operationId)
       else setError(cause instanceof Error ? cause.message : '无法保护操作记录，未开始处理。')
-    } finally { lock.current = false; if (active()) { setBusy(false); setConfirmation(null) } }
+    } finally { if (active()) { lock.current = false; setBusy(false); setConfirmation(null) } }
   }
 
   return <div className="grid min-w-0 gap-2">
