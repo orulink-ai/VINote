@@ -256,7 +256,7 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
       protectedOperation = true
       if (!active()) return
       const result = await apiJson<Receipt>(`/api/task/${encodeURIComponent(taskId)}/meeting-versions`, { method: 'POST', body: JSON.stringify({ operation_id: operationId, confirmed: true, context_revision: confirmation.context.context_revision, source_version: confirmation.context.source.version, asr_mode: asrMode, llm_mode: llmMode, content_depth: contentDepth, presentation,
-        ...(llmMode === 'select' ? { model_name: modelName, selection_revision: catalog!.selection_revision, ...(catalog!.connection.connection_id ? { connection_id: catalog!.connection.connection_id } : {}) } : {}),
+        ...(llmMode === 'select' ? { model_name: modelName, selection_revision: catalog!.selection_revision } : {}),
         ...(asrMode === 'fresh' ? { asr_model: asrModel, fresh_context_revision: confirmation.context.asr_modes.fresh.context_revision, extra_asr_consent: true } : {}) }) })
       if (!active()) return
       if (result.operation_id !== operationId || !result.task_id || result.task_id === taskId || !['reserved', 'accepted'].includes(result.state)) throw new Error('提交结果尚未确认，请查询本次操作。')
@@ -320,9 +320,9 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
               <option value="" disabled>请选择本次总结模型</option>
               {llmMode === 'select' && models.map(model => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
             </NativeSelect>
-            <FieldDescription id="summary-model-help">默认沿用所选纪要的原模型与原连接，不修改全局模型偏好。只有明确更换时读取当前连接目录；草稿与事实复核使用同一模型。</FieldDescription>
+            <FieldDescription id="summary-model-help">默认沿用所选纪要的原模型，不修改全局模型偏好。只有明确更换时读取当前模型目录；草稿与事实复核使用同一模型。</FieldDescription>
           </Field>
-          {loadingModels && <p role="status">正在核验当前连接目录…</p>}
+          {loadingModels && <p role="status">正在核验模型目录…</p>}
           {asrMode === 'fresh' && <>
             <Field><FieldLabel htmlFor="summary-asr-choice">本次 ASR 模型</FieldLabel>
               <NativeSelect id="summary-asr-choice" value={asrModel} disabled={busy || loadingModels} onChange={event => { setAsrModel(event.target.value); setAsrConsent(false) }}>

@@ -48,6 +48,53 @@ it('cloud mode offers VINote login and permits local mode during an outage', asy
   expect(await screen.findByText('自定义 STT 表单')).toBeInTheDocument()
 })
 
+it('shows the fixed public service address without any endpoint controls', async () => {
+  vi.mocked(apiJson).mockResolvedValue([])
+  useAppModeStore.setState({ config: {
+    configured: true, mode: 'cloud', asr_model: '', llm_model: '', server_url: 'https://api-hk.orulink.ai',
+  } })
+  render(<ModelSourcePanel compact />)
+  expect(await screen.findByText('https://api-hk.orulink.ai')).toBeInTheDocument()
+  expect(screen.getByText('公网地址，不可编辑')).toBeInTheDocument()
+  expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+  expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+})
+
+it('keeps adaptive speech for recordings while naming why meetings need another model', async () => {
+  vi.mocked(apiJson).mockResolvedValue([{
+    id: 'stream-model', name: '流式转写', modelType: 'asr', runtimeStatus: 'available',
+    capabilities: {
+      recordedAudio: { protocol: 1, supported: true, strategy: 'adaptive_pause', policySource: 'service_budget', maxSessionAudioBytes: 2097152 },
+      useCases: ['recording'], protocols: ['asr-streaming'],
+    },
+  }])
+  useAppModeStore.setState({ config: {
+    configured: true, mode: 'cloud', asr_model: 'stream-model', llm_model: '', server_url: 'https://api-hk.orulink.ai',
+  } })
+  render(<ModelSourcePanel compact />)
+  expect((await screen.findAllByText(/录音转写 · 按停顿自动分段/)).length).toBeGreaterThan(0)
+  expect(await screen.findByText(/暂不能用于会议纪要/)).toBeInTheDocument()
+})
+
+it('describes a meeting model by its declared whole-file capability', async () => {
+  vi.mocked(apiJson).mockResolvedValue([{
+    id: 'meeting-model', name: '会议转写', modelType: 'asr', runtimeStatus: 'available',
+    capabilities: {
+      recordedAudio: { protocol: 1, supported: true, strategy: 'single_request', policySource: 'provider_model' },
+      useCases: ['recording', 'meeting'], protocols: ['asr-recording'], audioFormats: ['wav'],
+      audioDelivery: 'public', maxAudioSeconds: 10800, maxAudioBytes: 536870912,
+      speakerDiarization: true, utteranceTimestamps: true,
+    },
+  }])
+  useAppModeStore.setState({ config: {
+    configured: true, mode: 'cloud', asr_model: 'meeting-model', llm_model: '', server_url: 'https://api-hk.orulink.ai',
+  } })
+  render(<ModelSourcePanel compact />)
+  expect(await screen.findByText('会议录音 · 整段识别 · 带说话人分离 · 带时间戳')).toBeInTheDocument()
+  expect(screen.getByText('会议录音整段提交，结果包含说话人与发言时间。')).toBeInTheDocument()
+  expect(screen.queryByText(/暂不能用于会议纪要/)).not.toBeInTheDocument()
+})
+
 it('loads a saved key only on demand and clears it when hidden', async () => {
   vi.mocked(apiJson).mockResolvedValue({ api_key: 'test-secret-value' })
   render(<SavedApiKey kind="model" profileId="profile-1" hint="test****alue" />)

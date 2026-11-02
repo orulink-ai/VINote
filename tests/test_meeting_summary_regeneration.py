@@ -241,15 +241,15 @@ def test_second_version_uses_original_evidence_never_previous_summary_and_freeze
     assert before == {p: p.read_bytes() for p in parent.rglob('*') if p.is_file()}
 
 
-def test_summary_snapshot_preserves_connection_auth_mode_without_tokens(monkeypatch):
+def test_summary_snapshot_drops_historical_connection_identity_without_tokens(monkeypatch):
     import app.services.meeting_summary_regeneration as module
-    connection = {'configured': True, 'mode': 'cloud', 'server_url': 'https://connection.invalid',
+    connection = {'configured': True, 'mode': 'cloud', 'server_url': settings.vilab_server_url,
         'connection_id': 'immutable-account-connection', 'connection_auth_mode': 'account',
         'asr_model': 'asr-unchanged', 'llm_model': 'global-default'}
     monkeypatch.setattr(VILabCloudService, 'connection_snapshot', lambda self, owner: connection)
-    monkeypatch.setattr(module, 'validate_source', lambda source, owner: source)
     frozen = module._snapshot('alice', 'this-version-llm')
-    assert frozen['connection_auth_mode'] == 'account' and frozen['connection_id'] == connection['connection_id']
+    assert frozen['server_url'] == settings.vilab_server_url
+    assert 'connection_id' not in frozen and 'connection_auth_mode' not in frozen
     assert frozen['llm_model'] == 'this-version-llm' and frozen['asr_model'] == 'asr-unchanged'
     assert 'configured' not in frozen and 'token' not in frozen
 

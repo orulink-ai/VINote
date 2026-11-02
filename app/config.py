@@ -104,7 +104,7 @@ class Settings:
     share_base_url: str = os.getenv("SHARE_BASE_URL", "").strip()
 
     model_profile_encryption_key: str = os.getenv("MODEL_PROFILE_ENCRYPTION_KEY", "")
-    vilab_server_url: str = os.getenv("VILAB_SERVER_URL", "").rstrip("/")
+    vilab_server_url: str = os.getenv("VILAB_SERVER_URL", "https://api-hk.orulink.ai").rstrip("/")
     vilab_api_key: str = os.getenv("VILAB_API_KEY", "")
     cloud_auth_url: str = os.getenv("VINOTE_SUPABASE_URL", "").rstrip("/")
     cloud_auth_public_key: str = os.getenv("VINOTE_SUPABASE_PUBLISHABLE_KEY", "")

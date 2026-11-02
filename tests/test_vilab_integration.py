@@ -227,7 +227,7 @@ def test_global_cloud_mode_overrides_stale_local_profile_ids(monkeypatch):
     assert isinstance(llm, VILabLLM)
     assert llm.model == "cloud-llm"
     stt = STTProfileService().resolve_config(user_id="user-1", stt_profile_id="old-stt")
-    assert stt.provider == "vliab-server"
+    assert stt.provider == "vilab-server"
     assert stt.model_name == "cloud-asr"
     assert stt.cloud_user_id == "user-1"
 

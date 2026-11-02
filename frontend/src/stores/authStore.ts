@@ -5,7 +5,7 @@ import { useNoteLibraryStore } from "./noteLibraryStore";
 import { useTeamStore } from "./teamStore";
 import { useSTTProfileStore } from './sttProfileStore';
 import { useWorkspaceStore } from './workspaceStore';
-import { setModelConnectionOwner } from '../lib/vilabConnectionIdentity';
+import { setModelSourceOwner } from '../lib/modelSourceIdentity';
 
 export interface AuthUser {
   id: string;
@@ -136,5 +136,5 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
 // Register after creation, rather than reading this store during a dependent
 // module's initialization (which is unsafe in a circular ESM import).
-setModelConnectionOwner(useAuthStore.getState().user?.id);
-useAuthStore.subscribe(state => setModelConnectionOwner(state.user?.id));
+setModelSourceOwner(useAuthStore.getState().user?.id);
+useAuthStore.subscribe(state => setModelSourceOwner(state.user?.id));

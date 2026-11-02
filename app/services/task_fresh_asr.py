@@ -253,10 +253,12 @@ class FreshASRService:
             cloud = VILabCloudService()
             frozen = _task_source.get()
             connection = dict(frozen[1]) if frozen and frozen[0] == owner else cloud.connection_snapshot(owner)
-            if connection.get('mode') != 'cloud' or body.connection_id is not None and body.connection_id != connection.get('connection_id'):
-                _unavailable('fresh_connection_changed', '模型连接已变化，请重新选择并确认。')
+            # Historical connection fields stay accepted for old receipts, but a
+            # new selection binds only the fixed deployment origin.
+            if connection.get('mode') != 'cloud' or not connection.get('server_url'):
+                _unavailable('fresh_connection_changed', '当前没有可用的云端模型服务，请重新选择并确认。')
             snapshot = validate_source({'version': 1, 'owner': owner, **{key: connection[key] for key in
-                ('mode', 'server_url', 'connection_id', 'connection_auth_mode') if key in connection},
+                ('mode', 'server_url') if key in connection},
                 'asr_model': body.asr_model, 'llm_model': body.model_name, 'needs_stt': True}, owner)
             with cloud.task_snapshot(owner, snapshot=snapshot):
                 models = cloud.models(owner)

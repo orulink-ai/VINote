@@ -72,7 +72,7 @@ def _snapshot(owner, model):
     connection = VILabCloudService().connection_snapshot(owner)
     return validate_source({'version': 1, 'owner': owner,
         **{key: value for key, value in connection.items()
-           if key in {'mode', 'server_url', 'connection_id', 'connection_auth_mode', 'asr_model', 'llm_model'}},
+           if key in {'mode', 'server_url', 'asr_model', 'llm_model'}},
         'llm_model': model, 'needs_stt': False}, owner)
 
 
@@ -241,8 +241,6 @@ class SummaryRegenerationService:
             if cloud.status(owner)['mode'] != 'cloud':
                 _unavailable('summary_cloud_required', '请明确选择云端总结模型后再确认。')
             snapshot = _snapshot(owner, body.model_name)
-            if body.connection_id is not None and body.connection_id != snapshot.get('connection_id'):
-                _unavailable('summary_connection_changed', '模型连接已变化，请重新核验并确认。')
             with cloud.task_snapshot(owner, snapshot=snapshot):
                 cloud.validate_ready(owner, needs_stt=False)
             visual = retained_visual_evidence(self.artifacts, folder,
@@ -389,8 +387,7 @@ class SummaryRegenerationService:
                 _preflight(_read_json(folder / 'request.json') == {'request': _options(saved, body)}, 'summary_preflight_request_changed')
                 _preflight(_digest(snapshot) == accepted_snapshot_sha256
                     and snapshot['mode'] == 'cloud' and snapshot.get('needs_stt') is False
-                    and snapshot['llm_model'] == body.model_name
-                    and (body.connection_id is None or body.connection_id == snapshot.get('connection_id')),
+                    and snapshot['llm_model'] == body.model_name,
                     'summary_preflight_snapshot_changed')
                 visual = retained_visual_evidence(self.artifacts, folder,
                     context['canonical_task_id'], source, owner, receipts=self.receipts)

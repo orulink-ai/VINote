@@ -1,6 +1,7 @@
 import { apiJson } from './api'
 
 export type STTProviderType =
+  | 'vilab-server'
   | 'vliab-server'
   | 'groq'
   | 'whisper'
@@ -109,6 +110,7 @@ const buildDraftPayload = (draft: Partial<STTProfileDraft>) => {
   }
 
   switch (draft.provider) {
+    case 'vilab-server':
     case 'vliab-server':
       if (draft.baseUrl !== undefined) payload.base_url = draft.baseUrl
       if (draft.modelName !== undefined) payload.model_name = draft.modelName || null

@@ -1,4 +1,5 @@
 import { modelEligible, type ModelEligibilityInput } from './modelEligibility'
+import { meetingReady, type RecordedAudioModel } from './recordedAudioPolicy'
 import { getPendingMeeting, getRecordedAudio, updatePendingMeeting, type PendingMeeting, type MeetingGenerationSelection } from './audioStorage'
 import { completeMeetingRecordingGeneration, createMeetingRecordingTitle, MeetingGenerationError, MissingMeetingTaskError, resumeMeetingTask, submitMeetingRecording, type MeetingGenerationStage } from './meetingGeneration'
 import { apiJson } from './api'
@@ -91,13 +92,25 @@ async function run(recording: PendingMeeting, language: string, audio?: Blob, co
         await persist({ generationConfirmationRequired: true })
         throw new Error('模型配置已变化，未提交生成。请核对模型后明确另建操作。')
       }
-      const available = selection.mode === 'cloud'
-        ? await apiJson<(ModelEligibilityInput & { id: string; modelType: string })[]>('/api/vilab/models', { cache: 'no-store' })
-          .then(catalog => catalog.some(model => model.id === selection.asr && model.modelType === 'asr' && modelEligible(model)) &&
-            catalog.some(model => model.id === selection.llm && model.modelType === 'llm' && modelEligible(model)))
-        : await Promise.all([fetchSTTProfiles(), fetchModelProfiles()]).then(([speech, models]) =>
+      let available: boolean
+      if (selection.mode === 'cloud') {
+        const catalog = await apiJson<(ModelEligibilityInput & RecordedAudioModel & { id: string; modelType: string })[]>(
+          '/api/vilab/models', { cache: 'no-store' })
+        if (useAuthStore.getState().user?.id !== pending.ownerId) throw new Error('账号已切换，未提交生成。')
+        const speech = catalog.find(model => model.id === selection.asr && model.modelType === 'asr')
+        // A meeting is one complete recording. The catalog must declare the
+        // whole-file contract before any audio is uploaded.
+        const readiness = speech ? meetingReady(speech) : { ready: false, reason: '所选语音模型已不在目录中或暂不可用' }
+        if (!readiness.ready) {
+          await persist({ generationConfirmationRequired: true })
+          throw new Error(`${readiness.reason}，未提交生成。请重新核对模型。`)
+        }
+        available = catalog.some(model => model.id === selection.llm && model.modelType === 'llm' && modelEligible(model))
+      } else {
+        available = await Promise.all([fetchSTTProfiles(), fetchModelProfiles()]).then(([speech, models]) =>
           speech.some(profile => profile.id === selection.asr && profile.isActive && `${profile.name} · ${profile.modelName || profile.provider}` === selection.asrLabel) &&
           models.some(profile => profile.id === selection.llm && profile.isActive && `${profile.name} · ${profile.modelName}` === selection.llmLabel))
+      }
       if (!available) {
         await persist({ generationConfirmationRequired: true })
         throw new Error('已确认模型不可用或配置已修改，未提交生成。请重新核对模型。')

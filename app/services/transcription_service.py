@@ -42,11 +42,11 @@ def create_transcriber(config: ResolvedSTTConfig | None = None) -> Transcriber:
     resolved = config or STTProfileService().resolve_config(user_id=None, stt_profile_id=None)
     t_type = resolved.provider.lower()
 
-    if t_type == "vliab-server":
+    if t_type in {"vilab-server", "vliab-server"}:
         from app.transcribers.vilab_transcriber import VILabTranscriber
 
-        return VILabTranscriber(resolved.base_url or "", resolved.api_key or "", resolved.model_name, resolved.language,
-                                resolved.cloud_user_id, resolved.cloud_connection_id, resolved.cloud_connection_auth_mode)
+        return VILabTranscriber(resolved.base_url or settings.vilab_server_url, resolved.api_key or "",
+                                resolved.model_name, resolved.language, resolved.cloud_user_id)
 
     if t_type == "groq":
         from app.transcribers.groq_transcriber import GroqWhisperTranscriber
@@ -608,8 +608,9 @@ class TranscriptionService:
         elif chunk_cache_dir is not None:
             require_task_execution(user_id, None, chunk_cache_dir.parent, audio_path)
         cached = load_cached()
+        cached_model_speakers = cached is not None and cached.metadata.get("model_speaker_diarization") is True
         if cached and bool(cached.metadata.get("speaker_diarization")) == diarize and (
-            not diarize or (cached.metadata.get("analysis_parallel")
+            not diarize or cached_model_speakers or (cached.metadata.get("analysis_parallel")
                             and cached.metadata.get("asr_evidence")
                             and cached.metadata.get("speaker_evidence"))
         ):
@@ -639,19 +640,35 @@ class TranscriptionService:
         if diarize:
             from app.services.speaker_diarization_service import SpeakerDiarizationService
             duration = self.get_audio_duration(audio_path)
-            transcript = SpeakerDiarizationService().transcribe(
-                audio_path=audio_path,
-                transcribe=lambda path, **context: self._transcribe_in_chunks(
-                    audio_path=path,
-                    duration=float(context.get("audio_duration_seconds") or duration),
-                    transcriber=transcriber,
-                    update_status=update_status,
-                    chunk_cache_dir=chunk_cache_dir, cache_identity=cache_identity,
-                    trace_context=context,
-                ),
-                speaker_count=speaker_count, update_status=update_status,
-                evidence_dir=chunk_cache_dir.parent if chunk_cache_dir else None,
-            )
+            if isinstance(transcriber, VILabTranscriber):
+                transcript = self._transcribe_in_chunks(
+                    audio_path=audio_path, duration=duration, transcriber=transcriber,
+                    update_status=update_status, chunk_cache_dir=chunk_cache_dir,
+                    cache_identity=cache_identity,
+                )
+                model_speakers = transcript.metadata.get("model_speaker_diarization") is True and any(
+                    segment.speaker_id is not None for segment in transcript.segments)
+                if not model_speakers:
+                    transcript = SpeakerDiarizationService().transcribe(
+                        audio_path=audio_path,
+                        transcribe=lambda _path, **_context: transcript,
+                        speaker_count=speaker_count, update_status=update_status,
+                        evidence_dir=chunk_cache_dir.parent if chunk_cache_dir else None,
+                    )
+            else:
+                transcript = SpeakerDiarizationService().transcribe(
+                    audio_path=audio_path,
+                    transcribe=lambda path, **context: self._transcribe_in_chunks(
+                        audio_path=path,
+                        duration=float(context.get("audio_duration_seconds") or duration),
+                        transcriber=transcriber,
+                        update_status=update_status,
+                        chunk_cache_dir=chunk_cache_dir, cache_identity=cache_identity,
+                        trace_context=context,
+                    ),
+                    speaker_count=speaker_count, update_status=update_status,
+                    evidence_dir=chunk_cache_dir.parent if chunk_cache_dir else None,
+                )
         else:
             duration = self.get_audio_duration(audio_path)
             transcript = self._transcribe_in_chunks(

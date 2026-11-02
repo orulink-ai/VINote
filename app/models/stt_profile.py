@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 
 STTProviderType = Literal[
+    "vilab-server",
     "vliab-server",
     "groq",
     "whisper",

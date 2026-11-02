@@ -58,7 +58,15 @@ const sttProfileStoreMock = vi.hoisted(() => ({
     }),
   },
 }))
-vi.mock('../../lib/api', () => ({ apiJson: vi.fn(async (path: string) => path.endsWith('/models') ? [{ id: 'bound-asr', modelType: 'asr', runtimeStatus: 'available' }, { id: 'bound-llm', modelType: 'llm', runtimeStatus: 'available' }] : { configured: true, mode: 'cloud', asr_model: 'bound-asr', llm_model: 'bound-llm' }) }))
+vi.mock('../../lib/api', () => ({ apiJson: vi.fn(async (path: string) => path.endsWith('/models') ? [{
+  id: 'bound-asr', modelType: 'asr', runtimeStatus: 'available',
+  capabilities: {
+    recordedAudio: { protocol: 1, supported: true, strategy: 'single_request', policySource: 'provider_model' },
+    useCases: ['recording', 'meeting'], protocols: ['asr-recording'], audioFormats: ['wav'],
+    audioDelivery: 'public', maxAudioSeconds: 10800, maxAudioBytes: 512 * 1024 * 1024,
+    speakerDiarization: true, utteranceTimestamps: true,
+  },
+}, { id: 'bound-llm', modelType: 'llm', runtimeStatus: 'available' }] : { configured: true, mode: 'cloud', asr_model: 'bound-asr', llm_model: 'bound-llm' }) }))
 vi.mock('../../lib/feishu', () => ({ publishToFeishu: vi.fn().mockResolvedValue(undefined) }))
 
 vi.mock('react-router-dom', async (importOriginal) => {

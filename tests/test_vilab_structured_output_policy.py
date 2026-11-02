@@ -364,22 +364,21 @@ def test_changed_global_origin_keeps_original_legacy_auth_gate_and_never_redirec
     assert llm._output_policy is None
 
 
-def test_explicit_connection_keeps_exact_source_when_global_origin_changes(monkeypatch):
-    from app.services.vilab_connection_service import VILabConnectionService
-
-    requests, authorizations = [], []
-    def authorize(self, owner, origin, identifier, auth_mode=None):
-        authorizations.append((owner, origin, identifier, auth_mode))
-        return {}
+def test_historical_connection_identity_uses_fixed_source_and_auth(monkeypatch):
+    monkeypatch.setattr(settings, 'vilab_server_url', ORIGIN)
+    monkeypatch.setattr(settings, 'content_cloud_runtime', False)
+    monkeypatch.setattr(settings, 'cloud_auth_url', '')
+    monkeypatch.setattr(settings, 'vilab_api_key', 'synthetic-fixed-key')
+    requests, headers_seen = [], []
     def http_request(method, url, **kwargs):
         requests.append((method, url))
+        headers_seen.append(kwargs['headers'])
         return httpx.Response(200, json={'data': [entry()]})
     def stream(self, method, path, headers, timeout, kwargs, *, server_url):
         requests.append((method, server_url + path))
+        headers_seen.append(headers)
         assert kwargs['json']['model'] == MODEL and kwargs['json']['response_format'] == JSON_OBJECT
         return {'choices': [{'message': {'content': '{}'}}]}
-    monkeypatch.setattr(VILabConnectionService, 'authorization', authorize)
-    monkeypatch.setattr(VILabConnectionService, 'current', lambda *args: pytest.fail('No current connection'))
     monkeypatch.setattr(VILabCloudService, '_request_chat_stream', stream)
     monkeypatch.setattr(httpx, 'request', http_request)
     source = snapshot(connection_id='frozen-c', connection_auth_mode='account')
@@ -387,10 +386,11 @@ def test_explicit_connection_keeps_exact_source_when_global_origin_changes(monke
         llm = VILabLLM(OWNER, MODEL)
         llm._complete(system_prompt='JSON', user_prompt='input')
         monkeypatch.setattr(settings, 'vilab_server_url', 'https://new-global.invalid')
-        llm._complete_review(system_prompt='JSON', user_prompt='input')
-        assert llm._output_policy.binding.scope == 'explicit_connection'
-    assert requests == [('GET', ORIGIN + '/v1/models')] + [('POST', ORIGIN + '/openai/v1/chat/completions')] * 2
-    assert authorizations == [(OWNER, ORIGIN, 'frozen-c', 'account')] * 3
+        with pytest.raises(HTTPException) as error:
+            llm._complete_review(system_prompt='JSON', user_prompt='input')
+        assert error.value.status_code == 409
+    assert requests == [('GET', ORIGIN + '/v1/models'), ('POST', ORIGIN + '/openai/v1/chat/completions')]
+    assert headers_seen == [{'Authorization': 'Bearer synthetic-fixed-key'}] * 2
 
 
 def test_unsupported_decision_also_stays_unchanged_for_review(gateway):
