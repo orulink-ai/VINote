@@ -7,7 +7,7 @@ const input = { env: tracing, version: '0.5.0', buildId: '20260914T180000Z', pub
   VINOTE_SUPABASE_URL: 'https://example.supabase.co', VINOTE_SUPABASE_PUBLISHABLE_KEY: 'sb_publishable_test',
 } }
 
-test('test and release packages use separate identities and fixed deployment origins', () => {
+test('test and release packages use separate identities and one fixed public origin', () => {
   const release = resolveDesktopProfile(input)
   const testing = resolveDesktopProfile({ ...input, channel: 'test' })
   assert.equal(release.version, '0.5.0')
@@ -15,8 +15,8 @@ test('test and release packages use separate identities and fixed deployment ori
   assert.notEqual(release.identifier, testing.identifier)
   assert.notEqual(release.binaryName, testing.binaryName)
   assert.notEqual(release.backendName, testing.backendName)
-  assert.equal(release.config.VILAB_SERVER_URL, 'https://api.orulink.ai')
-  assert.equal(testing.config.VILAB_SERVER_URL, 'http://192.168.1.143:9876')
+  assert.equal(release.config.VILAB_SERVER_URL, 'https://api-hk.orulink.ai')
+  assert.equal(testing.config.VILAB_SERVER_URL, 'https://api-hk.orulink.ai')
   assert.equal(testing.config.MEETING_REVIEW_MODEL, 'gpt-6-astra')
   assert.equal(release.config.MEETING_REVIEW_MODEL, testing.config.MEETING_REVIEW_MODEL)
 })
@@ -39,11 +39,11 @@ for (const channel of ['test', 'release']) test(`${channel} bundles the fixed sh
   }
 })
 
-test('both channels share accounts and integration but reject opposite model origin overrides', () => {
+test('both channels share accounts and integration but ignore legacy model origin overrides', () => {
   const integration = 'https://supabase-vinote.orulink.ai/vinote-api'
   for (const [channel, expected, opposite] of [
-    ['test', 'http://192.168.1.143:9876', 'https://api.orulink.ai'],
-    ['release', 'https://api.orulink.ai', 'http://192.168.1.143:9876'],
+    ['test', 'https://api-hk.orulink.ai', 'https://api.orulink.ai'],
+    ['release', 'https://api-hk.orulink.ai', 'http://192.168.1.143:9876'],
   ]) {
     const profile = resolveDesktopProfile({ ...input, channel, env: { ...tracing,
       VINOTE_INTEGRATION_URL: 'https://untrusted.invalid', VILAB_SERVER_URL: opposite,
@@ -60,7 +60,7 @@ test('release integration validation rejects alternate origins, credentials, tra
   const expected = 'https://supabase-vinote.orulink.ai/vinote-api'
   assert.equal(validateDesktopIntegrationUrl(expected), expected)
   assert.equal(validateDesktopIntegrationUrl(expected + '/'), expected)
-  for (const value of ['', 'http://127.0.0.1:8900', 'https://api.orulink.ai',
+  for (const value of ['', 'http://127.0.0.1:8900', 'https://api-hk.orulink.ai',
     'https://untrusted.invalid/vinote-api', expected + '/api', expected + '?key=fixture', expected + '#fragment',
     'https://user:fixture@supabase-vinote.orulink.ai/vinote-api',
     'https://supabase-vinote.orulink.ai:8443/vinote-api']) {
@@ -73,7 +73,7 @@ test('stale URL overrides cannot change the bundled public server or leak creden
     VILAB_SERVER_URL: 'http://localhost:1111', VILAB_API_KEY: 'private', APP_JWT_SECRET: 'private',
     VINOTE_RELEASE_VILAB_SERVER_URL: 'https://api.example.com/',
   } })
-  assert.equal(profile.config.VILAB_SERVER_URL, 'https://api.orulink.ai')
+  assert.equal(profile.config.VILAB_SERVER_URL, 'https://api-hk.orulink.ai')
   assert.equal(profile.config.VILAB_API_KEY, undefined)
   assert.equal(profile.config.APP_JWT_SECRET, undefined)
 })

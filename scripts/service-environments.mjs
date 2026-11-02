@@ -1,7 +1,9 @@
-// Product entry points intentionally ignore environment URL overrides.
+// All product entry points use the public service. `lan` remains a legacy
+// installation identity only; it cannot select another model service.
+const publicOrigin = 'https://api-hk.orulink.ai'
 export const serviceOrigins = Object.freeze({
-  lan: 'http://192.168.1.143:9876',
-  public: 'https://api.orulink.ai',
+  lan: publicOrigin,
+  public: publicOrigin,
 })
 
 export function serviceOrigin(environment) {

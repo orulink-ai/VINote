@@ -131,6 +131,12 @@ class FakeScreenshotService:
 
 class NoteServiceTest(unittest.TestCase):
     def setUp(self):
+        # Provider policy is exercised with real guards in test_meeting_model_boundary.
+        # These tests inject fake local services to exercise artifact orchestration.
+        for name in ("require_public", "validate_meeting_source"):
+            guard = patch("app.services.meeting_model_boundary." + name)
+            guard.start()
+            self.addCleanup(guard.stop)
         mode = patch("app.services.vilab_cloud_service.VILabCloudService.status",
                      return_value={"mode": "local"})
         mode.start()

@@ -1,4 +1,4 @@
-import { ProcessingWave } from "@/components/ui/motion";
+import { AudioLines, Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 interface TranscriptionProgressProps {
@@ -38,18 +38,20 @@ export function TranscriptionProgress({
     !complete;
   return (
     <div
-      className="flex flex-col gap-2 text-sm"
+      className="flex flex-col gap-3 text-sm"
       aria-live="polite"
       aria-atomic="true"
     >
-      {!complete && <ProcessingWave label={zh ? "正在转写" : "Transcribing"} />}
-      <p>
+      <div className="flex items-center gap-2">
+        {complete ? <Check aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" /> : <AudioLines aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />}
+      <p className="font-medium tabular-nums">
         {measured
           ? `${zh ? "已转写" : "Transcribed"} ${duration(processed)} / ${duration(totalSeconds!)} (${percentage}%)`
           : zh
             ? "正在转写完整录音"
             : "Transcribing the complete recording"}
       </p>
+      </div>
       <div
         role="progressbar"
         aria-label={zh ? "音频转写进度" : "Audio transcription progress"}
@@ -59,17 +61,17 @@ export function TranscriptionProgress({
         aria-valuetext={measured
           ? `${duration(processed)} / ${duration(totalSeconds!)} (${percentage}%)`
           : zh ? "正在转写，等待测量进度" : "Transcribing; waiting for measured progress"}
-        className="h-2 w-full overflow-hidden rounded-full bg-secondary"
+        className="h-1.5 w-full overflow-hidden rounded-sm bg-secondary"
       >
         <div
           className={cn(
-            "h-full rounded-full bg-primary",
+            "h-full rounded-sm bg-primary",
             !measured && "w-1/3 opacity-60 motion-safe:animate-pulse motion-reduce:animate-none",
           )}
           style={percentage !== undefined ? { width: `${percentage}%` } : undefined}
         />
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-xs leading-5 text-muted-foreground">
         {complete
           ? zh
             ? "音频转写完成，正在整理结果。"

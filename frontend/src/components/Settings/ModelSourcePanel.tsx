@@ -1,8 +1,8 @@
 import { modelEligible, modelEligibility, type ModelEligibilityInput } from '../../lib/modelEligibility'
-import { meetingReady, recordedAudioDescription, transcriptionReady, type RecordedAudioModel } from '../../lib/recordedAudioPolicy'
+import { meetingReady, recordedAudioDescription, type RecordedAudioModel } from '../../lib/recordedAudioPolicy'
 import { frozenModelDisplay, type FrozenModelCatalogEntry } from '../../lib/frozenModelDisplay'
 import { useEffect, useId, useState } from 'react'
-import { Cloud, RefreshCw, Server } from 'lucide-react'
+import { RefreshCw, Server } from 'lucide-react'
 import { apiJson } from '../../lib/api'
 import { useI18n } from '../../lib/i18n'
 import { useAppModeStore } from '../../stores/appModeStore'
@@ -10,19 +10,13 @@ import { Alert, AlertDescription } from '../ui/alert'
 import { Button } from '../ui/button'
 import { Label } from '../ui/label'
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from '../ui/select'
-import { ToggleGroup, ToggleGroupItem } from '../ui/toggle-group'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../ui/tabs'
-import { ModelProfileManager } from './ModelProfileManager'
-import { STTProfileManager } from './STTProfileManager'
-import { ProcessingModelPicker } from './ProcessingModelPicker'
 import { modelSourceScope } from '@/lib/modelSourceIdentity'
 
 type CloudModel = ModelEligibilityInput & RecordedAudioModel & FrozenModelCatalogEntry
-const DEFAULT_VALUE = '__service_default__'
 
 export function ModelSourcePanel({ compact = false }: { compact?: boolean }) {
   const fieldId = useId()
-  const { config, saving, error, setMode, saveModels: saveSelectedModels } = useAppModeStore()
+  const { config, saving, error, saveModels: saveSelectedModels } = useAppModeStore()
   const { locale } = useI18n()
   const zh = locale.startsWith('zh')
   const [catalog, setCatalog] = useState<{ key: string; models: CloudModel[] }>({ key: '', models: [] })
@@ -74,10 +68,10 @@ export function ModelSourcePanel({ compact = false }: { compact?: boolean }) {
     <section className="min-w-0 border-b">
       <header className="flex flex-col gap-4 py-4 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
-          <h3 className="text-base font-medium">{compact ? (zh ? '本次任务使用' : 'Use for this task') : (zh ? '模型运行方式' : 'Model runtime')}</h3>
+          <h3 className="text-base font-medium">{compact ? (zh ? '本次任务使用' : 'Use for this task') : (zh ? '公网服务模型' : 'Public service models')}</h3>
           <p className="mt-1 max-w-2xl text-sm leading-6 text-muted-foreground">{compact
             ? (zh ? '为会议转写与纪要选择模型，修改用于下一次处理' : 'Choose models for meeting transcription and notes. Changes apply to the next run.')
-            : (zh ? '会议录音使用固定服务部署，也可以改用本机或兼容服务' : 'Meeting recordings use a fixed deployment, or your own local and compatible services')}</p>
+            : (zh ? '会议转写与纪要仅使用固定公网服务，请明确选择下一次处理使用的模型' : 'Meeting transcription and notes use the fixed public service. Choose models explicitly for the next run.')}</p>
         </div>
         {config?.mode === 'cloud' && <Button variant="outline" size="sm" className="shrink-0" disabled={loading || saving} onClick={() => setRefresh(value => value + 1)}>
           <RefreshCw className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />{loading ? (zh ? '正在读取' : 'Loading') : (zh ? '刷新' : 'Refresh')}
@@ -85,13 +79,6 @@ export function ModelSourcePanel({ compact = false }: { compact?: boolean }) {
       </header>
 
       <div className="grid gap-5 py-5">
-        {!compact && <ToggleGroup type="single" value={config?.mode} onValueChange={value => {
-          if (value === 'cloud' || value === 'local') void setMode(value)
-        }} className="grid w-full max-w-sm grid-cols-2">
-          <ToggleGroupItem value="cloud" disabled={saving || !config} className="gap-2"><Cloud className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />{zh ? '服务模型' : 'Service models'}</ToggleGroupItem>
-          <ToggleGroupItem value="local" disabled={saving || !config} className="gap-2"><Server className="h-4 w-4" strokeWidth={1.5} aria-hidden="true" />{zh ? '本地 / 自定义' : 'Local / custom'}</ToggleGroupItem>
-        </ToggleGroup>}
-
         {config?.mode === 'cloud' && <>
           <div className="flex flex-col gap-2 border-y py-4 sm:flex-row sm:items-center sm:justify-between">
             <div className="flex items-center gap-2 text-sm text-muted-foreground">
@@ -107,29 +94,28 @@ export function ModelSourcePanel({ compact = false }: { compact?: boolean }) {
           <div className={compact ? 'grid gap-4' : 'grid min-w-0 gap-4 xl:grid-cols-2'}>
             {(['asr', 'llm'] as const).map(kind => {
               const selected = kind === 'asr' ? selectedAsr : selectedLlm
-              const choices = models.filter(model => model.modelType === kind)
+              const choices = models.filter(model => model.modelType === kind && (kind !== 'asr' || meetingReady(model).ready))
               return <div key={kind} className="grid min-w-0 gap-2">
                 <Label htmlFor={`${fieldId}-${kind}`}>{kind === 'asr' ? (zh ? '语音转写' : 'Speech recognition') : (zh ? '内容总结 / 画面分析' : 'Summary / image analysis')}</Label>
-                <Select value={selected || DEFAULT_VALUE} disabled={saving || loading || Boolean(catalogError)} onValueChange={value => {
-                  const normalized = value === DEFAULT_VALUE ? '' : value
-                  if (normalized && !choices.some(model => model.id === normalized && modelEligible(model) &&
-                    (kind !== 'asr' || transcriptionReady(model)))) return
+                <Select value={selected} disabled={saving || loading || Boolean(catalogError) || choices.length === 0} onValueChange={value => {
+                  const normalized = value
+                  if (!choices.some(model => model.id === normalized && modelEligible(model) &&
+                    (kind !== 'asr' || meetingReady(model).ready))) return
                   void saveModels(kind === 'asr' ? normalized : selectedAsr, kind === 'llm' ? normalized : selectedLlm).catch(() => undefined)
                 }}>
-                  <SelectTrigger id={`${fieldId}-${kind}`} aria-describedby={kind === 'asr' && speechChoice ? `${fieldId}-asr-help` : undefined} className="h-11 w-full min-w-0 overflow-hidden">
-                    <SelectValue className="truncate" />
+                  <SelectTrigger id={`${fieldId}-${kind}`} aria-describedby={kind === 'asr' && speechReadiness?.ready ? `${fieldId}-asr-help` : undefined} className="h-11 w-full min-w-0 overflow-hidden">
+                    <SelectValue className="truncate" placeholder={zh ? '请选择模型' : 'Choose a model'} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      <SelectItem value={DEFAULT_VALUE}>{zh ? '跟随服务默认' : 'Use service default'}</SelectItem>
                       {selected && !choices.some(model => model.id === selected) && <SelectItem value={selected} disabled>
-                        {loading ? (zh ? '正在读取原选择' : 'Loading saved selection') : (zh ? '原选择暂不可用' : 'Saved selection unavailable')}
+                        {kind === 'asr' && speechChoice ? `${frozenModelDisplay([speechChoice], selected, 'asr')} · ${zh ? '原选择暂不可用' : 'Saved selection unavailable'}` : loading ? (zh ? '正在读取原选择' : 'Loading saved selection') : (zh ? '原选择暂不可用' : 'Saved selection unavailable')}
                       </SelectItem>}
                       {choices.map(model => {
                         const label = kind === 'asr' ? frozenModelDisplay([model], model.id, 'asr') : model.name || model.providerModel || model.id
                         const detail = kind === 'asr' ? recordedAudioDescription(model, zh) : ''
                         const state = modelEligibility(model) === 'retryable' ? (zh ? '可重试' : 'Retry allowed') : !modelEligible(model) ? (zh ? '不可用' : 'Unavailable') : ''
-                        return <SelectItem key={model.id} value={model.id} disabled={!modelEligible(model) || (kind === 'asr' && !transcriptionReady(model))}>
+                        return <SelectItem key={model.id} value={model.id} disabled={!modelEligible(model)}>
                           <span className="truncate">{label}</span>
                           {(detail || state) && <span className="text-muted-foreground"> · {[detail, state].filter(Boolean).join(' · ')}</span>}
                         </SelectItem>
@@ -141,11 +127,14 @@ export function ModelSourcePanel({ compact = false }: { compact?: boolean }) {
             })}
           </div>
 
-          {speechChoice && <div id={`${fieldId}-asr-help`} className="max-w-2xl text-sm leading-6 text-muted-foreground" role="status">
+          {!loading && !catalogError && !models.some(model => model.modelType === 'asr' && meetingReady(model).ready) && <Alert><AlertDescription>{zh
+            ? '公网服务暂未提供支持整段识别、说话人分离和时间戳的会议模型。请稍后刷新或联系管理员。原选择已保留，不会自动替换。'
+            : 'The public service does not currently offer a meeting model with whole-file recognition, speaker diarization and timestamps. Refresh later or contact your administrator. Your saved selection is retained and will not be replaced automatically.'}</AlertDescription></Alert>}
+          {!loading && !catalogError && !models.some(model => model.modelType === 'llm' && modelEligible(model)) && <p role="status" className="text-sm text-muted-foreground">{zh ? '暂无可用总结模型，请检查公网服务配置后刷新。' : 'No summary model is available. Check the public service configuration and refresh.'}</p>}
+
+          {speechChoice && speechReadiness?.ready && <div id={`${fieldId}-asr-help`} className="max-w-2xl text-sm leading-6 text-muted-foreground" role="status">
             {recordedAudioDescription(speechChoice, zh)}
-            {speechReadiness?.ready
-              ? <p className="mt-1">{zh ? '会议录音整段提交，结果包含说话人与发言时间。' : 'Each meeting is submitted as one recording and returns speakers and timings.'}</p>
-              : transcriptionReady(speechChoice) && <p className="mt-1">{zh ? '可继续用于录音转写；会议纪要需要上面这类整段识别模型。' : 'Still usable for recording transcription; meeting notes need a whole-file model like the one above.'}</p>}
+            <p className="mt-1">{zh ? '会议录音整段提交，结果包含说话人与发言时间。' : 'Each meeting is submitted as one recording and returns speakers and timings.'}</p>
           </div>}
 
           <p className="max-w-2xl text-xs leading-5 text-muted-foreground" role="status">{saving
@@ -153,37 +142,23 @@ export function ModelSourcePanel({ compact = false }: { compact?: boolean }) {
             : (zh ? '选择自动保存，用于下一次生成' : 'Selections save automatically for the next run')}</p>
 
           {meetingBlockedSpeech && <Alert><AlertDescription>{zh
-            ? `所选语音模型可用于录音转写，暂不能用于会议纪要：${speechReadiness?.reason}。会议提交前会再次确认。`
-            : `This speech model handles recordings but not meeting notes: ${speechReadiness?.reason}. Submission will re-check it.`}</AlertDescription></Alert>}
+            ? `原语音选择不满足会议转写要求：${speechReadiness?.reason}。已保留原选择，请明确选择可用会议模型。`
+            : `The saved speech model does not meet meeting requirements: ${speechReadiness?.reason}. Choose an available meeting model explicitly.`}</AlertDescription></Alert>}
         </>}
 
-        {config?.mode === 'local' && !compact && <p className="text-sm leading-6 text-muted-foreground">{zh
-          ? '语音转写与内容总结分开管理，任务中只需选择已经配置好的服务'
-          : 'Manage speech and summary services separately, then select them in a task'}</p>}
+        {config?.mode === 'local' && <Alert variant="destructive"><AlertDescription>{zh
+          ? '当前配置仍为旧版本地模式。VINote 仅使用固定公网服务，请更新服务并重新加载设置。'
+          : 'This configuration still uses legacy local mode. VINote requires the fixed public service. Update the service and reload settings.'}</AlertDescription></Alert>}
 
         {config?.mode === 'cloud' && unavailableSelection && <Alert><AlertDescription>{zh
           ? '原选择已不可用，已保留且不会自动切换。请刷新状态或明确选择其他模型。'
           : 'The unavailable selection is retained. Refresh its status or explicitly choose another model.'}</AlertDescription></Alert>}
-        {config?.mode === 'cloud' && models.some(model => model.id === (model.modelType === 'asr' ? selectedAsr : selectedLlm) && modelEligibility(model) === 'retryable') && <Alert><AlertDescription>{zh
+        {config?.mode === 'cloud' && models.some(model => model.id === (model.modelType === 'asr' ? selectedAsr : selectedLlm) && modelEligibility(model) === 'retryable' && (model.modelType !== 'asr' || meetingReady(model).ready)) && <Alert><AlertDescription>{zh
           ? '原模型可重试，仍使用原选择。开始任务后才会尝试，尚未确认服务恢复。'
           : 'Retry is allowed using the saved model. Recovery is not yet confirmed.'}</AlertDescription></Alert>}
-        {(error || catalogError) && <Alert variant="destructive"><AlertDescription>{error || catalogError}</AlertDescription></Alert>}
+        {(error || catalogError) && <Alert variant="destructive"><AlertDescription>{error || catalogError}{catalogError && <p className="mt-1">{zh ? '无法确认会议模型能力。请检查固定公网服务是否可用、是否已升级，然后刷新。' : 'Meeting capabilities could not be verified. Check the fixed public service and its upgrade status, then refresh.'}</p>}</AlertDescription></Alert>}
       </div>
     </section>
 
-    {config?.mode === 'local' && (compact ? <ProcessingModelPicker /> : <Tabs defaultValue="llm" className="min-w-0">
-      <div className="mb-6 flex flex-col gap-3 sm:flex-row sm:items-end sm:justify-between">
-        <div>
-          <h3 className="text-xl font-medium">{zh ? '本地与自定义模型' : 'Local and custom models'}</h3>
-          <p className="mt-1 text-sm leading-6 text-muted-foreground">{zh ? '一次管理一种服务，保存后可在任务中选择' : 'Manage one service type at a time. Saved profiles become available in task pickers.'}</p>
-        </div>
-        <TabsList className="grid w-full grid-cols-2 sm:w-[320px]">
-          <TabsTrigger value="llm">{zh ? '内容总结 / 画面分析' : 'Summary / image analysis'}</TabsTrigger>
-          <TabsTrigger value="stt">{zh ? '语音转写' : 'Speech'}</TabsTrigger>
-        </TabsList>
-      </div>
-      <TabsContent value="llm" className="mt-0"><ModelProfileManager /></TabsContent>
-      <TabsContent value="stt" className="mt-0"><STTProfileManager /></TabsContent>
-    </Tabs>)}
   </div>
 }

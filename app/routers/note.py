@@ -448,7 +448,7 @@ def _build_note_request_fields(
         diarize=diarize,
         speaker_count=speaker_count,
         title=title,
-        style=style or "meeting",
+        style="meeting" if workflow == "meeting" else style or "meeting",
         summary_mode=summary_mode,
         extras=extras,
         output_language=output_language,
@@ -539,7 +539,7 @@ def generate_note_sync(
         with desktop_trace(trace_context):
             result = _note_service.generate(
                 video_url=req.video_url, task_id=task_id, platform=req.platform,
-                style=req.style or "detailed", summary_mode=req.summary_mode,
+                style="meeting" if req.workflow == "meeting" else req.style or "detailed", summary_mode=req.summary_mode,
                 extras=req.extras, output_language=req.output_language,
                 model_profile_id=req.model_profile_id, stt_profile_id=req.stt_profile_id,
                 **({"asr_model": req.asr_model} if req.asr_model is not None else {}),
@@ -643,9 +643,14 @@ def task_model_confirmation(task_id: str, user=Depends(get_current_user)):
         source_type = "media"
     context = {"task_id": task_id, "source": {"title": title, "type": source_type}}
     if (folder / SNAPSHOT_FILE).exists():
-        ensure_source(folder, user.user_id, options)
+        from app.services.task_model_source import validate_source
+        try:
+            frozen = json.loads((folder / SNAPSHOT_FILE).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            raise HTTPException(409, "原任务模型快照无法读取，未使用当前设置替换") from None
+        validate_source(frozen, user.user_id)
         return {**context, "requires_confirmation": False}
-    selection = capture_source(user.user_id, options)
+    selection = capture_source(user.user_id, options, validate_meeting=False)
     if selection["mode"] != "cloud":
         raise HTTPException(409, "原任务缺少本地模型快照，请保留原件并另建明确确认的生成操作")
     service = VILabCloudService()
@@ -655,6 +660,12 @@ def task_model_confirmation(task_id: str, user=Depends(get_current_user)):
     for key, kind in (("asr_model", "asr"), ("llm_model", "llm")):
         try:
             service._validate_selection(models, selection[key], kind)
+        except HTTPException:
+            allowed = False
+    from app.services.meeting_model_boundary import is_meeting, validate_meeting_source
+    if is_meeting(options):
+        try:
+            validate_meeting_source(user.user_id, selection, needs_stt=options.get("needs_stt", True))
         except HTTPException:
             allowed = False
     return {**context, "requires_confirmation": True, "can_confirm": allowed,
@@ -809,7 +820,7 @@ def generate_from_file_sync(
                 speaker_count=req.speaker_count,
                 task_id=task_id,
                 title=req.title,
-                style=req.style or "meeting",
+                style="meeting" if req.workflow == "meeting" else req.style or "meeting",
                 summary_mode=req.summary_mode,
                 extras=req.extras,
                 output_language=req.output_language,
@@ -958,7 +969,7 @@ async def generate_from_upload(
                 task_id=task_id,
                 transcript=transcript,
                 title=title or Path(file.filename or "transcript.txt").stem,
-                style=style or "meeting",
+                style="meeting" if workflow == "meeting" else style or "meeting",
                 summary_mode=normalized_summary_mode,
                 extras=extras,
                 output_language=normalized_output_language,
@@ -989,7 +1000,7 @@ async def generate_from_upload(
                     reserved_upload = task_id
             task_dir = _note_service.artifact_service.create_task_dir(task_id)
             ensure_source(task_dir, user.user_id if user else None,
-                dict(model_profile_id=model_profile_id, stt_profile_id=stt_profile_id,
+                dict(style="meeting" if workflow == "meeting" else style or "meeting", workflow=workflow, model_profile_id=model_profile_id, stt_profile_id=stt_profile_id,
                      asr_model=asr_model, model_name=model_name, api_key=api_key, base_url=base_url), allow_capture=True)
             record_origin(task_dir, request.headers.get("X-VINote-Client", ""))
             media_dir = task_dir / "media"
@@ -1119,7 +1130,7 @@ async def generate_from_upload_sync(
                     transcript=transcript,
                     task_id=task_id,
                     title=title,
-                    style=style or "meeting",
+                    style="meeting" if workflow == "meeting" else style or "meeting",
                     summary_mode=normalized_summary_mode,
                     extras=extras,
                     output_language=normalized_output_language,
@@ -1134,7 +1145,7 @@ async def generate_from_upload_sync(
         else:
             task_dir = _note_service.artifact_service.create_task_dir(task_id)
             ensure_source(task_dir, user.user_id if user else None,
-                dict(model_profile_id=model_profile_id, stt_profile_id=stt_profile_id,
+                dict(style="meeting" if workflow == "meeting" else style or "meeting", workflow=workflow, model_profile_id=model_profile_id, stt_profile_id=stt_profile_id,
                      asr_model=asr_model, model_name=model_name, api_key=api_key, base_url=base_url), allow_capture=True)
             record_origin(task_dir, request.headers.get("X-VINote-Client", ""))
             media_dir = task_dir / "media"
@@ -1188,7 +1199,7 @@ async def generate_from_upload_sync(
                     speaker_count=req.speaker_count,
                     task_id=task_id,
                     title=req.title,
-                    style=req.style or "meeting",
+                    style="meeting" if req.workflow == "meeting" else req.style or "meeting",
                     summary_mode=req.summary_mode,
                     extras=req.extras,
                     output_language=req.output_language,
@@ -1252,7 +1263,7 @@ def _run_task(task_id: str, req: NoteRequest, user_id: str | None,
         with desktop_trace(trace_context):
             _note_service.generate(
                 video_url=req.video_url, task_id=task_id, platform=req.platform,
-                style=req.style or "detailed", summary_mode=req.summary_mode,
+                style="meeting" if req.workflow == "meeting" else req.style or "detailed", summary_mode=req.summary_mode,
                 extras=req.extras, output_language=req.output_language,
                 model_profile_id=req.model_profile_id, stt_profile_id=req.stt_profile_id,
                 **({"asr_model": req.asr_model} if req.asr_model is not None else {}),
@@ -1314,7 +1325,7 @@ def _run_task_from_file(task_id: str, req: LocalFileRequest, user_id: str | None
                 speaker_count=req.speaker_count,
                 task_id=task_id,
                 title=req.title,
-                style=req.style or "meeting",
+                style="meeting" if req.workflow == "meeting" else req.style or "meeting",
                 summary_mode=req.summary_mode,
                 extras=req.extras,
                 output_language=req.output_language,

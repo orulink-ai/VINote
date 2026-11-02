@@ -48,11 +48,11 @@ export function SettingsNav({
   return (
     <nav
       aria-label="设置分类"
-      className="flex flex-col gap-5 rounded-2xl border bg-muted/30 p-3"
+      className="grid grid-cols-2 gap-4 rounded-xl border bg-muted/20 p-3 lg:sticky lg:top-6 lg:grid-cols-1 lg:gap-5"
     >
       {groups.map((group) => (
         <section key={group.label} className="flex flex-col gap-1">
-          <h2 className="px-3 pb-1 pt-2 text-[11px] font-medium text-muted-foreground">
+          <h2 className="px-3 pb-1 pt-2 text-xs text-muted-foreground">
             {group.label}
           </h2>
           {group.keys.map((key) => {
@@ -63,7 +63,7 @@ export function SettingsNav({
                 aria-current={activeTab === tab.key ? "page" : undefined}
                 onClick={() => onChange(tab.key)}
                 variant={activeTab === tab.key ? "secondary" : "ghost"}
-                className="h-10 w-full justify-start"
+                className="h-9 w-full justify-start rounded-lg border border-transparent px-3 font-normal aria-[current=page]:border-border aria-[current=page]:bg-background aria-[current=page]:font-medium aria-[current=page]:text-foreground"
               >
                 <tab.icon data-icon="inline-start" />
                 {tab.label}

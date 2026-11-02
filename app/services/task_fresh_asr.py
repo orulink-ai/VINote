@@ -265,6 +265,8 @@ class FreshASRService:
                 cloud._validate_selection(models, body.asr_model, 'asr')
                 cloud._validate_selection(models, body.model_name, 'llm')
                 cloud.validate_ready(owner, needs_stt=True)
+                from app.services.meeting_model_boundary import validate_meeting_source
+                validate_meeting_source(owner, cloud.status(owner))
             link = {'contract': CONTRACT, 'parent_task_id': parent, 'canonical_task_id': context['canonical_task_id'],
                     'snapshot_sha256': _digest(snapshot), **body.model_dump(mode='json')}
             claim = self.receipts.reserve(owner, operation, _submission(link))
@@ -331,6 +333,8 @@ class FreshASRService:
                         raise ValueError('Changed source request')
                 # Do not hold the source registry lock through paid execution.
                 VILabCloudService().validate_ready(owner, needs_stt=True)
+                from app.services.meeting_model_boundary import validate_meeting_source
+                validate_meeting_source(owner, VILabCloudService().status(owner))
                 if note_service is None:
                     from app.services.note_service import NoteService
                     note_service = NoteService()

@@ -1,7 +1,7 @@
 import { useSearchParams, useLocation, Link, Navigate } from "react-router-dom";
 import { pageParentLabel, settingsPageParent } from '@/lib/navigation';
 import {
-  ArrowUpRight,
+  ChevronRight,
   ArrowLeft,
   Mic2,
   Plug,
@@ -42,10 +42,10 @@ function SettingLink({
     <Link
       to={target.pathname + target.search + target.hash}
       state={parent ? { returnTo: parent } : undefined}
-      className="group flex items-center gap-4 border-b py-5 last:border-b-0 focus-visible:rounded-lg focus-visible:outline focus-visible:outline-ring"
+      className="group -mx-3 flex items-center gap-3 rounded-lg px-3 py-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted">
-        <Icon className="size-5" />
+      <span className="grid size-8 shrink-0 place-items-center text-muted-foreground">
+        <Icon aria-hidden="true" className="size-4" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-medium">{title}</span>
@@ -53,7 +53,7 @@ function SettingLink({
           {description}
         </span>
       </span>
-      <ArrowUpRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 motion-reduce:transform-none" />
+      <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground group-hover:text-foreground" />
     </Link>
   );
 }
@@ -101,10 +101,10 @@ export function Settings() {
         <section
           key={activeTab}
           aria-label="设置内容"
-          className="min-w-0 rounded-2xl border bg-background p-6 sm:p-8"
+          className="min-w-0 rounded-xl border bg-background p-5 sm:p-8"
         >
-          {activeTab === 'overview' && <div className="flex flex-col gap-4">
-            <h2 className="text-lg font-medium">你想调整什么？</h2>
+          {activeTab === 'overview' && <div className="flex flex-col">
+            <h2 className="mb-3 text-lg font-medium">设置总览</h2>
             <SettingLink parent={parent} to="/settings?tab=profile" title="我的账号" description="当前登录身份。" icon={Users} />
             <SettingLink parent={parent} to="/settings?tab=spaces" title="空间与协作" description="选择个人或团队空间，管理成员。" icon={Users} />
             <SettingLink parent={parent} to="/settings?tab=models" title="转写与总结" description="选择下次处理使用的模型与服务。" icon={Plug} />
@@ -185,6 +185,10 @@ export function Settings() {
               <Button variant="outline" className="w-fit" asChild>
                 <Link to={'/tasks?' + new URLSearchParams({ returnTo: sectionPath }).toString()} state={{ returnTo: sectionPath }}>任务与诊断</Link>
               </Button>
+              <div className="mt-4 border-t pt-4 text-xs leading-6 text-muted-foreground">
+                <p>界面细节参考并适配了 <a className="underline underline-offset-4 hover:text-foreground focus-visible:outline-ring" href="https://github.com/heydamir/unslop" target="_blank" rel="noreferrer">unslop</a>，作者 Damir Sokolovsky（@heydamir）。</p>
+                <p>采用 <a className="underline underline-offset-4 hover:text-foreground focus-visible:outline-ring" href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a> 许可；已针对 VINote 的录制、设置与逐字稿界面调整。</p>
+              </div>
             </div>
           )}
         </section>

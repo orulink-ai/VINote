@@ -394,7 +394,7 @@ npm run build
 
 会议默认将完整来源提交一次生成草稿，再由同一冻结模型对照完整来源复核，增加一次模型调用；不会因为会议较长自动分块。只有显式旧 `accurate` 模式使用分块合并，视频证据不接受该模式。历史 `MEETING_REVIEW_MODEL` 不再决定复核模型；视觉、上下文或服务错误不会自动换模型、改用分块或重放推理 POST，未知结果只查询原记录。复核失败不静默返回未复核稿；复核不能恢复缺失信息或保证所有识别错误都已消除。
 
-正式版使用 `yarn package:release`，固定连接 `官方公网服务`；测试版使用 `yarn package:test`，固定连接 `http://192.168.1.143:9876`。测试版保留独立安装身份和数据目录。产物与校验清单位于 `.desktop-build/artifacts/`，详见[打包说明](docs/desktop-packaging.md)。
+正式版使用 `yarn package:release`，固定连接 `https://api-hk.orulink.ai`；测试版使用 `yarn package:test`，连接同一固定公网服务。测试版保留独立安装身份和数据目录。产物与校验清单位于 `.desktop-build/artifacts/`，详见[打包说明](docs/desktop-packaging.md)。
 
 真实会议生成验证可运行 `python scripts/check_meeting_generation.py data/diarization-four-speakers.wav --live --speakers 4 --output data/meeting-live-report.json`。它调用桌面端共用的上传、任务、保存、逐字稿和媒体接口，真实消耗云端 STT/LLM，并在当前唯一关联账号的个人空间保存一条标注「测试」的笔记；多账号需传 `--user-id`。该后台检查不验证原生麦克风、录屏权限或桌面窗口交互。
 
@@ -402,11 +402,11 @@ npm run build
 
 需要 Node.js 22+、Rust，以及 Windows C++ Build Tools/WebView2 或 macOS Xcode Command Line Tools。两个项目分别运行，VINote 不启动或打包 VILab Server。
 
-1. 源码选择桌面或网页、内网或公网入口；不需要在本机启动 VILab Server。
+1. 源码选择桌面或网页入口；旧 lan 命令保留独立开发身份，所有入口均连接固定公网服务；不需要在本机启动 VILab Server。
 2. 运行 `yarn dev:desktop:lan` / `yarn dev:desktop:public`，或 `yarn dev:web:lan` / `yarn dev:web:public`。首次自动准备依赖、`.venv` 和 `.env`（不覆盖已有文件），启动本机后端与前端。桌面打开 Tauri，网页打开浏览器。
 3. 源码桌面统一使用 development 追踪环境，网页不启用桌面追踪；账号配置仍使用 `VINOTE_SUPABASE_URL` 和 `VINOTE_SUPABASE_PUBLISHABLE_KEY`。
 4. 安装 FFmpeg/FFprobe 并加入 PATH，然后运行根目录 `yarn client:production` 或 `yarn client:test`，脚本会自动初始化依赖和安装 PyInstaller。Windows 生成 NSIS `.exe`，macOS 生成 `.app` 和 `.dmg`，归档到 `.desktop-build/artifacts/`。必须在对应系统上构建；签名/公证需要各平台的发布证书。
-5. 固定地址集中在 `scripts/service-environments.mjs`，不接受旧渠道地址变量覆盖。打包保留公开账号配置和构建管理的 Langfuse 配置，不打包 `.env`、模型密钥或个人数据。
+5. 所有启动和打包入口固定使用 `https://api-hk.orulink.ai`，由 `scripts/service-environments.mjs` 定义；后端 `app/config.py` 同样固定该地址，包括 `dev:api`。忽略通用及旧渠道 VILab URL 环境变量，不提供外部地址编辑或切换。打包保留公开账号配置和构建管理的 Langfuse 配置，不打包 `.env`、模型密钥或个人数据。
 
 `VINOTE_PYTHON` 可指定 Python；`VINOTE_FFMPEG_PATH`、`VINOTE_FFPROBE_PATH` 可指定打包用的二进制文件。macOS 请使用可分发的同架构 FFmpeg（其动态依赖也须可分发）。
 首次运行检查可用：yarn setup（只初始化依赖/配置，不打开额外桌面窗口）。邮箱公共配置来自 config/desktop-public.json，用户不需要填写云端模型 API Key；自托管版本可通过 .env 覆盖公开账号配置。源码处理音视频需要 PATH 中的 FFmpeg 和 FFprobe。

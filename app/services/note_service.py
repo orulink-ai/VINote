@@ -378,6 +378,9 @@ class NoteService:
         )
 
 
+    from app.services.meeting_model_boundary import meeting_pipeline
+
+    @meeting_pipeline
     def _run_pipeline(
         self,
         *,

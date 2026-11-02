@@ -221,6 +221,9 @@ class VILabTranscriber(Transcriber):
         bearer = self._recognition_bearer()
         policy = self._recorded_audio_policy(bearer)
         from app.services.adaptive_asr_policy import RecordingModelPolicy
+        from app.services.meeting_model_boundary import meeting_execution, require_meeting_policy
+        if meeting_execution.get():
+            require_meeting_policy(policy)
         if isinstance(policy, RecordingModelPolicy):
             if "meeting" in policy.use_cases:
                 if not policy.meeting_ready:

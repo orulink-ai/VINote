@@ -10,6 +10,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from tests.test_meeting_model_boundary import CAPABILITIES
 from tests.test_meeting_summary_regeneration import case
 from app.db_models import SourceRequestDB
 from app.services.meeting_version_context import MeetingVersionService, MeetingVersionConfirmation
@@ -36,7 +37,7 @@ def version(case, monkeypatch):
         names = ["old-model", "chosen-other", "global-llm"]
         return ([{"id": name, "modelType": "llm", "runtimeStatus": "available"}
                 for name in names if name not in denied]
-                + ([{"id": "explicit-asr", "modelType": "asr", "runtimeStatus": "available"}]
+                + ([{"id": "explicit-asr", "modelType": "asr", "runtimeStatus": "available", "capabilities": CAPABILITIES}]
                    if config["server_url"] == c.snapshot["server_url"] else []))
     monkeypatch.setattr(VILabCloudService, "models", models)
     service = MeetingVersionService(c.service)

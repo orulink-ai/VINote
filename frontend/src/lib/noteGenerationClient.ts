@@ -40,6 +40,8 @@ export interface UploadGenerationInput {
   extras?: string
   summaryMode: SummaryMode
   outputLanguage?: string
+  asrModel?: string
+  modelName?: string
   modelProfileId?: string
   sttProfileId?: string
   diarize?: boolean
@@ -70,6 +72,8 @@ export async function submitUploadedSource(input: UploadGenerationInput) {
   if (input.outputLanguage) {
     formData.append('output_language', input.outputLanguage)
   }
+  if (input.asrModel !== undefined) formData.append('asr_model', input.asrModel)
+  if (input.modelName !== undefined) formData.append('model_name', input.modelName)
   if (input.modelProfileId) {
     formData.append('model_profile_id', input.modelProfileId)
   }

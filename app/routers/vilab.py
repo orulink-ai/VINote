@@ -53,7 +53,12 @@ class ModeSelection(BaseModel):
 
 @router.get("/config")
 def config(user=Depends(get_current_user)):
-    return service.status(user.user_id)
+    value = service.status(user.user_id)
+    if value['mode'] == 'local':
+        # Expose an empty public selection so the current Settings UI can save
+        # an explicit choice. GET never migrates preferences or old snapshots.
+        return {**value, 'mode': 'cloud', 'asr_model': '', 'llm_model': ''}
+    return value
 
 
 @router.get("/models")

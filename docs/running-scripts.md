@@ -1,27 +1,27 @@
 # 运行与打包命令规范
 
-所有日常命令从 VINote 仓库根目录执行。源码按“桌面/网页 × 内网/公网”选择，安装包分正式版与测试版。
+所有日常命令从 VINote 仓库根目录执行。源码选择桌面或网页，安装包分正式版与测试版；所有入口均使用固定公网模型服务。旧 lan 名称仅保留独立开发身份，不切换服务。
 
 ## 六个主入口
 
 | 用途 | 命令 | 固定 VILab Server |
 | --- | --- | --- |
-| 桌面源码·内网 | `yarn dev:desktop:lan` | `http://192.168.1.143:9876` |
-| 桌面源码·公网 | `yarn dev:desktop:public` | `官方公网服务` |
-| 网页源码·内网 | `yarn dev:web:lan` | `http://192.168.1.143:9876` |
-| 网页源码·公网 | `yarn dev:web:public` | `官方公网服务` |
-| 正式安装包 | `yarn package:release` | `官方公网服务` |
-| 测试安装包 | `yarn package:test` | `http://192.168.1.143:9876` |
+| 桌面源码·兼容测试身份 | `yarn dev:desktop:lan` | `https://api-hk.orulink.ai` |
+| 桌面源码·公网 | `yarn dev:desktop:public` | `https://api-hk.orulink.ai` |
+| 网页源码·兼容测试身份 | `yarn dev:web:lan` | `https://api-hk.orulink.ai` |
+| 网页源码·公网 | `yarn dev:web:public` | `https://api-hk.orulink.ai` |
+| 正式安装包 | `yarn package:release` | `https://api-hk.orulink.ai` |
+| 测试安装包 | `yarn package:test` | `https://api-hk.orulink.ai` |
 
-地址集中定义在 `scripts/service-environments.mjs`，这六个入口忽略 `VILAB_SERVER_URL` 及旧 `VINOTE_TEST_VILAB_SERVER_URL` / `VINOTE_DEV_VILAB_SERVER_URL` / `VINOTE_RELEASE_VILAB_SERVER_URL` 的覆盖。修改固定地址须修改该模块，不写入用户 `.env`。
+地址集中定义在 `scripts/service-environments.mjs`，这六个入口忽略 `VILAB_SERVER_URL` 及旧 `VINOTE_TEST_VILAB_SERVER_URL` / `VINOTE_DEV_VILAB_SERVER_URL` / `VINOTE_RELEASE_VILAB_SERVER_URL` 的覆盖。后端 `app/config.py` 同样固定该地址，不接受 `.env` 覆盖，也不提供外部地址编辑或切换。
 
 ## 源码运行
 
 四个源码入口均准备依赖、启动本机 VINote API（`127.0.0.1:8900`）和 Vite（`127.0.0.1:3100`）。桌面模式再启动 Tauri；网页模式自动打开浏览器，不检查 Rust 工具链。两者均支持前端热更新和 Python 热重载，桌面额外支持 Rust 自动重编译。
 
-界面通过本机 VINote 后端调用所选 VILab Server。入口强制前端使用同源 API 代理，忽略旧 `VITE_API_BASE_URL`；连接公网并不把笔记数据库和录制文件迁移到公网。VINote 不启动或打包 VILab Server。
+界面通过本机 VINote 后端调用固定公网 VILab Server。入口强制前端使用同源 API 代理，忽略旧 `VITE_API_BASE_URL`；连接公网并不把笔记数据库和录制文件迁移到公网。VINote 不启动或打包 VILab Server。
 
-内网桌面源码身份为 `app.vinote.desktop.test.dev`，公网为 `app.vinote.desktop.dev`，名称分别是 VINote LAN Dev / VINote Public Dev。桌面源码追踪统一属于 `development`，网页不启用桌面追踪。测试包属于 `test`，正式包属于 `production`。
+兼容测试桌面源码身份为 `app.vinote.desktop.test.dev`，公网为 `app.vinote.desktop.dev`，名称分别是 VINote Test Dev / VINote Public Dev。桌面源码追踪统一属于 `development`，网页不启用桌面追踪。测试包属于 `test`，正式包属于 `production`。
 
 源码后端数据库和文件目录仍遵循仓库配置；切换服务地址不会创建独立数据库。桌面登录与录制存储随应用身份区分；网页两种模式使用相同浏览器 Origin，因此共用浏览器存储。
 
@@ -54,7 +54,7 @@ yarn package:test:plan
 
 正式与测试包保留独立安装身份和应用数据目录，可同时安装。两个渠道按顺序构建；产物位于 `.desktop-build/artifacts/<channel>/<version>/<buildId>/`，不自动上传或发布。Windows/macOS 须在对应系统构建，详见[桌面打包](desktop-packaging.md)。
 
-`yarn dev:api` 仅启动后端，仍允许通用 `VILAB_SERVER_URL` 配置，适合独立服务联调。`cd frontend && npm run web:dev` 仅启动 Vite；`yarn build` 只构建前端。它们不是上述六个完整入口。
+`yarn dev:api` 仅启动后端，同样忽略 `VILAB_SERVER_URL`，固定使用上述公网服务。`cd frontend && npm run web:dev` 仅启动 Vite；`yarn build` 只构建前端。它们不是上述六个完整入口。
 
 ## 旧入口兼容
 
@@ -66,7 +66,7 @@ yarn package:test:plan
 | `yarn client:test`、`yarn desktop:build:test` | `yarn package:test` |
 | `yarn client:production`、`yarn desktop:build`、`yarn desktop:build:release` | `yarn package:release` |
 
-旧开发和打包入口会打印替代命令；已有预览别名继续支持。`scripts/dev-desktop.mjs` 保留直接调用兼容，旧 `--channel test` 映射内网、`--channel development` 映射公网。
+旧开发和打包入口会打印替代命令；已有预览别名继续支持。`scripts/dev-desktop.mjs` 保留直接调用兼容，旧 `--channel test` 和 `--channel development` 保留各自开发身份，两者均使用固定公网服务。
 
 实现由 `dev.mjs` 共用启动与清理，`desktop-dev-profile.mjs` 解析源码身份，`service-environments.mjs` 提供固定地址，`bootstrap-dev.mjs` 准备依赖。`build-desktop.mjs` / `desktop-build-profile.mjs` 负责打包；`windows-backend-dev.py` 保留 Windows 信号隔离。
 

@@ -265,6 +265,10 @@ def test_real_pipeline_entry_uses_child_frozen_models_without_media_copy(case):
     from app.services.note_service import NoteService
     import shutil
     c = case
+    from tests.test_meeting_model_boundary import CAPABILITIES
+    c.monkeypatch.setattr(VILabCloudService, "models", lambda *a: [
+        {"id": "original-asr", "modelType": "asr", "runtimeStatus": "available", "capabilities": CAPABILITIES},
+        {"id": "original-llm", "modelType": "llm", "runtimeStatus": "available"}])
     pipeline = NoteService()
     c.monkeypatch.setattr(note, '_note_service', pipeline)
     c.monkeypatch.setattr(pipeline.transcription_service, 'get_audio_duration', lambda _: 28.0)

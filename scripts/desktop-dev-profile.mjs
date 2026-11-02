@@ -6,7 +6,7 @@ export function resolveDesktopDevProfile({ environment = 'lan', version } = {}) 
   return {
     environment,
     server,
-    productName: lan ? 'VINote LAN Dev' : 'VINote Public Dev',
+    productName: lan ? 'VINote Test Dev' : 'VINote Public Dev',
     identifier: lan ? 'app.vinote.desktop.test.dev' : 'app.vinote.desktop.dev',
     tracingEnvironment: 'development',
     release: `${version}-dev-${environment}`,

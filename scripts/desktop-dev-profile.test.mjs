@@ -14,8 +14,8 @@ const stale = { ...process.env, VILAB_SERVER_URL: 'http://localhost:9878',
 test('source environments have fixed origins, distinct identities and development tracing', () => {
   const lan = resolveDesktopDevProfile({ environment: 'lan', env: stale, version: '0.6.1' })
   const publicProfile = resolveDesktopDevProfile({ environment: 'public', env: stale, version: '0.6.1' })
-  assert.equal(lan.server, 'http://192.168.1.143:9876')
-  assert.equal(publicProfile.server, 'https://api.orulink.ai')
+  assert.equal(lan.server, 'https://api-hk.orulink.ai')
+  assert.equal(publicProfile.server, 'https://api-hk.orulink.ai')
   assert.notEqual(lan.identifier, publicProfile.identifier)
   assert.equal(lan.tracingEnvironment, 'development')
   assert.equal(publicProfile.tracingEnvironment, 'development')

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import { Check, MessageSquareText, Wand2, X } from 'lucide-react'
+import { Check, MessageSquareText, AlignLeft, X } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Conversation, ConversationContent, ConversationEmptyState, ConversationMessage } from '@/components/ui/conversation'
 import { Input } from '@/components/ui/input'
@@ -29,7 +28,18 @@ export function TranscriptEvidencePanel({ evidence, loading, currentTimestamp, t
   const saveAlias = async () => { if (!editingSpeakerId || savingAlias || !speakerDraft.trim()) return; setSavingAlias(true); try { await onSaveAlias(editingSpeakerId, speakerDraft.trim()); setEditingSpeakerId(''); setSpeakerDraft(''); setError('') } catch { setError(zh ? '名称未保存，修改已保留，请重试' : 'Name not saved. Changes retained; retry.') } finally { setSavingAlias(false) } }
   if (loading) return <div className="grid flex-1 gap-4 p-6"><Skeleton className="h-24 w-4/5" /><Skeleton className="ml-auto h-24 w-4/5" /><Skeleton className="h-24 w-4/5" /></div>
   return <section className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
-    <div className="flex flex-wrap items-center gap-2 border-b px-5 py-3">{evidence?.language ? <Badge variant="outline">{zh ? '语言' : 'Language'} · {evidence.language}</Badge> : null}<Badge variant="outline">{zh ? '片段' : 'Segments'} · {segments.length}</Badge>{typeof metadata.asr_model === 'string' ? <Badge variant="secondary">{zh ? '转写模型' : 'Transcription model'} · {metadata.asr_model}</Badge> : null}{typeof metadata.speaker_count === 'number' ? <Badge variant="secondary">{zh ? '已区分声音' : 'Voice groups'} · {metadata.speaker_count}</Badge> : null}{hasRawText ? <Toggle pressed={textMode === 'clean'} onPressedChange={() => onTextModeChange(textMode === 'clean' ? 'raw' : 'clean')} aria-label={textMode === 'clean' ? (zh ? '显示原始转写' : 'Show raw ASR') : (zh ? '显示智能整理' : 'Show smart cleanup')}><Wand2 />{textMode === 'clean' ? (zh ? '智能整理' : 'Smart cleanup') : (zh ? '原始转写' : 'Raw ASR')}</Toggle> : null}<Toggle pressed={followPlayback} onPressedChange={value => { lastScrolled.current = -1; setFollowPlayback(value) }} aria-label={zh ? '跟随播放位置' : 'Follow playback'}>{zh ? '跟随播放' : 'Follow playback'}</Toggle></div>
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-b px-5 py-3">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 text-xs leading-5 text-muted-foreground">
+        {evidence?.language ? <span>{zh ? '语言' : 'Language'} · {evidence.language}</span> : null}
+        <span className="tabular-nums">{zh ? '片段' : 'Segments'} · {segments.length}</span>
+        {typeof metadata.asr_model === 'string' ? <span className="break-all">{zh ? '转写模型' : 'Transcription model'} · {metadata.asr_model}</span> : null}
+        {typeof metadata.speaker_count === 'number' ? <span className="tabular-nums">{zh ? '已区分声音' : 'Voice groups'} · {metadata.speaker_count}</span> : null}
+      </div>
+      <div role="group" aria-label={zh ? '逐字稿显示' : 'Transcript display'} className="flex flex-wrap items-center gap-2">
+        {hasRawText ? <Toggle pressed={textMode === 'clean'} onPressedChange={() => onTextModeChange(textMode === 'clean' ? 'raw' : 'clean')} aria-label={textMode === 'clean' ? (zh ? '显示原始转写' : 'Show raw ASR') : (zh ? '显示智能整理' : 'Show smart cleanup')}><AlignLeft aria-hidden="true" />{textMode === 'clean' ? (zh ? '智能整理' : 'Smart cleanup') : (zh ? '原始转写' : 'Raw ASR')}</Toggle> : null}
+        <Toggle pressed={followPlayback} onPressedChange={value => { lastScrolled.current = -1; setFollowPlayback(value) }} aria-label={zh ? '跟随播放位置' : 'Follow playback'}>{zh ? '跟随播放' : 'Follow playback'}</Toggle>
+      </div>
+    </div>
     {metadata.speaker_alignment_estimated === true && <Alert className="mx-4 mt-3 w-auto"><AlertDescription>{zh ? '转写只有分段时间，逐句时间与说话人归属为估算。请回听确认，再修改名称。' : 'Only chunk timestamps are available. Sentence timing and speaker attribution are estimated; replay to verify.'}</AlertDescription></Alert>}
     {gaps.length > 0 && <Alert className="mx-4 mt-3 w-auto"><AlertDescription><p>{zh ? '以下区间未识别出文字，不能据此判断静音。点击时间回听原声。' : 'No text was recognized in these intervals. This does not establish silence; select a time to replay.'}</p><details className="mt-2"><summary className="cursor-pointer">{zh ? `${gaps.length} 个未识别区间` : `${gaps.length} unrecognized intervals`}</summary><div className="mt-2 flex max-h-32 flex-wrap gap-2 overflow-auto">{gaps.map((gap, index) => <Button key={index} variant="outline" size="sm" onClick={() => onSeek(gap.start)}>{formatTranscriptTimestamp(gap.start)}–{formatTranscriptTimestamp(gap.end)}</Button>)}</div></details></AlertDescription></Alert>}
     {error ? <Alert variant="destructive" className="m-4 mb-0"><AlertDescription>{error}</AlertDescription></Alert> : null}

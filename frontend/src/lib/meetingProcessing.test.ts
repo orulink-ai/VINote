@@ -50,6 +50,8 @@ it('persists the operation before submission and preserves the source identity',
   mocks.submit.mockImplementation(async input => {
     expect(record.generationOperation?.selection).toEqual(selection)
     expect(input.meetingSessionId).toBe(record.id)
+    expect(input.asrModel).toBe(selection.asr)
+    expect(input.modelName).toBe(selection.llm)
     return { task_id: 'new-task' }
   })
   await processSavedMeeting(record, 'zh', undefined, { selection })
@@ -127,14 +129,18 @@ it('rejects stale confirmation rather than replacing a newer operation', async (
   expect(record.generationOperation.id).toBe('newer'); expect(mocks.submit).not.toHaveBeenCalled()
 })
 
-it('passes saved local profiles rather than current global selections', async () => {
+it('rejects saved local profiles without upload or profile resolution', async () => {
   const local = { mode: 'local', asr: 'saved-asr', llm: 'saved-llm', asrLabel: '语音 · speech', llmLabel: '总结 · summary' } as const
   record.generationOperation = { id: 'operation', selection: local, outputLanguage: 'en' }
   mocks.api.mockResolvedValue({ mode: 'local' })
   mocks.speech.mockResolvedValue([{ id: local.asr, isActive: true, name: '语音', modelName: 'speech' }])
   mocks.models.mockResolvedValue([{ id: local.llm, isActive: true, name: '总结', modelName: 'summary' }])
   await processSavedMeeting(record, 'zh')
-  expect(mocks.submit).toHaveBeenCalledWith(expect.objectContaining({ sttProfileId: 'saved-asr', modelProfileId: 'saved-llm', outputLanguage: 'en' }), expect.anything())
+  expect(mocks.submit).not.toHaveBeenCalled()
+  expect(mocks.speech).not.toHaveBeenCalled()
+  expect(mocks.models).not.toHaveBeenCalled()
+  expect(record.processingError).toContain('公网')
+  expect(record.generationOperation?.selection).toEqual(local)
 })
 
 it('blocks unavailable cloud models without silently choosing an alternative', async () => {
