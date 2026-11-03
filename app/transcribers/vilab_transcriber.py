@@ -7,6 +7,7 @@ import json
 import os
 import tempfile
 import time
+import uuid
 from contextlib import ExitStack
 from dataclasses import asdict
 from pathlib import Path
@@ -306,6 +307,73 @@ class VILabTranscriber(Transcriber):
             full_text=value["full_text"], segments=segments, metadata=dict(metadata),
         )
 
+    _RECORDING_JOB_STATES = {"created", "queued", "submitting", "processing",
+                             "completed", "failed", "outcome_unknown"}
+
+    @staticmethod
+    def _load_recording_checkpoint(checkpoint_file):
+        if not checkpoint_file.exists():
+            return None
+        try:
+            if checkpoint_file.stat().st_size > 16 * 1024 * 1024:
+                raise ValueError
+            saved = json.loads(checkpoint_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            raise ValueError("已保存的会议转写记录无法读取，未重新提交音频") from None
+        if not isinstance(saved, dict) or saved.get("version") not in (1, 2):
+            raise ValueError("已保存的会议转写记录无效，未重新提交音频")
+        return saved
+
+    @staticmethod
+    def _validate_recording_job(saved, duration, size, stamp):
+        job_id = saved.get("job_id")
+        try:
+            if str(uuid.UUID(str(job_id))) != str(job_id):
+                raise ValueError
+        except (ValueError, TypeError, AttributeError):
+            raise ValueError("已保存的会议转写任务无效，未重新提交音频") from None
+        if saved.get("status") not in VILabTranscriber._RECORDING_JOB_STATES:
+            raise ValueError("已保存的会议转写任务无效，未重新提交音频")
+        if (saved.get("duration_seconds") != round(duration, 3)
+                or saved.get("size_bytes") != size):
+            raise ValueError("已保存的会议转写任务与当前音频不一致，未重新提交音频")
+        if stamp is not None and saved.get("execution") != stamp:
+            raise ValueError("本次处理的会议转写记录归属不一致")
+        return job_id
+
+    @staticmethod
+    def _retry_after_seconds(response, fallback):
+        try:
+            value = float(response.headers.get("retry-after"))
+        except (TypeError, ValueError):
+            return fallback
+        if not math.isfinite(value):
+            return fallback
+        return min(max(value, 2.0), 30.0)
+
+    @staticmethod
+    def _recording_job_wait_seconds():
+        try:
+            value = float(os.environ.get("VINOTE_ASR_JOB_WAIT_SECONDS", ""))
+        except ValueError:
+            value = 0.0
+        return value if 60 <= value <= 24 * 3600 else 6 * 3600
+
+    @staticmethod
+    def _raise_recording_failure(checkpoint):
+        from app.services.asr_stream_service import ASRServiceError
+        error = checkpoint.get("error")
+        code = error.get("code") if isinstance(error, dict) else None
+        if code in {"empty_result_unverified", "asr_empty_result"}:
+            raise NoSpeechDetectedError("该音频片段未识别出文字")
+        raise ASRServiceError(code if isinstance(code, str) and code else "asr_provider_error")
+
+    def _recording_job_get(self, path, bearer):
+        headers = {"Authorization": "Bearer " + bearer} if bearer else {}
+        return httpx.get(self.base_url + path, headers=headers,
+                         timeout=httpx.Timeout(30, connect=15, pool=30),
+                         trust_env=False, follow_redirects=False)
+
     def _transcribe_recording(self, file_path: str, bearer, policy) -> TranscriptResult:
         from app.config import settings
         from app.services.asr_checkpoint_lock import checkpoint_lock
@@ -346,71 +414,188 @@ class VILabTranscriber(Transcriber):
         if checkpoint_file.is_symlink():
             raise ValueError("会议转写记录位置无效，未提交音频")
         with checkpoint_lock(folder):
-            saved = None
-            if checkpoint_file.exists():
-                try:
-                    if checkpoint_file.stat().st_size > 16 * 1024 * 1024:
-                        raise ValueError
-                    saved = json.loads(checkpoint_file.read_text(encoding="utf-8"))
-                except (OSError, ValueError, TypeError):
-                    raise ValueError("已保存的会议转写记录无法读取，未重新提交音频") from None
-                if not isinstance(saved, dict) or saved.get("version") != 1:
-                    raise ValueError("已保存的会议转写记录无效，未重新提交音频")
-                if stamp is not None and saved.get("execution") != stamp:
-                    raise ValueError("本次处理的会议转写记录归属不一致")
-                if saved.get("status") == "completed":
+            saved = self._load_recording_checkpoint(checkpoint_file)
+            if saved is not None:
+                status = saved.get("status")
+                if saved.get("version") == 1:
+                    if stamp is not None and saved.get("execution") != stamp:
+                        raise ValueError("本次处理的会议转写记录归属不一致")
+                    if status == "completed":
+                        return self._restore_recording_result(saved.get("result"))
+                    if status != "inflight":
+                        raise ValueError("已保存的会议转写状态无效，未重新提交音频")
+                    # A synchronous submission without a job id can never be replayed.
+                    raise ASRServiceError("unknown_result")
+                job_id = self._validate_recording_job(saved, duration, size, stamp)
+                if saved.get("model") != self.model:
+                    raise ValueError("已保存的会议转写任务与当前模型不一致，未重新提交音频")
+                if status == "completed":
                     return self._restore_recording_result(saved.get("result"))
-                if saved.get("status") != "inflight":
-                    raise ValueError("已保存的会议转写状态无效，未重新提交音频")
-                raise ASRServiceError("unknown_result")
-            marker = {"version": 1, "status": "inflight", "model": self.model,
-                      "duration_seconds": round(duration, 3), "size_bytes": size}
-            if stamp is not None:
-                marker["execution"] = stamp
-            # Durable before dispatch: a lost response can never trigger a paid replay.
-            _save_checkpoint(checkpoint_file, marker)
-            fields = {"mode": "meeting"}
-            if self.model:
-                fields["model"] = self.model
-            if self.language:
-                fields["language"] = self.language
-            timeout = httpx.Timeout(2100, connect=15, write=600, pool=30)
-            headers = {"Authorization": "Bearer " + bearer} if bearer else {}
+                if status == "outcome_unknown":
+                    raise ASRServiceError("unknown_result")
+                if status == "failed":
+                    self._raise_recording_failure(saved)
+                if status != "created":
+                    return self._await_recording_job(job_id, saved, checkpoint_file, file_path, bearer)
+            else:
+                job_id = str(uuid.uuid4())
+                saved = {"version": 2, "status": "created", "job_id": job_id,
+                         "idempotency_key": job_id, "model": self.model,
+                         "duration_seconds": round(duration, 3), "size_bytes": size}
+                if stamp is not None:
+                    saved["execution"] = stamp
+                # Durable before dispatch: a lost response resumes the same job.
+                _save_checkpoint(checkpoint_file, saved)
+            return self._submit_recording_job(job_id, saved, checkpoint_file, file_path, bearer)
+
+    def _submit_recording_job(self, job_id, checkpoint, checkpoint_file, file_path, bearer):
+        from app.services.asr_stream_service import ASRServiceError
+        fields = {"mode": "meeting"}
+        if self.model:
+            fields["model"] = self.model
+        if self.language:
+            fields["language"] = self.language
+        headers = {"Idempotency-Key": job_id}
+        if bearer:
+            headers["Authorization"] = "Bearer " + bearer
+        # The read budget covers upload acknowledgement only; recognition is
+        # tracked separately by polling the created job.
+        timeout = httpx.Timeout(120, connect=15, write=600, pool=30)
+        try:
+            with Path(file_path).open("rb") as audio:
+                response = httpx.post(
+                    self.base_url + "/v1/asr/transcription-jobs", headers=headers,
+                    files={"file": (Path(file_path).name, audio, "audio/wav")},
+                    data=fields, timeout=timeout, trust_env=False, follow_redirects=False,
+                )
+        except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError, httpx.RequestError):
+            # The same idempotency key resolves the job without a second submission.
+            raise ASRServiceError("unknown_result") from None
+        if not response.is_success:
+            code = None
             try:
-                with Path(file_path).open("rb") as audio:
-                    response = httpx.post(
-                        self.base_url + "/v1/asr/transcriptions", headers=headers,
-                        files={"file": (Path(file_path).name, audio, "audio/wav")},
-                        data=fields, timeout=timeout, trust_env=False, follow_redirects=False,
-                    )
-            except (httpx.TimeoutException, httpx.NetworkError, httpx.RemoteProtocolError, httpx.RequestError):
-                raise ASRServiceError("unknown_result") from None
+                error = response.json().get("error")
+                code = error.get("code") if isinstance(error, dict) else None
+            except (ValueError, AttributeError):
+                pass
+            if code == "meeting_audio_delivery_unavailable":
+                checkpoint_file.unlink(missing_ok=True)
+                raise HTTPException(503, "当前公网服务没有可被语音服务访问的音频地址，会议转写暂不可用；实时转写不受影响。")
+            if 400 <= response.status_code < 500:
+                checkpoint_file.unlink(missing_ok=True)
+                raise RuntimeError(f"VILab STT returned HTTP {response.status_code}")
+            raise ASRServiceError("unknown_result")
+        try:
+            payload = response.json()
+        except ValueError:
+            raise ASRServiceError("unknown_result") from None
+        status = payload.get("status") if isinstance(payload, dict) else None
+        if not isinstance(payload, dict) or payload.get("id") != job_id \
+                or status not in self._RECORDING_JOB_STATES:
+            raise ASRServiceError("unknown_result")
+        if status != checkpoint.get("status"):
+            checkpoint["status"] = status
+            _save_checkpoint(checkpoint_file, checkpoint)
+        if status == "completed":
+            return self._finish_recording_job(job_id, checkpoint, checkpoint_file, file_path, bearer)
+        if status == "outcome_unknown":
+            raise ASRServiceError("unknown_result")
+        if status == "failed":
+            self._raise_recording_failure(checkpoint)
+        return self._await_recording_job(job_id, checkpoint, checkpoint_file, file_path, bearer)
+
+    def _await_recording_job(self, job_id, checkpoint, checkpoint_file, file_path, bearer):
+        from app.services.asr_stream_service import ASRServiceError
+        deadline = time.monotonic() + self._recording_job_wait_seconds()
+        delay = 5.0
+        while True:
+            try:
+                response = self._recording_job_get(
+                    f"/v1/asr/transcription-jobs/{job_id}", bearer)
+            except httpx.RequestError:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ASRServiceError("unknown_result") from None
+                time.sleep(min(delay, remaining))
+                continue
+            if response.status_code in (401, 403):
+                raise ASRServiceError("auth_failed")
+            if response.status_code == 404:
+                raise ASRServiceError("unknown_result")
+            if response.status_code == 429 or response.status_code >= 500:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ASRServiceError("unknown_result")
+                time.sleep(min(self._retry_after_seconds(response, delay), remaining))
+                delay = min(delay * 2, 30)
+                continue
             if not response.is_success:
-                code = None
-                try:
-                    error = response.json().get("error")
-                    code = error.get("code") if isinstance(error, dict) else None
-                except (ValueError, AttributeError):
-                    pass
-                if code == "meeting_audio_delivery_unavailable":
-                    checkpoint_file.unlink(missing_ok=True)
-                    raise HTTPException(503, "当前公网服务没有可被语音服务访问的音频地址，会议转写暂不可用；实时转写不受影响。")
-                if 400 <= response.status_code < 500:
-                    checkpoint_file.unlink(missing_ok=True)
-                    raise RuntimeError(f"VILab STT returned HTTP {response.status_code}")
                 raise ASRServiceError("unknown_result")
             try:
                 payload = response.json()
-                result = self._result(payload, file_path, transport="recording")
-                completed = {"version": 1, "status": "completed", "model": self.model,
-                             "duration_seconds": round(duration, 3), "size_bytes": size,
-                             "result": asdict(result)}
-                if stamp is not None:
-                    completed["execution"] = stamp
-                _save_checkpoint(checkpoint_file, completed)
-                return result
-            except (ValueError, TypeError, KeyError, AttributeError):
+            except ValueError:
                 raise ASRServiceError("unknown_result") from None
+            status = payload.get("status") if isinstance(payload, dict) else None
+            if status not in self._RECORDING_JOB_STATES:
+                raise ASRServiceError("unknown_result")
+            if status != checkpoint.get("status"):
+                checkpoint["status"] = status
+                error = payload.get("error")
+                if status == "failed" and isinstance(error, dict):
+                    checkpoint["error"] = {"code": error.get("code"), "message": error.get("message")}
+                elif status != "failed":
+                    checkpoint.pop("error", None)
+                _save_checkpoint(checkpoint_file, checkpoint)
+            if status == "completed":
+                return self._finish_recording_job(job_id, checkpoint, checkpoint_file, file_path, bearer)
+            if status == "failed":
+                self._raise_recording_failure(checkpoint)
+            if status == "outcome_unknown":
+                raise ASRServiceError("unknown_result")
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ASRServiceError("unknown_result")
+            time.sleep(min(self._retry_after_seconds(response, delay), remaining))
+
+    def _finish_recording_job(self, job_id, checkpoint, checkpoint_file, file_path, bearer):
+        from app.services.asr_stream_service import ASRServiceError
+        response = None
+        for attempt in range(3):
+            try:
+                response = self._recording_job_get(
+                    f"/v1/asr/transcription-jobs/{job_id}/result", bearer)
+                break
+            except httpx.RequestError:
+                if attempt == 2:
+                    raise ASRServiceError("unknown_result") from None
+                time.sleep(attempt + 1)
+        if response.status_code == 409:
+            try:
+                error = response.json().get("error")
+            except (ValueError, AttributeError):
+                error = None
+            if isinstance(error, dict) and error.get("jobStatus") == "failed":
+                checkpoint["status"] = "failed"
+                checkpoint["error"] = {"code": error.get("code"), "message": error.get("message")}
+                _save_checkpoint(checkpoint_file, checkpoint)
+                self._raise_recording_failure(checkpoint)
+        if not response.is_success:
+            raise ASRServiceError("unknown_result")
+        try:
+            payload = response.json()
+            result = self._result(payload, file_path, transport="recording")
+        except NoSpeechDetectedError:
+            checkpoint["status"] = "failed"
+            checkpoint["error"] = {"code": "empty_result_unverified"}
+            _save_checkpoint(checkpoint_file, checkpoint)
+            raise
+        except (ValueError, TypeError, KeyError, AttributeError):
+            raise ASRServiceError("unknown_result") from None
+        completed = dict(checkpoint)
+        completed.update(status="completed", result=asdict(result))
+        completed.pop("error", None)
+        _save_checkpoint(checkpoint_file, completed)
+        return result
 
     def _transcribe_stream(self, file_path: str) -> TranscriptResult:
         from app.config import settings
