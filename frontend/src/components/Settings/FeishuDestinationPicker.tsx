@@ -37,10 +37,10 @@ function readPlaces(owner?: string, connectionKey?: string): SavedPlaces {
   } catch { return empty }
 }
 
-export function FeishuDestinationPicker({ value, onChange, capabilities, disabled, onChecked, autoCheck = false, connectionKey }: {
+export function FeishuDestinationPicker({ value, onChange, capabilities, disabled, onChecked, autoCheck = false, connectionKey, compact = false }: {
   value: FeishuDestination; onChange: (value: FeishuDestination) => void;
   capabilities?: Record<string, boolean>; disabled?: boolean;
-  onChecked?: (value: DestinationCheck | null) => void; autoCheck?: boolean;
+  onChecked?: (value: DestinationCheck | null) => void; autoCheck?: boolean; compact?: boolean;
   connectionKey?: string;
 }) {
   const owner = useAuthStore(state => state.user?.id);
@@ -176,7 +176,7 @@ export function FeishuDestinationPicker({ value, onChange, capabilities, disable
       <div role="region" aria-label="已选文档位置" className="flex min-w-0 flex-wrap items-center justify-between gap-3 rounded-lg border p-3">
         <div className="flex min-w-0 flex-1 items-center gap-2"><Folder aria-hidden="true" className="size-4 shrink-0" /><span className="min-w-0 break-words text-sm [overflow-wrap:anywhere]">{selectedName}</span></div>
         <Dialog open={open} onOpenChange={openPicker}>
-          <DialogTrigger asChild><Button variant="outline" size="sm" disabled={disabled || !!busy}>选择文档位置</Button></DialogTrigger>
+          <DialogTrigger asChild><Button variant="outline" size="sm" disabled={disabled || !!busy} aria-label="选择文档位置">{compact ? "更改" : "选择文档位置"}</Button></DialogTrigger>
           <DialogContent closeLabel="取消选择位置" className="flex max-h-[85dvh] w-[calc(100vw-2rem)] max-w-2xl flex-col overflow-hidden">
             <DialogHeader><DialogTitle>选择文档位置</DialogTitle><DialogDescription>进入只浏览目录；选择后点击确认核验创建权限。取消保留原位置。</DialogDescription></DialogHeader>
             <div className="flex min-h-0 flex-col gap-4 overflow-y-auto overscroll-contain">
@@ -212,11 +212,11 @@ export function FeishuDestinationPicker({ value, onChange, capabilities, disable
             <DialogFooter><Button variant="outline" onClick={close}>取消</Button><Button disabled={!!busy || !complete(draft) || !allowed(draft)} onClick={() => void verify(draft, true)}>{busy === 'check' ? '正在核验…' : '确认位置并核验'}</Button></DialogFooter>
           </DialogContent>
         </Dialog>
-      </div><FieldDescription>组织位置沿用目标权限；浏览可见不代表可创建。</FieldDescription>
+      </div>{!compact && <FieldDescription>组织位置沿用目标权限；浏览可见不代表可创建。</FieldDescription>}
     </Field>
     {error && <ErrorState error={error} />}
     {(!autoCheck || !!error || !!check && !check.can_attempt_create) && <Button className="self-start" size="sm" variant="ghost" disabled={disabled || !!busy || !complete(value)} onClick={() => void verify(value, false)}>核验位置与权限</Button>}
     {busy === 'check' && !open && <p role="status" className="text-sm text-muted-foreground">正在核验文档位置…</p>}
-    {check && (!autoCheck || !check.can_attempt_create) && <Alert variant={check.can_attempt_create ? 'default' : 'destructive'}><AlertDescription><p>{check.path_complete ? '完整路径：' : '已核验路径片段：'}{check.path.join(' / ') || check.name || '尚未确认'}</p><p>{check.can_create ? '已具备创建条件，提交时仍由飞书核验。' : check.can_attempt_create ? '目录可读，创建权限将在提交时核验。' : '当前目标不能提交创建。'}</p>{check.reason && <p>{typeof check.reason === 'string' ? check.reason : '目标权限未通过检查'}</p>}</AlertDescription></Alert>}
+    {check && ((!autoCheck && !compact) || !check.can_attempt_create) && <Alert variant={check.can_attempt_create ? 'default' : 'destructive'}><AlertDescription><p>{check.path_complete ? '完整路径：' : '已核验路径片段：'}{check.path.join(' / ') || check.name || '尚未确认'}</p><p>{check.can_create ? '已具备创建条件，提交时仍由飞书核验。' : check.can_attempt_create ? '目录可读，创建权限将在提交时核验。' : '当前目标不能提交创建。'}</p>{check.reason && <p>{typeof check.reason === 'string' ? check.reason : '目标权限未通过检查'}</p>}</AlertDescription></Alert>}
   </FieldGroup>;
 }

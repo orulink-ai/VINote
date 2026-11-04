@@ -28,17 +28,35 @@ def _need(condition, code):
         raise FinalLedgerError(code)
 
 
+class InvalidDraftEvidenceKind(ValueError):
+    """A completed draft contains a non-protocol evidence type."""
+
+
 def prepare_final_draft(text):
     """Decode raw draft before any legacy parser can discard duplicate keys."""
-    material = decode_final_review(text)
+    material = decode_final_review(text, output_stage='draft')
     _need(isinstance(material, dict) and type(material.get('protocol')) is int
           and material['protocol'] == 3, 'invalid_draft_protocol')
+    claims = material.get('claims')
+    if isinstance(claims, list):
+        for claim in claims:
+            rows = claim.get('evidence') if isinstance(claim, dict) else None
+            if isinstance(rows, list) and any(
+                isinstance(row, dict) and isinstance(row.get('kind'), str)
+                and row['kind'] not in {'asr_span', 'ocr_span', 'frame_observation', 'asr_window'}
+                for row in rows
+            ):
+                raise InvalidDraftEvidenceKind('Invalid draft evidence kind')
     return prepare_v3(material)
 
 
 def validate_review_envelope(value, material, *, depth, presentation):
     """Return the checked ledger and detached original versioned envelope."""
     _need(isinstance(presentation, str) and presentation in _EXTRAS, 'invalid_presentation')
+    if isinstance(value, dict) and type(value.get('protocol')) is int and value['protocol'] == 8:
+        _need(presentation == 'text', 'invalid_protocol')
+        from app.llm.meeting_compact_review import validate_compact_review
+        return validate_compact_review(value, material, depth=depth), copy.deepcopy(value)
     if isinstance(value, dict) and type(value.get('protocol')) is int and value['protocol'] == 7:
         _need(set(value) == _CORE | _EXTRAS[presentation] | {'title_ref'}, 'invalid_host_envelope')
         from app.llm.meeting_single_copy_projection7 import validate_review7
@@ -99,12 +117,13 @@ def finalize_final_review(text, draft):
     state = presentation_state()
     _need(state is not None, 'missing_presentation_state')
     state.raw_review = text
-    value = decode_final_review(text)
+    value = decode_final_review(text, output_stage='review')
     # The actual new graphic prompt freezes the expected protocol before the
     # response. Standalone legacy finalizers/readback retain their v4 contract.
     if getattr(state, 'expected_review_protocol', None) is not None:
         _need(type(value) is dict and type(value.get('protocol')) is int
-              and value['protocol'] == state.expected_review_protocol, 'invalid_protocol')
+              and (value['protocol'] == state.expected_review_protocol
+                   or state.expected_review_protocol == 8 and value['protocol'] == 4), 'invalid_protocol')
     ledger, review = validate_review_envelope(value, decode_final_review(draft),
         depth=state.depth, presentation=state.presentation or 'text')
     if state.presentation == 'illustrated':
@@ -123,6 +142,10 @@ def review_protocol(presentation, *, protocol=4):
     """The model sees the actual envelope, not contradictory core-only rules."""
     presentation = presentation or 'text'
     _need(isinstance(presentation, str) and presentation in _EXTRAS, 'invalid_presentation')
+    if type(protocol) is int and protocol == 8:
+        _need(presentation == 'text', 'invalid_protocol')
+        from app.llm.meeting_compact_review import compact_review_protocol
+        return compact_review_protocol()
     if type(protocol) is int and protocol == 7:
         from app.llm.meeting_single_copy_projection7 import review_protocol7
         return review_protocol7(presentation)

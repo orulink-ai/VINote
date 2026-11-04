@@ -18,7 +18,7 @@ class FullSourceLLM(_BasePromptLLM):
         if ((self.reject_at == 'draft' and len(self.calls) == 1)
                 or (self.reject_at == 'review' and len(self.calls) == 2)):
             raise HTTPException(400, 'context_length_exceeded')
-        return 'complete draft' if len(self.calls) == 1 else 'reviewed whole note'
+        return '# Complete meeting\n\n## Topic\n\nWhole source minutes.'
 
 
 @pytest.mark.parametrize('exceeds', ['chars', 'segments', 'speaker_evidence'])
@@ -34,18 +34,17 @@ def test_default_full_source_and_overall_review_ignore_old_thresholds(exceeds, m
     with patch.object(llm, '_chunk_segments', side_effect=AssertionError('default must not chunk')):
         result = llm.summarize('Full source', segments, style='meeting', summary_mode=mode,
                               extras='COMPLETE_EXTRAS', progress_callback=progress.append)
-    assert result == 'reviewed whole note' and len(llm.calls) == 2
+    assert result.startswith('# Complete meeting') and len(llm.calls) == 1
     for call in llm.calls:
         assert 'COMPLETE_EXTRAS' in call['user_prompt']
         for segment in segments:
             assert segment.text in call['user_prompt']
         if exceeds == 'speaker_evidence':
             assert 'speaker_29' in call['user_prompt']
-    assert 'complete draft' in llm.calls[1]['user_prompt']
     assert not any('chunk' in message or '分段' in message for message in progress)
 
 
-@pytest.mark.parametrize('failure_at', ['draft', 'review'])
+@pytest.mark.parametrize('failure_at', ['draft'])
 def test_context_rejection_preserves_source_and_never_splits_switches_or_retries(failure_at):
     llm = FullSourceLLM()
     source = [TranscriptSegment(0, 10, 'RETAIN_ALL_' + 'x' * 20000)]
@@ -60,12 +59,17 @@ def test_context_rejection_preserves_source_and_never_splits_switches_or_retries
     assert source[0].text == before
 
 
-@pytest.mark.parametrize('reject_at', [None, 'draft', 'review'])
+@pytest.mark.parametrize('reject_at', [None, 'draft'])
 def test_transcript_pipeline_default_retains_full_source_reviews_and_never_calls_asr(tmp_path, monkeypatch, reject_at):
     from app.services.note_service import NoteService
     from app.services.task_artifact_service import TaskArtifactService
     from app.services.vilab_cloud_service import VILabCloudService
-    monkeypatch.setattr(VILabCloudService, 'status', lambda *a: {'mode': 'local'})
+    public_source = {'version': 1, 'owner': None, 'mode': 'cloud',
+                     'server_url': settings.vilab_server_url, 'asr_model': '',
+                     'llm_model': 'selected-frozen-model', 'needs_stt': False}
+    monkeypatch.setattr(VILabCloudService, 'status', lambda *a: dict(public_source))
+    monkeypatch.setattr(VILabCloudService, 'models', lambda *a: [
+        {'id': 'selected-frozen-model', 'modelType': 'llm', 'runtimeStatus': 'available'}])
     monkeypatch.setattr(settings, 'summary_default_max_chars', 2000)
     monkeypatch.setattr(settings, 'summary_default_max_segments', 1)
     transcript = TranscriptResult('zh', 'BEGIN ' + '全文资料' * 2000 + ' END',
@@ -79,11 +83,9 @@ def test_transcript_pipeline_default_retains_full_source_reviews_and_never_calls
     transcription.transcribe.side_effect = AssertionError('ASR forbidden')
     artifacts = TaskArtifactService(tmp_path / 'output')
     service = NoteService(llm_service=llm_service, transcription_service=transcription, artifact_service=artifacts)
-    # The existing model-freeze contract also needs resolved local STT identity
-    # only for media; transcript input deliberately never resolves it.
-    with patch('app.services.task_model_source.capture_source', return_value={
-        'version': 1, 'owner': None, 'mode': 'local', 'server_url': '', 'asr_model': '', 'llm_model': '',
-        'needs_stt': False, 'local_llm_fingerprint': 'a' * 64, 'local_stt_fingerprint': 'b' * 64}), \
+    # Meetings now require the fixed public service. Transcript input still
+    # deliberately needs no ASR identity or available ASR catalog entry.
+    with patch('app.services.task_model_source.capture_source', return_value=public_source), \
             patch('app.services.speaker_diarization_service.SpeakerDiarizationService.transcribe',
                   side_effect=AssertionError('speaker analysis forbidden')):
         if reject_at:
@@ -91,8 +93,8 @@ def test_transcript_pipeline_default_retains_full_source_reviews_and_never_calls
                 service.generate_from_transcript(transcript, 'full-summary-offline', style='meeting')
         else:
             result = service.generate_from_transcript(transcript, 'full-summary-offline', style='meeting')
-            assert result.markdown == 'reviewed whole note'
-    assert len(llm.calls) == (1 if reject_at == 'draft' else 2)
+            assert result.markdown.startswith('# Complete meeting')
+    assert len(llm.calls) == 1
     assert all(transcript.full_text in call['user_prompt'] for call in llm.calls)
     transcription.transcribe.assert_not_called()
     folder = artifacts.find_task_dir('full-summary-offline')

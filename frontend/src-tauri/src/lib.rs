@@ -42,12 +42,20 @@ pub fn run() {
         .manage(RecorderRuntimeState::default())
         .manage(original_download::Downloads::default())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_process::init())
         .setup(|_app| {
+            // Signed release builds inject the real key and endpoint. Development
+            // and unsigned builds must remain usable without a placeholder key.
+            if updater_is_configured(_app.config()) {
+                _app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
             #[cfg(not(debug_assertions))]
             desktop_backend::start(_app)?;
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            desktop_update_available,
             original_download::choose_original_destination,
             original_download::append_original_bytes,
             original_download::finish_original_download,
@@ -66,6 +74,17 @@ pub fn run() {
         .expect("error while building VINote");
 
     app.run(handle_run_event);
+}
+
+fn updater_is_configured(config: &tauri::Config) -> bool {
+    let Some(updater) = config.plugins.0.get("updater") else { return false; };
+    updater.get("pubkey").and_then(|value| value.as_str()).is_some_and(|key| !key.trim().is_empty())
+        && updater.get("endpoints").and_then(|value| value.as_array()).is_some_and(|endpoints| !endpoints.is_empty())
+}
+
+#[tauri::command]
+fn desktop_update_available(app: AppHandle) -> bool {
+    updater_is_configured(app.config())
 }
 
 #[tauri::command]
@@ -441,5 +460,18 @@ mod tests {
         assert!(capabilities.contains("\"main\""));
         assert!(capabilities.contains("\"recorder-window\""));
         assert!(capabilities.contains("\"core:window:allow-start-dragging\""));
+    }
+
+    #[test]
+    fn updater_requires_key_and_endpoint_including_test_channel() {
+        let mut config = tauri::Config::default();
+        assert!(!updater_is_configured(&config));
+        config.plugins.0.insert("updater".into(), r#"{"endpoints":[]}"#.parse().unwrap());
+        assert!(!updater_is_configured(&config));
+        let updater = config.plugins.0.get_mut("updater").unwrap().as_object_mut().unwrap();
+        updater.insert("pubkey".into(), "public-key-for-unit-test".into());
+        assert!(!updater_is_configured(&config));
+        config.plugins.0.get_mut("updater").unwrap().as_object_mut().unwrap().insert("endpoints".into(), vec!["https://example.invalid/latest.json"].into());
+        assert!(updater_is_configured(&config));
     }
 }

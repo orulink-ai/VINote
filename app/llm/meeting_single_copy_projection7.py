@@ -182,6 +182,11 @@ def review_protocol7(presentation):
         {'id': 'B1', 'parts': ['one complete reviewed factual paragraph']}],
         'title_ref': {'block_id': 'B1', 'part_index': 0}, 'visual': visual}
     lines = REVIEW_PROTOCOL.splitlines()
+    def source_rule(prefix):
+        matches = [line for line in lines if line.startswith(prefix)]
+        _need(len(matches) == 1, 'invalid_protocol_rules')
+        return matches[0]
+
     # Preserve the source/evidence and complete-original review paragraphs
     # verbatim. Replace only the incompatible declaration/accounting shapes.
     return '\n'.join([
@@ -194,8 +199,8 @@ def review_protocol7(presentation):
         'Included row fields are exactly id/field/material/disposition/evidence/part_ref. part_ref={"block_id":"B1","part_index":0}; do not output included text or block_ids. Every paragraph part must have an included claim referencing that exact position. Provide the complete effective final evidence for each included claim, replacing mistaken draft evidence rather than merging it. Draft verification=unverified is not proof. Rejected rows instead require id/field/text/material/disposition/evidence/reason/reason_code and have no part_ref/block_ids. Their text is the unpublished candidate, not extra report prose. reason_code is unclear_entity/unsupported/misread/incidental/non_meeting, with a specific reason and valid actual-source evidence; unclear_entity only applies to entity claims. Rejection is not a way to shorten supported important content.',
         'omitted_for_depth rows instead require id/field/text/material/disposition/evidence/reason, with no part_ref/block_ids. Their text is unpublished candidate context. Detailed output cannot omit a material=true claim for depth, including a new claim. An omitted row may use evidence=[] rather than invent support; any supplied evidence must be valid. Working material remains fallible; use source-grounded rejection reasons for genuinely mistaken candidates, never disguise a real omission as rejection. Unknown owner, missing final decision or uncertain outcome alone does not reject a supported request, proposal or condition.',
         'title_ref={"block_id":"B1","part_index":0} is required and selects one WHOLE already-included visible body part, 1–120 Unicode code points. It supplies the metadata topic, not another prose slot. Do not output free title or heading text, select a substring, cross parts, trim or rely on host truncation. Choose a relevant complete supported part; no new fact or paragraph is needed merely to supply a title.',
-        lines[7],  # Exact existing ASR/OCR/frame-evidence rule, never normalized.
-        lines[8],  # Exact complete-source review and semantic responsibility.
+        source_rule('For asr_span quote'),  # Exact existing evidence rule.
+        source_rule('Independently review the complete original speech'),
     ])
 
 

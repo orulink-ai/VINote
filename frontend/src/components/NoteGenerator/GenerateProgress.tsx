@@ -4,9 +4,9 @@ import {
   Loader2 as LoaderCircle,
   AlertCircle,
 } from "lucide-react";
+import { useEffect, useState } from "react";
 import { useI18n } from "../../lib/i18n";
 import { Alert, AlertDescription } from "../ui/alert";
-import { Badge } from "../ui/badge";
 import { cn } from "../../lib/utils";
 import { ProcessingWave } from "@/components/ui/motion";
 
@@ -27,6 +27,7 @@ interface GenerateProgressProps {
   audioOnlySource?: boolean;
   videoSource?: boolean;
   reuseTranscript?: boolean;
+  createdAt?: string;
 }
 
 export function GenerateProgress({
@@ -44,8 +45,16 @@ export function GenerateProgress({
   audioOnlySource = false,
   videoSource = false,
   reuseTranscript = false,
+  createdAt,
 }: GenerateProgressProps) {
   const { copy } = useI18n();
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setNow(Date.now());
+    if (status !== "processing" && status !== "uploading") return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [createdAt, status]);
   const videoStep = videoSource || currentStep === 'analyzing_video' ? [{ key: 'analyzing_video', label: '整理共享画面与发言资料' }] : [];
   const steps = documentSource ? [
     { key: "preparing", label: "读取来源正文" },
@@ -55,7 +64,7 @@ export function GenerateProgress({
     { key: 'preparing', label: reuseTranscript ? '核验已有会议资料' : '准备会议文件' },
     ...(!reuseTranscript ? [{ key: 'transcribing', label: '转写与说话人分析' }] : []),
     ...videoStep,
-    { key: 'summarizing', label: '生成并核对会议纪要' },
+    { key: 'summarizing', label: '生成会议纪要' },
     { key: 'saving', label: '保存会议纪要' },
   ] : [
     { key: "uploading", label: copy.progress.prepareRequest },
@@ -93,6 +102,7 @@ export function GenerateProgress({
     : undefined;
   const progressLabel = phase === 'transcribing' && status !== 'success' ? receivedMeasured ? '音频提交进度' : '音频转写进度' : meeting ? '会议纪要生成进度' : '生成笔记阶段进度';
   const analysis = phase === 'transcribing' && !documentSource;
+  const unifiedMeetingRecognition = meeting && analysis && message === '正在转写完整录音，服务暂未提供识别百分比…';
   const savedTranscript = measured && processedSeconds! >= totalSeconds!;
   const speakerMeasured = Number.isFinite(speakerDetectionProgress) && speakerDetectionProgress! >= 0 && speakerDetectionProgress! <= 1;
   const speakerPercentage = speakerMeasured ? Math.floor(speakerDetectionProgress! * 100) : undefined;
@@ -101,6 +111,8 @@ export function GenerateProgress({
     return `${Math.floor(value / 60).toString().padStart(2, '0')}:${(value % 60).toString().padStart(2, '0')}`;
   };
   const knownTotal = Number.isFinite(totalSeconds) && totalSeconds! > 0;
+  const startTime = createdAt ? Date.parse(createdAt) : NaN;
+  const elapsed = Number.isFinite(startTime) && startTime <= now ? duration((now - startTime) / 1000) : undefined;
   const audioSeconds = receivedMeasured ? receivedSeconds : measured ? processedSeconds : undefined;
   const renderBar = (label: string, value?: number) => <div
     className="h-2 overflow-hidden rounded-full bg-secondary" role="progressbar"
@@ -118,7 +130,7 @@ export function GenerateProgress({
       : '转写完成后，将生成笔记；返回后可继续查看。'
     : phase === 'analyzing_video' ? '正在整理共享画面与发言资料，完成后继续生成纪要。逐字稿已就绪不代表纪要已完成。'
     : phase === 'saving' ? '正在保存生成内容，请稍候。'
-    : phase === 'summarizing' ? meeting ? '正在整理并核对会议纪要。' : '正在整理笔记。'
+    : phase === 'summarizing' ? meeting ? '正在根据完整资料生成会议纪要，完成后即可阅读。' : '正在整理笔记。'
     : '正在准备来源，完成后继续处理。';
   // Unknown model/provider/chunk messages stay diagnostic, not reader copy.
   const safeMessages: Record<string, string> = {
@@ -144,16 +156,19 @@ export function GenerateProgress({
   if (status === "idle") return null;
 
   return (
-    <section className="border">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b p-5">
+    <section className="generation-status min-w-0 rounded-lg border border-border/70 bg-background">
+      <header className="flex flex-wrap items-start justify-between gap-3 px-5 pt-5">
         <h2 className="flex items-center gap-2 text-balance text-base font-semibold">
           {running && !(meeting && analysis) && (phase === 'analyzing_video' ? <span aria-hidden="true"><ProcessingWave label={stageTitle} /></span> : <ProcessingWave label={meeting ? '正在生成会议纪要' : '正在生成笔记'} />)}
           {stageTitle}
         </h2>
-        <Badge variant={status === 'failed' ? 'destructive' : 'secondary'}>{status === 'success' ? '已完成' : status === 'failed' ? '已停止' : `第 ${activeStep} / ${steps.length} 步`}</Badge>
+        <span className="text-xs tabular-nums text-muted-foreground">{running && elapsed ? `任务已用时 ${elapsed}` : status === 'success' ? '已完成' : status === 'failed' ? '已停止' : `第 ${activeStep} / ${steps.length} 步`}</span>
       </header>
-      <div className="grid gap-5 p-5">
-        {analysis ? <div className="grid gap-5">
+      <div className="grid gap-4 p-5">
+        {unifiedMeetingRecognition ? <section aria-label="会议语音识别" className="grid gap-2">
+          <h3 className="font-medium">会议语音识别与说话人区分</h3>
+          <p className="text-sm text-muted-foreground">正在准备或等待云端识别结果；服务未提供识别百分比。</p>
+        </section> : analysis ? <div className="grid gap-5">
           <section aria-label="语音转写" className="grid gap-2">
             <div className="flex flex-wrap items-center justify-between gap-2 text-sm">
               <h3 className="font-medium">语音转写</h3>
@@ -183,9 +198,9 @@ export function GenerateProgress({
           <p className="text-sm tabular-nums text-muted-foreground">{status === 'success' ? `100% · ${meeting ? '会议纪要已保存' : '笔记已完成'}` : status === 'failed' ? '处理已停止' : '进度待更新'}</p>
         </>}
         {meeting && reuseTranscript && <p className="text-pretty text-sm text-muted-foreground">本次复用已有转写与说话人资料，不重新识别。</p>}
-        {running && <p role="status" className="text-pretty text-sm leading-6 text-muted-foreground">{safeMessage || statusCopy}</p>}
+        {running && <p role="status" className="text-pretty text-sm leading-6 text-muted-foreground">{unifiedMeetingRecognition ? '识别完成后将生成会议纪要，可随时返回查看。' : safeMessage || statusCopy}</p>}
 
-        <div role="list" aria-label={meeting ? '会议纪要处理步骤' : '笔记处理步骤'} className="grid gap-2 sm:grid-cols-2">
+        <div role="list" aria-label={meeting ? '会议纪要处理步骤' : '笔记处理步骤'} className="grid gap-0 border-t pt-3 sm:grid-cols-2">
           {steps.map((step) => {
             const stepStatus = getStepStatus(step.key);
             const stateLabel = { pending: '待开始', processing: '进行中', completed: '已完成', failed: '失败' }[stepStatus];
@@ -199,23 +214,23 @@ export function GenerateProgress({
                 aria-label={`${step.label}：${stateLabel}`}
                 aria-current={stepStatus === 'processing' ? 'step' : undefined}
                 className={cn(
-                  "flex items-center gap-3 border-l-2 border-transparent p-3",
+                  "flex items-center gap-2 rounded-md px-2 py-2.5",
                   stepStatus === "processing"
-                    ? "border-primary/30 bg-primary/5"
-                    : "border-transparent",
+                    ? "bg-muted/60"
+                    : "bg-transparent",
                 )}
               >
                 {stepStatus === "completed" && (
-                  <CheckCircle2 aria-hidden="true" className="size-5 text-muted-foreground" />
+                  <CheckCircle2 aria-hidden="true" className="size-4 text-muted-foreground" />
                 )}
                 {stepStatus === "processing" && (
-                  <LoaderCircle aria-hidden="true" className="size-5 motion-safe:animate-spin motion-reduce:animate-none text-primary" />
+                  <LoaderCircle aria-hidden="true" className="size-4 motion-safe:animate-spin motion-reduce:animate-none text-primary" />
                 )}
                 {stepStatus === "failed" && (
-                  <AlertCircle aria-hidden="true" className="size-5 text-destructive" />
+                  <AlertCircle aria-hidden="true" className="size-4 text-destructive" />
                 )}
                 {stepStatus === "pending" && (
-                  <Circle aria-hidden="true" className="size-5 text-muted-foreground/50" />
+                  <Circle aria-hidden="true" className="size-4 text-muted-foreground/50" />
                 )}
 
                 <span

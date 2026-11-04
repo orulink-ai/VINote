@@ -21,6 +21,11 @@ def _chat_failure(response):
     """Project a bounded error envelope; never expose/log arbitrary messages."""
     if response.status_code == 524:
         failure = SummaryResultUnconfirmed('http524')
+        from app.services.summary_failure import safe_summary_failure_context
+        failure.summary_failure_context = safe_summary_failure_context({
+            **failure.summary_failure_context,
+            'http_request_id': response.headers.get('x-request-id'),
+        })
         failure.cloud_failure_context = {'category': 'summary_result_unconfirmed', 'http_status': 524}
         logger.warning('Cloud chat result unconfirmed: %s', failure.cloud_failure_context)
         return failure
@@ -162,7 +167,7 @@ class VILabCloudService:
         server_url = config.get("server_url") or settings.vilab_server_url
         if not server_url:
             raise HTTPException(503, "云端模型服务尚未配置，请联系管理员")
-        headers = self.authorization(user_id, server_url, config.get("connection_id"), config.get("connection_auth_mode"))
+        headers = self.authorization(user_id, server_url)
         kwargs.setdefault("follow_redirects", False)
         try:
             timeout = kwargs.pop("timeout", 300)
@@ -204,11 +209,7 @@ class VILabCloudService:
         return response.json()
 
     def authorization(self, user_id, server_url, connection_id=None, auth_mode=None):
-        """Resolve auth only for the exact immutable owner/Origin binding."""
-        from app.services.vilab_connection_service import VILabConnectionService
-        connections = VILabConnectionService(session_scope)
-        if connection_id:
-            return connections.authorization(user_id, server_url, connection_id, auth_mode)
+        """Authenticate the fixed deployment, ignoring historical connection fields."""
         if server_url.rstrip("/") != settings.vilab_server_url.rstrip("/"):
             raise HTTPException(409, "原任务服务来源未绑定，未向其他服务发送账号令牌")
         headers = {}
@@ -228,17 +229,15 @@ class VILabCloudService:
             return dict(snapshot[1])
         with session_scope() as db:
             row = db.get(VILabPreferenceDB, user_id)
-            defaults = {"configured": bool(settings.vilab_server_url),
+            return {"configured": bool(settings.vilab_server_url),
                     "server_url": settings.vilab_server_url,
                     "mode": row.mode if row else ("cloud" if settings.vilab_server_url else "local"),
                     "asr_model": row.asr_model if row else "", "llm_model": row.llm_model if row else ""}
-        from app.services.vilab_connection_service import VILabConnectionService
-        return VILabConnectionService(session_scope).current(user_id, defaults)
 
     def connection_snapshot(self, user_id):
-        """Read selected connection, without catalog access or credential export."""
+        """Read the fixed deployment selection, without credentials or connection state."""
         config = self.status(user_id)
-        return {key: config[key] for key in ("configured", "mode", "server_url", "asr_model", "llm_model", "connection_id", "connection_auth_mode")
+        return {key: config[key] for key in ("configured", "mode", "server_url", "asr_model", "llm_model")
                 if key in config}
 
     @contextmanager
@@ -273,11 +272,9 @@ class VILabCloudService:
                 for m in data.get("data", []) if isinstance(m, dict) and isinstance(m.get("id"), str) and m.get("modelType") in {"asr", "llm"}]
 
     def select(self, user_id, mode, asr_model, llm_model, *, connection_id=None, connection_revision=None):
+        # Historical clients may still send connection fields; the fixed
+        # deployment has no editable connection to validate.
         config = self.status(user_id) if mode == "cloud" else {}
-        if mode == "cloud" and (connection_revision is not None or connection_id is not None) and (
-                connection_revision != config.get("connection_revision") or
-                (connection_id or None) != config.get("connection_id")):
-            raise HTTPException(409, "模型连接已变化，请重新读取后选择模型")
         if mode == "cloud":
             with self.task_snapshot(user_id, snapshot=config):
                 models = self.models(user_id)
@@ -291,22 +288,7 @@ class VILabCloudService:
                 db.add(row)
             row.mode = mode
             if mode == "cloud":
-                from app.db_models import VILabConnectionDB, VILabConnectionStateDB
-                state = db.get(VILabConnectionStateDB, user_id)
-                if ((getattr(state, "connection_id", "") or None) != config.get("connection_id") or
-                        getattr(state, "revision", "") != config.get("connection_revision", "")):
-                    raise HTTPException(409, "模型连接已变化，请重新读取后选择模型")
-                if state:
-                    import uuid
-                    from sqlalchemy import update
-                    changed = db.execute(update(VILabConnectionStateDB).where(
-                        VILabConnectionStateDB.user_id == user_id,
-                        VILabConnectionStateDB.revision == config["connection_revision"]
-                    ).values(revision=str(uuid.uuid4())))
-                    if changed.rowcount != 1:
-                        raise HTTPException(409, "模型连接已变化，请重新读取后选择模型")
-                selected = db.get(VILabConnectionDB, state.connection_id) if getattr(state, "connection_id", "") else row
-                selected.asr_model, selected.llm_model = asr_model, llm_model
+                row.asr_model, row.llm_model = asr_model, llm_model
         return self.status(user_id)
 
     def set_mode(self, user_id, mode):

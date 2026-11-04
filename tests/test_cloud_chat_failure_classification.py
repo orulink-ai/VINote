@@ -78,6 +78,22 @@ def test_complete_diarized_transcript_recovery_does_not_resolve_or_invoke_asr():
     saved.assert_not_called()
 
 
+@pytest.mark.parametrize("missing", ["analysis_parallel", "asr_evidence", "speaker_evidence"])
+def test_incomplete_parallel_evidence_is_not_treated_as_complete_cache(missing):
+    from app.models.transcript import TranscriptResult, TranscriptSegment
+    from app.services.transcription_service import TranscriptionService
+    metadata = {"speaker_diarization": True, "analysis_parallel": True,
+                "asr_evidence": {"full_text": "saved"}, "speaker_evidence": [{"start": 0, "end": 3}]}
+    metadata.pop(missing)
+    transcript = TranscriptResult("zh", "saved", [TranscriptSegment(0, 3, "saved")], metadata)
+    service = TranscriptionService(stt_profile_service=Mock())
+    with patch("app.services.transcription_service.create_transcriber", side_effect=RuntimeError("cache not eligible")) as create:
+        with pytest.raises(RuntimeError, match="cache not eligible"):
+            service.transcribe(audio_path="unused.wav", user_id="owner", diarize=True,
+                               load_cached=lambda: transcript, save_transcript=Mock())
+    create.assert_called_once()
+
+
 @pytest.mark.parametrize('raw', [b'<html>private-secret</html>', b'{"error": []}',
     b'{"error":{"type":"vilab_error","code":"unauthorized","message":"private-secret"}}'])
 def test_ambiguous_or_malformed_403_is_not_called_a_login_failure(raw, caplog):

@@ -83,6 +83,24 @@ def accept(c, body=None):
     return receipt, background
 
 
+def test_confirmed_speaker_context_is_frozen_in_receipt_and_used_only_by_new_summary(case, monkeypatch):
+    import app.services.meeting_summary_regeneration as module
+    c = case
+    frozen = {'protocol': 1, 'owner': 'alice', 'parent': c.parent, 'matches': []}
+    monkeypatch.setattr(module, 'capture_speaker_context', lambda owner, parent: frozen)
+    enrichment = Mock(return_value='confirmed-speaker-context')
+    monkeypatch.setattr(module, 'speaker_extras', enrichment)
+    receipt, _ = accept(c)
+    with c.receipts.sessions() as db:
+        stored = db.get(SourceRequestDB, ('alice', str(c.body.operation_id)))
+        assert json.loads(stored.receipt_json)['summary_speaker_context'] == frozen
+    c.service.run_once(receipt.task_id, 'alice', c.note)
+    assert enrichment.call_args.args[:2] == ('alice', c.parent)
+    assert enrichment.call_args.args[3] == frozen
+    assert c.note.generate_from_transcript.call_args.kwargs['extras'] == 'confirmed-speaker-context'
+    assert not c.note.generate_from_file.called
+
+
 def test_formats_are_frozen_per_child_and_replay_cannot_change_them(case):
     from app.services.meeting_summary_regeneration import SummaryConfirmation
     c = case
@@ -130,6 +148,54 @@ def test_two_versions_of_same_format_are_distinct_operations(case):
     first, _ = accept(c)
     second, _ = accept(c, c.body.model_copy(update={'operation_id': uuid4()}))
     assert first.task_id != second.task_id
+
+
+def test_original_summary_children_are_owner_bound_read_only(case):
+    from app.routers.meeting_summary_regeneration import create_summary_regeneration_router
+    c = case
+    receipt, _ = accept(c)
+    app = FastAPI()
+    app.include_router(create_summary_regeneration_router(c.service, lambda: SimpleNamespace(user_id='alice'), c.note), prefix='/api')
+    client = TestClient(app)
+    path = f'/api/task/{c.parent}/summary-children'
+    before = (c.artifacts.find_task_dir(receipt.task_id) / 'status.json').read_bytes()
+    response = client.get(path)
+    assert response.status_code == 200
+    assert response.headers['cache-control'] == 'private, no-store'
+    assert response.json()['items'][0]['task_id'] == receipt.task_id
+    assert response.json()['items'][0]['operation_id'] == str(c.body.operation_id)
+    assert (c.artifacts.find_task_dir(receipt.task_id) / 'status.json').read_bytes() == before
+    other = FastAPI()
+    other.include_router(create_summary_regeneration_router(c.service, lambda: SimpleNamespace(user_id='bob'), c.note), prefix='/api')
+    assert TestClient(other).get(path).status_code == 404
+    with c.sessions() as db:
+        db.get(SourceRequestDB, ('alice', str(c.body.operation_id))).fingerprint = '0' * 64
+    assert client.get(path).json()['items'] == []
+
+
+@pytest.mark.parametrize('damage', ['reference', 'presentation', 'unaccepted', 'missing_receipt'])
+def test_summary_children_ignores_unverifiable_entries(case, damage):
+    c = case
+    good, _ = accept(c)
+    bad, _ = accept(c, c.body.model_copy(update={'operation_id': uuid4()}))
+    folder = c.artifacts.find_task_dir(bad.task_id)
+    if damage in {'reference', 'presentation'}:
+        name = 'source_reference.json' if damage == 'reference' else 'summary_presentation.json'
+        path = folder / name
+        data = json.loads(path.read_text(encoding='utf-8'))
+        data['parent_task_id' if damage == 'reference' else 'canonical_task_id'] = str(uuid4())
+        c.artifacts.write_json(path, data)
+    else:
+        with c.sessions() as db:
+            row = db.get(SourceRequestDB, ('alice', str(bad.operation_id)))
+            if damage == 'unaccepted':
+                row.state = 'pending'
+            else:
+                db.delete(row)
+    c.artifacts.update_status(c.artifacts.find_task_dir(good.task_id), 'failed', 'offline failure')
+    result = c.service.list_children('alice', c.parent)
+    assert [item['task_id'] for item in result['items']] == [good.task_id]
+    assert 'status' not in result['items'][0]
 
 
 @pytest.mark.parametrize('actual_pipeline', [False, True])
@@ -211,14 +277,7 @@ def test_second_version_uses_original_evidence_never_previous_summary_and_freeze
         def __init__(self): self.calls = []
         def _complete(self, **prompts):
             self.calls.append(prompts)
-            if len(self.calls) == 1:
-                return json.dumps({'protocol': 3, 'topics': [{'id': 'T1', 'title': 'Synthetic source'}],
-                    'claims': [{'id': 'C1', 'topic_id': 'T1', 'field': 'relation', 'text': c.transcript['full_text'], 'anchor': c.transcript['full_text'],
-                         'material': True, 'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': c.transcript['full_text']}]}]})
-            return json.dumps({'protocol': 4, 'blocks': [{'id': 'B1', 'markdown': '# Synthetic source'}, {'id': 'B2', 'markdown': c.transcript['full_text']}],
-                'claims': [{'id': 'C1', 'field': 'relation', 'text': c.transcript['full_text'], 'material': True,
-                    'disposition': 'included', 'block_ids': ['B2'],
-                    'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': c.transcript['full_text']}]}]})
+            return '# Synthetic source\n\n' + c.transcript['full_text']
     llm = CaptureLLM()
     runner = object.__new__(NoteService)
     runner.artifact_service = c.artifacts
@@ -231,7 +290,7 @@ def test_second_version_uses_original_evidence_never_previous_summary_and_freeze
     second = c.service.accept('alice', first.task_id, body, BackgroundTasks(), runner)
     c.service.run_once(second.task_id, 'alice', runner)
     assert c.artifacts.get_status(second.task_id)['status'] == 'success'
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 1
     assert all(sentinel not in json.dumps(call) for call in llm.calls)
     assert all(c.transcript['full_text'] in call['user_prompt'] for call in llm.calls)
     assert all('speaker_0' in call['user_prompt'] for call in llm.calls)
@@ -241,15 +300,15 @@ def test_second_version_uses_original_evidence_never_previous_summary_and_freeze
     assert before == {p: p.read_bytes() for p in parent.rglob('*') if p.is_file()}
 
 
-def test_summary_snapshot_preserves_connection_auth_mode_without_tokens(monkeypatch):
+def test_summary_snapshot_drops_historical_connection_identity_without_tokens(monkeypatch):
     import app.services.meeting_summary_regeneration as module
-    connection = {'configured': True, 'mode': 'cloud', 'server_url': 'https://connection.invalid',
+    connection = {'configured': True, 'mode': 'cloud', 'server_url': settings.vilab_server_url,
         'connection_id': 'immutable-account-connection', 'connection_auth_mode': 'account',
         'asr_model': 'asr-unchanged', 'llm_model': 'global-default'}
     monkeypatch.setattr(VILabCloudService, 'connection_snapshot', lambda self, owner: connection)
-    monkeypatch.setattr(module, 'validate_source', lambda source, owner: source)
     frozen = module._snapshot('alice', 'this-version-llm')
-    assert frozen['connection_auth_mode'] == 'account' and frozen['connection_id'] == connection['connection_id']
+    assert frozen['server_url'] == settings.vilab_server_url
+    assert 'connection_id' not in frozen and 'connection_auth_mode' not in frozen
     assert frozen['llm_model'] == 'this-version-llm' and frozen['asr_model'] == 'asr-unchanged'
     assert 'configured' not in frozen and 'token' not in frozen
 

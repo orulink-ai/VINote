@@ -1,5 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import type { PendingMeeting, MeetingGenerationSelection } from './audioStorage'
+const notify = vi.hoisted(() => vi.fn())
+vi.mock('./taskNotifications', () => ({ trackGenerationNotification: notify }))
 
 const mocks = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn(), audio: vi.fn(), api: vi.fn(), submit: vi.fn(), resume: vi.fn(), complete: vi.fn(), save: vi.fn(), owner: 'owner', publish: vi.fn(), models: vi.fn(), speech: vi.fn() }))
 vi.mock('./audioStorage', () => ({ getPendingMeeting: mocks.read, updatePendingMeeting: mocks.write, getRecordedAudio: mocks.audio }))
@@ -14,6 +16,19 @@ import { processSavedMeeting, isMeetingProcessing } from './meetingProcessing'
 import { MissingMeetingTaskError } from './meetingGeneration'
 
 const selection: MeetingGenerationSelection = { mode: 'cloud', asr: 'asr-original', llm: 'llm-original', asrLabel: 'asr-original', llmLabel: 'llm-original' }
+// A meeting is submitted as one recording, so the catalog has to declare the
+// whole-file contract; the model name alone never implies it.
+const meetingCapabilities = {
+  recordedAudio: { protocol: 1, supported: true, strategy: 'single_request', policySource: 'provider_model' },
+  useCases: ['recording', 'meeting'],
+  protocols: ['asr-recording'],
+  audioFormats: ['wav'],
+  audioDelivery: 'public',
+  maxAudioSeconds: 10800,
+  maxAudioBytes: 512 * 1024 * 1024,
+  speakerDiarization: true,
+  utteranceTimestamps: true,
+}
 let record: PendingMeeting
 beforeEach(() => {
   vi.resetAllMocks(); mocks.owner = 'owner'
@@ -21,7 +36,7 @@ beforeEach(() => {
   mocks.read.mockImplementation(async () => record)
   mocks.write.mockImplementation(async (_id, patch) => { record = { ...record, ...patch }; return record })
   mocks.audio.mockResolvedValue(new Blob(['audio']))
-  mocks.api.mockImplementation(async (path: string) => path.endsWith('/models') ? [{ id: selection.asr, modelType: 'asr', runtimeStatus: 'available' }, { id: selection.llm, modelType: 'llm', runtimeStatus: 'available' }] : { configured: true, mode: 'cloud', asr_model: selection.asr, llm_model: selection.llm })
+  mocks.api.mockImplementation(async (path: string) => path.endsWith('/models') ? [{ id: selection.asr, modelType: 'asr', runtimeStatus: 'available', capabilities: meetingCapabilities }, { id: selection.llm, modelType: 'llm', runtimeStatus: 'available' }] : { configured: true, mode: 'cloud', asr_model: selection.asr, llm_model: selection.llm })
   mocks.submit.mockResolvedValue({ task_id: 'new-task' }); mocks.resume.mockResolvedValue({ task_id: 'original-task' })
   mocks.save.mockResolvedValue({ id: 'note' }); mocks.complete.mockResolvedValue({ id: 'note' }); mocks.publish.mockResolvedValue(undefined)
 })
@@ -37,6 +52,8 @@ it('persists the operation before submission and preserves the source identity',
   mocks.submit.mockImplementation(async input => {
     expect(record.generationOperation?.selection).toEqual(selection)
     expect(input.meetingSessionId).toBe(record.id)
+    expect(input.asrModel).toBe(selection.asr)
+    expect(input.modelName).toBe(selection.llm)
     return { task_id: 'new-task' }
   })
   await processSavedMeeting(record, 'zh', undefined, { selection })
@@ -44,6 +61,14 @@ it('persists the operation before submission and preserves the source identity',
   expect(record.id).toBe('source-recording')
   expect(record.generationOperation?.outputLanguage).toBe('zh')
   expect(record.processingStatus).toBe('completed')
+  expect(notify).toHaveBeenCalledWith('owner', { taskId: 'new-task', recordingId: 'source-recording', meeting: true, mode: 'file' })
+})
+
+it('keeps accepted recording work running when notification storage is unavailable', async () => {
+  notify.mockImplementation(() => { throw new Error('storage unavailable') })
+  await processSavedMeeting(record, 'zh', undefined, { selection })
+  expect(record.processingStatus).toBe('completed')
+  expect(mocks.complete).toHaveBeenCalledOnce()
 })
 
 it('does not upload when persisting the model confirmation fails', async () => {
@@ -72,6 +97,7 @@ it('restores an existing task without reading newer global model configuration',
   expect(mocks.resume).toHaveBeenCalledWith('original-task')
   expect(mocks.submit).not.toHaveBeenCalled(); expect(mocks.api).not.toHaveBeenCalled()
   expect(record.generationOperation?.selection).toEqual(selection)
+  expect(notify).not.toHaveBeenCalled()
 })
 
 it('persists the real failed stage from non-retryable task readback without retry, upload or model execution', async () => {
@@ -114,14 +140,18 @@ it('rejects stale confirmation rather than replacing a newer operation', async (
   expect(record.generationOperation.id).toBe('newer'); expect(mocks.submit).not.toHaveBeenCalled()
 })
 
-it('passes saved local profiles rather than current global selections', async () => {
+it('rejects saved local profiles without upload or profile resolution', async () => {
   const local = { mode: 'local', asr: 'saved-asr', llm: 'saved-llm', asrLabel: '语音 · speech', llmLabel: '总结 · summary' } as const
   record.generationOperation = { id: 'operation', selection: local, outputLanguage: 'en' }
   mocks.api.mockResolvedValue({ mode: 'local' })
   mocks.speech.mockResolvedValue([{ id: local.asr, isActive: true, name: '语音', modelName: 'speech' }])
   mocks.models.mockResolvedValue([{ id: local.llm, isActive: true, name: '总结', modelName: 'summary' }])
   await processSavedMeeting(record, 'zh')
-  expect(mocks.submit).toHaveBeenCalledWith(expect.objectContaining({ sttProfileId: 'saved-asr', modelProfileId: 'saved-llm', outputLanguage: 'en' }), expect.anything())
+  expect(mocks.submit).not.toHaveBeenCalled()
+  expect(mocks.speech).not.toHaveBeenCalled()
+  expect(mocks.models).not.toHaveBeenCalled()
+  expect(record.processingError).toContain('公网')
+  expect(record.generationOperation?.selection).toEqual(local)
 })
 
 it('blocks unavailable cloud models without silently choosing an alternative', async () => {
@@ -144,7 +174,7 @@ it('query failure preserves the original task and never becomes a new upload', a
 
 it.each(['service_error', 'rate_limited'])('allows an explicit expired %s retry using the frozen model', async status => {
   mocks.api.mockImplementation(async (path: string) => path.endsWith('/models') ? [
-    { id: selection.asr, modelType: 'asr', runtimeStatus: 'not_available', availability: { status, retryAt: Date.now() - 1 } },
+    { id: selection.asr, modelType: 'asr', runtimeStatus: 'not_available', capabilities: meetingCapabilities, availability: { status, retryAt: Date.now() - 1 } },
     { id: selection.llm, modelType: 'llm', runtimeStatus: 'available' },
   ] : { configured: true, mode: 'cloud', asr_model: selection.asr, llm_model: selection.llm })
   await processSavedMeeting(record, 'zh', undefined, { selection })
@@ -153,7 +183,7 @@ it.each(['service_error', 'rate_limited'])('allows an explicit expired %s retry 
 })
 it.each(['auth_failed', 'quota_exhausted', 'permission_denied'])('blocks %s even with an expired retryAt', async status => {
   mocks.api.mockImplementation(async (path: string) => path.endsWith('/models') ? [
-    { id: selection.asr, modelType: 'asr', runtimeStatus: 'not_available', availability: { status, retryAt: 1 } },
+    { id: selection.asr, modelType: 'asr', runtimeStatus: 'not_available', capabilities: meetingCapabilities, availability: { status, retryAt: 1 } },
     { id: selection.llm, modelType: 'llm', runtimeStatus: 'available' },
   ] : { configured: true, mode: 'cloud', asr_model: selection.asr, llm_model: selection.llm })
   await processSavedMeeting(record, 'zh', undefined, { selection })

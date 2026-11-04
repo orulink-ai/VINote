@@ -1,3 +1,4 @@
+vi.mock('@/hooks/useTaskCenter', () => ({ useTaskCenter: () => ({}) }));
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { MemoryRouter, useLocation } from 'react-router-dom'
@@ -50,12 +51,10 @@ it('retains the explicit Feishu receipt read without any workspace job request',
   expect(api.json).not.toHaveBeenCalled()
 })
 
-it('retains the MCP read and its own 404 error instead of suppressing all Not Found results', async () => {
-  vi.mocked(listMCPRuns).mockRejectedValueOnce(new Error('MCP Not Found'))
+it('does not query retired MCP tools from a historical tab URL', async () => {
   render(<MemoryRouter initialEntries={['/tasks?tab=mcp']}><Tasks /></MemoryRouter>)
-  expect(await screen.findByText('MCP Not Found')).toBeVisible()
-  expect(listMCPRuns).toHaveBeenCalledTimes(1)
-  expect(screen.getByRole('button', { name: '重试' })).toBeVisible()
+  expect(screen.queryByRole('tab', { name: 'MCP' })).not.toBeInTheDocument()
+  expect(listMCPRuns).not.toHaveBeenCalled()
   expect(api.json).not.toHaveBeenCalled()
 })
 
@@ -93,7 +92,7 @@ it('keeps the originating filtered page when changing recovery categories', asyn
   function LocationProbe() { return <output data-testid="location">{useLocation().search}</output> }
   render(<MemoryRouter initialEntries={['/tasks?returnTo=%2Ffiles%3Ftype%3Dvideo&tab=generation']}><Tasks /><LocationProbe /></MemoryRouter>)
   await waitFor(() => expect(screen.queryByText('正在更新任务状态…')).toBeNull())
-  fireEvent.mouseDown(screen.getByRole('tab', { name: '飞书' }), { button: 0, ctrlKey: false })
+  fireEvent.mouseDown(screen.getByRole('tab', { name: '飞书发布' }), { button: 0, ctrlKey: false })
   await waitFor(() => expect(screen.getByTestId('location').textContent).toContain('tab=feishu'))
   expect(screen.getByRole('link', { name: /返回文件库/ })).toHaveAttribute('href', '/files?type=video')
 })
@@ -126,6 +125,9 @@ it('distinguishes concurrent typed versions by frozen title/model/form and submi
   render(<MemoryRouter><Tasks /></MemoryRouter>)
   const a = (await screen.findByRole('heading', { name: '会议 A · 新版本' })).closest('article')!
   const b = screen.getByRole('heading', { name: '会议 B · 新版本' }).closest('article')!
+  expect(a.querySelector('details')).not.toHaveAttribute('open')
+  fireEvent.click(within(a).getByText('处理详情'))
+  fireEvent.click(within(b).getByText('处理详情'))
   expect(within(a).getByText('Luna')).toBeVisible()
   expect(within(b).getByText('Deepseek')).toBeVisible()
   expect(within(b).getByText('详细 · 信息图')).toBeVisible()
@@ -170,3 +172,16 @@ it.each([{ owner: 'other' }, { origin: 'https://changed.invalid' }, { createdAt:
     await screen.findByRole('link', { name: '查看原任务与处理记录' })
     expect(screen.queryByText(/unverified/)).toBeNull()
   })
+
+it('searches task sources locally and clearing the query keeps every recovery receipt', async () => {
+  localStorage.setItem('vinote:source-receipt:owner:alpha', JSON.stringify({ id: 'alpha', operationId: 'alpha', meeting: true, sourceTitle: '项目评审', submissionState: 'accepted' }));
+  localStorage.setItem('vinote:source-receipt:owner:beta', JSON.stringify({ id: 'beta', operationId: 'beta', meeting: false, sourceTitle: '培训视频', submissionState: 'accepted' }));
+  render(<MemoryRouter initialEntries={['/tasks?tab=generation']}><Tasks /></MemoryRouter>);
+  const search = await screen.findByRole('textbox', { name: '搜索处理记录' });
+  fireEvent.change(search, { target: { value: '项目评审' } });
+  expect(screen.getAllByRole('article')).toHaveLength(1);
+  fireEvent.change(search, { target: { value: '无匹配' } });
+  fireEvent.click(screen.getByRole('button', { name: '清除搜索' }));
+  expect(screen.getAllByRole('article')).toHaveLength(2);
+  expect(localStorage.length).toBe(2);
+});

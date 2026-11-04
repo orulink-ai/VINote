@@ -168,6 +168,22 @@ def item(url=CDN):
     return source.BilibiliSource(URL, "标题", BV + "_p1", 73, url, 1, 123, 456)
 
 
+def test_selects_valid_https_backup_when_primary_is_peer_cdn_nonstandard_port(wire):
+    wire['replies'] = [view(), play(dash={'audio': [{
+        'baseUrl': 'https://peer.bilivideo.cn:8082/audio',
+        'backupUrl': ['https://untrusted.example/audio', CDN],
+        'mimeType': 'audio/mp4', 'codecs': 'mp4a.40.2', 'bandwidth': 64000}]})]
+    assert source.resolve(URL).audio_url == CDN
+
+
+def test_untrusted_backup_never_expands_audio_allowlist(wire):
+    wire['replies'] = [view(), play(dash={'audio': [{
+        'baseUrl': 'https://peer.bilivideo.cn:8082/audio',
+        'backupUrl': ['https://untrusted.example/audio'],
+        'mimeType': 'audio/mp4', 'codecs': 'mp4a.40.2', 'bandwidth': 64000}]})]
+    with pytest.raises(source.BilibiliSourceError): source.resolve(URL)
+
+
 @pytest.mark.parametrize("status", [401, 403, 412, 429])
 def test_blocked_http_fixed_safe_message_no_retry(wire, status):
     wire["replies"] = [response(b"private provider content", status=status, kind="text/html")]

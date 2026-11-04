@@ -109,6 +109,10 @@ def _with_meeting_source(note: NoteRecordResponse, owner: str) -> NoteRecordResp
 
 def _with_meeting_display_source(note: NoteRecordResponse, owner: str) -> NoteRecordResponse:
     """Archive grouping only; domain callers retain artifact-only provenance."""
+    from app.services.note_original_projection import original_source
+    from app.models.note_library import OriginalSourceResponse
+    original = original_source(note, owner, _artifact_service)
+    note = note.model_copy(update={'original_source': OriginalSourceResponse(**original) if original else None})
     note = _with_meeting_source(note, owner)
     if note.meeting_source is not None or not settings.desktop_runtime or note.scope != 'personal':
         return note
@@ -197,10 +201,11 @@ def ask(note_id: str, payload: MeetingQuestion, user: AuthenticatedUser = Depend
 def list_notes(
     scope: NoteScope = Query(default="personal"),
     team_id: str | None = Query(default=None),
+    task_id: str | None = Query(default=None, min_length=1, max_length=160),
     user: AuthenticatedUser = Depends(get_current_user),
 ):
     return [_with_meeting_display_source(note, user.user_id)
-            for note in _repository.list_notes(user.user_id, scope=scope, team_id=team_id)]
+            for note in _repository.list_notes(user.user_id, scope=scope, team_id=team_id, **({"task_id": task_id} if task_id is not None else {}))]
 
 
 @router.get("/notes/{note_id}", response_model=NoteRecordResponse)

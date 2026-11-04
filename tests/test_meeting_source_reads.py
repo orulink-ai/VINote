@@ -136,6 +136,18 @@ def raw(value):
     return json.dumps(value, ensure_ascii=False)
 
 
+def test_fullwidth_structural_punctuation_preserves_string_values_and_raw_response():
+    value = draft()
+    value['claims'][0]['evidence'][0].pop('start')
+    value['claims'][0]['evidence'][0].pop('end')
+    value['claims'][0]['text'] = '原文，包含：标点和\"引号'
+    source = raw(value)
+    malformed = source.replace('], "claims":', ']， "claims"：', 1)
+    combined = combine_source_reads([malformed, source, source], [frozenset({'[ASR:0001]'})] * 3)
+    assert json.loads(combined)['claims'][0]['text'] == value['claims'][0]['text']
+    assert combined.raw_reads[0] == malformed
+
+
 def test_combination_only_namespaces_ids_preserves_duplicate_claims_and_raw_provenance():
     value = draft()
     # Explicit offsets retain their original character count; no searching/repair.

@@ -37,6 +37,12 @@ it('keeps the same item and offers retry after failed restoration, without delet
 it('does not show an empty trash or zero contents before the first device read has completed', async () => {
   useWorkspaceStore.setState({ ready: false }); await mount();
   expect(screen.getByText('正在读取保存内容…')).toBeInTheDocument();
-  expect(screen.queryByText('回收站为空。')).not.toBeInTheDocument();
+  expect(screen.queryByText('此设备工作区缓存中没有回收站内容。')).not.toBeInTheDocument();
   expect(screen.queryByRole('button', { name: '恢复内容' })).not.toBeInTheDocument();
+});
+it('labels counts and empty trash with their device cache scope', async () => {
+  useWorkspaceStore.setState({ items: [] }); await mount();
+  expect(screen.getByText('已缓存内容')).toBeInTheDocument();
+  expect(screen.getByText('以下统计仅包含此设备工作区已缓存的内容；笔记列表中的其他内容不计入。')).toBeInTheDocument();
+  expect(screen.getByText('此设备工作区缓存中没有回收站内容。')).toBeInTheDocument();
 });

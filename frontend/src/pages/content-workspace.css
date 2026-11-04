@@ -1,0 +1,32 @@
+/* Scoped to the meeting index and saved-note reader; global tokens stay intact. */
+.meeting-workspace .meeting-source-row { padding: 1rem .75rem; align-items: center; }
+.meeting-workspace .meeting-source-row > span:first-child { background: transparent; }
+.meeting-workspace .meeting-source-row > span:nth-child(2) > span:first-child { font-size: 15px; line-height: 1.5; }
+.meeting-workspace .meeting-source-contents { margin-left: 3.75rem; padding: 0 .75rem 1rem 0; }
+.meeting-workspace .meeting-source-contents > div { gap: 1.25rem; }
+.meeting-workspace .meeting-version-list { gap: 0; }
+.meeting-workspace .meeting-version-list > li { padding: .5rem 0; border-bottom: 1px solid hsl(var(--border) / .55); }
+.meeting-workspace .meeting-version-list > li:last-child { border-bottom: 0; }
+.meeting-workspace .meeting-version-row { padding: .5rem .625rem; border-radius: .375rem; box-shadow: none; }
+.meeting-workspace .meeting-version-row > span { width: 100%; }
+.meeting-workspace .meeting-version-row > span > span:first-child { font-size: .875rem; font-weight: 500; }
+.meeting-workspace .meeting-version-row + div { padding-inline: .625rem; }
+.note-reading-workspace .note-reading-header { padding-top: 1.5rem; }
+.note-reading-workspace .note-reading-actions { border: 0; border-radius: 0; background: transparent; }
+.note-reading-workspace .note-reading-actions > summary { width: fit-content; padding-left: 0; color: hsl(var(--muted-foreground)); font-size: .75rem; }
+.note-reading-workspace .note-reading-actions > summary:hover { color: hsl(var(--foreground)); }
+.note-reading-workspace .note-reading-actions-body { background: hsl(var(--muted) / .2); border-bottom: 1px solid hsl(var(--border)); }
+.note-reading-workspace .note-reading-prose { max-width: 52rem; padding-top: 2rem; padding-bottom: 4rem; font-size: 15px; line-height: 1.85; }
+.note-reading-workspace .note-reading-prose h2 { margin-top: 2em; margin-bottom: .8em; font-size: 1.25rem; line-height: 1.5; font-weight: 600; }
+.note-reading-workspace .note-reading-prose h3 { margin-top: 1.6em; font-size: 1.0625rem; font-weight: 600; }
+.note-reading-workspace .note-reading-prose p { margin-block: .9em; }
+@media (hover: hover) and (pointer: fine) {
+  .meeting-workspace .meeting-version-actions { opacity: 0; }
+  .meeting-workspace .meeting-version-list > li:hover .meeting-version-actions,
+  .meeting-workspace .meeting-version-list > li:focus-within .meeting-version-actions { opacity: 1; }
+}
+@media (max-width: 639px) {
+  .meeting-workspace .meeting-source-contents { margin-left: .75rem; padding-right: .75rem; }
+  .note-reading-workspace .note-reading-header { padding-inline: 1rem; padding-top: 1rem; }
+  .note-reading-workspace .note-reading-prose { padding: 1.5rem 1rem 3rem; }
+}

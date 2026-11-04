@@ -59,8 +59,10 @@ class MeetingVersionConfirmation(BaseModel):
     @model_validator(mode="after")
     def choices(self):
         if self.llm_mode == "inherit":
-            if any(value is not None for value in (self.model_name, self.selection_revision, self.connection_id)):
-                raise ValueError("沿用原模型时不接受其他连接或模型")
+            # connection_id remains parseable for historical clients; the fixed
+            # deployment gives it no binding or destination role.
+            if any(value is not None for value in (self.model_name, self.selection_revision)):
+                raise ValueError("沿用原模型时不接受其他模型")
         elif not self.model_name or not self.selection_revision:
             raise ValueError("请明确选择总结模型并核验当前连接")
         if self.asr_mode == "fresh":
@@ -187,8 +189,7 @@ class MeetingVersionService:
                 bound_snapshot = json.loads(accepted.receipt_json or "{}").get("summary_snapshot_sha256")
             if link.get("contract") == "meeting-summary-only-v1":
                 if (snapshot.get("needs_stt") is not False
-                        or snapshot["llm_model"] != body.model_name
-                        or body.connection_id is not None and snapshot.get("connection_id") != body.connection_id):
+                        or snapshot["llm_model"] != body.model_name):
                     _unavailable("meeting_version_parent_unverified", "原版本的冻结模型与处理回执不匹配。")
                 if bound_snapshot is None:
                     # The accepted fingerprint still proves the selected source
@@ -242,7 +243,7 @@ class MeetingVersionService:
             "original_llm": {"model_name": snapshot["llm_model"], "server_url": snapshot["server_url"],
                              "verified": verified,
                              **({"reason": "原版本模型连接暂不能核验，请选择并确认本次模型。已有转写仍可复用。"} if not verified else {}),
-                             **({"connection_id": snapshot["connection_id"]} if snapshot.get("connection_id") else {})},
+                             },
             "presentation_options": context["presentation_options"],
             "asr_modes": {"reuse": {"available": reuse_available,
                 **({"reason": "当前缺少完整可复用证据；可明确选择重新识别。"} if not reuse_available else {})},
@@ -266,8 +267,8 @@ class MeetingVersionService:
     def _current(owner):
         current = VILabCloudService().connection_snapshot(owner)
         if current.get("mode") != "cloud" or not current.get("server_url"):
-            _unavailable("meeting_version_selection_unavailable", "当前没有可选择的云端模型连接。")
-        return {k: current[k] for k in ("mode", "server_url", "connection_id", "connection_auth_mode") if k in current}
+            _unavailable("meeting_version_selection_unavailable", "当前没有可选择的云端模型服务。")
+        return {k: current[k] for k in ("mode", "server_url") if k in current}
 
     @staticmethod
     def _selection_revision(owner, context_revision, current):
@@ -284,7 +285,7 @@ class MeetingVersionService:
                 models = cloud.models(owner)
             if self._current(owner) != current:
                 _unavailable("meeting_version_selection_changed", "模型连接已变化，请重新读取目录。")
-            return {"models": models, "connection": {k: current[k] for k in ("server_url", "connection_id") if k in current},
+            return {"models": models, "connection": {k: current[k] for k in ("server_url",) if k in current},
                     "selection_revision": self._selection_revision(owner, context_revision, current)}
 
     def _existing(self, owner, parent, body):
@@ -315,8 +316,7 @@ class MeetingVersionService:
             selected = {**original, "needs_stt": False}
             if body.llm_mode == "select":
                 current = self._current(owner)
-                if (body.selection_revision != self._selection_revision(owner, body.context_revision, current)
-                        or body.connection_id != current.get("connection_id")):
+                if body.selection_revision != self._selection_revision(owner, body.context_revision, current):
                     _unavailable("meeting_version_selection_changed", "当前模型连接已变化，请重新核验目录。")
                 selected = {"version": 1, "owner": owner, **current, "llm_model": body.model_name,
                             "asr_model": body.asr_model or "", "needs_stt": body.asr_mode == "fresh"}
@@ -332,7 +332,7 @@ class MeetingVersionService:
             executor.artifacts = self.summary.artifacts
             confirmation = SummaryConfirmation(operation_id=body.operation_id, confirmed=True,
                 context_revision=summary_context["context_revision"], source_version=body.source_version,
-                model_name=selected["llm_model"], connection_id=selected.get("connection_id"),
+                model_name=selected["llm_model"],
                 content_depth=body.content_depth, presentation=body.presentation)
             with cloud.task_snapshot(owner, snapshot=selected):
                 return executor.accept(owner, parent, confirmation, background, note_service, active=active)

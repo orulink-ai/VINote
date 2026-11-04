@@ -8,6 +8,20 @@ ContentDepth = Literal['brief', 'concise', 'detailed']
 Presentation = Literal['text', 'illustrated', 'html', 'comic', 'infographic']
 _depth = ContextVar('meeting_content_depth', default=None)
 _state = ContextVar('meeting_presentation_state', default=None)
+_direct_markdown = ContextVar('meeting_direct_markdown', default=False)
+
+
+def direct_markdown_active():
+    return _direct_markdown.get()
+
+
+@contextmanager
+def direct_markdown_scope():
+    token = _direct_markdown.set(True)
+    try:
+        yield
+    finally:
+        _direct_markdown.reset(token)
 
 
 @dataclass
@@ -16,6 +30,11 @@ class PresentationState:
     presentation: str | None
     figures: list = field(default_factory=list)
     raw_review: str | None = None
+    review_attempts_started: int = 0
+    review_attempts_completed: int = 0
+    empty_review_responses: int = 0
+    review_attempt_details: list = field(default_factory=list)
+    active_review_attempt: dict | None = None
     visual_review: dict | None = None
 
 
@@ -42,7 +61,7 @@ def depth_instructions(depth=None):
         'concise': 'Content depth: concise. Cover the substantive topics, outcomes, rationale and explicit follow-ups compactly. Remove repetition and secondary examples while preserving material conditions and disagreements.',
         'detailed': 'Content depth: detailed. Preserve substantive source-supported explanations, examples, comparisons, constraints, disagreements and changes of plan without repeating facts.',
     }
-    return instructions.get(depth, '') + ('\nChoose headings from the actual content; no fixed sections, counts or action tables. The report field contains Markdown facts only; do not generate HTML, images, image URLs or screenshot placeholders.' if depth else '')
+    return instructions.get(depth, '') + ('\nFormat the reader-facing minutes as structured Markdown: one # meeting title, ## headings for substantive topics, and ### subheadings only where useful. Begin with a short overview, then organize discussion by actual topic rather than transcript order. Use short paragraphs and bullet lists with blank lines between sections. Bold key conclusions sparingly. Include decisions, open questions and action items only when supported by the source; preserve explicit owners and deadlines, never invent them. Do not create empty sections or repeat facts. The report field contains Markdown facts only; do not generate HTML, images, image URLs or screenshot placeholders.' if depth else '')
 
 
 def final_depth_selection(depth):
@@ -68,7 +87,7 @@ def final_depth_selection(depth):
              'claim, including material=true; keep its frozen id, field and material unchanged. Do not falsely '
              'reject or reclassify it to shorten the report.' if depth != 'detailed' else '') +
             ' The complete claim ledger may be longer than the report. Keep its accounting outside the '
-            'reader-facing blocks. No truncation, fixed headings or extra model call.')
+            'reader-facing blocks. No truncation, forced thematic templates or extra model call.')
 
 
 def presentation_availability(*, has_visuals):

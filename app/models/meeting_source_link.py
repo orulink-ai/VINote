@@ -41,3 +41,31 @@ class ConfirmMeetingSourceLink(BaseModel):
         if str(UUID(value)) != value:
             raise ValueError('Canonical UUID required')
         return value
+
+
+class MeetingDisplayDB(Base):
+    """User labels, independent of immutable capture and canonical identity."""
+    __tablename__ = 'meeting_display_metadata'
+    owner: Mapped[str] = mapped_column(String(128), primary_key=True)
+    source_key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    title: Mapped[str] = mapped_column(String(180), default='')
+    meeting_date: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+
+class MeetingDisplayUpdate(BaseModel):
+    model_config = ConfigDict(extra='forbid')
+    title: str = Field(default='', max_length=180)
+    meeting_date: str | None = None
+
+    @field_validator('title')
+    @classmethod
+    def clean_title(cls, value):
+        return value.strip()
+
+    @field_validator('meeting_date')
+    @classmethod
+    def calendar_date(cls, value):
+        from datetime import date
+        if value is not None and date.fromisoformat(value).isoformat() != value:
+            raise ValueError('使用 YYYY-MM-DD 格式的会议日期')
+        return value

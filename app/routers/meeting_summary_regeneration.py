@@ -27,6 +27,11 @@ def create_summary_regeneration_router(service=None, principal=None, note_servic
     active = active or (lambda task: False)
     router = APIRouter(tags=['notes'])
 
+    @router.get('/task/{task_id}/summary-children')
+    def children(task_id: str, response: Response, user=Depends(principal)):
+        response.headers['Cache-Control'] = 'private, no-store'
+        return service.list_children(user.user_id, task_id)
+
     @router.get('/task/{task_id}/summary-presentation')
     def presentation(task_id: str, response: Response, user=Depends(principal)):
         from app.services.summary_presentation_artifact import read_presentation

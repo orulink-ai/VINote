@@ -1,12 +1,12 @@
+import { trackGenerationNotification } from './taskNotifications'
 import { modelEligible, type ModelEligibilityInput } from './modelEligibility'
+import { meetingReady, type RecordedAudioModel } from './recordedAudioPolicy'
 import { getPendingMeeting, getRecordedAudio, updatePendingMeeting, type PendingMeeting, type MeetingGenerationSelection } from './audioStorage'
 import { completeMeetingRecordingGeneration, createMeetingRecordingTitle, MeetingGenerationError, MissingMeetingTaskError, resumeMeetingTask, submitMeetingRecording, type MeetingGenerationStage } from './meetingGeneration'
 import { apiJson } from './api'
 import { formatMeetingTitle, meetingSubject } from './meetingTitle'
 import { useAuthStore } from '../stores/authStore'
 import { type ModelSourceConfig } from '../stores/appModeStore'
-import { fetchModelProfiles } from './modelProfiles'
-import { fetchSTTProfiles } from './sttProfiles'
 import { useNoteLibraryStore } from '../stores/noteLibraryStore'
 import { publishToFeishu } from './feishu'
 
@@ -57,6 +57,7 @@ async function run(recording: PendingMeeting, language: string, audio?: Blob, co
         throw new Error('处理记录已更新，请返回原任务；不会重复提交。')
       }
       if (pending.taskId && !pending.generationConfirmationRequired) throw new Error('请先恢复原任务，不能重复提交。')
+      if (confirmation.selection.mode !== 'cloud') throw new Error('会议处理仅支持固定公网服务，请选择服务模型后重新确认。')
       if (!confirmation.selection.asr || !confirmation.selection.llm) throw new Error('请明确选择语音转写和总结模型，再确认生成。')
       pending = await updatePendingMeeting(id, {
         generationOperation: { id: crypto.randomUUID(), selection: { ...confirmation.selection }, outputLanguage: language, previousTaskId: pending.taskId },
@@ -84,6 +85,10 @@ async function run(recording: PendingMeeting, language: string, audio?: Blob, co
     }
     if (!resumed) {
       const selection = pending.generationOperation!.selection
+      if (selection.mode !== 'cloud') {
+        await persist({ generationConfirmationRequired: true })
+        throw new Error('会议处理仅支持固定公网服务，请选择服务模型后重新确认；原录制保留。')
+      }
       const config = await apiJson<ModelSourceConfig>('/api/vilab/config', { cache: 'no-store' })
       if (useAuthStore.getState().user?.id !== pending.ownerId) throw new Error('账号已切换，未提交生成。')
       if (config.mode !== selection.mode || (selection.mode === 'cloud' &&
@@ -91,29 +96,39 @@ async function run(recording: PendingMeeting, language: string, audio?: Blob, co
         await persist({ generationConfirmationRequired: true })
         throw new Error('模型配置已变化，未提交生成。请核对模型后明确另建操作。')
       }
-      const available = selection.mode === 'cloud'
-        ? await apiJson<(ModelEligibilityInput & { id: string; modelType: string })[]>('/api/vilab/models', { cache: 'no-store' })
-          .then(catalog => catalog.some(model => model.id === selection.asr && model.modelType === 'asr' && modelEligible(model)) &&
-            catalog.some(model => model.id === selection.llm && model.modelType === 'llm' && modelEligible(model)))
-        : await Promise.all([fetchSTTProfiles(), fetchModelProfiles()]).then(([speech, models]) =>
-          speech.some(profile => profile.id === selection.asr && profile.isActive && `${profile.name} · ${profile.modelName || profile.provider}` === selection.asrLabel) &&
-          models.some(profile => profile.id === selection.llm && profile.isActive && `${profile.name} · ${profile.modelName}` === selection.llmLabel))
+      let available = false
+      if (selection.mode === 'cloud') {
+        const catalog = await apiJson<(ModelEligibilityInput & RecordedAudioModel & { id: string; modelType: string })[]>(
+          '/api/vilab/models', { cache: 'no-store' })
+        if (useAuthStore.getState().user?.id !== pending.ownerId) throw new Error('账号已切换，未提交生成。')
+        const speech = catalog.find(model => model.id === selection.asr && model.modelType === 'asr')
+        // A meeting is one complete recording. The catalog must declare the
+        // whole-file contract before any audio is uploaded.
+        const readiness = speech ? meetingReady(speech) : { ready: false, reason: '所选语音模型已不在目录中或暂不可用' }
+        if (!readiness.ready) {
+          await persist({ generationConfirmationRequired: true })
+          throw new Error(`${readiness.reason}，未提交生成。请重新核对模型。`)
+        }
+        available = catalog.some(model => model.id === selection.llm && model.modelType === 'llm' && modelEligible(model))
+      }
       if (!available) {
         await persist({ generationConfirmationRequired: true })
         throw new Error('已确认模型不可用或配置已修改，未提交生成。请重新核对模型。')
       }
       if (useAuthStore.getState().user?.id !== pending.ownerId) throw new Error('账号已切换，未提交生成。')
     }
-    const selection = pending.generationOperation?.selection
     const response = resumed || await submitMeetingRecording({
       audioBlob: blob!, title: pending.options.title, diarize: true,
       startedAt: new Date(pending.startedAt), endedAt: pending.endedAt ? new Date(pending.endedAt) : undefined,
+      asrModel: pending.generationOperation!.selection.asr,
+      modelName: pending.generationOperation!.selection.llm,
       outputLanguage: pending.generationOperation!.outputLanguage, summaryMode: 'default',
-      modelProfileId: selection?.mode === 'local' ? selection.llm : undefined,
-      sttProfileId: selection?.mode === 'local' ? selection.asr : undefined,
       meetingSessionId: id, meetingMode: 'minutes', meetingType: pending.options.meetingType,
     }, { onStage })
     await persist({ taskId: response.task_id, processingStatus: 'preparing_media' })
+    if (!resumed) {
+      try { trackGenerationNotification(pending.ownerId, { taskId: response.task_id, recordingId: id, meeting: true, mode: 'file' }) } catch { /* Notification storage cannot fail an accepted recording. */ }
+    }
     if (useAuthStore.getState().user?.id !== pending.ownerId) throw new Error('账号已切换，请用原账号恢复任务保存。')
     const library = useNoteLibraryStore.getState()
     draftId = pending.draftNoteId

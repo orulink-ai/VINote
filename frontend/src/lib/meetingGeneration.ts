@@ -33,6 +33,8 @@ interface SubmitMeetingRecordingInput {
   endedAt?: Date
   outputLanguage?: string
   summaryMode: SummaryMode
+  asrModel?: string
+  modelName?: string
   modelProfileId?: string
   sttProfileId?: string
   meetingSessionId?: string
@@ -97,6 +99,8 @@ export async function submitMeetingRecording(
       extras: `录制开始时间：${input.startedAt.toISOString()}。${input.endedAt ? `录制结束时间：${input.endedAt.toISOString()}。` : '录制结束时间未知。'}这是录制时间，不代表实际会议起止；录制可能暂停，禁止用音频时长推算会议结束时间。最终纪要首行请用一级标题概括原文支持的会议主题，不含日期，不沿用录制占位名称。`,
       summaryMode: input.summaryMode,
       outputLanguage: input.outputLanguage,
+      asrModel: input.asrModel,
+      modelName: input.modelName,
       modelProfileId: input.modelProfileId,
       sttProfileId: input.sttProfileId,
       meetingSessionId: input.meetingSessionId,

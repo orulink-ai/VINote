@@ -66,9 +66,9 @@ export function WriteNote() {
   return <div className="workspace-page max-w-4xl">
     <Button variant="ghost" className="self-start" disabled={saving} onClick={leave}><ArrowLeft data-icon="inline-start" />保存草稿并返回</Button>
     <PageHeading title="写笔记" description="直接写作或粘贴 Markdown，保存后继续编辑、导出或分享。" />
-    <section aria-label="笔记编辑" className="flex flex-col gap-5 rounded-2xl border bg-card p-6">
+    <section aria-label="笔记编辑" className="flex min-w-0 flex-col gap-4">
       <Field><FieldLabel htmlFor="new-note-title">标题</FieldLabel><Input id="new-note-title" value={title} maxLength={120} disabled={saving || pending || !!savedNote} onChange={e => setTitle(e.target.value)} placeholder="给这份内容一个容易找回的名字" /></Field>
-      <Field><FieldLabel htmlFor="new-note-content">正文</FieldLabel><Textarea id="new-note-content" value={content} maxLength={100000} disabled={saving || pending || !!savedNote} onChange={e => setContent(e.target.value)} className="min-h-72" placeholder="从一句想法开始，也可以粘贴已有文字…" /></Field>
+      <Field><FieldLabel htmlFor="new-note-content">正文</FieldLabel><Textarea id="new-note-content" value={content} maxLength={100000} disabled={saving || pending || !!savedNote} onChange={e => setContent(e.target.value)} className="min-h-64 resize-y text-sm leading-7" placeholder="从一句想法开始，也可以粘贴已有文字…" /></Field>
       {error && <ErrorState error={error} />}
       <div className="flex flex-wrap items-center justify-between gap-3"><p role="status" className="text-xs text-muted-foreground">{savedNote && !pending ? '笔记已保存。后续修改从详情继续，保留历史版本。' : protection || '原始输入保存在当前账号的本机草稿中'}</p>
         {pending ? <Button variant="outline" onClick={() => navigate(recoveryPath)}>查看保存结果与重试</Button> : savedNote ? <Button onClick={() => navigate(detailPath(savedNote.key))}>打开已保存笔记</Button> : <Button disabled={saving || storeBusy || !ready || !content.trim()} aria-busy={saving} onClick={() => void save()}>{saving ? <FileText data-icon="inline-start" /> : <Check data-icon="inline-start" />}{saving ? '正在保存…' : storeBusy ? '正在保存，请稍候' : '保存笔记'}</Button>}

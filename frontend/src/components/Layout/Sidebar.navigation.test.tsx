@@ -65,11 +65,22 @@ describe('Sidebar loaded note identity', () => {
 })
 
 describe('Sidebar settings return context', () => {
+  it('exposes one direct Feishu destination without a tool catalog', () => {
+    renderSidebar('/settings/feishu')
+    expect(screen.getByRole('link', { name: '飞书' })).toHaveAttribute('href', '/settings/feishu')
+    expect(screen.queryByRole('link', { name: /MCP|插件/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '展开飞书' })).not.toBeInTheDocument()
+  })
   it('shows meetings and notes as separate navigation destinations', () => {
     renderSidebar('/meetings')
     expect(screen.getByRole('link', { name: '会议' })).toHaveAttribute('aria-current', 'page')
     expect(screen.getByRole('link', { name: '笔记' })).not.toHaveAttribute('aria-current')
     expect(screen.queryByRole('link', { name: '会议与笔记' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: '文件库' })).not.toBeInTheDocument()
+  })
+  it.each([['/meetings/files', '会议'], ['/notes/files', '笔记']])('keeps %s under %s navigation', (path, label) => {
+    renderSidebar(path)
+    expect(screen.getByRole('link', { name: label })).toHaveAttribute('aria-current', 'page')
   })
   it('carries the current list query and hash into settings', () => {
     const parent = '/meetings?archived=1&q=pdf#selected'

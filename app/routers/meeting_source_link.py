@@ -23,6 +23,21 @@ def targets(owner=Depends(_owner)):
     return MeetingSourceLinkService().targets(owner)
 
 
+@router.get('/display')
+def display_metadata(owner=Depends(_owner)):
+    from app.services.meeting_display_metadata import MeetingDisplayService
+    return MeetingDisplayService().list(owner)
+
+
+from app.models.meeting_source_link import MeetingDisplayUpdate
+
+
+@router.put('/display/{kind}/{identifier}')
+def edit_display_metadata(kind: str, identifier: str, payload: MeetingDisplayUpdate, owner=Depends(_owner)):
+    from app.services.meeting_display_metadata import MeetingDisplayService
+    return MeetingDisplayService().update(owner, kind, identifier, payload)
+
+
 @router.get('/{note_id}')
 def association(note_id: str, owner=Depends(_owner)):
     return MeetingSourceLinkService().get(owner, note_id)

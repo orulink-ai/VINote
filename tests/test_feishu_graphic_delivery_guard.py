@@ -232,7 +232,8 @@ def test_bound_task_with_unverifiable_form_refuses_new_delivery(chain, automatic
         submit(c, note, operation, body, automatic)
     assert rejected.value.code == 'meeting_context_unverified'
     assert rejected.value.status_code == 409 and not rejected.value.uncertain
-    assert '尚未创建文档或通知' in rejected.value.detail
+    detail = rejected.value.detail
+    assert '尚未创建文档或通知' in (detail['message'] if isinstance(detail, dict) else detail)
     assert_no_delivery(c)
     assert artifact_hashes(folder) == before
     with c.scope() as db:

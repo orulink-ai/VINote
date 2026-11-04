@@ -99,6 +99,9 @@ def test_current_prompt_examples_are_valid_flat_json_and_quotes_stay_in_source_l
 def test_live_path_remains_two_calls_with_draft_three_and_review_four(depth):
     from app.llm.openai_llm import _BasePromptLLM
     class Automatic(_BasePromptLLM):
+        # Explicit historical structured-review fixture; default text is one Markdown call.
+        def _summarize_one_shot(self, **kwargs):
+            return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
         def __init__(self): self.calls = []
         def _complete(self, **prompts):
             self.calls.append(prompts)
@@ -206,6 +209,9 @@ def test_wrong_quote_reaches_second_call_with_original_response_preserved():
     result['claims'][0]['evidence'] = draft()['claims'][0]['evidence']
     raw = json.dumps(material)
     class Automatic(_BasePromptLLM):
+        # Explicit historical structured-review fixture; default text is one Markdown call.
+        def _summarize_one_shot(self, **kwargs):
+            return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
         def __init__(self): self.calls = []
         def _complete(self, **prompts):
             self.calls.append(prompts)

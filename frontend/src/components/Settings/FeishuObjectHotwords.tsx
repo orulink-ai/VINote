@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuthStore } from '@/stores/authStore';
 import { publishScope } from '@/lib/feishuPublishReceipt';
-import { feishuObjectHotwords, refreshFeishuObjectHotwords, bindFeishuObjectAlias, deleteFeishuObjectAlias, normalizeObjectAlias, type FeishuObjectHotwords as Directory } from '@/lib/feishu';
+import { refreshFeishuObjectHotwords, bindFeishuObjectAlias, deleteFeishuObjectAlias, normalizeObjectAlias, type FeishuObjectHotwords as Directory } from '@/lib/feishu';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { FeishuObjectPicker } from './FeishuObjectPicker';
@@ -11,6 +11,7 @@ import { Alert, AlertDescription } from '@/components/ui/alert';
 export function FeishuObjectHotwords({ connectionKey, connectionCurrent }: { connectionKey: number; connectionCurrent: () => boolean }) {
   const owner = useAuthStore(state => state.user?.id);
   const [visit, setVisit] = useState(0);
+  const [contactQuery, setContactQuery] = useState('');
   const [data, setData] = useState<Directory | null>(null);
   const [alias, setAlias] = useState(''), [target, setTarget] = useState('');
   const [pending, setPending] = useState(''), [error, setError] = useState(''), [message, setMessage] = useState('');
@@ -34,7 +35,7 @@ export function FeishuObjectHotwords({ connectionKey, connectionCurrent }: { con
       setData(next); directoryGuard.current = current;
       if (action === 'save') { setAlias(''); setTarget(''); setMessage('别称已保存。') }
       if (action === 'delete') setMessage('别称已删除。');
-      if (action === 'refresh') setMessage('已更新当前可见对象。');
+      if (action === 'refresh' || action === 'search') setMessage('已更新当前可见对象。');
       setTarget(previous => next.objects.some(item => item.id === previous) ? previous : '');
     } catch (cause) { if (current()) setError(cause instanceof Error ? cause.message : '对象目录读取失败，请重试') }
     finally { if (current()) { working.current = false; setPending('') } }
@@ -43,9 +44,9 @@ export function FeishuObjectHotwords({ connectionKey, connectionCurrent }: { con
     if (state.user?.id !== previous.user?.id) { ++sequence.current; working.current = false; directoryGuard.current = null; setVisit(value => value + 1) }
   }), []);
   useEffect(() => {
-    setData(null); setAlias(''); setTarget(''); setError(''); setMessage(''); setPending('');
+    setData(null); setContactQuery(''); setAlias(''); setTarget(''); setError(''); setMessage(''); setPending('');
     working.current = false; directoryGuard.current = null;
-    void run('read', feishuObjectHotwords);
+    void run('read', refreshFeishuObjectHotwords);
     return () => { ++sequence.current; working.current = false; directoryGuard.current = null };
   }, [owner, visit, connectionKey]);
   const bind = () => {
@@ -60,15 +61,17 @@ export function FeishuObjectHotwords({ connectionKey, connectionCurrent }: { con
     void run('save', () => bindFeishuObjectAlias(text, selected.id));
   };
   const available = readable() && !pending;
-  return <section aria-label="对象热词设置" className="flex flex-col gap-5 rounded-xl border p-5">
+  return <section aria-label="对象热词设置" className="flex flex-col gap-4">
     <div className="flex flex-col gap-2"><h2 className="font-medium">对象热词</h2><p className="text-sm text-muted-foreground">为当前飞书可见的联系人或群绑定常用别称。每个别称只绑定一个对象，不按相似姓名自动匹配；保存别称不会发送消息。</p></div>
     <Button variant="outline" disabled={!!pending} onClick={() => void run('refresh', refreshFeishuObjectHotwords)}>{pending === 'refresh' ? '正在更新对象…' : '更新可见对象'}</Button>
     {pending && <p role="status" className="text-sm text-muted-foreground">{pending === 'save' ? '正在保存别称…' : pending === 'delete' ? '正在删除别称…' : '正在读取当前可见对象…'}</p>}
-    {error && <Alert variant="destructive" role="alert"><AlertDescription>{error}</AlertDescription><Button variant="outline" disabled={!!pending} onClick={() => void run('read', feishuObjectHotwords)}>重新读取对象</Button></Alert>}
+    {error && <Alert variant="destructive" role="alert"><AlertDescription>{error}</AlertDescription><Button variant="outline" disabled={!!pending} onClick={() => void run('read', refreshFeishuObjectHotwords)}>重新读取对象</Button></Alert>}
     {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
     {data && <>
       <p className="text-sm text-muted-foreground">{data.partial ? '当前仅显示部分可见对象，可更新后再查找。' : '以下为当前授权可见的对象。'}</p>
       <FieldGroup>
+        <Field><FieldLabel htmlFor="feishu-contact-search">搜索飞书联系人</FieldLabel><div className="flex gap-2"><Input id="feishu-contact-search" value={contactQuery} maxLength={50} disabled={!!pending} onChange={event => setContactQuery(event.target.value)} placeholder="输入姓名查找联系人" /><Button variant="outline" disabled={!!pending || !contactQuery.trim()} onClick={() => void run('search', () => refreshFeishuObjectHotwords(contactQuery))}>搜索联系人</Button></div><FieldDescription>更新显示聊过的联系人（含外部联系人）；姓名搜索可查找当前授权可见的其他联系人。下方列表只筛选已读取对象。</FieldDescription></Field>
+        {data.has_more && <p role="status" className="text-sm text-muted-foreground">联系人结果尚未显示完整，请输入更具体的姓名再搜索。</p>}
         <Field><FieldLabel htmlFor="feishu-object-target">绑定对象</FieldLabel><FeishuObjectPicker objects={data.objects} value={target} onChange={setTarget} disabled={!available} isCurrent={readable} /><FieldDescription>同名对象会分别保留，请确认对象后绑定。当前可见 {data.objects.length} 个对象。</FieldDescription></Field>
         <Field data-invalid={Array.from(alias.trim()).length > 50}><FieldLabel htmlFor="feishu-object-alias">别称</FieldLabel><Input id="feishu-object-alias" disabled={!available} value={alias} aria-invalid={Array.from(alias.trim()).length > 50} aria-describedby="feishu-object-alias-help" onChange={event => setAlias(event.target.value)} placeholder="例如项目群的常用简称" /><FieldDescription id="feishu-object-alias-help">最长50字；仅明确选择的对象会与此别称绑定。</FieldDescription></Field>
       </FieldGroup>

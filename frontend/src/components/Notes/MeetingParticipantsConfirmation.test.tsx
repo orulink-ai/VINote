@@ -184,3 +184,52 @@ it('ignores a save response after the route changes, including the footer callba
   await act(async () => resolve({ ...context(), confirmation: { revision: 1, status: 'confirmed', participants: [person] } }));
   expect(onConfirmed).not.toHaveBeenCalled(); expect(screen.queryByRole('dialog')).toBeNull();
 });
+
+
+const speakers = [{ speaker_id: 'speaker_1', samples: [{ text: '这项工作我来负责。', start: 65, end: 68, association: 'segment_speaker' }], candidates: [{ ...person, reasons: ['材料姓名与联系人姓名一致，仍需人工确认'] }] }];
+it('shows speaker evidence and candidates without selecting or searching contacts automatically', async () => {
+  Object.assign(current, { speakers });
+  show(); await open();
+  expect(screen.getByText('这项工作我来负责。')).toBeVisible();
+  expect(screen.getByText('01:05–01:08')).toBeVisible();
+  expect(screen.getByLabelText('说话人speaker_1对应的联系人')).toHaveValue('');
+  expect(screen.getByText(/姓名候选不等于身份确认，不会自动加入通知名单/)).toBeVisible();
+  expect(screen.getByText(/候选：.*仅供核对/)).toBeVisible();
+  expect(contactReads()).toHaveLength(0); expect(puts()).toHaveLength(0);
+});
+it('saves a manually chosen speaker mapping with that exact contact proof', async () => {
+  Object.assign(current, { speakers });
+  show(); await open();
+  fireEvent.click(screen.getByRole('button', { name: '为说话人speaker_1查找联系人' }));
+  await searchAndSelect(); attest();
+  fireEvent.click(screen.getByRole('button', { name: '保存参会人确认' }));
+  await waitFor(() => expect(puts()).toHaveLength(1));
+  expect(JSON.parse(puts()[0][1]!.body as string)).toMatchObject({ speaker_matches: [{ speaker_id: 'speaker_1', open_id: person.open_id }], contacts: [{ open_id: person.open_id, selection_token: 'fresh-token' }] });
+});
+it('removing a selected participant clears their speaker mapping without changing original speaker IDs', async () => {
+  Object.assign(current, { speakers });
+  Object.assign(current.confirmation, { status: 'confirmed', participants: [person], speaker_matches: [{ speaker_id: 'speaker_1', open_id: person.open_id }] });
+  show(); fireEvent.click(screen.getByRole('button', { name: '确认参会人' }));
+  fireEvent.click(await screen.findByRole('button', { name: '移除参会人合成甲' }));
+  expect(screen.getByLabelText('说话人speaker_1对应的联系人')).toHaveValue('');
+  attest(); fireEvent.click(screen.getByRole('button', { name: '确认不通知参会人' }));
+  await waitFor(() => expect(puts()).toHaveLength(1));
+  expect(JSON.parse(puts()[0][1]!.body as string).speaker_matches).toEqual([]);
+  expect(speakers[0].speaker_id).toBe('speaker_1');
+});
+
+
+it('rejects a mapping to a speaker that is absent from the retained evidence', async () => {
+  Object.assign(current, { speakers });
+  Object.assign(current.confirmation, { status: 'confirmed', participants: [person], speaker_matches: [{ speaker_id: 'invented', open_id: person.open_id }] });
+  show(); fireEvent.click(screen.getByRole('button', { name: '确认参会人' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('说话人对应关系未核验');
+  expect(contactReads()).toHaveLength(0); expect(puts()).toHaveLength(0);
+});
+it('keeps attendance confirmation usable without inventing missing speaker identities', async () => {
+  Object.assign(current, { speakers: [] });
+  show(); await open();
+  expect(screen.getByText(/没有可用的说话人标识/)).toBeVisible();
+  expect(screen.queryByRole('combobox')).toBeNull();
+  expect(contactReads()).toHaveLength(0);
+});

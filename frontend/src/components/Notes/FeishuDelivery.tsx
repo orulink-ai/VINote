@@ -181,6 +181,7 @@ export function FeishuDelivery({
   const draftOptions = (): PublishDraft['options'] => ({ destination_config: destination, permission_policy: destination.kind === 'personal' ? 'private' : 'inherit', notify_self: notifySelf, groups: selectedGroups, ...(selectedContacts.length ? { contacts: selectedContacts } : {}), ...(grantingRecipients ? { recipient_access_policy: 'grant_view_and_notify' as const } : {}) });
   const connectionKey = destinationBinding(preferences);
   const bindingLost = connectionIdentity.current?.owner === owner && connectionIdentity.current?.lost === true;
+  const connectionReady = !!preferences?.configured && !!preferences.connected && !preferences.expired && !verificationUnavailable && !bindingLost;
   const selectionDisabled = busy || frozen || uncertain || !!running || verificationUnavailable || bindingLost || !preferences?.connected || preferences.expired;
   const checkedTarget = !!checked?.can_attempt_create && checked.kind === destination.kind &&
     (destination.kind !== 'folder' || checked.kind === 'folder' && checked.folder_token === destination.folder_token) &&
@@ -536,14 +537,14 @@ export function FeishuDelivery({
           {connectionLoading && <LoadingState label="正在读取飞书连接…" rows={1} />}
           {connectionError && <ErrorState error={connectionError} onRetry={() => void loadConnection()} busy={busy || connectionLoading} retryLabel="重新读取飞书连接" />}
           {pluginLoading && <p role="status" className="text-sm text-muted-foreground">正在读取飞书插件状态…</p>}
-          {pluginError && <ErrorState error={pluginError} onRetry={() => void loadPlugin()} busy={pluginLoading} retryLabel="重新读取插件状态" />}
-          {plugin && (!plugin.installed || !plugin.enabled) && <Alert>
+          {connectionReady && pluginError && <ErrorState error={pluginError} onRetry={() => void loadPlugin()} busy={pluginLoading} retryLabel="重新读取插件状态" />}
+          {connectionReady && preferences?.publish_receipt_protocol === 1 && plugin && (!plugin.installed || !plugin.enabled) && <Alert>
             <AlertDescription>
-              <p>{plugin.installed ? '飞书插件已停用' : '飞书插件尚未安装'}</p>
-              <Button variant="outline" disabled={pluginLoading || busy} onClick={() => void loadPlugin(true)}>启用飞书插件</Button>
+              <p>{plugin.installed ? '当前设备已停用飞书发布' : '当前设备尚未启用飞书发布'}</p>
+              <Button variant="outline" disabled={pluginLoading || busy} onClick={() => void loadPlugin(true)}>启用飞书发布</Button>
             </AlertDescription>
           </Alert>}
-          {preferences && preferences.publish_receipt_protocol !== 1 && <Alert><AlertDescription>飞书服务需要升级发布回执协议，暂不能新发布或重试交付；原草稿与未确认请求保留。</AlertDescription></Alert>}
+          {connectionReady && preferences?.publish_receipt_protocol !== 1 && <Alert><AlertDescription>飞书服务需要升级，暂不能发布或重试交付。草稿和未确认的请求已保留。</AlertDescription></Alert>}
           {!ready && loading && (
             <LoadingState label="正在读取交付状态…" rows={1} />
           )}
@@ -555,7 +556,7 @@ export function FeishuDelivery({
               </AlertDescription>
             </Alert>
           )}
-          {preferences && (verificationUnavailable || bindingLost || !preferences.connected || preferences.expired) && (
+          {preferences?.configured && (verificationUnavailable || bindingLost || !preferences.connected || preferences.expired) && (
             <Alert>
               <AlertDescription>
                 {verificationUnavailable ? feishuVerificationMessage : bindingLost ? '连接身份尚未核验，原发布回执保留；请重新核验后确认位置与通知对象。' : "需连接或重新授权飞书。当前发布内容保留，完成授权后重新打开发布面板核验。"}
@@ -599,7 +600,7 @@ export function FeishuDelivery({
               {job.permission?.note && <p className="text-xs text-muted-foreground">{job.permission.note}</p>}
               {job.version_id && (
                 <p className="text-xs text-muted-foreground">
-                  已发布保存修订 {job.revision_id}；历史文档保留。
+                  已发布此版本，历史文档保留。
                 </p>
               )}
               {job.document_url && (

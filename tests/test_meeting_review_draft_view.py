@@ -12,12 +12,20 @@ import app.llm.meeting_review_draft_view as view_module
 from app.llm.meeting_final_claim_ledger import FinalLedgerError
 from app.llm.meeting_presentation import presentation_scope
 from app.llm.openai_llm import _BasePromptLLM
-from app.llm.vilab_llm import VILabLLM
+from app.llm.vilab_llm import VILabLLM as BaseVILabLLM
+
 from app.models.transcript import TranscriptSegment
 from test_meeting_final_review import SOURCE, case, response
 from test_meeting_final_review import finalize
 from test_meeting_visual_protocol5_adapter import seven
 from tests.test_meeting_summary_regeneration import case as summary_case, accept as accept_summary
+
+
+class VILabLLM(BaseVILabLLM):
+    """Explicit historical structured-review adapter for these view contracts."""
+    compact_review_enabled = False
+    def _summarize_one_shot(self, **kwargs):
+        return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
 
 
 def material():
@@ -35,6 +43,22 @@ def material():
          'evidence': [{'kind': 'frame_observation', 'source_ref': '[FRAME:9999]',
                        'observation': 'Unverified interpretation B.', 'verification': 'unverified'}]},
     ]}
+
+
+def test_wrapped_review_prompt_identifies_all_claims_and_requires_source_recheck():
+    from app.llm.meeting_review import build_meeting_review_prompts
+
+    draft = view_module.review_draft_input_view(json.dumps(material()))
+    with presentation_scope("detailed", "text"):
+        prompts = build_meeting_review_prompts(
+            source="[ASR:0001] synthetic original", draft=draft, extras=None, output_language="en")
+    prompt = prompts["user_prompt"]
+    assert "original_claims_view.claims" in prompt
+    assert "Original claim count: 2" in prompt
+    assert "Original claim IDs: [\"C1\", \"C2\"]" in prompt
+    assert "missing quote" in prompt
+    assert "not mean there are no claims" in prompt
+    assert "recheck the original source" in prompt
 
 
 def test_view_preserves_meaning_identity_disposition_and_valid_spans():
@@ -177,6 +201,18 @@ def test_actual_adapter_changes_only_review_draft_view_and_keeps_original_for_gu
     first = candidate[1]['messages'][1]['content'][0]
     assert first['text'].count(projected) == 1
     first['text'] = first['text'].replace(projected, original, 1)
+    contract, remainder = first['text'].split('Fallible working draft to audit (not evidence):', 1)
+    assert 'original_claims_view.claims' in contract
+    assert f"Original claim count: {len(json.loads(original)['claims'])}" in contract
+    assert json.dumps([row['id'] for row in json.loads(original)['claims']], ensure_ascii=False) in contract
+    first['text'] = 'Fallible working draft to audit (not evidence):' + remainder
+    baseline_first = baseline[1]['messages'][1]['content'][0]
+    baseline_contract, baseline_remainder = baseline_first['text'].split(
+        'Fallible working draft to audit (not evidence):', 1)
+    assert 'located at claims.' in baseline_contract
+    assert f"Original claim count: {len(json.loads(original)['claims'])}" in baseline_contract
+    assert json.dumps([row['id'] for row in json.loads(original)['claims']], ensure_ascii=False) in baseline_contract
+    baseline_first['text'] = 'Fallible working draft to audit (not evidence):' + baseline_remainder
     assert wire(baseline[1]) == wire(candidate[1])
 
 

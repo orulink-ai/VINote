@@ -4,7 +4,7 @@ import json
 
 from fastapi import HTTPException
 from app.db_models import FeishuDeliveryDB
-from app.models.feishu_destination import FeishuPublishReceiptDB, FeishuWriteBatchDB
+from app.models.feishu_destination import FeishuPublishReceiptDB, FeishuPublishRejectionDB, FeishuWriteBatchDB
 
 
 def fingerprint(payload):
@@ -13,6 +13,8 @@ def fingerprint(payload):
 
 
 def operation_job(db, owner, operation_id, expected=None):
+    if db.get(FeishuPublishRejectionDB, (owner, operation_id)) is not None:
+        raise HTTPException(409, {"code": "OPERATION_REJECTED", "message": "原发布操作已拒绝，不能再次提交"})
     receipt = db.get(FeishuPublishReceiptDB, (owner, operation_id))
     if not receipt:
         return None

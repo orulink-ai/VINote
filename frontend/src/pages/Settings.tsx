@@ -1,15 +1,17 @@
 import { useSearchParams, useLocation, Link, Navigate } from "react-router-dom";
 import { pageParentLabel, settingsPageParent } from '@/lib/navigation';
 import {
-  ArrowUpRight,
+  ChevronRight,
   ArrowLeft,
   Mic2,
   Plug,
   HardDrive,
   Users,
   ListTodo,
+  Bell,
 } from "lucide-react";
-import packageJson from "../../package.json";
+import { DesktopUpdatePanel } from "@/components/Settings/DesktopUpdatePanel";
+import { NotificationSettingsPanel } from "@/components/Settings/NotificationSettingsPanel";
 import { ModelSourcePanel } from "@/components/Settings/ModelSourcePanel";
 import { PageHeading } from "@/components/Layout/PageHeading";
 import { AppearanceSettingsPanel } from "@/components/Settings/AppearanceSettingsPanel";
@@ -42,10 +44,10 @@ function SettingLink({
     <Link
       to={target.pathname + target.search + target.hash}
       state={parent ? { returnTo: parent } : undefined}
-      className="group flex items-center gap-4 border-b py-5 last:border-b-0 focus-visible:rounded-lg focus-visible:outline focus-visible:outline-ring"
+      className="group -mx-3 flex items-center gap-3 rounded-lg px-3 py-3 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
     >
-      <span className="grid size-10 shrink-0 place-items-center rounded-xl bg-muted">
-        <Icon className="size-5" />
+      <span className="grid size-8 shrink-0 place-items-center text-muted-foreground">
+        <Icon aria-hidden="true" className="size-4" />
       </span>
       <span className="min-w-0 flex-1">
         <span className="block text-sm font-medium">{title}</span>
@@ -53,7 +55,7 @@ function SettingLink({
           {description}
         </span>
       </span>
-      <ArrowUpRight className="size-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5 motion-reduce:transform-none" />
+      <ChevronRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground group-hover:text-foreground" />
     </Link>
   );
 }
@@ -70,6 +72,7 @@ export function Settings() {
     "profile",
     "models",
     "appearance",
+    "notifications",
     "recording",
     "storage",
     "connections",
@@ -88,12 +91,12 @@ export function Settings() {
   if (activeTab === 'connections') return <Navigate to={parent ? '/connections?' + new URLSearchParams({ returnTo: parent }).toString() : '/connections'} state={parent ? { returnTo: parent } : undefined} replace />;
   return (
     <div className="workspace-page max-w-5xl">
-      {(activeTab !== 'overview' || hasContext) && <div><Button asChild variant="ghost" size="sm"><Link to={activeTab === 'overview' ? parent : overviewPath}><ArrowLeft data-icon="inline-start" />{activeTab === 'overview' ? pageParentLabel(parent) : '返回设置总览'}</Link></Button></div>}
+      {(activeTab !== 'overview' || hasContext) && <div className="page-return"><Button asChild variant="ghost" size="sm"><Link to={activeTab === 'overview' ? parent : overviewPath}><ArrowLeft data-icon="inline-start" />{activeTab === 'overview' ? pageParentLabel(parent) : '返回设置总览'}</Link></Button></div>}
       <PageHeading
         title="设置"
         description="管理当前设备、内容处理和外部服务。"
       />
-      <div className="grid items-start gap-6 lg:grid-cols-[190px_minmax(0,1fr)]">
+      <div className="grid items-start gap-5 lg:grid-cols-[180px_minmax(0,1fr)]">
         <SettingsNav
           activeTab={activeTab}
           onChange={(tab) => setParams(current => { const next = new URLSearchParams(current); next.set('tab', tab); if (hasContext) next.set('returnTo', parent); else next.delete('returnTo'); return next; }, { state: hasContext ? { returnTo: parent } : undefined })}
@@ -101,24 +104,25 @@ export function Settings() {
         <section
           key={activeTab}
           aria-label="设置内容"
-          className="min-w-0 rounded-2xl border bg-background p-6 sm:p-8"
+          className="min-w-0 bg-background py-1 lg:border-l lg:pl-6"
         >
-          {activeTab === 'overview' && <div className="flex flex-col gap-4">
-            <h2 className="text-lg font-medium">你想调整什么？</h2>
+          {activeTab === 'overview' && <div className="flex flex-col">
+            <h2 className="mb-2 text-base font-medium">设置总览</h2>
             <SettingLink parent={parent} to="/settings?tab=profile" title="我的账号" description="当前登录身份。" icon={Users} />
             <SettingLink parent={parent} to="/settings?tab=spaces" title="空间与协作" description="选择个人或团队空间，管理成员。" icon={Users} />
             <SettingLink parent={parent} to="/settings?tab=models" title="转写与总结" description="选择下次处理使用的模型与服务。" icon={Plug} />
             <SettingLink parent={parent} to="/settings?tab=storage" title="存储" description="查看当前设备的内容、原文件与回收站。" icon={HardDrive} />
-            <SettingLink parent={sectionPath} to="/connections" title="连接与工具" description="飞书发布与通知，以及可选 MCP 工具。" icon={Plug} />
+            <SettingLink parent={parent} to="/settings?tab=notifications" title="任务通知" description="完成或失败时提醒，后台可使用系统通知。" icon={Bell} />
+            <SettingLink parent={sectionPath} to="/settings/feishu" title="飞书" description="发布内容与发送通知。" icon={Plug} />
           </div>}
           {activeTab === "profile" && (
             <div className="flex flex-col gap-6">
-              <h2 className="text-lg font-medium">我的账号</h2>
+              <h2 className="text-base font-medium">我的账号</h2>
               <ProfileSettingsPanel email={user?.email} />
             </div>
           )}
           {activeTab === 'spaces' && <div className="flex flex-col gap-4">
-              <h2 className="text-lg font-medium">空间与协作</h2>
+              <h2 className="text-base font-medium">空间与协作</h2>
               <SettingLink
                 parent={sectionPath}
                 to="/team"
@@ -136,9 +140,10 @@ export function Settings() {
               onLanguageChange={setLanguage}
             />
           )}
+          {activeTab === "notifications" && <NotificationSettingsPanel />}
           {activeTab === "recording" && (
             <div className="flex flex-col gap-5">
-              <h2 className="text-lg font-medium">录制</h2>
+              <h2 className="text-base font-medium">录制</h2>
               <p className="text-sm leading-7 text-muted-foreground">
                 麦克风与权限在当前设备上选择。开始会议后选择是否录屏，结束后先保存完整媒体，再决定是否生成纪要。
               </p>
@@ -156,7 +161,7 @@ export function Settings() {
           )}
           {activeTab === "storage" && (
             <div className="flex flex-col gap-5">
-              <h2 className="text-lg font-medium">存储</h2>
+              <h2 className="text-base font-medium">存储</h2>
               <SettingLink
                 parent={sectionPath}
                 to="/settings/storage"
@@ -175,16 +180,18 @@ export function Settings() {
           )}
           {activeTab === "about" && (
             <div className="flex flex-col gap-4">
-              <h2 className="text-lg font-medium">VINote</h2>
-              <p className="text-sm text-muted-foreground">
-                版本 {packageJson.version}
-              </p>
+              <h2 className="text-base font-medium">VINote</h2>
+              <DesktopUpdatePanel />
               <p className="text-sm leading-7 text-muted-foreground">
                 把讨论与资料整理成可回溯、可继续使用的笔记。
               </p>
               <Button variant="outline" className="w-fit" asChild>
                 <Link to={'/tasks?' + new URLSearchParams({ returnTo: sectionPath }).toString()} state={{ returnTo: sectionPath }}>任务与诊断</Link>
               </Button>
+              <div className="mt-4 border-t pt-4 text-xs leading-6 text-muted-foreground">
+                <p>界面细节参考并适配了 <a className="underline underline-offset-4 hover:text-foreground focus-visible:outline-ring" href="https://github.com/heydamir/unslop" target="_blank" rel="noreferrer">unslop</a>，作者 Damir Sokolovsky（@heydamir）。</p>
+                <p>采用 <a className="underline underline-offset-4 hover:text-foreground focus-visible:outline-ring" href="https://creativecommons.org/licenses/by/4.0/" target="_blank" rel="noreferrer">CC BY 4.0</a> 许可；已针对 VINote 的录制、设置与逐字稿界面调整。</p>
+              </div>
             </div>
           )}
         </section>

@@ -1,0 +1,4 @@
+[[permission]]
+identifier = "desktop-update-status"
+description = "Read whether the current desktop build has a signed update channel."
+commands.allow = ["desktop_update_available"]

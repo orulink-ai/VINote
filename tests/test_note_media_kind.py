@@ -10,6 +10,8 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.db import Base
+from app.models.local_file import LocalFileDB  # noqa: F401; register before create_all
+from app.models.meeting_source_link import MeetingSourceLinkDB  # noqa: F401; register before create_all
 from app.models.note_library import NoteCreateRequest
 from app.routers import note_library as router
 from app.services.task_artifact_service import TaskArtifactService
@@ -28,6 +30,15 @@ def env(tmp_path, monkeypatch):
                 yield db
 
     monkeypatch.setattr("app.services.note_repository.session_scope", sessions)
+    from functools import partial
+    from app.services import note_original_projection
+
+    # Source-link fallback resolves app.db sessions when constructing its service.
+    monkeypatch.setattr('app.db.session_scope', sessions)
+    # The projection captures its default session at import; bind the real query
+    # to this fixture's database as well as the repository.
+    monkeypatch.setattr(note_original_projection, 'original_source',
+        partial(note_original_projection.original_source, sessions=sessions))
     artifacts = TaskArtifactService(tmp_path / "output")
     monkeypatch.setattr(router, "_artifact_service", artifacts)
     owner = {"id": "owner"}

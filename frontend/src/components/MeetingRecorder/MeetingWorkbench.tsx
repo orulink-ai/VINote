@@ -1,3 +1,8 @@
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
+import { calendarDay, dayLabel } from '@/lib/contentDates';
+import { useMeetingDisplay } from '@/hooks/useMeetingDisplay';
+import { MeetingDisplayEditor } from './MeetingDisplayEditor';
+import '@/pages/content-workspace.css';
 import type { MeetingTaskStates } from '@/hooks/useMeetingTaskStates';
 import { useMeetingSummaryPresentations } from '@/hooks/useMeetingSummaryPresentations';
 import { depthLabels, presentationLabels } from '@/lib/summaryPresentation';
@@ -16,7 +21,6 @@ import { notePreview } from "@/lib/notePreview";
 import { type LibraryNote as NoteRecord } from "@/hooks/useLibraryNotes";
 import { type PendingMeeting } from "@/lib/audioStorage";
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import {
   Empty,
@@ -110,10 +114,10 @@ function MeetingNoteItems({ notes, onOpenNote, taskStates, onAssociate, locatedN
   const items = notes.map(relatedNotePresentation);
   const presentations = new Map<string, number>();
   items.forEach(({ signature }) => presentations.set(signature, (presentations.get(signature) || 0) + 1));
-  return <ul className="grid min-w-0 gap-2">
+  return <ul className="meeting-version-list grid min-w-0 gap-2">
     {items.map(({ note, savedTime, updatedTime, metadata, preview, signature }, index) => <li key={JSON.stringify([note.scope, note.teamId, note.workspaceKey, note.id])} className="min-w-0">
       <Button data-meeting-return-target={`${note.scope}:${note.teamId || ''}:note:${note.id}`} data-meeting-located={note.id === locatedNoteId || undefined}
-        aria-describedby={`${presentationId}-${index}`} aria-current={note.id === locatedNoteId ? 'true' : undefined} variant="outline" className={`h-auto min-h-11 w-full items-start justify-start whitespace-normal py-3 text-left ${note.id === locatedNoteId ? 'ring-2 ring-ring' : ''}`} onClick={() => onOpenNote(note.id)}>
+        aria-describedby={`${presentationId}-${index}`} aria-current={note.id === locatedNoteId ? 'true' : undefined} variant="ghost" className={`meeting-version-row h-auto min-h-11 w-full items-start justify-start whitespace-normal py-3 text-left ${note.id === locatedNoteId ? 'ring-2 ring-ring' : ''}`} onClick={() => onOpenNote(note.id)}>
         <span className="min-w-0">
           <span className="block [overflow-wrap:anywhere]">查看纪要 · {note.title}</span>
           <span className="mt-1 block text-xs leading-5 text-muted-foreground">保存于 <span title={savedTime.full} className="tabular-nums">{savedTime.full}</span>{metadata && ` · ${metadata}`}</span>
@@ -126,11 +130,11 @@ function MeetingNoteItems({ notes, onOpenNote, taskStates, onAssociate, locatedN
         {(() => {
           const summary = readPresentation(note);
           return typeof summary === 'object'
-            ? <><Badge variant="secondary">{presentationLabels[summary.presentation]}</Badge><Badge variant="outline">{depthLabels[summary.depth]}</Badge></>
+            ? <><span className="text-xs text-muted-foreground">{presentationLabels[summary.presentation]}</span><span aria-hidden="true" className="text-xs text-muted-foreground">·</span><span className="text-xs text-muted-foreground">{depthLabels[summary.depth]}</span></>
             : <span className="text-xs text-muted-foreground">{summary === 'checking' ? '正在读取形式与详略…' : summary === 'missing' ? '形式/详略未记录' : '形式/详略暂未核验'}</span>;
         })()}
       </div>
-      <div className="ml-auto flex flex-wrap justify-end gap-2">
+      <div className="meeting-version-actions ml-auto flex flex-wrap justify-end gap-2">
         {onAssociate && <Button size="sm" variant="outline" className="min-h-11" disabled={!associationNoteId(note)} aria-label={`关联《${note.title}》到会议`} onClick={() => onAssociate(note)}>关联到会议</Button>}
         <Button size="sm" variant="ghost" className="min-h-11" aria-label={`编辑《${note.title}》`} onClick={() => onOpenNote(note.id, true)}>编辑纪要</Button>
       </div>
@@ -150,6 +154,8 @@ const matchesNote = (note: NoteRecord, id: string) => note.id === id || note.loc
 export function MeetingWorkbench({
   recordings,
   notes,
+  importedSourceCount = 0,
+  importedSources,
   loading,
   onOpenNote,
   onDeleted,
@@ -166,6 +172,8 @@ export function MeetingWorkbench({
 }: {
   recordings: PendingMeeting[];
   notes: NoteRecord[];
+  importedSourceCount?: number;
+  importedSources?: (query: string, filter: string, date: string) => ReactNode;
   loading: boolean;
   onOpenNote: (id: string, edit?: boolean) => void;
   onDeleted: (id: string) => void;
@@ -181,8 +189,11 @@ export function MeetingWorkbench({
   onClearLocator?: () => void;
 }) {
   const ownerId = useAuthStore(state => state.user?.id);
+  const display = useMeetingDisplay(ownerId);
+  const [selectedDate, setSelectedDate] = useViewState('meetings-calendar-date', '');
   const viewId = useId();
   const [previewOpen, setPreviewOpen] = useState(false);
+  const [filtersOpen, setFiltersOpen] = useState(false);
   const [previewRecordingId, setPreviewRecordingId] = useState<string | null>(null);
   const [associating, setAssociating] = useState<{ note: NoteRecord; ownerId: string; context: string }>();
   const [associationFeedback, setAssociationFeedback] = useState('');
@@ -201,7 +212,17 @@ export function MeetingWorkbench({
   const [expandedRows, setExpandedRows] = useViewState<string[]>("recordings-expanded", []);
   const [storedView, setStoredView] = useViewState<MeetingArchiveView>('meeting-dossier-view', 'meetings');
   const allRows = buildMeetingRows(recordings.filter(row => !ownerId || row.ownerId === ownerId),
-    notes.filter(note => !ownerId || !note.meetingSource || note.meetingSource.ownerId === ownerId), taskStates, ownerId);
+    notes.filter(note => !ownerId || !note.meetingSource || note.meetingSource.ownerId === ownerId), taskStates, ownerId).map(row => {
+      const canonical = row.notes.find(note => note.meetingSource)?.meetingSource?.canonicalTaskId || row.recording?.taskId;
+      const displayKey = canonical ? `task:${canonical}` : undefined;
+      const metadata = displayKey ? display[displayKey] : undefined;
+      const topic = (row.note?.title || '').replace(/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s*[|｜]\s*/, '').trim();
+      const readableTopic = /^(待生成纪要|录制时间未记录)$/.test(topic) || /\.(?:wav|mp3|m4a|webm|mp4|ogg|flac)$/i.test(topic) ? '' : topic;
+      return { ...row, displayKey,
+        title: (metadata ? metadata.title : row.recording?.displayTitle || (row.recording?.titleEdited ? row.recording.options.title : '')) || readableTopic || '未命名会议',
+        displayDate: (metadata ? metadata.meeting_date : row.recording?.displayDate) || calendarDay(row.date),
+      };
+    }).sort((a, b) => b.displayDate.localeCompare(a.displayDate) || a.key.localeCompare(b.key));
   const locating = !!locator && locator.requestId !== dismissedLocator;
   const invalidLocator = locator?.invalid || locator?.focus !== undefined && locator.focus !== 'meeting' || !!locator?.ownerId && locator.ownerId !== ownerId ||
     !!locator && ![locator.noteId, locator.taskId, locator.recordingId].some(Boolean) ||
@@ -243,7 +264,7 @@ export function MeetingWorkbench({
   // Source association defines a dossier. Historical personal archive flags
   // remain on the content but cannot hide a meeting or split its versions.
   const rows = allRows.filter(row => row.kind === 'meeting');
-  const visible = pendingView ? [] : rows.filter(
+  const visible = pendingView ? [] : rows.filter(row => !selectedDate || selectedDate === row.displayDate || locating && row.key === locatedRow?.key).filter(
     (row) =>
       (row.key === locatedRow?.key || (
         row.title +
@@ -294,62 +315,41 @@ export function MeetingWorkbench({
   const selectedRecordingDuration = recordingDuration(previewRecording?.elapsedSeconds);
   useEffect(() => { if (!selected) setPreviewOpen(false) }, [selected]);
   return (
-    <section ref={listRef} aria-label="会议列表" tabIndex={-1} data-meeting-scroll-view={JSON.stringify([activeView, query, filter])} data-meeting-scroll-ready={!loading} className="flex min-w-0 flex-col gap-4">
+    <section ref={listRef} aria-label="会议列表" tabIndex={-1} data-meeting-scroll-view={JSON.stringify([activeView, query, filter])} data-meeting-scroll-ready={!loading} className="meeting-workspace flex min-w-0 flex-col gap-4">
       <div className="min-w-0">
         <div
           aria-label="记录列表"
           className="min-w-0"
         >
-          <div className="mb-3 flex flex-col gap-3 border-b pb-4">
-            <div className="flex flex-wrap items-center gap-2">
-              {!pendingView && actions}
-              <div className="relative min-w-0 basis-full sm:basis-48 sm:flex-1">
-                <Search
-                  className="absolute left-3 top-3 size-4 text-muted-foreground"
-                  aria-hidden="true"
-                />
-                <Input
-                  aria-label="搜索记录"
-                  placeholder="搜索标题或会议内容"
-                  value={query}
-                  onChange={(event) => setQuery(event.target.value)}
-                  className="pl-9"
-                />
-              </div>
-            </div>
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <Tabs className="min-w-0 max-w-full" value={activeView} onValueChange={value => changeView(value === 'pending' ? 'pending' : 'meetings')}>
-                <TabsList aria-label="会议档案视图" className="h-auto max-w-full flex-wrap">
-                  <TabsTrigger value="meetings">全部会议</TabsTrigger>
-                  <TabsTrigger ref={pendingTab} value="pending">待归档</TabsTrigger>
-                </TabsList>
-              </Tabs>
+          {(allRows.length > 0 || !!importedSourceCount || query || selectedDate || filter !== '全部') && <div className="mb-2 flex flex-wrap items-center gap-3 border-b pb-3">
+            <div className="relative min-w-0 flex-1 sm:max-w-sm"><Search className="absolute left-3 top-2.5 size-4 text-muted-foreground" aria-hidden="true" /><Input aria-label="搜索记录" placeholder="搜索标题或会议内容" value={query} onChange={event => setQuery(event.target.value)} className="h-9 pl-9" /></div>
+            <Tabs className="min-w-0" value={activeView} onValueChange={value => changeView(value === 'pending' ? 'pending' : 'meetings')}><TabsList aria-label="会议档案视图" className="line-tabs h-9"><TabsTrigger value="meetings">按日期浏览</TabsTrigger><TabsTrigger ref={pendingTab} value="pending">未关联原录制</TabsTrigger></TabsList></Tabs>
+            {!pendingView && <Button variant="outline" className="h-9" onClick={() => setFiltersOpen(true)}>筛选会议{(selectedDate || filter !== '全部') ? ' · 已筛选' : ''}</Button>}
+          </div>}
+          <Dialog open={filtersOpen} onOpenChange={setFiltersOpen}><DialogContent className="max-w-md"><DialogHeader><DialogTitle>筛选会议</DialogTitle><DialogDescription>按会议日期与处理状态查找，关闭后保留选择。</DialogDescription></DialogHeader><div className="grid gap-5">
+              {!pendingView && <label className="flex items-center gap-2 text-xs text-muted-foreground">会议日期<Input type="date" aria-label="按会议日期筛选" value={selectedDate} onChange={event => setSelectedDate(event.target.value)} className="w-auto" />{selectedDate && <Button variant="ghost" size="sm" onClick={() => setSelectedDate('')}>全部日期</Button>}</label>}
               {!pendingView && <Tabs className="min-w-0 max-w-full" value={filter} onValueChange={setFilter}>
-                <TabsList
-                  aria-label="记录筛选"
-                  className="h-auto max-w-full flex-wrap gap-1 rounded-full border border-border/60 bg-muted p-1"
-                >
+                <TabsList aria-label="记录筛选" className="h-auto max-w-full flex-wrap">
                   {["全部", "未生成", "处理中", "已完成", "需处理"].map((label) => (
                     <TabsTrigger
                       key={label}
                       value={label}
-                      className="rounded-full px-3 py-1.5 transition-colors duration-200 motion-reduce:transition-none"
+                      className="px-2.5 py-1"
                     >
                       {label}
                     </TabsTrigger>
                   ))}
                 </TabsList>
               </Tabs>}
-            </div>
-            <p className="text-xs leading-5 text-muted-foreground">{pendingView
-              ? '点击“关联到会议”，选择对应的录音或录屏档案。正文、保存版本和原项目均保留。'
-              : '每场会议一个档案，同源纪要的不同形式、版本与原录制集中保留。'}</p>
+            <Button onClick={() => setFiltersOpen(false)}>完成筛选</Button></div></DialogContent></Dialog>
+          <div>
+            {pendingView && unlinked.length > 0 && <p className="text-xs leading-5 text-muted-foreground">选择“关联到会议”，并入对应的录音或录屏档案。</p>}
           </div>
-          <p role="status" className="text-sm leading-6">{associationFeedback}</p>
+          {associationFeedback && <p role="status" className="text-sm leading-6">{associationFeedback}</p>}
           {locating && <Alert variant={!loading && !locatedRow ? 'destructive' : 'default'}>
             <AlertDescription className="grid gap-2">
               <p role={loading || locatedRow ? 'status' : 'alert'}>{loading ? '正在读取并定位关联会议…' : locatedRow
-                ? locatedRow.kind === 'unlinked' ? '此纪要尚未关联到会议，已定位待归档内容。原筛选已保留。'
+                ? locatedRow.kind === 'unlinked' ? '此纪要尚未关联到会议，已定位未关联原录制内容。原筛选已保留。'
                   : focusedNote ? '已定位原会议档案和关联纪要。原筛选已保留。' : '已定位原会议档案。原筛选已保留。'
                 : invalidLocator ? '定位标识无效或账号已变化，请返回文件库重新选择。'
                   : '当前空间未找到唯一的会议关联，请重新读取记录或返回文件库。原文件和纪要均保留。'}</p>
@@ -360,8 +360,8 @@ export function MeetingWorkbench({
             </AlertDescription>
           </Alert>}
           {loading && !(pendingView ? unlinked.length : visible.length) && <Skeleton className="h-20 w-full" />}
-          {!loading && <p className="pb-1 text-xs text-muted-foreground">{pendingView ? `${unlinked.length} 条待归档内容` : `${visible.length} 场会议`}</p>}
-          {visible.map((row) => {
+          {!loading && <p className="pb-1 text-xs tabular-nums text-muted-foreground">{pendingView ? `${unlinked.length} 条未关联原录制内容` : `${visible.length + importedSourceCount} 场会议`}</p>}
+          {visible.map((row, index) => {
             const viewIds = relatedViewIds(row);
             const expanded = viewIds.some(id => expandedIds.includes(id));
             const panelId = `${viewId}-meeting-${encodeURIComponent(row.key)}`;
@@ -391,6 +391,7 @@ export function MeetingWorkbench({
                   : FileText;
             return (
               <div key={row.key} data-meeting-row-key={row.key} data-meeting-row-ids={JSON.stringify(viewIds)} className="border-b">
+              {(index === 0 || visible[index - 1].displayDate !== row.displayDate) && <h2 className="border-b bg-background px-3 pb-2 pt-6 text-sm font-medium">{dayLabel(row.displayDate, '录制日期未记录')}</h2>}
               <button
                 key={row.key}
                 type="button"
@@ -400,7 +401,7 @@ export function MeetingWorkbench({
                 aria-expanded={expanded}
                 aria-controls={panelId}
                 onClick={() => setRowExpanded(viewIds, !expanded)}
-                className={`flex w-full items-start gap-3 px-3 py-5 text-left transition-colors motion-reduce:transition-none hover:bg-muted/60 focus-visible:outline focus-visible:outline-ring ${expanded ? "bg-muted/50" : ""}`}
+                className={`meeting-source-row flex w-full items-start gap-3 px-2 py-4 text-left transition-colors motion-reduce:transition-none hover:bg-muted/60 focus-visible:outline focus-visible:outline-ring ${expanded ? "bg-muted/50" : ""}`}
               >
                 <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted/40 text-muted-foreground">
                   <Icon className="size-4" aria-hidden="true" />
@@ -409,16 +410,15 @@ export function MeetingWorkbench({
                   <span className="block break-words text-sm font-medium tabular-nums">
                     {row.title}
                   </span>
-                  <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-                    {isRecordingDate && <>录制于 <span title={time.full} className="tabular-nums">{time.full}</span></>}
-                    {duration && ` · ${duration}`}
+                  <span className="meeting-source-meta mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                    {isRecordingDate && <span title={time.full} className="tabular-nums">录制于 {time.full}</span>}
+                    {duration && <span className="tabular-nums">{duration}</span>}
                     {row.notes.length > 0 && <span>{row.notes.length} 份纪要</span>}
-                    <Badge
-                      variant="secondary"
-                      className={`rounded px-1.5 py-0 text-[10px] ${row.state === "已完成" ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-200" : row.state === "需处理" ? "bg-destructive/10 text-destructive" : ""}`}
+                    <span
+                      className={row.state === "需处理" ? "text-destructive" : row.state === "已完成" ? "text-emerald-700 dark:text-emerald-300" : undefined}
                     >
-                      · {row.state === "已完成" ? "纪要已完成" : row.state}
-                    </Badge>
+                      {row.state === "已完成" ? "纪要已完成" : row.state}
+                    </span>
                   </span>
                   {row.recording?.processingError && (
                     <span className="mt-2 block break-words text-xs text-destructive">
@@ -428,16 +428,17 @@ export function MeetingWorkbench({
                 </span>
                 <ChevronRight aria-hidden="true" className={`mt-1 size-4 shrink-0 text-muted-foreground ${expanded ? 'rotate-90' : ''}`} />
               </button>
-              {hasRelated && <details id={panelId} className="min-w-0 px-3 text-sm [overflow-wrap:anywhere]" open={expanded} onToggle={event => setRowExpanded(viewIds, event.currentTarget.open)}>
-                <summary data-meeting-row-fallback aria-label={`${row.title} · ${relatedLabel}`} className="min-h-11 cursor-pointer break-words rounded-md py-3 text-muted-foreground focus-visible:outline focus-visible:outline-ring">{relatedLabel}</summary>
+              {hasRelated && <details id={panelId} className="meeting-source-contents min-w-0 text-sm [overflow-wrap:anywhere]" open={expanded} onToggle={event => setRowExpanded(viewIds, event.currentTarget.open)}>
+                <summary hidden data-meeting-row-fallback aria-label={`${row.title} · ${relatedLabel}`} className="min-h-11 cursor-pointer break-words rounded-md py-3 text-muted-foreground focus-visible:outline focus-visible:outline-ring">{relatedLabel}</summary>
                 <div className="grid min-w-0 gap-4 pb-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-muted-foreground">{row.displayDate ? `会议日期 · ${row.displayDate}` : '可补填会议日期'}</span><MeetingDisplayEditor sourceKey={row.displayKey} recording={row.recording} title={(display[row.displayKey || ''] ? display[row.displayKey || ''].title : row.recording?.displayTitle || (row.recording?.titleEdited ? row.recording.options.title : '')) || ''} date={row.displayDate} onSaved={() => { void onAssociated?.(); }} /></div>
                   {row.notes.length > 0 && <section aria-label="关联纪要" className="grid gap-2">
-                    <h3 className="font-medium">纪要</h3>
-                    <p className="text-xs leading-5 text-muted-foreground">关联纪要分别保留自己的保存版本。</p>
+                    <h3 className="text-xs font-medium text-muted-foreground">纪要版本</h3>
+
                     <MeetingNoteItems notes={row.notes} onOpenNote={onOpenNote} taskStates={taskStates} locatedNoteId={focusedNote?.id} ownerId={ownerId} expanded={expanded} />
                   </section>}
                   {row.recordings.length > 0 && <section aria-label="关联原录制" className="grid gap-2">
-                    <h3 className="font-medium">原录制</h3>
+                    <h3 className="text-xs font-medium text-muted-foreground">原录制</h3>
                     {row.recordings.map(recording => {
                       const recordedTime = meetingTime(recording.startedAt);
                       const originalDuration = recordingDuration(recording.elapsedSeconds);
@@ -450,7 +451,7 @@ export function MeetingWorkbench({
                     })}
                   </section>}
                   {retainedSource && <section aria-label="关联原录制" className="grid gap-2">
-                    <h3 className="font-medium">原录制</h3>
+                    <h3 className="text-xs font-medium text-muted-foreground">原录制</h3>
                     <p className="text-xs leading-5 text-muted-foreground">打开关联纪要查看来源，原录制是否可用以详情核验为准。纪要和旧稿始终保留。</p>
                     <Button variant="ghost" className="h-auto min-h-11 w-full justify-start whitespace-normal py-3 text-left" onClick={() => onOpenNote(retainedSource.id)}>
                       查看原录制 · {retainedSource.title}
@@ -461,31 +462,34 @@ export function MeetingWorkbench({
               </div>
             );
           })}
-          {pendingView && unlinked.length > 0 && <section aria-label="待归档内容" className="grid min-w-0 gap-3 py-3">
+          {pendingView && unlinked.length > 0 && <section aria-label="未关联原录制内容" className="grid min-w-0 gap-3 py-3">
             <MeetingNoteItems notes={unlinked} onOpenNote={onOpenNote} taskStates={taskStates} locatedNoteId={focusedNote?.id} ownerId={ownerId}
               onAssociate={ownerId && onAssociated ? note => setAssociating({ note, ownerId, context: associationContextKey }) : undefined} />
           </section>}
           {!pendingView && unlinked.length > 0 && <div className="mt-4 flex flex-wrap items-center justify-between gap-2 border-t pt-3 text-xs text-muted-foreground">
             <p>另有 {unlinked.length} 条内容待关联到会议档案。</p>
-            <Button variant="ghost" className="min-h-11" onClick={() => changeView('pending')}>查看待归档</Button>
+            <Button variant="ghost" className="min-h-11" onClick={() => changeView('pending')}>查看未关联原录制</Button>
           </div>}
-          {!loading && !(pendingView ? unlinked.length : visible.length) && (
-            <Empty>
+          {!pendingView && importedSources?.(query, filter, selectedDate)}
+          {!loading && !(pendingView ? unlinked.length : visible.length) && (pendingView || !importedSourceCount) && (
+            <Empty className="border-0 py-10">
+              <FileAudio className="size-7 text-muted-foreground" aria-hidden="true" />
               <EmptyHeader>
                 <EmptyTitle>
-                  {pendingView ? query ? '没有匹配的待归档内容' : '暂无待归档内容' : query || filter !== '全部' ? '没有匹配会议' : '还没有会议档案'}
+                  {pendingView ? query ? '没有匹配的未关联原录制内容' : '暂无未关联原录制内容' : query || selectedDate || filter !== '全部' ? '没有匹配会议' : '还没有会议档案'}
                 </EmptyTitle>
                 <EmptyDescription>
-                  {pendingView ? query ? '调整搜索关键词，内容和保存版本均保留。' : '已关联的纪要位于对应会议档案中。' : query || filter !== '全部'
-                    ? '调整筛选或搜索关键词。'
-                    : '录制或导入会议后在这里查看档案；尚未关联的内容可在待归档中查看。'}
+                  {pendingView ? query ? '换个关键词试试。' : '已关联的纪要位于对应会议档案中。' : query || selectedDate || filter !== '全部'
+                    ? '换个关键词或筛选条件试试。'
+                    : '录制或导入一场会议后，档案会出现在这里。'}
                 </EmptyDescription>
               </EmptyHeader>
-              {(query || !pendingView && filter !== "全部") && (
+              {!pendingView && !query && !selectedDate && filter === '全部' && actions}
+              {(query || selectedDate || !pendingView && filter !== "全部") && (
                 <Button
                   variant="outline"
                   onClick={() => {
-                    setQuery("");
+                    setQuery(""); setSelectedDate('');
                     if (!pendingView) setFilter("全部");
                   }}
                 >

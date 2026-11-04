@@ -23,7 +23,7 @@ from sqlalchemy.exc import IntegrityError
 from app.config import settings
 from app.db import session_scope
 from app.db_models import FeishuConnectionDB, FeishuDeliveryDB, FeishuOAuthDB
-from app.models.feishu_destination import FeishuDeliveryDestinationDB
+from app.models.feishu_destination import FeishuDeliveryDestinationDB, FeishuPublishRejectionDB
 from app.models.workspace import WorkspaceNoteDB, WorkspaceVersionDB
 from app.services import feishu_receipt_service as receipts
 from app.services import feishu_markdown as native_markdown
@@ -33,6 +33,12 @@ from app.services.feishu_notification_card import document_card
 from app.services.cloud_account_service import _cipher
 
 _locks = [threading.RLock() for _ in range(64)]
+
+
+class _CommittedRejection:
+    def __init__(self, operation_id, message):
+        self.operation_id = operation_id
+        self.message = message
 
 
 class FeishuError(HTTPException):
@@ -508,7 +514,9 @@ class FeishuService:
         Selection tokens are opaque 15-minute proofs of this owner's results;
         they are not Feishu credentials or a promise of bot availability/access.
         """
-        if (not isinstance(query, str) or not query.strip() or len(query) > 50 or
+        if isinstance(query, str) and not query.strip():
+            raise FeishuError("请输入联系人姓名后搜索", 422, code="invalid_contact_query")
+        if (not isinstance(query, str) or len(query) > 50 or
                 type(page_size) is not int or not 1 <= page_size <= 50 or
                 not isinstance(page_token, str) or len(page_token) > 2000):
             raise FeishuError("联系人查询参数无效", 422, code="invalid_contact_query")
@@ -973,11 +981,6 @@ class FeishuService:
                 prior = receipts.operation_job(db, owner, operation_id, request_hash)
                 if prior:
                     return {**self.serialize(prior, db=db), 'operation_id': operation_id, '_dispatch_required': False}
-                previous = db.scalar(select(FeishuDeliveryDB).where(FeishuDeliveryDB.owner == owner,
-                    FeishuDeliveryDB.note_key == note_key, FeishuDeliveryDB.revision == revision))
-                if previous:
-                    receipts.bind_operation(db, owner, operation_id, request_hash, previous)
-                    return {**self.serialize(previous, db=db), 'operation_id': operation_id, '_dispatch_required': False}
             raise
 
     @staticmethod
@@ -1179,15 +1182,17 @@ class FeishuService:
                     prior = receipts.operation_job(db, owner, operation_id, request_hash)
                     if prior:
                         return {**self.serialize(prior, db=db), "operation_id": operation_id, "_dispatch_required": False}
-                previous = db.scalar(select(FeishuDeliveryDB).where(FeishuDeliveryDB.owner == owner,
-                    FeishuDeliveryDB.note_key == note_key, FeishuDeliveryDB.revision == revision))
-                if previous:
-                    receipts.bind_operation(db, owner, operation_id, request_hash, previous)
-                    return {**self.serialize(previous, db=db), "_dispatch_required": False,
-                            **({"operation_id": operation_id} if operation_id else {})}
             raise
 
-    def _enqueue(self, owner, note_key, title, content, automatic, enhanced, destination, policy,
+    def _enqueue(self, *args, **kwargs):
+        result = self._enqueue_locked(*args, **kwargs)
+        if isinstance(result, _CommittedRejection):
+            raise FeishuError({"code": "PUBLISH_DEFINITELY_REJECTED", "protocol": 1,
+                               "operation_id": result.operation_id, "message": result.message},
+                              409, code="meeting_context_unverified")
+        return result
+
+    def _enqueue_locked(self, owner, note_key, title, content, automatic, enhanced, destination, policy,
                  notify_self, groups, available_groups, version_id, revision_id, content_revision, revision, source,
                  operation_id=None, request_hash=None, contacts=None, recipient_access_policy=None,
                  automatic_policy_id=None, attendance=None, manual_group_meeting_versions=None):
@@ -1197,11 +1202,11 @@ class FeishuService:
                 # policy/pending-job reads, including across server processes.
                 db.execute(update(FeishuConnectionDB).where(FeishuConnectionDB.owner == owner)
                            .values(preferences=FeishuConnectionDB.preferences))
+            account = db.scalar(select(FeishuConnectionDB).where(FeishuConnectionDB.owner == owner).with_for_update())
             if operation_id:
                 prior = receipts.operation_job(db, owner, operation_id, request_hash)
                 if prior:
                     return {**self.serialize(prior, db=db), "operation_id": operation_id, "_dispatch_required": False}
-            account = db.scalar(select(FeishuConnectionDB).where(FeishuConnectionDB.owner == owner).with_for_update())
             if not account or not account.tokens:
                 if automatic_policy_id is not None:
                     raise FeishuError("自动交付授权已失效", 409, code="automatic_policy_changed")
@@ -1235,7 +1240,14 @@ class FeishuService:
                 receipts.bind_operation(db, owner, operation_id, request_hash, previous)
                 return {**self.serialize(previous, db=db), "_dispatch_required": False,
                         **({"operation_id": operation_id} if operation_id else {})}
-            graphic = self._guard_graphic_delivery(db, owner, note_key, content)
+            try:
+                graphic = self._guard_graphic_delivery(db, owner, note_key, content)
+            except FeishuError as exc:
+                if not automatic and operation_id and request_hash and exc.code == 'meeting_context_unverified' and not exc.uncertain:
+                    db.add(FeishuPublishRejectionDB(owner=owner, operation_id=operation_id, fingerprint=request_hash))
+                    db.flush()
+                    return _CommittedRejection(operation_id, exc.detail)
+                raise
             if manual_group_meeting_versions is not None:
                 self._guard_grouping_history(db, owner, note_key, title, content)
                 actual_grouping = self._manual_meeting_grouping(db, owner, note_key, title, content, destination, preferences, source)

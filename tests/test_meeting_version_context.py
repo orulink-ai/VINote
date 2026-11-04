@@ -10,6 +10,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from tests.test_meeting_model_boundary import CAPABILITIES
 from tests.test_meeting_summary_regeneration import case
 from app.db_models import SourceRequestDB
 from app.services.meeting_version_context import MeetingVersionService, MeetingVersionConfirmation
@@ -20,7 +21,7 @@ from app.services.vilab_cloud_service import VILabCloudService, _task_source
 @pytest.fixture
 def version(case, monkeypatch):
     c = case
-    current = {"mode": "cloud", "configured": True, "server_url": "https://current.invalid",
+    current = {"mode": "cloud", "configured": True, "server_url": c.snapshot["server_url"],
                "connection_id": "synthetic-current", "connection_auth_mode": "api_key",
                "asr_model": "global-asr", "llm_model": "global-llm"}
     calls = []
@@ -33,20 +34,12 @@ def version(case, monkeypatch):
     def models(self, owner):
         config = self.status(owner)
         calls.append((owner, config["server_url"], config.get("llm_model")))
-        names = ["old-model"] if config["server_url"] == c.snapshot["server_url"] else ["chosen-other", "global-llm"]
+        names = ["old-model", "chosen-other", "global-llm"]
         return ([{"id": name, "modelType": "llm", "runtimeStatus": "available"}
                 for name in names if name not in denied]
-                + ([{"id": "explicit-asr", "modelType": "asr", "runtimeStatus": "available"}]
-                   if config["server_url"] == "https://current.invalid" else []))
+                + ([{"id": "explicit-asr", "modelType": "asr", "runtimeStatus": "available", "capabilities": CAPABILITIES}]
+                   if config["server_url"] == c.snapshot["server_url"] else []))
     monkeypatch.setattr(VILabCloudService, "models", models)
-    from app.services.vilab_connection_service import VILabConnectionService
-    def validate(self, owner, snapshot):
-        assert owner == "alice"
-        if snapshot["server_url"] == c.snapshot["server_url"] and snapshot.get("connection_id") is None:
-            return
-        if snapshot.get("connection_id") != "synthetic-current" or snapshot["server_url"] != "https://current.invalid":
-            raise HTTPException(409, "synthetic connection denied")
-    monkeypatch.setattr(VILabConnectionService, "validate_snapshot", validate)
     service = MeetingVersionService(c.service)
     context = service.context("alice", c.parent)
     def body(**extra):
@@ -81,7 +74,7 @@ def test_default_creates_distinct_child_and_runs_original_frozen_llm_without_asr
     snapshot = json.loads((child / SNAPSHOT_FILE).read_text())
     assert snapshot["llm_model"] == "old-model" and snapshot["server_url"] == v.c.snapshot["server_url"]
     assert snapshot["needs_stt"] is False
-    assert v.current["llm_model"] == "global-llm" and v.current["server_url"] == "https://current.invalid"
+    assert v.current["llm_model"] == "global-llm" and v.current["server_url"] == v.c.snapshot["server_url"]
     def run(**kwargs):
         frozen = _task_source.get()[1]
         assert frozen["llm_model"] == "old-model" and frozen["server_url"] == v.c.snapshot["server_url"]
@@ -103,12 +96,13 @@ def test_two_confirmed_versions_are_new_tasks_without_rewriting_parent(version):
 def test_explicit_override_reads_current_catalog_only_on_demand_and_freezes_selection(version):
     v = version
     catalog = v.service.models("alice", v.c.parent, v.context["context_revision"])
-    assert v.calls == [("alice", "https://current.invalid", None)]
+    assert v.calls == [("alice", v.c.snapshot["server_url"], None)]
     body = v.body(llm_mode="select", model_name="chosen-other", selection_revision=catalog["selection_revision"], connection_id="synthetic-current")
     receipt, _ = accept(v, body)
     snapshot = json.loads((v.c.artifacts.find_task_dir(receipt.task_id) / SNAPSHOT_FILE).read_text())
-    assert snapshot["llm_model"] == "chosen-other" and snapshot["server_url"] == "https://current.invalid"
-    assert snapshot["connection_id"] == "synthetic-current" and snapshot["needs_stt"] is False
+    assert snapshot["llm_model"] == "chosen-other" and snapshot["server_url"] == v.c.snapshot["server_url"]
+    assert "connection_id" not in snapshot and "connection_auth_mode" not in snapshot
+    assert snapshot["needs_stt"] is False
     assert v.current["llm_model"] == "global-llm"
 
 
@@ -138,7 +132,7 @@ def test_unavailable_exact_model_does_not_fall_back_or_reserve(version, choice):
     with v.c.sessions() as db: assert not db.scalars(select(SourceRequestDB)).all()
 
 
-def test_selected_catalog_connection_change_is_not_silently_rebound(version):
+def test_selected_catalog_fixed_origin_change_is_not_silently_rebound(version):
     v = version
     catalog = v.service.models("alice", v.c.parent, v.context["context_revision"])
     body = v.body(llm_mode="select", model_name="chosen-other", connection_id="synthetic-current", selection_revision=catalog["selection_revision"])
@@ -202,7 +196,7 @@ def test_derived_parent_cannot_replace_db_bound_original_llm_or_origin(version, 
     v.c.artifacts.update_status(child, "success", "synthetic complete")
     snapshot = json.loads((child / SNAPSHOT_FILE).read_text())
     if damage == "model": snapshot["llm_model"] = "different-nonempty-model"
-    elif damage == "connection": snapshot.update(server_url="https://current.invalid", connection_id="synthetic-current", connection_auth_mode="api_key")
+    elif damage == "connection": snapshot.update(connection_id="synthetic-current", connection_auth_mode="api_key")
     else:
         with v.c.sessions() as db:
             row = db.get(SourceRequestDB, ("alice", receipt.operation_id))
@@ -266,7 +260,7 @@ def test_exact_historical_context_hash_can_prove_origin_without_trusting_child_d
         meta = json.loads(row.receipt_json); meta.pop("summary_snapshot_sha256"); row.receipt_json = json.dumps(meta)
     snap = json.loads((child / SNAPSHOT_FILE).read_text())
     snap["asr_model"] = "unused-summary-asr-field"  # B's real legacy shape: no ASR authority is inherited.
-    if damage == "origin": snap.update(server_url="https://current.invalid", connection_id="synthetic-current", connection_auth_mode="api_key")
+    if damage == "origin": snap.update(connection_id="synthetic-current", connection_auth_mode="api_key")
     v.c.artifacts.write_json(child / SNAPSHOT_FILE, snap)
     if damage == "parent_model": v.c.artifacts.write_json(v.c.folder / SNAPSHOT_FILE, {**v.c.snapshot, "llm_model": "changed"})
     if damage == "parent_request": v.c.artifacts.write_json(v.c.folder / "request.json", {"request": {**request["request"], "title": "changed"}})

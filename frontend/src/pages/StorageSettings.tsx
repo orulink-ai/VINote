@@ -101,21 +101,21 @@ export function StorageSettings() {
     <PageHeading title="存储" description="管理当前设备的内容、原文件与回收站。" />
     {error && <ErrorState error={error} onRetry={reload} busy={busy} retryLabel="重新读取" />}
     {!ready && !error && <LoadingState label="正在读取保存内容…" />}
-    <section className="grid gap-3 border-b pb-6" aria-label="保存内容">
+    <section className="grid gap-3 border-b pb-5" aria-label="保存内容">
       <h2 className="font-medium">正文与版本</h2>
-      <p className="text-sm text-muted-foreground">笔记、会议纪要和已保存版本保留在此设备；移入回收站后可恢复。</p>
+      <p className="text-sm text-muted-foreground">以下统计仅包含此设备工作区已缓存的内容；笔记列表中的其他内容不计入。</p>
       {ready && <dl className="grid grid-cols-2 gap-3 text-sm">
-        <dt>内容</dt><dd>{items.filter(note => !note.deleted).length} 份</dd>
+        <dt>已缓存内容</dt><dd>{items.filter(note => !note.deleted).length} 份</dd>
         <dt>已读取历史版本</dt><dd>{Object.values(details).reduce((sum, note) => sum + note.versions.length, 0)} 份</dd>
       </dl>}
       <Button variant="outline" className="w-fit" asChild><Link to="/notes">查看笔记</Link></Button>
     </section>
-    <section className="grid gap-3 border-b pb-6" aria-label="原文件">
+    <section className="grid gap-3 border-b pb-5" aria-label="原文件">
       <h2 className="font-medium">原文件</h2>
-      <p className="text-sm text-muted-foreground">录制和导入的原文件在文件库管理。移除正文不会删除原文件或已发布的飞书文档。</p>
+      <p className="text-sm text-muted-foreground">录制和导入的原文件在会议或笔记中管理。移除正文不会删除原文件或已发布的飞书文档。</p>
       {localError && <ErrorState error={localError} onRetry={reload} retryLabel="重新读取" />}
       <p className="text-sm text-muted-foreground">{recordingsReady ? `${recordings.length} 条录制记录` : localError ? '录制记录数量暂不可用' : '正在读取录制记录…'}</p>
-      <Button variant="outline" className="w-fit" asChild><Link to={'/files?' + new URLSearchParams({ type: 'all', returnTo })} state={{ returnTo }}>打开原文件目录</Link></Button>
+      <div className="flex flex-wrap gap-2"><Button variant="outline" asChild><Link to={'/meetings/files?' + new URLSearchParams({ returnTo })} state={{ returnTo }}>会议原文件</Link></Button><Button variant="outline" asChild><Link to={'/notes/files?' + new URLSearchParams({ returnTo })} state={{ returnTo }}>笔记原文件</Link></Button></div>
     </section>
     <section className="grid gap-3" aria-label="内容回收站">
       <h2 id="trash" ref={heading} tabIndex={-1} className="scroll-mt-6 font-medium">内容回收站</h2>
@@ -124,8 +124,8 @@ export function StorageSettings() {
       {notice && <p role="status" className="text-sm text-muted-foreground">{notice}</p>}
       {ready && deleted.length > 0 && <Button variant="outline" className="w-fit" disabled={!canPurge}
         onClick={event => selectTrash(deleted, event.currentTarget)}>清空回收站</Button>}
-      {ready && deleted.map(note => <div key={note.key} className="flex items-center justify-between gap-3 border-b py-3">
-        <span className="min-w-0 break-words">{note.title}</span>
+      {ready && deleted.map(note => <div key={note.key} className="flex flex-wrap items-center justify-between gap-3 border-b py-3">
+        <span className="min-w-0 flex-1 basis-40 break-words text-sm">{note.title}</span>
         <div className="flex shrink-0 gap-2">
         <Button variant="outline" disabled={busy || !!restoring || purging} onClick={async () => {
           if (!owner) return;
@@ -145,10 +145,10 @@ export function StorageSettings() {
           onClick={event => selectTrash([note], event.currentTarget)}>永久删除</Button>
         </div>
       </div>)}
-      {ready && !deleted.length && <p className="text-sm text-muted-foreground">回收站为空。</p>}
+      {ready && !deleted.length && <p className="text-sm text-muted-foreground">此设备工作区缓存中没有回收站内容。</p>}
     </section>
     <AlertDialog open={!!selection} onOpenChange={open => { if (!open && !purging) setSelection(null); }}>
-      <AlertDialogContent onCloseAutoFocus={event => {
+      <AlertDialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto break-words" onCloseAutoFocus={event => {
         event.preventDefault();
         const origin = trigger.current;
         if (!origin || origin.owner !== useAuthStore.getState().user?.id || origin.generation !== view.current.generation) return;

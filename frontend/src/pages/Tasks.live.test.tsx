@@ -1,0 +1,52 @@
+import {cleanup,render,screen,within,waitFor} from '@testing-library/react';
+import {MemoryRouter} from 'react-router-dom';
+import {beforeEach,afterEach,it,expect,vi} from 'vitest';
+import {Tasks} from './Tasks';
+import {apiJson} from '@/lib/api';
+import {useAuthStore} from '@/stores/authStore';
+import {listPendingMeetings} from '@/lib/audioStorage';
+vi.mock('@/lib/api',async original=>({...await original<typeof import('@/lib/api')>(),apiJson:vi.fn()}));
+vi.mock('@/lib/audioStorage',()=>({listPendingMeetings:vi.fn(async()=>[])}));
+vi.mock('@/hooks/useLibraryNotes',()=>({useLibraryNotes:()=>[],libraryNoteUrl:()=>'/notes'}));
+const api=vi.mocked(apiJson);
+beforeEach(()=>{localStorage.clear();api.mockReset();vi.mocked(listPendingMeetings).mockResolvedValue([]);useAuthStore.setState({user:{id:'center-owner'} as never})});
+afterEach(()=>{cleanup();localStorage.clear()});
+it('shows each live source, measured stage, completed note and failure recovery without posting',async()=>{
+ for(const [id,title]of [['a','评审会议'],['b','培训纪要'],['c','采购讨论'],['d','周会纪要']])localStorage.setItem(`vinote:source-receipt:center-owner:${id}`,JSON.stringify({id,operationId:id,meeting:true,sourceTitle:title,workspace:{scope:'personal'},submissionState:'accepted'}));
+ localStorage.setItem('vinote:source-receipt:center-owner:unknown',JSON.stringify({id:'unknown',operationId:'unknown',meeting:true,sourceTitle:'提交待核验',submissionState:'unknown'}));
+ api.mockImplementation(async path=>path==='/api/notes'?[{id:'saved-b',task_id:'b',status:'done'}]:path.endsWith('/a')?{task_id:'a',status:'transcribing',processed_seconds:30,total_seconds:120}:path.endsWith('/c')?{task_id:'c',status:'failed',message:'原音频无法读取'}:{task_id:path.endsWith('/b')?'b':'d',status:'success',result:{task_id:path.endsWith('/b')?'b':'d',title:'完成纪要',markdown:'正文'}});
+ render(<MemoryRouter initialEntries={['/tasks?tab=generation']}><Tasks/></MemoryRouter>);
+ expect(screen.queryByRole('link',{name:'返回笔记'})).toBeNull();
+ expect(await screen.findByText('已转写 30 / 120 秒')).toBeVisible();
+ expect(screen.getByRole('progressbar',{name:'转写进度'})).toHaveAttribute('aria-valuenow','25');
+ expect(screen.getAllByRole('progressbar')).toHaveLength(1);
+ expect(await screen.findByRole('link',{name:'打开已保存内容'})).toHaveAttribute('href','/note/saved-b');
+ expect(screen.getByRole('link',{name:'打开结果并保存'})).toHaveAttribute('href','/generate?mode=file&meeting=1&operation=d');
+ const failed=screen.getByRole('heading',{name:'采购讨论'}).closest('article')!;
+ expect(within(failed).getByText('原音频无法读取')).toBeVisible();
+ expect(within(failed).getByRole('link',{name:'查看失败原因与恢复'})).toHaveAttribute('href','/generate?mode=file&meeting=1&operation=c');
+ await waitFor(()=>expect(api.mock.calls.some(([p])=>p==='/api/notes')).toBe(true));
+ expect(api.mock.calls.some(([p])=>p==='/api/task/unknown')).toBe(false);
+ expect(api.mock.calls.every(([,i])=>!i?.method)).toBe(true);
+});
+
+it('uses verified recovered recording state instead of stale local failure text and action',async()=>{
+ vi.mocked(listPendingMeetings).mockResolvedValue([{id:'recording',taskId:'recovered',processingStatus:'failed',processingError:'旧的失败原因',options:{title:'恢复的会议'}}] as never);
+ api.mockImplementation(async path=>path==='/api/notes'?[{id:'saved-recovered',task_id:'recovered',status:'done'}]:{task_id:'recovered',status:'success',message:'Note generated successfully',result:{task_id:'recovered',title:'恢复的会议',markdown:'已完成'}});
+ render(<MemoryRouter><Tasks/></MemoryRouter>);
+ expect(await screen.findByRole('link',{name:'查看会议纪要'})).toHaveAttribute('href','/note/saved-recovered');
+ expect(screen.queryByText('旧的失败原因')).not.toBeInTheDocument();
+ expect(screen.queryByRole('link',{name:'查看原录音与恢复选项'})).not.toBeInTheDocument();
+ expect(screen.queryByRole('progressbar')).not.toBeInTheDocument();
+ expect(screen.queryByText('Note generated successfully')).not.toBeInTheDocument();
+});
+it('opens a saved team import using its retained workspace without changing its receipt',async()=>{
+ const key='vinote:source-receipt:center-owner:team-task';
+ const receipt=JSON.stringify({id:'team-task',operationId:'team-task',meeting:false,sourceTitle:'团队资料',workspace:{scope:'team',teamId:'team-1'},submissionState:'accepted'});
+ localStorage.setItem(key,receipt);
+ api.mockImplementation(async path=>path==='/api/notes?scope=team&team_id=team-1'?[{id:'team-note',task_id:'team-task',status:'done',scope:'team',team_id:'team-1'}]:path==='/api/notes'?[]:{task_id:'team-task',status:'success',result:{task_id:'team-task',title:'团队资料',markdown:'正文'}});
+ render(<MemoryRouter><Tasks/></MemoryRouter>);
+ expect(await screen.findByRole('link',{name:'打开已保存内容'})).toHaveAttribute('href','/note/team-note');
+ expect(localStorage.getItem(key)).toBe(receipt);
+ expect(api.mock.calls.every(([,options])=>!options?.method)).toBe(true);
+});

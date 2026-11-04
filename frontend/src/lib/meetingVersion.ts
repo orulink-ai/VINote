@@ -4,14 +4,14 @@ export type Presentation = 'text' | 'illustrated' | 'html' | 'comic' | 'infograp
 export type MeetingVersionContext = {
   protocol: 1; parent_task_id: string; canonical_task_id: string; context_revision: string
   source: { version: string; type: string; title?: string; file_id?: string }
-  original_llm: { model_name: string; server_url: string; connection_id?: string; verified: boolean; reason?: string }
+  original_llm: { model_name: string; server_url: string; verified: boolean; reason?: string }
   default_asr_mode: 'reuse'; default_llm_mode: 'inherit'
   asr_modes: { reuse: { available: boolean; reason?: string }; fresh: { available: boolean; reason?: string; context_revision?: string; presentation_options?: Partial<Record<Presentation, { available: boolean; reason?: string | null }>> } }
   presentation_options?: Partial<Record<Presentation, { available: boolean; reason?: string | null }>>
 }
 export type MeetingVersionModels = {
   models: { id: string; modelType: string; runtimeStatus: string; availability?: { status?: string; retryAt?: number | null }; name?: string }[]
-  selection_revision: string; connection: { server_url: string; connection_id?: string }
+  selection_revision: string; connection: { server_url: string }
 }
 export function meetingVersionOperationKey(owner: string, parent: string, note?: string) {
   return `vinote:meeting-version-operation:${owner}:${note || 'task'}:${parent}`

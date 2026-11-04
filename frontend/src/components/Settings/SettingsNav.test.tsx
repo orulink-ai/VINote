@@ -17,7 +17,7 @@ describe("SettingsNav", () => {
     for (const label of ["账号与协作", "使用偏好", "当前设备与处理", "服务"]) {
       expect(within(nav).getByRole("heading", { name: label })).toBeVisible();
     }
-    expect(within(nav).getAllByRole("button")).toHaveLength(8);
+    expect(within(nav).getAllByRole("button")).toHaveLength(9);
     expect(
       within(nav).getByRole("button", { name: "转写与总结" }),
     ).toHaveAttribute("aria-current", "page");

@@ -28,12 +28,12 @@ class RecordingLLM(_BasePromptLLM):
         return 'dynamic note'
 
 
-def test_text_model_gets_actual_extracted_text_and_entire_source_in_draft_and_review(tmp_path):
+def test_text_model_gets_actual_extracted_text_and_entire_source_in_one_request(tmp_path):
     llm = RecordingLLM()
     material = evidence(tmp_path)
     llm.summarize('Meeting', [TranscriptSegment(0, 100, 'FULL_SPEECH_END')],
                   style='meeting', video_evidence=material)
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 1
     for call in llm.calls:
         assert isinstance(call, str)
         assert 'FULL_SPEECH_END' in call and 'SCREEN_PROPOSAL_NOT_DECISION' in call
@@ -41,12 +41,12 @@ def test_text_model_gets_actual_extracted_text_and_entire_source_in_draft_and_re
 
 
 @pytest.mark.parametrize('capabilities,verified', [({'vision': True}, False), ({}, True)])
-def test_verified_or_explicit_vision_sends_actual_image_in_draft_and_review(tmp_path, capabilities, verified):
+def test_verified_or_explicit_vision_sends_actual_image_in_one_request(tmp_path, capabilities, verified):
     llm = RecordingLLM()
     llm.configure_video_capabilities(capabilities, image_input_verified=verified)
     llm.summarize('Meeting', [TranscriptSegment(0, 100, 'FULL_SOURCE')], style='meeting',
                   video_evidence=evidence(tmp_path, text=None))
-    assert len(llm.calls) == 2
+    assert len(llm.calls) == 1
     for call in llm.calls:
         assert call[0]['type'] == 'text'
         assert 'FULL_SOURCE' in call[0]['text']
@@ -65,7 +65,7 @@ def test_unknown_capability_does_not_send_images_or_call_provider_without_text(t
     assert not llm.calls
 
 
-def test_visual_review_does_not_switch_to_other_model_or_query_catalog(tmp_path):
+def test_direct_visual_summary_does_not_switch_to_other_model_or_query_catalog(tmp_path):
     llm = VILabLLM('user', 'chosen-model')
     llm.configure_video_capabilities({}, image_input_verified=True)
     used = []
@@ -76,7 +76,7 @@ def test_visual_review_does_not_switch_to_other_model_or_query_catalog(tmp_path)
     with patch.object(VILabLLM, '_complete', complete), \
             patch('app.llm.vilab_llm.VILabCloudService.models', side_effect=AssertionError('no switching')):
         llm.summarize('Meeting', [], style='meeting', video_evidence=evidence(tmp_path))
-    assert len(used) == 2 and all(model == 'chosen-model' for model, _ in used)
+    assert len(used) == 1 and all(model == 'chosen-model' for model, _ in used)
 
 
 def test_openai_transport_receives_images_but_tracing_receives_only_text(tmp_path):

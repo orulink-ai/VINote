@@ -6,10 +6,10 @@
 
 | 运行方式 | 命令 | 固定 VILab 地址 | 数据位置 |
 | --- | --- | --- | --- |
-| 内网桌面源码 | `yarn dev:desktop:lan` | `http://192.168.1.143:9876` | 仓库配置指定的位置 |
-| 公网桌面源码 | `yarn dev:desktop:public` | `官方公网服务` | 仓库配置指定的位置 |
-| 正式安装包 | `yarn package:release` | `官方公网服务` | `app.vinote.desktop` 对应应用数据目录 |
-| 测试安装包 | `yarn package:test` | `http://192.168.1.143:9876` | `app.vinote.desktop.test` 对应应用数据目录 |
+| 兼容测试桌面源码 | `yarn dev:desktop:lan` | `https://api-hk.orulink.ai` | 仓库配置指定的位置 |
+| 公网桌面源码 | `yarn dev:desktop:public` | `https://api-hk.orulink.ai` | 仓库配置指定的位置 |
+| 正式安装包 | `yarn package:release` | `https://api-hk.orulink.ai` | `app.vinote.desktop` 对应应用数据目录 |
+| 测试安装包 | `yarn package:test` | `https://api-hk.orulink.ai` | `app.vinote.desktop.test` 对应应用数据目录 |
 
 `yarn desktop:build` 保持兼容，等同于正式版。地址统一定义在 `scripts/service-environments.mjs`，不接受 `.env` 或终端的通用/旧渠道 VILab URL 覆盖。Langfuse 地址独立配置，默认仍为内网；公网 VILab 不代表外网追踪已可达。
 

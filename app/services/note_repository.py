@@ -86,7 +86,7 @@ class NoteRepository:
             return any(self._get_accessible_record(db, user_id=user_id, note_id=note_id) is not None
                        for note_id in ids)
 
-    def list_notes(self, user_id: str, *, scope: str = "personal", team_id: str | None = None) -> list[NoteRecordResponse]:
+    def list_notes(self, user_id: str, *, scope: str = "personal", team_id: str | None = None, task_id: str | None = None) -> list[NoteRecordResponse]:
         with session_scope() as db:
             statement = select(NoteDB)
             if scope == "team":
@@ -96,6 +96,8 @@ class NoteRepository:
             else:
                 statement = statement.where(NoteDB.scope == "personal", NoteDB.created_by == user_id)
 
+            if task_id is not None:
+                statement = statement.where(NoteDB.task_id == task_id, NoteDB.created_by == user_id)
             rows = db.scalars(statement.order_by(desc(NoteDB.created_at))).all()
             return [self._to_response(row, team_name=self._get_team_name(db, row.team_id)) for row in rows]
 
@@ -112,7 +114,7 @@ class NoteRepository:
             connection = db.connection()
             if (connection.dialect.name == "sqlite"
                     and not connection.connection.driver_connection.in_transaction):
-                connection.exec_driver_sql("BEGIN")
+                connection.exec_driver_sql("BEGIN IMMEDIATE")
             scope = payload.scope or "personal"
             team_id = None
             if scope == "team":
@@ -121,17 +123,16 @@ class NoteRepository:
                 team_id = payload.team_id
 
             meeting_key = None
-            if payload.task_id and payload.source_type in {"meeting_recording", "meeting_video"}:
+            if payload.task_id:
                 existing = db.scalar(select(NoteDB).where(
                     NoteDB.created_by == user_id, NoteDB.task_id == payload.task_id,
                     NoteDB.scope == scope, NoteDB.team_id == team_id,
-                    NoteDB.source_type.in_(["meeting_recording", "meeting_video"]),
                 ).order_by(NoteDB.created_at).limit(1))
                 if existing:
                     return self._to_response(existing, team_name=self._get_team_name(db, team_id))
                 # The primary key also serializes simultaneous retries across workers.
                 meeting_key = str(uuid.uuid5(uuid.NAMESPACE_URL, json.dumps(
-                    ["vinote-meeting", user_id, payload.task_id, scope, team_id],
+                    ["vinote-meeting" if payload.source_type in {"meeting_recording", "meeting_video"} else "vinote-generated", user_id, payload.task_id, scope, team_id],
                 )))
 
             record = NoteDB(
@@ -153,7 +154,7 @@ class NoteRepository:
                     db.flush()
             except IntegrityError:
                 existing = db.get(NoteDB, meeting_key) if meeting_key else None
-                if not existing or existing.created_by != user_id or existing.scope != scope or existing.team_id != team_id:
+                if not existing or existing.created_by != user_id or existing.task_id != payload.task_id or existing.scope != scope or existing.team_id != team_id:
                     raise
                 return self._to_response(existing, team_name=self._get_team_name(db, team_id))
             feishu_auto_outbox.register_new_meeting(db, record)

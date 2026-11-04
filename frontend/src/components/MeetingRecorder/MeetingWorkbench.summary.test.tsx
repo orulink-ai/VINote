@@ -1,3 +1,4 @@
+vi.mock('@/hooks/useMeetingDisplay', () => ({ useMeetingDisplay: () => ({}), MEETING_DISPLAY_CHANGED: 'vinote-meeting-display-changed' }));
 import { act, cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -20,7 +21,7 @@ function note(index: number, overrides = {}): LibraryNote {
 function mount(notes: LibraryNote[], open = vi.fn()) {
   return render(<MeetingWorkbench notes={notes} recordings={[]} loading={false} onOpenNote={open} onDeleted={vi.fn()} />)
 }
-async function expand(count: number) { await userEvent.click(screen.getByText(new RegExp(`^关联纪要（${count}条）`))) }
+async function expand(count: number) { await userEvent.click(screen.getByText(new RegExp(`^关联纪要（${count}条）`)).closest('details')!.previousElementSibling as HTMLElement) }
 beforeEach(() => {
   vi.resetAllMocks(); sessionStorage.clear()
   useAuthStore.setState({ user: { id: 'owner' } as never }); useAppModeStore.setState({ config: null })

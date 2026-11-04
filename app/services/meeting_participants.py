@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 import re
 import stat
@@ -33,6 +34,8 @@ from sqlalchemy.exc import IntegrityError
 from app.db import session_scope
 from app.db_models import NoteDB, SourceRequestDB
 from app.models.meeting_participants import MeetingParticipantConfirmationDB as Confirmation
+from app.models.meeting_participants import MeetingSpeakerConfirmationDB as SpeakerConfirmation
+from app.services.meeting_speaker_matches import project_speakers, valid_speaker_id
 from app.models.transcript import TranscriptSegment
 from app.services import feishu_object_hotwords
 from app.services.meeting_evidence import original_asr_evidence
@@ -105,7 +108,7 @@ def resolve_attendance(snapshot, evidence):
     participants, confidence, status and recipient IDs) have no authority.
     Confidence is a reasoned evidence tier rather than a probability.
     """
-    result = {"contacts": [], "candidates": [], "unresolved": []}
+    result = {"contacts": [], "candidates": [], "unresolved": [], "speakers": []}
     if not isinstance(snapshot, dict) or not isinstance(evidence, dict):
         result["unresolved"].append(_unresolved("evidence_invalid"))
         return result
@@ -115,6 +118,7 @@ def resolve_attendance(snapshot, evidence):
         result["unresolved"].append(_unresolved("hotwords_invalid"))
         return result
     materials = []
+    original = None
     transcript = evidence.get("transcript")
     if transcript is not None:
         try:
@@ -132,6 +136,7 @@ def resolve_attendance(snapshot, evidence):
         except (ValueError, TypeError, KeyError):
             result["unresolved"].append(_unresolved("transcript_invalid"))
             materials = []
+            original = None
     else:
         result["unresolved"].append(_unresolved("transcript_missing"))
     visual = evidence.get("visual")
@@ -140,6 +145,14 @@ def resolve_attendance(snapshot, evidence):
             materials.append((visual["text"], {"artifact": "visual_observations.json"}, True))
         else:
             result["unresolved"].append(_unresolved("visual_invalid"))
+    frames = evidence.get("visual_frames", [])
+    if isinstance(frames, list):
+        for index, frame in enumerate(frames[:256]):
+            if (isinstance(frame, dict) and isinstance(frame.get("text"), str)
+                    and isinstance(frame.get("offsets"), list) and len(frame["offsets"]) <= 256
+                    and all(type(t) in (int, float) and math.isfinite(t) and t >= 0 for t in frame["offsets"])):
+                materials.append((frame["text"], {"artifact": "video_evidence.json", "frame_index": index,
+                    "offsets": frame["offsets"]}, True))
     # Speaker turns are deliberately not sentence labels or name mappings.
     transcript_metadata = transcript.get("metadata", {}) if isinstance(transcript, dict) else {}
     if (evidence.get("speaker") is not None
@@ -150,6 +163,7 @@ def resolve_attendance(snapshot, evidence):
     if sum(len(text) for text, _, _ in materials) > _MAX_TEXT:
         result["unresolved"].append(_unresolved("evidence_budget_exceeded"))
         return result
+    result["speakers"] = project_speakers(original, evidence.get("speaker"), [], snapshot)
     if not terms:
         result["unresolved"].append(_unresolved("hotwords_no_contacts"))
         return result
@@ -192,6 +206,12 @@ def resolve_attendance(snapshot, evidence):
             for item in (reason, "name_collision" if len(ids) > 1 else "exact_hotword_match_only"):
                 if item not in reasons:
                     reasons.append(item)
+            # Full bounded association indices are internal, independent of the
+            # eight short public excerpts. A late introduction must stay visible.
+            if reference.get("artifact") == "transcript.json" and "segment_index" in reference:
+                candidate.setdefault("_segment_indices", set()).add(reference["segment_index"])
+            if reference.get("artifact") == "video_evidence.json":
+                candidate.setdefault("_frame_offsets", set()).update(reference["offsets"])
             # References and a small excerpt only, never full private artifacts.
             if len(candidate["evidence"]) < 8:
                 position = match.start()
@@ -200,7 +220,10 @@ def resolve_attendance(snapshot, evidence):
         if budget_exhausted:
             break
     result["candidates"] = list(found.values())
+    result["speakers"] = project_speakers(original, evidence.get("speaker"), result["candidates"], snapshot)
     for item in result["candidates"]:
+        item.pop("_segment_indices", None)
+        item.pop("_frame_offsets", None)
         result["unresolved"].append(_unresolved("attendance_identity_unverified", item["candidate_id"]))
     result["unresolved"].append(_unresolved("no_verified_attendance_identity"))
     return result
@@ -274,7 +297,7 @@ def _context(service, owner, note_key, *, title, content):
                 or json.loads(identity["status.json"]).get("status") != "success"):
             raise ValueError("meeting_completion_unverified")
         # These gate the selected saved version, but do not define attendance.
-        canonical, folder, source_hash, visual_revision, canonical_folder = _canonical_meeting(artifacts, owner, task_id)
+        canonical, folder, source_hash, visual_revision, canonical_folder, visual_frames = _canonical_meeting(artifacts, owner, task_id)
         evidence_files = (*_FILES, "asr_evidence.json", "video_evidence.json")
         loaded_raw, file_sources = {}, {}
         for filename in evidence_files:
@@ -294,6 +317,7 @@ def _context(service, owner, note_key, *, title, content):
                            else loaded_raw["asr_evidence.json"])
         original = original_asr_evidence(transcript.metadata.get("asr_evidence") or saved)
         evidence["transcript"] = original
+        evidence["visual_frames"] = visual_frames
         speaker = transcript.metadata.get("speaker_evidence")
         if speaker is not None:
             evidence["speaker"] = speaker
@@ -426,7 +450,9 @@ def _canonical_meeting(artifacts, owner, task):
     visual = retained_visual_evidence(artifacts, evidence_folder, canonical, source, owner,
         receipts=SourceRequestService(session_scope))
     visual_revision = visual_version(visual)  # Actual retained JPEG digests.
-    return canonical, evidence_folder, source_hash, visual_revision, folder
+    frames = [{"text": frame.ocr_text, "offsets": frame.sample_offsets} for frame in visual.frames
+              if frame.ocr_text] if visual is not None else []
+    return canonical, evidence_folder, source_hash, visual_revision, folder, frames
 
 
 def _saved_body(owner, note_key):
@@ -444,7 +470,10 @@ def _stored(owner, task_id, binding):
         row = db.get(Confirmation, (owner, task_id, feishu_object_hotwords.binding_hash(binding)))
         if row is None:
             return None
-        return {"revision": row.revision, "note_key": row.note_key,
+        matches = db.get(SpeakerConfirmation, (owner, task_id, feishu_object_hotwords.binding_hash(binding)))
+        speaker_matches = json.loads(matches.matches_json) if (matches and matches.revision == row.revision
+            and matches.evidence_revision == row.evidence_revision) else []
+        return {"speaker_matches": speaker_matches, "revision": row.revision, "note_key": row.note_key,
                 "evidence_revision": row.evidence_revision, "participants": json.loads(row.participants_json),
                 "confirmed_at": row.confirmed_at}
 
@@ -456,6 +485,7 @@ def _view(result, task_id, note_key, stored, valid):
                              "status": ("confirmed" if stored["participants"] else "cleared") if current
                                        else "stale" if stored else "unconfirmed",
                              "participants": stored["participants"] if current else [],
+                             "speaker_matches": stored.get("speaker_matches", []) if current else [],
                              "confirmed_at": stored["confirmed_at"] if current else None},
             "can_confirm": valid}
 
@@ -491,7 +521,7 @@ def _validated(service, owner, binding, selections):
 
 
 def confirm_meeting_participants(service, owner, note_key, *, confirmed, task_id,
-                                 evidence_revision, confirmation_revision, contacts):
+                                 evidence_revision, confirmation_revision, contacts, speaker_matches=None):
     """Replace this meeting's attendance assertion, never dispatch a delivery.
 
     Empty contacts explicitly revokes the list. CAS revisions prevent concurrent
@@ -519,6 +549,20 @@ def confirm_meeting_participants(service, owner, note_key, *, confirmed, task_id
     previous = _stored(owner, canonical, binding)
     if (previous["revision"] if previous else 0) != confirmation_revision:
         raise HTTPException(409, "本会议参会人确认已变化，请重新读取")
+    allowed_speakers = {item["speaker_id"] for item in result.get("speakers", [])}
+    selected_ids = {item["open_id"] for item in contacts}
+    if speaker_matches is None:
+        speaker_matches = [item for item in (previous or {}).get("speaker_matches", [])
+            if previous["evidence_revision"] == evidence_revision and item["open_id"] in selected_ids
+            and item["speaker_id"] in allowed_speakers]
+    if (not isinstance(speaker_matches, list) or len(speaker_matches) > 100
+            or any(not isinstance(item, dict) or set(item) != {"speaker_id", "open_id"}
+                   or not valid_speaker_id(item.get("speaker_id")) or item["speaker_id"] not in allowed_speakers
+                   or not isinstance(item.get("open_id"), str) or item["open_id"] not in selected_ids
+                   for item in speaker_matches)
+            or len({item["speaker_id"] for item in speaker_matches}) != len(speaker_matches)):
+        raise HTTPException(422, "说话人映射须使用真实说话人与本次已选择的联系人，且每位说话人只匹配一次")
+    speaker_matches = sorted(speaker_matches, key=lambda item: item["speaker_id"])
     proofs = _validated(service, owner, binding, contacts) if contacts else []
     fresh, fresh_task, fresh_binding, fresh_valid = _context(service, owner, note_key, title=title, content=content)
     if (not fresh_valid or fresh_task != task_id or fresh_binding != binding
@@ -548,6 +592,14 @@ def confirm_meeting_participants(service, owner, note_key, *, confirmed, task_id
             row.revision = confirmation_revision + 1
             row.participants_json = json.dumps(participants, ensure_ascii=False)
             row.confirmed_at = time.time()
+            mapping = db.get(SpeakerConfirmation, (owner, canonical, fingerprint))
+            if mapping is None:
+                mapping = SpeakerConfirmation(owner=owner, task_id=canonical, binding_hash=fingerprint)
+                db.add(mapping)
+            mapping.revision = row.revision
+            mapping.evidence_revision = evidence_revision
+            mapping.matches_json = json.dumps(speaker_matches, ensure_ascii=False)
+            _assert_binding(service, owner, binding)
             db.flush()
     except IntegrityError:
         raise HTTPException(409, "本会议参会人确认已变化，请重新读取") from None
@@ -565,6 +617,7 @@ def resolve_saved_meeting(service, owner, note_key, *, title, content):
     canonical = result["canonical_task_id"]
     stored = _stored(owner, canonical, binding)
     result["confirmation_status"] = "unconfirmed"
+    result["speaker_matches"] = []
     if not stored:
         # Legacy/current-task lookup only reports staleness, never migrates or
         # returns its names/proofs when the canonical origin cannot be verified.
@@ -613,6 +666,7 @@ def resolve_saved_meeting(service, owner, note_key, *, title, content):
         result["confirmation_status"] = "stale"
         result["unresolved"].append(_unresolved("attendance_confirmation_changed"))
         return result
+    result["speaker_matches"] = stored.get("speaker_matches", [])
     # Internal acceptance scope, never a directory proof or a public receipt.
     # The caller must lock/recheck this confirmation before creating a delivery.
     result["_confirmation_binding_hash"] = feishu_object_hotwords.binding_hash(binding)
@@ -638,3 +692,23 @@ def resolve_saved_meeting(service, owner, note_key, *, title, content):
         result["unresolved"] = [item for item in result["unresolved"] if item["reason"] != "no_verified_attendance_identity"
                                 and item.get("candidate_id") not in resolved_candidates]
     return result
+
+
+def confirmed_speaker_context(service, owner, note_key):
+    """Read-only attribution context; no contact lookup, proof minting or send.
+
+    Only raw segment speaker IDs may attribute a sentence. Independent turn
+    overlaps and visual names remain review evidence even after a human mapping.
+    Callers freeze and recheck this scope before dispatching generation.
+    """
+    title, content = _saved_body(owner, note_key)
+    result, _, binding, valid = _context(service, owner, note_key, title=title, content=content)
+    stored = _stored(owner, result["canonical_task_id"], binding)
+    current = bool(valid and stored and stored["evidence_revision"] == result["evidence_revision"])
+    people = {item["open_id"]: item["name"] for item in stored["participants"]} if current else {}
+    return {"canonical_task_id": result["canonical_task_id"], "evidence_revision": result["evidence_revision"],
+        "confirmation_revision": stored["revision"] if current else 0,
+        "binding_hash": feishu_object_hotwords.binding_hash(binding),
+        "speakers": result.get("speakers", []),
+        "speaker_matches": [{**item, "name": people[item["open_id"]]}
+            for item in stored.get("speaker_matches", []) if item["open_id"] in people] if current else []}

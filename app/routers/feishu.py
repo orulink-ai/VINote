@@ -167,6 +167,30 @@ class CompleteAuthorization(BaseModel):
     flow_id: str = Field(min_length=1, max_length=100)
 
 
+class RegistrationRecovery(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    revision: str = Field(pattern=r"^[a-f0-9]{64}$")
+    confirmed: Literal[True]
+
+
+@router.get("/authorize/recovery")
+def registration_recovery_status(response: Response, identity=Depends(principal)):
+    from app.services import feishu_cli as cli
+    if not cli.enabled():
+        raise HTTPException(404, "没有此连接流程")
+    response.headers["Cache-Control"] = "no-store"
+    return cli.registration_recovery_info(identity[0])
+
+
+@router.post("/authorize/recovery")
+def registration_recovery(payload: RegistrationRecovery, response: Response, identity=Depends(principal)):
+    from app.services import feishu_cli as cli
+    if not cli.enabled():
+        raise HTTPException(404, "没有此连接流程")
+    response.headers["Cache-Control"] = "no-store"
+    return cli.recover_registration(identity[0], payload.revision, payload.confirmed)
+
+
 @router.post("/authorize/complete")
 def complete_authorization(payload: CompleteAuthorization, response: Response,
                            identity=Depends(principal)):
@@ -201,16 +225,18 @@ def groups(identity=Depends(principal)):
 
 
 @router.get("/contacts")
-def contacts(response: Response, query: str = Query(min_length=1, max_length=50, pattern=r"\S"),
+def contacts(response: Response, query: str = Query(default="", max_length=50),
              page_size: int = Query(default=20, ge=1, le=50),
              page_token: str = Query(default="", max_length=2000), identity=Depends(principal)):
-    """One search page; items carry open_id/name/selection_token (900s).
+    """One search page (CLI empty query: recent visible contacts), fresh 900s proofs.
 
     Requires the existing owner's contact:user:search grant. Selection is
     per-publication, not a saved notification default. Reading permission and
     bot availability remain not_checked; no document/message write occurs.
     """
     response.headers["Cache-Control"] = "no-store"
+    if query and not query.strip():
+        raise HTTPException(422, "请输入联系人姓名，或清空输入查看最近联系人")
     params = dict(query=query, page_size=page_size, page_token=page_token)
     remote, result = proxy(identity, "GET", "/contacts?" + urlencode(params))
     return result if remote else service.for_owner(identity[0]).contacts(identity[0], **params)

@@ -35,19 +35,17 @@ def validate_source(value, user_id):
         if (parsed.scheme not in {"http", "https"} or not parsed.netloc or parsed.username or parsed.password
                 or parsed.query or parsed.fragment):
             raise HTTPException(409, "原任务的模型服务来源已变化，请明确确认恢复来源")
-        from app.services.vilab_connection_service import VILabConnectionService
-        from app.services import vilab_cloud_service
-        if "connection_id" in value and (not isinstance(value["connection_id"], str) or not value["connection_id"]):
-            raise HTTPException(409, "原任务的模型连接绑定无效")
-        VILabConnectionService(vilab_cloud_service.session_scope).validate_snapshot(user_id, value)
+        # Connection fields may exist in historical snapshots. They no longer
+        # select a destination or credential and are deliberately ignored.
+        if not settings.vilab_server_url or origin.rstrip("/") != settings.vilab_server_url.rstrip("/"):
+            raise HTTPException(409, "原任务的模型服务来源与当前固定公网服务不一致")
         for kind in ("llm_model", "asr_model"):
             if kind == "asr_model" and value.get("needs_stt") is False:
                 continue
             if not isinstance(value.get(kind), str) or not value[kind].strip():
                 raise HTTPException(409, "原任务缺少具体模型，请明确确认恢复模型")
-        allowed = {"version", "owner", "mode", "server_url", "asr_model", "llm_model", "connection_id", "connection_auth_mode"}
-        if "connection_auth_mode" in value and (not value.get("connection_id") or value["connection_auth_mode"] not in {"account", "api_key"}):
-            raise HTTPException(409, "原任务连接认证方式无效")
+        allowed = {"version", "owner", "mode", "server_url", "asr_model", "llm_model",
+                   "connection_id", "connection_auth_mode"}
     else:
         allowed = {"version", "owner", "mode", "server_url", "asr_model", "llm_model",
                    "local_llm_fingerprint", "local_stt_fingerprint"}
@@ -62,26 +60,24 @@ def validate_source(value, user_id):
     return dict(value)
 
 
-def capture_source(user_id, options, confirmation=None):
+def capture_source(user_id, options, confirmation=None, *, validate_meeting=True):
     from app.config import settings
     from app.services.vilab_cloud_service import VILabCloudService
+    from app.services.meeting_model_boundary import is_meeting, require_public, validate_meeting_source
     service = VILabCloudService()
     cloud = service.connection_snapshot(user_id) if user_id else {"mode": "local"}
     if confirmation is not None:
         if (set(confirmation) - {"confirmed", "mode", "server_url", "asr_model", "llm_model", "connection_id", "connection_auth_mode"}
                 or confirmation.get("confirmed") is not True or confirmation.get("mode") != "cloud"
                 or not isinstance(confirmation.get("server_url"), str)
-                or confirmation.get("server_url", "").rstrip('/') != cloud.get("server_url", "").rstrip('/')
-                or confirmation.get("connection_id", cloud.get("connection_id")) != cloud.get("connection_id")):
+                or confirmation.get("server_url", "").rstrip('/') != settings.vilab_server_url.rstrip('/')):
             raise HTTPException(409, "请明确确认配置的服务来源及两个具体模型")
         cloud = {**cloud, **{key: confirmation.get(key) for key in ("mode", "server_url", "asr_model", "llm_model")}}
+    if validate_meeting and is_meeting(options):
+        require_public(cloud)
     value = {"version": 1, "owner": user_id, "mode": cloud["mode"],
              "server_url": cloud.get("server_url", settings.vilab_server_url), "asr_model": "", "llm_model": "",
              "needs_stt": options.get("needs_stt", True)}
-    if cloud.get("connection_id") and value["mode"] == "cloud":
-        value["connection_id"] = cloud["connection_id"]
-        if cloud.get("connection_auth_mode"):
-            value["connection_auth_mode"] = cloud["connection_auth_mode"]
     # asr_model is the explicit new paired-selection marker. model_name alone
     # retains its historical cloud/default and local/custom behavior.
     paired = options.get("asr_model") is not None and confirmation is None
@@ -102,9 +98,19 @@ def capture_source(user_id, options, confirmation=None):
         if not paired:
             choices = {key: cloud.get(key, "") for key in ("asr_model", "llm_model")}
             if (not choices["llm_model"] or value["needs_stt"] and not choices["asr_model"]) and confirmation is None:
-                choices = service.defaults(user_id)
+                if is_meeting(options):
+                    # Resolve only absent choices under the captured public origin,
+                    # never reread later global preferences. Summary-only ignores ASR.
+                    with service.task_snapshot(user_id, snapshot=cloud):
+                        defaults = service.request(user_id, "GET", "/v1/default-models")
+                    choices = {key: choices[key] or defaults.get(key, "") for key in choices}
+                else:
+                    choices = service.defaults(user_id)
             value.update({key: choices.get(key) for key in ("asr_model", "llm_model")})
         if not value["llm_model"] or value["needs_stt"] and not value["asr_model"]:
+            if is_meeting(options) and value["needs_stt"] and not value["asr_model"]:
+                from app.services.meeting_model_boundary import MEETING_MODEL_ERROR
+                raise HTTPException(409, MEETING_MODEL_ERROR)
             raise ValueError("云端当前模型未配置，请联系服务管理员")
     else:
         from app.services.llm_service import LLMService
@@ -118,6 +124,8 @@ def capture_source(user_id, options, confirmation=None):
             stt = (STTProfileService().resolve_config(user_id=user_id, stt_profile_id=options.get("stt_profile_id"))
                    if value["needs_stt"] else None)
         value.update(local_llm_fingerprint=config_fingerprint(llm), local_stt_fingerprint=config_fingerprint(stt) if stt else hashlib.sha256(b"not-used").hexdigest())
+    if validate_meeting and is_meeting(options):
+        validate_meeting_source(user_id, value, needs_stt=value["needs_stt"])
     return validate_source(value, user_id)
 
 
@@ -132,7 +140,11 @@ def ensure_source(folder, user_id, options, *, allow_capture=False, confirmation
                 raise HTTPException(409, "原任务模型快照无法读取，未使用当前设置替换") from None
             if confirmation is not None:
                 raise HTTPException(409, "已有模型快照的任务不能更换模型，请另建确认操作")
-            return validate_source(value, user_id)
+            value = validate_source(value, user_id)
+            from app.services.meeting_model_boundary import is_meeting, validate_meeting_source
+            if is_meeting(options):
+                validate_meeting_source(user_id, value, needs_stt=options.get("needs_stt", True))
+            return value
         if not allow_capture and confirmation is None:
             raise HTTPException(409, "原任务缺少冻结模型，请明确确认服务来源、ASR 和 LLM 后再恢复")
         value = capture_source(user_id, options, confirmation)

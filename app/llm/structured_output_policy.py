@@ -4,7 +4,8 @@ from typing import Literal
 from urllib.parse import urlsplit
 
 POLICY_VERSION = 'native-json/1'
-_SUPPORTED_PAIR = ('aliyun-token-plan-openai', 'deepseek-v4.1-flash')
+_SUPPORTED_PAIRS = {('aliyun-token-plan-openai', 'deepseek-v4.1-flash'),
+                    ('openai', 'codex/gpt-6-luna')}
 
 
 @dataclass(frozen=True)
@@ -66,6 +67,6 @@ def select_policy(binding, catalog):
     if len(rows) != 1:
         return OutputPolicy(binding, 'unchanged', 'catalog_entry_unavailable')
     row = rows[0]
-    if (row.get('providerId'), row.get('providerModel')) != _SUPPORTED_PAIR:
+    if (row.get('providerId'), row.get('providerModel')) not in _SUPPORTED_PAIRS:
         return OutputPolicy(binding, 'unchanged', 'unsupported_pair')
     return OutputPolicy(binding, 'json_object', 'eligible_pair')

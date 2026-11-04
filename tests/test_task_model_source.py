@@ -9,6 +9,7 @@ from unittest.mock import patch
 import pytest
 from fastapi import BackgroundTasks, HTTPException
 
+from tests.test_meeting_model_boundary import CAPABILITIES
 from app.config import settings
 from app.models.note import LocalFileRequest
 from app.models.audio import AudioDownloadResult
@@ -30,7 +31,7 @@ def cloud(monkeypatch):
         yield SimpleNamespace(get=lambda cls, user: row)
     monkeypatch.setattr(cloud_module, 'session_scope', session)
     monkeypatch.setattr(VILabCloudService, 'models', lambda self,user: [
-        {'id': 'original-asr', 'modelType': 'asr', 'runtimeStatus': 'available'},
+        {'id': 'original-asr', 'modelType': 'asr', 'runtimeStatus': 'available', 'capabilities': CAPABILITIES},
         {'id': 'original-llm', 'modelType': 'llm', 'runtimeStatus': 'available'}])
     return row
 
@@ -231,6 +232,9 @@ def test_confirmation_route_is_owner_scoped_read_only(tmp_path, cloud, monkeypat
     artifacts.write_json(folder/'request.json', {'request':req.model_dump(), 'trace':None})
     if case == 'frozen':
         sources.ensure_source(folder, 'owner', {}, allow_capture=True)
+        def offline(*args, **kwargs):
+            pytest.fail('historical snapshot GET must not read live models')
+        monkeypatch.setattr(VILabCloudService, 'models', offline)
     if case == 'active':
         status = artifacts.get_status('recover')
         status['status'] = 'transcribing'

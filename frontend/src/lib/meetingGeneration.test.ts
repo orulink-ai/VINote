@@ -15,6 +15,16 @@ vi.mock('./api', () => ({ apiJson: vi.fn() }))
 describe('meetingGeneration', () => {
   beforeEach(() => vi.mocked(apiJson).mockReset())
 
+  it('sends the confirmed pair through the real multipart transport', async () => {
+    vi.mocked(apiJson).mockResolvedValue({ task_id: 'frozen-task' })
+    await submitMeetingRecording({ audioBlob: new Blob(['audio']), startedAt: new Date(),
+      summaryMode: 'default', asrModel: 'confirmed-speech', modelName: 'confirmed-summary' })
+    const form = vi.mocked(apiJson).mock.calls[0][1]?.body as FormData
+    expect(form.get('asr_model')).toBe('confirmed-speech')
+    expect(form.get('model_name')).toBe('confirmed-summary')
+    expect(form.get('workflow')).toBe('meeting')
+  })
+
   it.each(['unknown_error', 'asr_empty_result', 'empty_result_unverified'])('reads non-retryable %s without POST and preserves the server failure stage/message on repeated recovery', async error_code => {
     const message = error_code === 'unknown_error' ? '转写结果尚未确认，原文件已保留。' : '转写服务返回空结果，尚未确认该区间的完整识别结果。原文件已保留，请查看原任务，不要重复提交。'
     vi.mocked(apiJson).mockResolvedValue({ status: 'failed', failed_stage: 'transcribing', retryable: false, error_code, message })

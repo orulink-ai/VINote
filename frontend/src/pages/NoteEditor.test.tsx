@@ -133,13 +133,15 @@ describe("NoteEditor transcript evidence", () => {
     noteStoreMock.getShareLink.mockResolvedValue(null);
   });
 
-  it("keeps a static title with visible edit/export/share/delete actions and Feishu publication", async () => {
+  it("keeps primary actions visible and groups export/share/delete under content actions", async () => {
     renderEditor();
     await screen.findByText("Minutes only.");
     expect(screen.getAllByRole("heading", { name: "Meeting note", level: 1 })).toHaveLength(1);
     expect(screen.queryByRole("textbox", { name: "Meeting title" })).not.toBeInTheDocument();
     const primary = screen.getByRole("group", { name: "Primary content actions" });
-    expect(within(primary).getAllByRole("button")).toHaveLength(6);
+    expect(within(primary).getAllByRole("button")).toHaveLength(3);
+    expect(within(primary).queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
+    expect(within(primary).queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
     expect(within(primary).getByRole("button", { name: "生成新版本" })).toBeVisible();
     expect(within(primary).getByRole("button", { name: "生成新版本" }).closest('details')).toBeNull();
     expect(within(primary).getByRole("button", { name: "Edit" })).toBeInTheDocument();
@@ -148,8 +150,8 @@ describe("NoteEditor transcript evidence", () => {
     openContentActions();
     expect(screen.getByRole("button", { name: "历史版本" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "导出 Markdown" })).toBeInTheDocument();
-    expect(within(primary).getByRole("button", { name: "Share" })).toBeVisible();
-    expect(within(primary).getByRole("button", { name: "Delete" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Share" })).toBeVisible();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeVisible();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
@@ -187,26 +189,23 @@ describe("NoteEditor transcript evidence", () => {
     expect(screen.queryByLabelText("Meeting title")).not.toBeInTheDocument();
   });
 
-  it("keeps saved versions and MCP translation separate from version history with contextual return", async () => {
+  it("keeps saved versions and version history available after retiring content tools", async () => {
     useWorkspaceStore.setState({ mappings: { "note-1": { key: "real-shared-key", revision: 3, fingerprint: "saved" } } });
     renderEditor("/note/note-1?view=summary");
     await screen.findByText("Minutes only.");
     openContentActions();
     expect(screen.getByText("Version history")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View saved versions" })).toHaveAttribute("href", "/workspace/real-shared-key");
-    const translation = screen.getByRole("link", { name: "Full-text translation · MCP" });
-    expect(translation).toHaveAttribute("href", "/settings/mcp?mode=translation&note=real-shared-key");
-    expect(within(screen.getByRole("group", { name: "Primary content actions" })).getByRole("button", { name: "Delete" })).toBeVisible();
+    expect(screen.queryByRole("link", { name: "Full-text translation · MCP" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Delete" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
     fireEvent.change(screen.getByLabelText("Meeting title"), { target: { value: "Draft title" } });
-    expect(translation).toHaveAttribute("aria-disabled", "true");
-    expect(translation).toHaveAttribute("tabindex", "-1");
-    fireEvent.click(translation);
+    expect(screen.queryByRole("region", { name: "Content tools" })).not.toBeInTheDocument();
     expect(screen.getByLabelText("Meeting title")).toHaveValue("Draft title");
     expect(noteStoreMock.updateNote).not.toHaveBeenCalled();
   });
 
-  it.each(["View original file", "View saved versions", "Full-text translation · MCP"])("preserves file filters, selected original and ancestor on a %s round trip", async action => {
+  it.each(["View original file", "View saved versions"])("preserves file filters, selected original and ancestor on a %s round trip", async action => {
     const parent = "/files?type=file&q=test&file=file-1&returnTo=%2Fprojects%3Fproject%3Dp1%26archive%3D1";
     useWorkspaceStore.setState({ mappings: { "note-1": { key: "real-shared-key", revision: 3, fingerprint: "saved" } } });
     renderEditor({ pathname: "/note/note-1", search: "?view=summary", hash: "#decision", state: { returnTo: parent } });
@@ -319,10 +318,10 @@ describe("NoteEditor transcript evidence", () => {
     renderEditor();
     await screen.findByText("Minutes only.");
     openContentActions();
-    expect(screen.getByText(/This tool does not yet support this saved content/)).toBeInTheDocument();
+    expect(screen.queryByText(/This tool does not yet support this saved content/)).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "View saved versions" })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Full-text translation · MCP" })).toBeDisabled();
-    expect(screen.getByRole("link", { name: "Configure MCP tools" })).toHaveAttribute("href", "/settings/mcp");
+    expect(screen.queryByRole("button", { name: "Full-text translation · MCP" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "Configure MCP tools" })).not.toBeInTheDocument();
     expect(apiMock.apiJson.mock.calls.some(([path]) => String(path).includes("/invoke"))).toBe(false);
   });
 

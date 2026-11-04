@@ -23,7 +23,7 @@ def is_document_url(url):
                 or Path(parsed.path).suffix.lower() in {".mp4", ".webm", ".m4a", ".mp3", ".mov", ".m3u8"})
 
 
-def _public_target(url):
+def _public_target(url, *, fake_dns_resolver=None):
     # Validate HTTPX's normalized host, then use this exact DNS answer for TCP.
     # A second resolution of the original hostname would allow DNS rebinding.
     try:
@@ -42,10 +42,16 @@ def _public_target(url):
     except OSError:
         raise ValueError("找不到这个网站，请检查链接或网络后重试") from None
     resolved = [ipaddress.ip_address(item[4][0]) for item in addresses]
+    # Some desktop TUN resolvers return benchmark addresses. Only an explicitly
+    # opted-in, allowlisted caller may replace an entirely synthetic answer;
+    # private or mixed answers remain rejected. Never connect to a fake IP.
+    fake_ranges = (ipaddress.ip_network('198.18.0.0/15'), ipaddress.ip_network('2001:2::/48'))
+    if fake_dns_resolver and resolved and all(any(ip in block for block in fake_ranges) for ip in resolved):
+        resolved = [ipaddress.ip_address(value) for value in fake_dns_resolver(host)]
     if not resolved or any(not address.is_global or address.is_multicast or address.is_reserved
                            or (address.version == 6 and address.is_site_local) for address in resolved):
         raise ValueError("不支持本机、内网或保留地址，请使用公开网页")
-    return parsed, parsed.copy_with(host=str(ipaddress.ip_address(addresses[0][4][0])))
+    return parsed, parsed.copy_with(host=str(resolved[0]))
 
 
 def public_url(url):
@@ -100,6 +106,17 @@ def document_text(filename, data):
 def webpage_text(url, *, reject_media=False, include_source_type=False):
     def extracted(title, text, kind):
         return (title, text, kind) if include_source_type else (title, text)
+
+    # X's public post content comes from its official oEmbed endpoint, not a
+    # generic login/dynamic HTML page. Malformed X paths must fail closed too.
+    from app.services.twitter_source_service import INPUT_HOSTS, twitter_text
+    try:
+        x_host = httpx.URL(url).host
+    except httpx.InvalidURL:
+        x_host = None
+    if x_host in INPUT_HOSTS:
+        title, text = twitter_text(url)
+        return extracted(title, text, 'webpage')
 
     for _ in range(6):
         if reject_media and (not is_document_url(url) or Path(urlparse(url).path).suffix.lower() in {

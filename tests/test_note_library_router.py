@@ -27,6 +27,28 @@ from app.services.task_artifact_service import TaskArtifactService
 class MeetingSourceProjectionTest(unittest.TestCase):
     """Synthetic metadata only: no live storage, provider or media processing."""
 
+    def setUp(self):
+        from functools import partial
+        from app.services import note_original_projection
+
+        self.database_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.database_dir.cleanup)
+        engine = create_engine(f"sqlite:///{Path(self.database_dir.name) / 'projection.db'}",
+                               connect_args={"check_same_thread": False})
+        self.addCleanup(engine.dispose)
+        Base.metadata.create_all(engine)
+
+        @contextmanager
+        def sessions():
+            with Session(engine) as db:
+                yield db
+
+        # Exercise the real projection without reading the developer's database.
+        projection = patch.object(note_original_projection, 'original_source',
+            partial(note_original_projection.original_source, sessions=sessions))
+        projection.start()
+        self.addCleanup(projection.stop)
+
     def test_owner_bound_canonical_projection_and_fail_closed_counterexamples(self):
         from app.models.note_library import NoteRecordResponse
         from datetime import datetime, timezone

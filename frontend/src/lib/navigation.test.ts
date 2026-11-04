@@ -18,6 +18,10 @@ describe('safe contextual parents', () => {
 })
 
 describe('loading page return context', () => {
+  it('returns scoped original pages to their owning content while loading', () => {
+    expect(loadingPageParent('/meetings/files', '')).toBe('/meetings')
+    expect(loadingPageParent('/notes/files', '')).toBe('/notes')
+  })
   it('does not invent a back destination on top-level pages or accept an unsafe context', () => {
     for (const path of ['/notes', '/meetings', '/files', '/connections', '/settings']) {
       expect(loadingPageParent(path, '')).toBeNull()
@@ -29,7 +33,9 @@ describe('loading page return context', () => {
     expect(loadingPageParent('/workspace/test', '', '/meetings?archived=1')).toBe('/meetings?archived=1')
     expect(loadingPageParent('/generate', '?meeting=1')).toBe('/meetings')
     expect(loadingPageParent('/settings/sync', '')).toBe('/settings?tab=storage')
-    expect(loadingPageParent('/settings/feishu', '')).toBe('/connections')
+    expect(loadingPageParent('/settings/feishu', '')).toBeNull()
+    expect(loadingPageParent('/tasks', '')).toBeNull()
+    expect(loadingPageParent('/settings/feishu', '?returnTo=%2Fsettings')).toBe('/settings')
     expect(loadingPageParent('/settings/mcp', '')).toBe('/connections')
     expect(loadingPageParent('/settings/mcp', '?mode=translation&note=abc')).toBe('/workspace/abc')
     expect(loadingPageParent('/settings/mcp', '?note=..%2Fsecret')).toBe('/connections')

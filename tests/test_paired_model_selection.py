@@ -177,11 +177,13 @@ def test_json_and_multipart_selection_reaches_single_snapshot_decision(router, c
         response = router.client.post(path, json={"video_url": "https://www.bilibili.com/video/BV13At46PEGQ", **PAIR})
     elif entry.startswith("upload"):
         path = "/api/generate_from_upload_sync" if entry.endswith("sync") else "/api/generate_from_upload"
-        response = router.client.post(path, data={"source_type": "audio", **PAIR},
+        # Keep this cross-entry selection test on ordinary-note semantics.
+        # Meeting uploads have additional capability checks covered separately.
+        response = router.client.post(path, data={"source_type": "audio", "style": "detailed", "workflow": "note_organization", **PAIR},
                                       files={"file": ("original.wav", router.content, "audio/wav")})
     else:
         path = "/api/generate_from_file_sync" if entry.endswith("sync") else "/api/generate_from_file"
-        response = router.client.post(path, json={"file_path": str(router.original), **PAIR})
+        response = router.client.post(path, json={"file_path": str(router.original), "style": "detailed", "workflow": "note_organization", **PAIR})
     assert response.status_code == 200, response.text
     assert len(router.captured) == 1
     assert router.captured[0]["asr_model"] == PAIR["asr_model"]

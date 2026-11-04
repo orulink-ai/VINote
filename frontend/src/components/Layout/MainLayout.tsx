@@ -13,6 +13,7 @@ import { TooltipProvider } from '@/components/ui/tooltip'
 import { APP_MODE_EVENT, useAppModeStore } from '../../stores/appModeStore'
 import { useAuthStore } from '../../stores/authStore'
 import { SourceTaskProgress } from './SourceTaskProgress'
+import { TaskNotifications } from './TaskNotifications'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
 import { FadeUp } from '@/components/ui/motion'
 import { SessionConnection } from './SessionConnection'
@@ -59,11 +60,12 @@ export function MainLayout() {
 
   return (
     <TooltipProvider delayDuration={150}>
-      <SidebarProvider defaultOpen style={{ '--sidebar-width': '14.5rem', '--sidebar-width-icon': '4.5rem' } as CSSProperties} className="workspace-shell relative h-full min-h-0">
+      <SidebarProvider defaultOpen style={{ '--sidebar-width': '13rem', '--sidebar-width-icon': '3.5rem' } as CSSProperties} className="workspace-shell relative h-full min-h-0">
         <Sidebar onSearch={openSearch} />
         <WorkspaceSearchDialog searchOpen={searchOpen} setSearchOpen={setSearchOpen} onClosed={() => searchOrigin.current?.focus()} />
         <div className="workspace-canvas flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
           <SessionConnection />
+          <TaskNotifications key={`notifications:${userId}`} />
           <div className="flex h-12 shrink-0 items-center justify-between border-b px-4 md:hidden">
             <SidebarTrigger aria-label="打开导航" />
             <span className="text-sm font-semibold">VINote</span>

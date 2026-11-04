@@ -16,7 +16,6 @@ const providerOptions: Array<{
   value: STTProviderType
   label: string
 }> = [
-  { value: 'vliab-server', label: 'VILab Server (vliab-server)' },
   { value: 'groq', label: 'Groq Whisper' },
   { value: 'whisper', label: 'OpenAI Whisper' },
   { value: 'faster-whisper', label: 'faster-whisper' },
@@ -24,10 +23,16 @@ const providerOptions: Array<{
   { value: 'sensevoice-local', label: 'SenseVoice Local' },
 ]
 
+// Saved VILab endpoint profiles predate the fixed public service. They stay
+// readable so they can be reviewed and removed, but cannot be created again.
+const LEGACY_VILAB_PROVIDERS = new Set<STTProviderType>(['vilab-server', 'vliab-server'])
+const isLegacyVilab = (provider: STTProviderType) => LEGACY_VILAB_PROVIDERS.has(provider)
+
 const getDefaultDraft = (provider: STTProviderType = 'groq'): STTProfileDraft => {
   switch (provider) {
+    case 'vilab-server':
     case 'vliab-server':
-      return { ...getDefaultDraft('groq'), provider, modelName: '', baseUrl: 'http://localhost:9876' }
+      return { ...getDefaultDraft('groq'), provider, modelName: '', baseUrl: '' }
     case 'groq':
       return {
         name: '',
@@ -126,14 +131,14 @@ const formatProfileSummary = (profile: STTProfile) => (
   ].filter(Boolean).join(' / ')
 )
 
-const requiresApiKey = (provider: STTProviderType) => (provider === 'groq' || provider === 'vliab-server')
+const requiresApiKey = (provider: STTProviderType) => provider === 'groq'
 
 const canSave = (draft: STTProfileDraft, editingId: string | null) => {
   if (!draft.name.trim()) {
     return false
   }
-  if (draft.provider === 'vliab-server') {
-    return Boolean(draft.baseUrl.trim() && (editingId || draft.apiKey.trim()))
+  if (isLegacyVilab(draft.provider)) {
+    return false
   }
   if (draft.provider === 'groq') {
     return Boolean(draft.modelName.trim() && (editingId || draft.apiKey.trim()))
@@ -230,9 +235,9 @@ export function STTProfileManager() {
   }
 
   const showModel = draft.provider !== 'sensevoice'
-  const showBaseUrl = draft.provider === 'sensevoice' || draft.provider === 'vliab-server'
+  const showBaseUrl = draft.provider === 'sensevoice'
   const showApiKey = requiresApiKey(draft.provider)
-  const showLanguage = draft.provider === 'vliab-server' || draft.provider === 'groq' || draft.provider === 'faster-whisper' || draft.provider === 'sensevoice' || draft.provider === 'sensevoice-local'
+  const showLanguage = draft.provider === 'groq' || draft.provider === 'faster-whisper' || draft.provider === 'sensevoice' || draft.provider === 'sensevoice-local'
   const showDevice = draft.provider === 'whisper' || draft.provider === 'faster-whisper'
   const showComputeType = draft.provider === 'faster-whisper'
   const showUseGpu = draft.provider === 'sensevoice-local'
@@ -362,8 +367,22 @@ export function STTProfileManager() {
                   {option.label}
                 </option>
               ))}
+              {isLegacyVilab(draft.provider) && (
+                <option value={draft.provider}>VILab 自建地址（旧配置）</option>
+              )}
             </NativeSelect>
           </div>
+
+          {isLegacyVilab(draft.provider) && (
+            <Alert>
+              <AlertDescription>
+                <p className="font-medium">会议转写已固定使用公网 VILab 服务</p>
+                <p className="mt-1 text-sm leading-6 text-muted-foreground">
+                  这条旧配置仍可查看和删除，但不能再新建或修改地址。请到“模型运行方式”里的“服务模型”选择转写模型。
+                </p>
+              </AlertDescription>
+            </Alert>
+          )}
 
           {showLocalSupport && (
             <Alert>

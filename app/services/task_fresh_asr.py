@@ -253,16 +253,20 @@ class FreshASRService:
             cloud = VILabCloudService()
             frozen = _task_source.get()
             connection = dict(frozen[1]) if frozen and frozen[0] == owner else cloud.connection_snapshot(owner)
-            if connection.get('mode') != 'cloud' or body.connection_id is not None and body.connection_id != connection.get('connection_id'):
-                _unavailable('fresh_connection_changed', '模型连接已变化，请重新选择并确认。')
+            # Historical connection fields stay accepted for old receipts, but a
+            # new selection binds only the fixed deployment origin.
+            if connection.get('mode') != 'cloud' or not connection.get('server_url'):
+                _unavailable('fresh_connection_changed', '当前没有可用的云端模型服务，请重新选择并确认。')
             snapshot = validate_source({'version': 1, 'owner': owner, **{key: connection[key] for key in
-                ('mode', 'server_url', 'connection_id', 'connection_auth_mode') if key in connection},
+                ('mode', 'server_url') if key in connection},
                 'asr_model': body.asr_model, 'llm_model': body.model_name, 'needs_stt': True}, owner)
             with cloud.task_snapshot(owner, snapshot=snapshot):
                 models = cloud.models(owner)
                 cloud._validate_selection(models, body.asr_model, 'asr')
                 cloud._validate_selection(models, body.model_name, 'llm')
                 cloud.validate_ready(owner, needs_stt=True)
+                from app.services.meeting_model_boundary import validate_meeting_source
+                validate_meeting_source(owner, cloud.status(owner))
             link = {'contract': CONTRACT, 'parent_task_id': parent, 'canonical_task_id': context['canonical_task_id'],
                     'snapshot_sha256': _digest(snapshot), **body.model_dump(mode='json')}
             claim = self.receipts.reserve(owner, operation, _submission(link))
@@ -329,6 +333,8 @@ class FreshASRService:
                         raise ValueError('Changed source request')
                 # Do not hold the source registry lock through paid execution.
                 VILabCloudService().validate_ready(owner, needs_stt=True)
+                from app.services.meeting_model_boundary import validate_meeting_source
+                validate_meeting_source(owner, VILabCloudService().status(owner))
                 if note_service is None:
                     from app.services.note_service import NoteService
                     note_service = NoteService()
@@ -348,9 +354,6 @@ def _dispatch(service, artifacts, folder, source, owner, task, req, link):
     The caller keeps both the fresh ASR lease and model snapshot live throughout.
     """
     started = time.time()
-    if req.diarize:
-        from app.services.speaker_diarization_service import SpeakerDiarizationService
-        SpeakerDiarizationService.require_ready()
     from app.services.asr_execution_binding import require_task_execution
     require_task_execution(owner, task, folder, source)
     artifacts.update_status(folder, 'preparing', '正在准备本次重新识别的录音…', retryable=False)

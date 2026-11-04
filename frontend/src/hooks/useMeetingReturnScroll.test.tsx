@@ -66,6 +66,20 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
+it('resets the shared pane on pathname changes but preserves it for query and hash changes', () => {
+  context.location = { pathname: '/settings/feishu', search: '', hash: '', state: null }
+  const { rerender } = render(<Harness showList={false} />)
+  const pane = geometry()
+  pane.scrollTop = 640
+  context.location = { pathname: '/connections', search: '', hash: '', state: null }
+  rerender(<Harness showList={false} />)
+  expect(pane.scrollTop).toBe(0)
+  pane.scrollTop = 280
+  context.location = { pathname: '/connections', search: '?filter=installed', hash: '#results', state: null }
+  rerender(<Harness showList={false} />)
+  expect(pane.scrollTop).toBe(280)
+})
+
 it('waits through lazy loading and list reads, then restores the exact clicked object offset and focus once', async () => {
   const { rerender } = render(<Harness />)
   enterDetail(rerender)

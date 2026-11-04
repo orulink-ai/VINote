@@ -13,6 +13,7 @@ type NoteRow = {
   generation_client?: string | null
   task_id: string | null
   meeting_source?: { owner_id: string; canonical_task_id: string; recording_started_at?: string | null } | null
+  original_source?: { owner_id: string; original_id: string; canonical_task_id: string } | null
   status: string
   scope: 'personal' | 'team'
   team_id: string | null
@@ -31,6 +32,7 @@ export interface NoteRecord {
   generationClient?: string
   taskId?: string
   meetingSource?: { ownerId: string; canonicalTaskId: string; recordingStartedAt?: string }
+  originalSource?: { ownerId: string; originalId: string; canonicalTaskId: string }
   status: string
   scope: 'personal' | 'team'
   teamId?: string
@@ -88,6 +90,8 @@ const mapRow = (row: NoteRow): NoteRecord => ({
   taskId: row.task_id ?? undefined,
   meetingSource: row.meeting_source ? { ownerId: row.meeting_source.owner_id, canonicalTaskId: row.meeting_source.canonical_task_id,
     recordingStartedAt: row.meeting_source.recording_started_at ?? undefined } : undefined,
+  originalSource: row.original_source ? { ownerId: row.original_source.owner_id,
+    originalId: row.original_source.original_id, canonicalTaskId: row.original_source.canonical_task_id } : undefined,
   status: row.status,
   scope: row.scope,
   teamId: row.team_id ?? undefined,

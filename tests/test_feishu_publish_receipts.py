@@ -9,6 +9,113 @@ from app.services import feishu_receipt_service as receipts
 from test_feishu_delivery import service  # noqa: F401
 
 
+def test_desktop_http_rejection_commits_before_response_without_provider_write(service, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.routers import feishu
+    from app.services import feishu_cli
+    from app.services import feishu_auto_runtime
+    from app.models.feishu_destination import FeishuPublishRejectionDB
+    from app.db_models import FeishuDeliveryDB
+    from sqlalchemy import select
+
+    monkeypatch.setattr(feishu, 'service', service)
+    monkeypatch.setattr(feishu, 'proxy', lambda *args: (False, None))
+    monkeypatch.setattr(service, 'for_owner', lambda owner: service)
+    monkeypatch.setattr(feishu_cli, 'enabled', lambda: True)
+    monkeypatch.setattr(feishu_auto_runtime, 'guard_manual_publish', lambda *args: None)
+    monkeypatch.setattr(service, '_guard_graphic_delivery', lambda *args: (_ for _ in ()).throw(
+        module.FeishuError('来源无法核验', 409, code='meeting_context_unverified')))
+    writes = []
+    monkeypatch.setattr(service, 'process', lambda *args: writes.append(args))
+    application = FastAPI()
+    application.include_router(feishu.router, prefix='/api')
+    application.dependency_overrides[feishu.principal] = lambda: ('a', 'a')
+    payload = {'note_key': 'isolated-note', 'title': 'title', 'content': 'body', 'operation_id': 'desktop-test-op'}
+    with TestClient(application) as client:
+        response = client.post('/api/feishu/deliveries', json=payload, headers={'X-VINote-Client': 'desktop'})
+        assert response.status_code == 409
+        assert response.json()['detail'] == {'code': 'PUBLISH_DEFINITELY_REJECTED', 'protocol': 1,
+                                             'operation_id': 'desktop-test-op', 'message': '来源无法核验'}
+        with module.session_scope() as db:
+            assert db.get(FeishuPublishRejectionDB, ('a', 'desktop-test-op')) is not None
+            assert db.scalars(select(FeishuDeliveryDB)).all() == []
+        replay = client.post('/api/feishu/deliveries', json=payload)
+        assert replay.status_code == 409 and replay.json()['detail']['code'] == 'OPERATION_REJECTED'
+    assert not writes
+
+
+def test_graphic_rejection_is_committed_and_blocks_late_replay(service, monkeypatch):
+    from app.models.feishu_destination import FeishuPublishRejectionDB
+    from app.db_models import FeishuDeliveryDB
+    from sqlalchemy import select
+    monkeypatch.setattr(service, '_guard_graphic_delivery', lambda *args: (_ for _ in ()).throw(
+        module.FeishuError('来源无法核验', 409, code='meeting_context_unverified')))
+    with pytest.raises(module.FeishuError) as rejected:
+        service.enqueue('a', 'note', 'title', 'body', operation_id='rejected-op')
+    assert rejected.value.code == 'meeting_context_unverified'
+    assert rejected.value.uncertain is False
+    assert rejected.value.detail['code'] == 'PUBLISH_DEFINITELY_REJECTED'
+    assert rejected.value.detail['operation_id'] == 'rejected-op'
+    with module.session_scope() as db:
+        assert db.get(FeishuPublishRejectionDB, ('a', 'rejected-op')) is not None
+        assert db.scalars(select(FeishuDeliveryDB)).all() == []
+    monkeypatch.setattr(service, '_guard_graphic_delivery', lambda *args: None)
+    with pytest.raises(HTTPException):
+        service.enqueue('a', 'note', 'title', 'body', operation_id='rejected-op')
+    with pytest.raises(HTTPException):
+        service.enqueue('a', 'note', 'title', 'changed', operation_id='rejected-op')
+    assert service.enqueue('a', 'note', 'title', 'body', operation_id='new-op')['id']
+
+
+def test_concurrent_acceptance_and_rejection_never_both_win(service, monkeypatch):
+    from threading import Barrier
+    from contextlib import nullcontext
+    gate = Barrier(2)
+    monkeypatch.setattr(module, '_lock', lambda owner: nullcontext())  # independent processes rely on DB lock
+    def submit(_):
+        gate.wait()
+        try:
+            return service.enqueue('a', 'note', 'title', 'body', operation_id='racing-op')
+        except HTTPException as exc:
+            return exc
+    calls = iter([True, False])
+    def guard(*args):
+        if next(calls):
+            raise module.FeishuError('来源无法核验', 409, code='meeting_context_unverified')
+    monkeypatch.setattr(service, '_guard_graphic_delivery', guard)
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        outcomes = list(pool.map(submit, [True, False]))
+    assert all(isinstance(value, HTTPException) for value in outcomes) or all(isinstance(value, dict) for value in outcomes)
+    with module.session_scope() as db:
+        from app.models.feishu_destination import FeishuPublishRejectionDB, FeishuPublishReceiptDB
+        assert db.get(FeishuPublishRejectionDB, ('a', 'racing-op')) is not None
+        assert db.get(FeishuPublishReceiptDB, ('a', 'racing-op')) is None
+
+
+def test_accepted_operation_is_not_rejected_after_guard_changes(service, monkeypatch):
+    result = service.enqueue('a', 'note', 'title', 'body', operation_id='accepted-op')
+    monkeypatch.setattr(service, '_guard_graphic_delivery', lambda *args: (_ for _ in ()).throw(
+        module.FeishuError('unverified', 409, code='meeting_context_unverified')))
+    assert service.enqueue('a', 'note', 'title', 'body', operation_id='accepted-op')['id'] == result['id']
+
+
+def test_rejection_commit_failure_never_returns_proof(service, monkeypatch):
+    from contextlib import contextmanager
+    real_sessions = module.session_scope
+    @contextmanager
+    def failing_sessions():
+        with real_sessions() as db:
+            yield db
+            if db.get(module.FeishuPublishRejectionDB, ('a', 'failed-commit')) is not None:
+                raise RuntimeError('commit failed')
+    monkeypatch.setattr(module, 'session_scope', failing_sessions)
+    monkeypatch.setattr(service, '_guard_graphic_delivery', lambda *args: (_ for _ in ()).throw(
+        module.FeishuError('unverified', 409, code='meeting_context_unverified')))
+    with pytest.raises(RuntimeError, match='commit failed'):
+        service.enqueue('a', 'note', 'title', 'body', operation_id='failed-commit')
+
+
 def test_original_operation_is_queryable_after_newer_publication_and_source_change(service, monkeypatch):
     old = service.enqueue('a', 'note', 'title', 'one', operation_id='original')
     service.enqueue('a', 'note', 'title', 'two', operation_id='new')

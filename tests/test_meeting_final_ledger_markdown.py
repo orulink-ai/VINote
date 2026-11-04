@@ -24,6 +24,9 @@ def host(blocks, presentation):
     raw3, raw4 = json.dumps(material, indent=2), json.dumps(review, indent=2)
 
     class Automatic(_BasePromptLLM):
+        # Explicit historical structured-review fixture; default text is one Markdown call.
+        def _summarize_one_shot(self, **kwargs):
+            return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
         def __init__(self): self.calls = []
 
         def _complete(self, **prompts):

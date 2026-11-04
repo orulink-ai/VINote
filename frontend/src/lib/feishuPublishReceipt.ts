@@ -23,7 +23,7 @@ export function publishScope(owner: string) {
 }
 // In-memory evidence belongs to one live invocation, never a historical JSON receipt.
 export type PublishAttempt = { readonly operationId: string }
-const attempts = new WeakMap<PublishAttempt, { draft: PublishDraft; guard: () => void; phase: 'preflight' | 'not_dispatched' | 'unknown' }>()
+const attempts = new WeakMap<PublishAttempt, { draft: PublishDraft; guard: () => void; phase: 'preflight' | 'not_dispatched' | 'unknown' | 'rejected' }>()
 const latestAttempts = new Map<string, PublishAttempt>()
 export function beginPublishAttempt(draft: PublishDraft, current: () => void = () => {}) : PublishAttempt {
   const saved = readPublishDraft(draft.owner, draft.noteKey)
@@ -41,15 +41,24 @@ export function markPublishAttempt(attempt: PublishAttempt, phase: 'not_dispatch
   if (latestAttempts.get(key(evidence.draft.owner, evidence.draft.noteKey)) !== attempt) throw new Error('发布调用已变化')
   evidence.phase = phase
 }
+export function markPublishRejected(attempt: PublishAttempt, detail: unknown) {
+  const evidence = attempts.get(attempt)
+  if (!evidence || evidence.phase !== 'unknown' || !detail || typeof detail !== 'object') return
+  const value = detail as Record<string, unknown>
+  if (value.code !== 'PUBLISH_DEFINITELY_REJECTED' || value.protocol !== 1 || value.operation_id !== attempt.operationId) return
+  evidence.guard()
+  if (latestAttempts.get(key(evidence.draft.owner, evidence.draft.noteKey)) !== attempt) return
+  evidence.phase = 'rejected'
+}
 export function restoreUndispatchedDraft(attempt: PublishAttempt): PublishDraft | null {
   const evidence = attempts.get(attempt)
-  if (!evidence || evidence.phase !== 'not_dispatched') return null
+  if (!evidence || (evidence.phase !== 'not_dispatched' && evidence.phase !== 'rejected')) return null
   evidence.guard()
   const { draft } = evidence
   if (latestAttempts.get(key(draft.owner, draft.noteKey)) !== attempt) return null
   const saved = readPublishDraft(draft.owner, draft.noteKey)
   if (!saved || saved.state !== 'unknown' || saved.jobId || saved.operationId !== attempt.operationId || JSON.stringify(saved.snapshot) !== JSON.stringify(draft.snapshot) || JSON.stringify(saved.options) !== JSON.stringify(draft.options)) return null
-  const restored = { ...saved, state: 'draft' as const }
+  const restored = { ...saved, operationId: evidence.phase === 'rejected' ? crypto.randomUUID() : saved.operationId, state: 'draft' as const }
   localStorage.setItem(key(draft.owner, draft.noteKey), JSON.stringify(restored))
   localStorage.removeItem(`${key(draft.owner, draft.noteKey)}:${attempt.operationId}`)
   attempts.delete(attempt)

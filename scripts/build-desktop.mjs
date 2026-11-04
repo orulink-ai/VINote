@@ -7,6 +7,7 @@ import { root, python, loadEnv } from './runtime.mjs'
 import { bootstrap } from './bootstrap-dev.mjs'
 import { assertProjectVersion } from './project-version.mjs'
 import { resolveLarkCli } from './lark-cli-bundle.mjs'
+import { updaterBuildConfig, verifyUpdaterSignature } from './ota-release.mjs'
 const { values } = parseArgs({ options: {
   channel: { type: 'string', default: 'release' },
   'build-id': { type: 'string' }, plan: { type: 'boolean', default: false },
@@ -23,6 +24,8 @@ if (values.plan) {
     identifier: profile.identifier, service: profile.channel === 'release' ? 'official-cloud' : 'lan', buildId: profile.buildId }, null, 2))
   process.exit(0)
 }
+const updaterPublicConfig = JSON.parse(readFileSync(join(root, 'config/desktop-updater-public.json'), 'utf8'))
+const updaterConfig = updaterBuildConfig(profile.channel, process.env, { ...baseConfig.plugins?.updater, ...updaterPublicConfig })
 bootstrap()
 if (!['win32', 'darwin'].includes(process.platform)) throw new Error('Build Windows installers on Windows, macOS installers on macOS.')
 const py = python()
@@ -101,7 +104,9 @@ writeFileSync(tauriConfig, JSON.stringify({
   mainBinaryName: profile.binaryName,
   app: { windows: baseConfig.app.windows.map(window => ({ ...window, title: profile.productName })) },
   build: { beforeBuildCommand: '' },
+  plugins: updaterConfig.plugins,
   bundle: { targets: process.platform === 'win32' ? ['nsis'] : ['app', 'dmg'],
+    ...updaterConfig.bundle,
     ...(process.platform === 'win32' ? { windows: { nsis: { installerHooks: hooks } } } : {}),
     resources: { [backendDir + '/']: 'backend/' } },
 }))
@@ -123,13 +128,21 @@ for (const type of process.platform === 'win32' ? ['nsis'] : ['macos', 'dmg']) {
   const directory = join(bundleDir, type)
   if (!existsSync(directory)) continue
   for (const entry of readdirSync(directory, { withFileTypes: true })) {
-    if (!/\.(exe|dmg|app)$/.test(entry.name)) continue
+    if (!/\.(exe|dmg|app|app\.tar\.gz|exe\.sig|app\.tar\.gz\.sig)$/.test(entry.name)) continue
     const name = `${profile.channel}-${profile.buildId}-${entry.name}`
     cpSync(join(directory, entry.name), join(artifacts, name), { recursive: entry.isDirectory() })
     files.push({ name, sha256: entry.isFile() ? checksum(readFileSync(join(artifacts, name))) : null })
   }
 }
 if (!files.length) throw new Error('No desktop package artifacts were produced')
+if (profile.channel === 'release') {
+  const suffix = process.platform === 'win32' ? '.exe' : '.app.tar.gz'
+  const updates = files.filter(file => file.name.endsWith(suffix))
+  if (updates.length !== 1) throw new Error('Expected one signed updater artifact')
+  const signature = files.find(file => file.name === updates[0].name + '.sig')
+  if (!signature) throw new Error('Tauri did not produce an updater signature')
+  verifyUpdaterSignature(readFileSync(join(artifacts, updates[0].name)), readFileSync(join(artifacts, signature.name), 'utf8'), updaterConfig.plugins.updater.pubkey)
+}
 const gitRun = (...args) => spawnSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true })
 const git = (...args) => gitRun(...args).stdout?.trim()
 // Tauri can touch Cargo.toml without changing its normalized contents on Windows.

@@ -3,6 +3,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { randomBytes, createHash } from 'node:crypto'
 import { root } from './runtime.mjs'
+import { serviceOrigin } from './service-environments.mjs'
 
 function exec(command, args) {
   const result = spawnSync(command, args, { cwd: root, stdio: 'inherit', windowsHide: true })
@@ -44,7 +45,7 @@ export function bootstrap({ desktop = true } = {}) {
   if (!existsSync(config)) {
     const publicConfig = JSON.parse(readFileSync(join(root, 'config/desktop-public.json'), 'utf8'))
     const initial = {
-      ...publicConfig, VILAB_SERVER_URL: 'http://192.168.1.143:9876',
+      ...publicConfig, VILAB_SERVER_URL: serviceOrigin('public'),
       APP_JWT_SECRET: randomBytes(48).toString('hex'),
       MODEL_PROFILE_ENCRYPTION_KEY: randomBytes(32).toString('base64url') + '=',
     }

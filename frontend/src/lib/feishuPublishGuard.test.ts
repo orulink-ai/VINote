@@ -47,6 +47,32 @@ const makeIntent = () => {
   persistPublishDraft(intent);
   return intent;
 };
+it('a committed rejection restores only this live attempt with a fresh operation', async () => {
+  localStorage.clear();
+  const draft = makeIntent(), attempt = beginPublishAttempt(draft);
+  persistPublishDraft({ ...draft, state: 'unknown' });
+  state.read.mockResolvedValue({ installed: true, enabled: true });
+  state.api.mockRejectedValueOnce({ status: 404 }).mockRejectedValueOnce({ status: 409, detail: { code: 'PUBLISH_DEFINITELY_REJECTED', protocol: 1, operation_id: draft.operationId, message: '来源无法核验' } });
+  await expect(publishToFeishu('note', 'title', 'body', false, { operation_id: draft.operationId }, attempt)).rejects.toBeTruthy();
+  const restored = restoreUndispatchedDraft(attempt);
+  expect(restored?.state).toBe('draft');
+  expect(restored?.operationId).not.toBe(draft.operationId);
+});
+it.each([
+  { status: 400, detail: { code: 'PUBLISH_DEFINITELY_REJECTED', protocol: 1 } },
+  { status: 409, detail: { code: 'PUBLISH_DEFINITELY_REJECTED', protocol: 1, operation_id: 'other' } },
+  { status: 409, detail: { code: 'PUBLISH_DEFINITELY_REJECTED', protocol: 2 } },
+  { status: 409, detail: { code: 'meeting_context_unverified' } },
+])('unverified rejection never restores unknown state %#', async error => {
+  localStorage.clear();
+  const draft = makeIntent(), attempt = beginPublishAttempt(draft);
+  persistPublishDraft({ ...draft, state: 'unknown' });
+  state.read.mockResolvedValue({ installed: true, enabled: true });
+  state.api.mockRejectedValueOnce({ status: 404 }).mockRejectedValueOnce(error);
+  await expect(publishToFeishu('note', 'title', 'body', false, { operation_id: draft.operationId }, attempt)).rejects.toBeTruthy();
+  expect(restoreUndispatchedDraft(attempt)).toBeNull();
+  expect(readPublishDraft('a', 'note')?.state).toBe('unknown');
+});
 it('a plugin preflight rejection has zero POST and can restore only its own live attempt', async () => {
   localStorage.clear();
   const draft = makeIntent(), attempt = beginPublishAttempt(draft);

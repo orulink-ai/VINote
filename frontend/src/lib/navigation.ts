@@ -1,4 +1,4 @@
-const parents = new Set(['/notes', '/projects', '/meetings', '/files', '/tasks', '/connections', '/settings', '/settings/storage', '/settings/sync', '/team', '/settings/feishu', '/settings/mcp'])
+const parents = new Set(['/notes', '/notes/files', '/projects', '/meetings', '/meetings/files', '/files', '/tasks', '/connections', '/settings', '/settings/storage', '/settings/sync', '/team', '/settings/feishu', '/settings/mcp'])
 
 /** Only application parents are valid. Never trust arbitrary location.state URLs. */
 export function resolvePageParent(value: unknown, fallback = '/notes'): string {
@@ -12,7 +12,7 @@ export function resolvePageParent(value: unknown, fallback = '/notes'): string {
 
 export function pageParentLabel(path: string): string {
   if (path.startsWith('/workspace/') || path.startsWith('/note/')) return '返回内容详情'
-  const labels: Record<string, string> = { '/notes': '返回笔记', '/projects': '返回项目', '/meetings': '返回会议', '/files': '返回文件库', '/tasks': '返回任务与恢复', '/connections': '返回插件', '/settings': '返回设置', '/settings/storage': '返回存储', '/settings/sync': '返回存储', '/team': '返回空间与成员', '/settings/feishu': '返回飞书', '/settings/mcp': '返回 MCP 工具' }
+  const labels: Record<string, string> = { '/notes': '返回笔记', '/notes/files': '返回笔记原文件', '/projects': '返回项目', '/meetings': '返回会议', '/meetings/files': '返回会议原文件', '/files': '返回文件库', '/tasks': '返回任务与恢复', '/connections': '返回飞书', '/settings': '返回设置', '/settings/storage': '返回存储', '/settings/sync': '返回存储', '/team': '返回空间与成员', '/settings/feishu': '返回飞书', '/settings/mcp': '返回飞书' }
   return labels[path.split(/[?#]/)[0]] || '返回上级'
 }
 
@@ -59,14 +59,15 @@ export function loadingPageParent(pathname: string, search: string, stateParent?
   }
   const contextual = contextualPageParent(pathname, search, stateParent)
   if (contextual) return contextual
+  if (pathname === '/meetings/files') return '/meetings'
+  if (pathname === '/notes/files') return '/notes'
   if (/^\/note\/[^/]+$/.test(pathname)) return null
-  if (['/notes', '/meetings', '/files', '/connections', '/settings'].includes(pathname)) return null
+  if (['/notes', '/meetings', '/tasks', '/files', '/connections', '/settings', '/settings/feishu'].includes(pathname)) return null
   if (pathname === '/settings/sync' || pathname === '/settings/storage') return '/settings?tab=storage'
   if (pathname === '/settings/mcp') {
     const note = params.get('note')
     return note ? resolvePageParent('/workspace/' + encodeURIComponent(note), '/connections') : '/connections'
   }
-  if (pathname === '/settings/feishu') return '/connections'
   if (pathname === '/generate' && params.get('meeting') === '1') return '/meetings'
   if (pathname === '/generate' && params.get('task')) return '/tasks?tab=generation'
   return '/notes'

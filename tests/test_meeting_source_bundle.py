@@ -24,6 +24,13 @@ from app.models.transcript import TranscriptSegment
 from app.services.video_evidence_service import VideoEvidence, VideoFrameEvidence
 
 
+class StructuredVILabFixture(VILabLLM):
+    """Exercise historical draft/review source binding explicitly."""
+    compact_review_enabled = False
+    def _summarize_one_shot(self, **kwargs):
+        return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
+
+
 @pytest.fixture
 def source(tmp_path, monkeypatch):
     monkeypatch.setattr('socket.create_connection', Mock(side_effect=AssertionError('No network')))
@@ -76,7 +83,7 @@ def llm_capture(source, monkeypatch, *, after_first=None, responses=None):
         return {'choices': [{'message': {'content': responses[len(calls) - 1]}}]}
 
     monkeypatch.setattr('app.llm.vilab_llm.VILabCloudService.request', request)
-    llm = VILabLLM('synthetic-owner', 'frozen-synthetic-model')
+    llm = StructuredVILabFixture('synthetic-owner', 'frozen-synthetic-model')
     llm.configure_video_capabilities({'max_images': 64}, image_input_verified=True,
                                      webp_input_verified=True)
     return llm, calls, receipts
@@ -196,7 +203,7 @@ def test_mutation_during_encoding_is_rejected_before_first_dispatch(source, monk
 
 
 def test_typed_slot_is_immutable_revoked_after_exit_and_trace_has_no_data_urls(source):
-    llm = VILabLLM('synthetic', 'synthetic')
+    llm = StructuredVILabFixture('synthetic', 'synthetic')
     with bind_source_references(source.segments), bind_chronological_source(source.segments, llm._build_segment_text):
         prompt = source_prompt('prefix\n', llm._build_segment_text(source.segments), '\nsuffix')
         assert isinstance(prompt, SourcePrompt) and isinstance(prompt, str)
@@ -209,7 +216,7 @@ def test_typed_slot_is_immutable_revoked_after_exit_and_trace_has_no_data_urls(s
 
 
 def test_nested_legacy_scope_cannot_borrow_outer_bundle_and_outer_is_restored(source):
-    llm = VILabLLM('synthetic', 'synthetic')
+    llm = StructuredVILabFixture('synthetic', 'synthetic')
     with bind_source_references(source.segments), bind_chronological_source(source.segments, llm._build_segment_text):
         text = llm._build_segment_text(source.segments)
         outer = source_prompt('', text, '')
@@ -228,7 +235,7 @@ def test_ocr_mutation_at_end_of_text_only_render_is_rejected(source, monkeypatch
         source.evidence.frames[0].ocr_text += ' changed after serialization'
         return result
     monkeypatch.setattr(source.evidence, '_chronological_content', content)
-    llm = VILabLLM('synthetic', 'synthetic')
+    llm = StructuredVILabFixture('synthetic', 'synthetic')
     with bind_source_references(source.segments), bind_chronological_source(source.segments, llm._build_segment_text), \
             bind_video_material(source.evidence, {'vision': False}):
         prompt = source_prompt('', llm._build_segment_text(source.segments), '')
@@ -275,7 +282,7 @@ def test_existing_unknown_duration_production_shapes_remain_accepted(source, mon
 def test_ocr_only_keeps_timeline_and_exact_text_without_encoding(source, monkeypatch):
     monkeypatch.setattr('app.services.video_input_encoding.encode_video_input',
                         Mock(side_effect=AssertionError('No image encoding')))
-    llm = VILabLLM('synthetic', 'synthetic')
+    llm = StructuredVILabFixture('synthetic', 'synthetic')
     with bind_source_references(source.segments), bind_chronological_source(source.segments, llm._build_segment_text), \
             bind_video_material(source.evidence, {'vision': False}):
         prompt = source_prompt('', llm._build_segment_text(source.segments), '')
@@ -290,6 +297,8 @@ def test_ocr_only_keeps_timeline_and_exact_text_without_encoding(source, monkeyp
 def test_plain_nonmeeting_and_legacy_keep_original_wire_order(source, monkeypatch):
     calls = []
     class Legacy(_BasePromptLLM):
+        def _summarize_one_shot(self, **kwargs):
+            return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
         def _complete(self, **prompts):
             assert not isinstance(prompts['user_prompt'], SourcePrompt)
             calls.append(video_user_content(prompts['user_prompt']))
@@ -313,7 +322,10 @@ def test_anthropic_keeps_original_jpeg_media_type_in_both_chronological_calls(so
         text = json.dumps(source.draft if len(payloads) == 1 else source.review)
         return SimpleNamespace(json=lambda: {'content': [{'type': 'text', 'text': text}]})
     monkeypatch.setattr('app.llm.openai_llm.post_anthropic_compatible', request)
-    llm = AnthropicLLM('offline-key', model='frozen-synthetic-model')
+    class HistoricalAnthropic(AnthropicLLM):
+        def _summarize_one_shot(self, **kwargs):
+            return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
+    llm = HistoricalAnthropic('offline-key', model='frozen-synthetic-model')
     llm.configure_video_capabilities({}, image_input_verified=True, webp_input_verified=True)
     run(source, llm)
     assert len(payloads) == 2

@@ -1,6 +1,6 @@
+import { MEETING_DISPLAY_CHANGED } from '@/hooks/useMeetingDisplay';
 import { useMeetingTaskStates } from '@/hooks/useMeetingTaskStates';
 import { ImportedMeetingSources } from '@/components/MeetingRecorder/ImportedMeetingSources';
-import { TextReveal } from "@/components/ui/motion";
 import { isMeetingProcessing } from "../lib/meetingProcessing";
 import { MeetingWorkbench, type MeetingArchiveView, type MeetingLocator } from "../components/MeetingRecorder/MeetingWorkbench";
 import { PageReturn } from '@/components/Layout/PageReturn';
@@ -15,9 +15,8 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { useEffect, useRef, useState } from "react";
-import { useLocation, useNavigate, useSearchParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Mic, Upload } from "lucide-react";
-import { apiJson } from "../lib/api";
 import { fetchTaskStatus } from "../lib/noteGenerationClient";
 import {
   listPendingMeetings,
@@ -36,6 +35,7 @@ import {
   useMeetingRecorderStore,
 } from "../stores/meetingRecorderStore";
 import { useNoteLibraryStore } from "../stores/noteLibraryStore";
+import { useWorkspaceStore } from "../stores/workspaceStore";
 import { getWorkspaceLabel, useTeamStore } from "../stores/teamStore";
 import { useI18n } from "../lib/i18n";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -91,10 +91,13 @@ export function Meetings() {
   const meetingView: MeetingArchiveView = params.get('view') === 'pending' ? 'pending' : 'meetings';
   const userId = useAuthStore((state) => state.user?.id);
   const [pending, setPending] = useState<PendingMeeting[]>([]);
+  useEffect(() => {
+    const reload = () => { if (userId) void listPendingMeetings(userId).then(items => { if (useAuthStore.getState().user?.id === userId) setPending(items); }); };
+    window.addEventListener(MEETING_DISPLAY_CHANGED, reload);
+    return () => window.removeEventListener(MEETING_DISPLAY_CHANGED, reload);
+  }, [userId]);
+  const [importedSourceCount, setImportedSourceCount] = useState(0);
   const [options, setOptions] = useState(DEFAULT_CAPTURE_OPTIONS);
-  const [diarizationReady, setDiarizationReady] = useState<boolean | null>(
-    null,
-  );
   const [devices, setDevices] = useState<MediaDeviceInfo[]>([]);
   const [error, setError] = useState("");
   const [historyError, setHistoryError] = useState("");
@@ -118,11 +121,13 @@ export function Meetings() {
   const { loading, error: notesError, loadNotes } = useNoteLibraryStore();
   const notes = useLibraryNotes();
   const { currentWorkspace, teams } = useTeamStore();
+  const hasTrashedMeeting = useWorkspaceStore(state => state.ready && state.owner === userId &&
+    state.items.some(item => item.deleted && ["meeting_recording", "meeting_video"].includes(item.source_type)));
   const readScope = JSON.stringify([userId, currentWorkspace]);
   const [readiness, setReadiness] = useState({ scope: '', ready: false });
   const locator = meetingLocator(params, location.state, userId, JSON.stringify([location.key, location.search, readScope]));
   const filesParent = [params.get('returnTo'), params.get('sourceReturnTo'), location.state?.returnTo, location.state?.sourceReturnTo]
-    .map(value => resolvePageParent(value, '')).find(value => value.split(/[?#]/)[0] === '/files');
+    .map(value => resolvePageParent(value, '')).find(value => ['/files', '/meetings/files'].includes(value.split(/[?#]/)[0]));
   const readonlyArchiveVisit = !!locator || !!filesParent;
   const withoutLocatorState = () => {
     const state = location.state && typeof location.state === 'object' ? { ...location.state } : {};
@@ -312,13 +317,6 @@ export function Meetings() {
     };
   }, [userId, session.recordingId, session.phase, readonlyArchiveVisit]);
   useEffect(() => {
-    void apiJson<{ diarization: { available: boolean } }>(
-      "/api/meeting-capabilities",
-    )
-      .then((result) => setDiarizationReady(result.diarization.available))
-      .catch(() => setDiarizationReady(false));
-  }, []);
-  useEffect(() => {
     const refresh = () => {
       void navigator.mediaDevices
         ?.enumerateDevices()
@@ -390,12 +388,11 @@ export function Meetings() {
 
   return (
     <div className="workspace-page pb-24">
-      {filesParent && <PageReturn contextual={false} to={filesParent} label="返回文件库" />}
+      {filesParent && <PageReturn contextual={false} to={filesParent} label={filesParent.split(/[?#]/)[0] === '/files' ? '返回文件库' : '返回会议原文件'} />}
       <SavedRecordingChoice />
-      <header className="flex items-start justify-between gap-4">
+      <header className="page-heading flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-2xl font-medium tracking-tight">
-            <TextReveal>
               {isCapturing
                 ? session.phase === "requesting"
                   ? zh
@@ -411,8 +408,8 @@ export function Meetings() {
                 : zh
                   ? "会议"
                   : "Recordings"}
-            </TextReveal>
           </h1>
+          {!isCapturing && <p className="mt-2 text-sm text-muted-foreground">录制、导入会议，查看每场会议的纪要与原文件。</p>}
           {isCapturing && (
             <p className="mt-2 text-sm leading-6 text-muted-foreground">
               {zh
@@ -421,7 +418,7 @@ export function Meetings() {
             </p>
           )}
         </div>
-        <span className="pt-1 text-xs text-muted-foreground">{workspace}</span>
+        {isCapturing ? <span className="pt-1 text-xs text-muted-foreground">{workspace}</span> : <div className="flex flex-wrap gap-2"><Button onClick={() => setSetupOpen(true)} disabled={busy}><Mic />{zh ? '录制会议' : 'Record meeting'}</Button><Button variant="outline" onClick={() => navigate(`/generate?meeting=1&intent=import&draft=${crypto.randomUUID()}`, { state: { returnTo: location.pathname + location.search + location.hash } })}><Upload />{zh ? '导入会议' : 'Import meeting'}</Button></div>}
       </header>
 
       {isCapturing ? (
@@ -456,7 +453,6 @@ export function Meetings() {
                 {microphoneCheckOpen && <MicrophoneCheck deviceId={options.microphoneId || ''} onActiveChange={setInputTesting} />}
               </details>
             </section>
-            {diarizationReady === false && <Alert><AlertDescription>说话人分析暂不可用，不影响录制。保存后可重新尝试生成会议纪要。</AlertDescription></Alert>}
             {(error || session.error) && <Alert variant="destructive"><AlertDescription>{error || session.error} 检查设备后可再次开始。</AlertDescription></Alert>}
             <div className="flex flex-col gap-3 border-t pt-4">
               <StartMeetingButton disabled={busy || inputTesting} type={options.meetingType} onTypeChange={meetingType => setOptions(current => ({ ...current, meetingType, screen: meetingType === "video" }))} onStart={startRecording} />
@@ -480,11 +476,22 @@ export function Meetings() {
           </AlertDescription>
         </Alert>
       )}
+      {!isCapturing && hasTrashedMeeting && currentWorkspace.scope === "personal" && meetingView === "meetings" && (
+        <p className="text-sm text-muted-foreground">
+          {hasTrashedMeeting && (zh ? "有会议内容在回收站。" : "Meeting content is in the trash. ")}
+          <Link className="underline underline-offset-4" to="/settings/storage#trash">{zh ? "前往内容回收站" : "Open content trash"}</Link>
+        </p>
+      )}
       {!isCapturing && (
         <MeetingWorkbench
           taskStates={meetingTaskStates}
           key={userId + JSON.stringify(currentWorkspace)}
           recordings={workspacePending}
+          importedSourceCount={importedSourceCount}
+          importedSources={(query, filter, date) => <ImportedMeetingSources owner={userId} query={query} filter={filter} date={date} onSourceCount={setImportedSourceCount} coveredTasks={[
+        ...notes.flatMap(note => [note.taskId, note.meetingSource && note.meetingSource.ownerId === userId ? note.meetingSource.canonicalTaskId : undefined]),
+        ...pending.map(record => record.taskId),
+      ].filter((id): id is string => !!id)} returnTo={location.pathname + location.search + location.hash} />}
           notes={meetingNotes}
           view={meetingView}
           locator={locator}
@@ -512,27 +519,11 @@ export function Meetings() {
           onDeleted={(id) =>
             setPending((items) => items.filter((item) => item.id !== id))
           }
-          actions={
-            <>
-              <Button onClick={() => setSetupOpen(true)} disabled={busy}>
-                <Mic />
-                {zh ? "录制会议" : "Record meeting"}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => navigate("/generate?meeting=1", { state: { returnTo: location.pathname + location.search + location.hash } })}
-              >
-                <Upload />
-                {zh ? "导入会议文件" : "Import meeting file"}
-              </Button>
-            </>
-          }
+          actions={<Button variant="outline" onClick={() => setSetupOpen(true)} disabled={busy}>录制第一场会议</Button>}
+
         />
       )}
-      {!isCapturing && meetingView === 'meetings' && <ImportedMeetingSources owner={userId} coveredTasks={[
-        ...notes.flatMap(note => [note.taskId, note.meetingSource && note.meetingSource.ownerId === userId ? note.meetingSource.canonicalTaskId : undefined]),
-        ...pending.map(record => record.taskId),
-      ].filter((id): id is string => !!id)} returnTo={location.pathname + location.search + location.hash} />}
+
     </div>
   );
 }

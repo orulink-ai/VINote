@@ -33,10 +33,14 @@ def offline(monkeypatch):
 def fresh(case, monkeypatch):
     c = case
     c.fresh = FreshASRService(c.receipts)
+    from tests.test_independent_asr_namespace import _REAL_STATUS
+    from tests.test_meeting_model_boundary import CAPABILITIES
+    # Fresh acceptance validates the frozen public meeting catalog, not preferences.
+    monkeypatch.setattr(VILabCloudService, 'status', _REAL_STATUS)
     monkeypatch.setattr(VILabCloudService, 'connection_snapshot', lambda *a: {
         'mode': 'cloud', 'server_url': 'https://original.invalid'})
     monkeypatch.setattr(VILabCloudService, 'models', lambda *a: [
-        {'id': 'original-asr', 'modelType': 'asr', 'runtimeStatus': 'available'},
+        {'id': 'original-asr', 'modelType': 'asr', 'runtimeStatus': 'available', 'capabilities': CAPABILITIES},
         {'id': 'selected-llm', 'modelType': 'llm', 'runtimeStatus': 'available'}])
     def ready(self, owner, *, needs_stt=True):
         assert owner == 'alice' and needs_stt
@@ -311,8 +315,9 @@ def test_exact_legacy_summary_origin_proof_allows_fresh_only_with_unchanged_bind
         context = service.context('alice', receipt.task_id)
         assert context['available'] and context['canonical_task_id'] == c.parent
         assert context['frozen_models']['asr_model'] == 'old-asr'
+        from tests.test_meeting_model_boundary import CAPABILITIES
         monkeypatch.setattr(VILabCloudService, 'models', lambda *args: [
-            {'id': 'fresh-asr', 'modelType': 'asr', 'runtimeStatus': 'available'},
+            {'id': 'fresh-asr', 'modelType': 'asr', 'runtimeStatus': 'available', 'capabilities': CAPABILITIES},
             {'id': 'fresh-llm', 'modelType': 'llm', 'runtimeStatus': 'available'}])
         body = FreshASRConfirmation(operation_id=uuid.uuid4(), confirmed=True, asr_mode='fresh',
             llm_mode='select', extra_asr_consent=True, context_revision='a' * 64, selection_revision='b' * 64,
@@ -408,19 +413,27 @@ def test_real_fresh_note_pipeline_sends_full_audio_with_selected_llm(fresh, audi
     c.body = c.body.model_copy(update={'fresh_context_revision': context['context_revision'],
         'source_version': context['source']['version'], 'content_depth': 'detailed'})
     monkeypatch.setattr(VILabCloudService, 'status', _REAL_STATUS)
+    import httpx
+    import wave
+    from app.services.adaptive_asr_policy import RecordingModelPolicy
+    from tests.test_meeting_model_boundary import CAPABILITIES
+    audio.policy.return_value = RecordingModelPolicy.from_capabilities(CAPABILITIES)
+    uploads = []
+    def upload(url, **kwargs):
+        assert url.endswith('/v1/asr/transcription-jobs')
+        assert kwargs['data']['model'] == 'original-asr'
+        with wave.open(kwargs['files']['file'][1], 'rb') as wav:
+            uploads.append(wav.getnframes() / wav.getframerate())
+        return httpx.Response(200, json={'id': kwargs['headers']['Idempotency-Key'], 'status': 'completed'})
+    monkeypatch.setattr('app.transcribers.vilab_transcriber.httpx.post', upload)
+    monkeypatch.setattr('app.transcribers.vilab_transcriber.httpx.get', lambda url, **kwargs:
+        httpx.Response(200, json={'text': 'new', 'segments': [{'start': 0, 'end': 3, 'text': 'new', 'speakerId': 'speaker_1'}]}))
     chats = []
     def chat(self, owner, method, endpoint, **kwargs):
         assert owner == 'alice' and method == 'POST' and endpoint == '/openai/v1/chat/completions'
         assert kwargs['json']['model'] == 'selected-llm'
         chats.append(kwargs['json'])
-        material = {'protocol': 3, 'topics': [{'id': 'T1', 'title': 'Synthetic source'}],
-            'claims': [{'id': 'C1', 'topic_id': 'T1', 'field': 'relation', 'text': 'new', 'anchor': 'new',
-                'material': True, 'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': 'new'}]}]}
-        review = {'protocol': 4, 'blocks': [{'id': 'B1', 'markdown': '# Synthetic meeting\n\nnew'}],
-            'claims': [{'id': 'C1', 'field': 'relation', 'text': 'new', 'material': True,
-                'disposition': 'included', 'block_ids': ['B1'],
-                'evidence': [{'kind': 'asr_span', 'source_ref': '[ASR:0001]', 'quote': 'new'}]}]}
-        return {'choices': [{'message': {'content': json.dumps(material if len(chats) == 1 else review)}}]}
+        return {'choices': [{'message': {'content': '# Synthetic meeting\n\nnew'}}]}
     monkeypatch.setattr(VILabCloudService, 'request', chat)
     monkeypatch.setattr(settings, 'meeting_review_model', '')
     from app.services import task_fresh_asr
@@ -439,6 +452,7 @@ def test_real_fresh_note_pipeline_sends_full_audio_with_selected_llm(fresh, audi
     assert all((child / name).is_file() for name in ('transcript.json', 'note.md', 'result.json'))
     transcript = json.loads((child / 'transcript.json').read_text())
     assert 'saved' not in transcript['full_text']
-    assert audio.recognize.call_args_list[0].kwargs['start'] == 0
-    assert audio.recognize.call_args_list[-1].kwargs['end'] == 3
-    assert chats and not (child / 'media').exists()
+    assert uploads == [3]
+    audio.recognize.assert_not_called()
+    assert len(chats) == 1 and not (child / 'media').exists()
+    assert (child / 'note.md').read_text(encoding='utf-8').strip() == '# Synthetic meeting\n\nnew'

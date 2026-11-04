@@ -64,3 +64,9 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 ```
+## Unslop design guidance
+
+Interface polish follows Unslop by Damir Sokolovsky ([@heydamir](https://x.com/heydamir)),
+[github.com/heydamir/unslop](https://github.com/heydamir/unslop), licensed under
+[CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). Adaptations include quieter
+navigation, consistent spacing, restrained motion and transcript reading layout.

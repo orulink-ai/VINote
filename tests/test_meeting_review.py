@@ -9,6 +9,10 @@ from app.models.transcript import TranscriptSegment
 
 
 class ReviewLLM(_BasePromptLLM):
+    """Historical review-path fixture, not the default direct Markdown path."""
+    def _summarize_one_shot(self, **kwargs):
+        return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
+
     def __init__(self, replies):
         self.replies = iter(replies)
         self.calls = []

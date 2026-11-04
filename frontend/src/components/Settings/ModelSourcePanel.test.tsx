@@ -33,7 +33,7 @@ it('cloud mode exposes model choices without asking for credentials', async () =
   expect(apiJson).toHaveBeenCalledWith('/api/vilab/models', { cache: 'no-store' })
 })
 
-it('cloud mode offers VINote login and permits local mode during an outage', async () => {
+it('keeps fixed service only during an outage without writing configuration', async () => {
   vi.mocked(apiJson).mockImplementation(async (path, init) => {
     if (path.endsWith('/models')) throw new Error('云端服务鉴权失败')
     return { configured: true, mode: init?.method === 'PUT' ? 'local' : 'cloud', asr_model: '', llm_model: '' }
@@ -42,10 +42,74 @@ it('cloud mode offers VINote login and permits local mode during an outage', asy
   expect(screen.queryByLabelText('云端账号邮箱')).not.toBeInTheDocument()
   expect(screen.queryByText('发送验证码')).not.toBeInTheDocument()
   expect(screen.queryByText('ViTalk')).not.toBeInTheDocument()
-  await userEvent.click(screen.getByRole('radio', { name: '本地 / 自定义' }))
-  expect(await screen.findByText('自定义 LLM 表单')).toBeInTheDocument()
-  await userEvent.click(screen.getByRole('tab', { name: '语音转写' }))
-  expect(await screen.findByText('自定义 STT 表单')).toBeInTheDocument()
+  expect(await screen.findByText('云端服务鉴权失败')).toBeInTheDocument()
+  expect(screen.queryByRole('radio')).not.toBeInTheDocument()
+  expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+  expect(screen.queryByText(/自定义.*表单/)).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '刷新' })).toBeEnabled()
+  expect(vi.mocked(apiJson).mock.calls.every(([, init]) => !init?.method)).toBe(true)
+})
+
+it.each([false, true])('blocks legacy local configuration without exposing profiles (compact=%s)', compact => {
+  useAppModeStore.setState({ config: { configured: true, mode: 'local', asr_model: 'saved', llm_model: '' } })
+  render(<ModelSourcePanel compact={compact} />)
+  expect(screen.getByRole('alert')).toHaveTextContent('VINote 仅使用固定公网服务')
+  expect(screen.queryByRole('combobox')).not.toBeInTheDocument()
+  expect(screen.queryByRole('radio')).not.toBeInTheDocument()
+  expect(screen.queryByRole('tab')).not.toBeInTheDocument()
+  expect(apiJson).not.toHaveBeenCalled()
+  expect(useAppModeStore.getState().config?.asr_model).toBe('saved')
+})
+
+it('shows the fixed public service address without any endpoint controls', async () => {
+  vi.mocked(apiJson).mockResolvedValue([])
+  useAppModeStore.setState({ config: {
+    configured: true, mode: 'cloud', asr_model: '', llm_model: '', server_url: 'https://api-hk.orulink.ai',
+  } })
+  render(<ModelSourcePanel compact />)
+  expect(await screen.findByText('https://api-hk.orulink.ai')).toBeInTheDocument()
+  expect(screen.getByText('公网地址，不可编辑')).toBeInTheDocument()
+  expect(screen.queryByRole('textbox')).not.toBeInTheDocument()
+  expect(screen.queryByRole('switch')).not.toBeInTheDocument()
+})
+
+it('blocks saved adaptive speech and gives user-facing availability guidance', async () => {
+  vi.mocked(apiJson).mockResolvedValue([{
+    id: 'stream-model', name: '流式转写', modelType: 'asr', runtimeStatus: 'available',
+    capabilities: {
+      recordedAudio: { protocol: 1, supported: true, strategy: 'adaptive_pause', policySource: 'service_budget', maxSessionAudioBytes: 2097152 },
+      useCases: ['recording'], protocols: ['asr-streaming'],
+    },
+  }])
+  useAppModeStore.setState({ config: {
+    configured: true, mode: 'cloud', asr_model: 'stream-model', llm_model: '', server_url: 'https://api-hk.orulink.ai',
+  } })
+  render(<ModelSourcePanel compact />)
+  expect(await screen.findByText('公网服务暂未提供支持整段识别、说话人分离和时间戳的会议模型。请稍后刷新或联系管理员。原选择已保留，不会自动替换。')).toBeInTheDocument()
+  expect(screen.queryByText(/AWS/)).not.toBeInTheDocument()
+  expect(screen.getByRole('combobox', { name: '语音转写' })).toBeDisabled()
+  expect(screen.getByText(/原语音选择不满足会议转写要求/)).toBeInTheDocument()
+  expect(useAppModeStore.getState().config?.asr_model).toBe('stream-model')
+  expect(vi.mocked(apiJson).mock.calls.every(([, init]) => !init?.method)).toBe(true)
+})
+
+it('describes a meeting model by its declared whole-file capability', async () => {
+  vi.mocked(apiJson).mockResolvedValue([{
+    id: 'meeting-model', name: '会议转写', modelType: 'asr', runtimeStatus: 'available',
+    capabilities: {
+      recordedAudio: { protocol: 1, supported: true, strategy: 'single_request', policySource: 'provider_model' },
+      useCases: ['recording', 'meeting'], protocols: ['asr-recording'], audioFormats: ['wav'],
+      audioDelivery: 'public', maxAudioSeconds: 10800, maxAudioBytes: 536870912,
+      speakerDiarization: true, utteranceTimestamps: true,
+    },
+  }])
+  useAppModeStore.setState({ config: {
+    configured: true, mode: 'cloud', asr_model: 'meeting-model', llm_model: '', server_url: 'https://api-hk.orulink.ai',
+  } })
+  render(<ModelSourcePanel compact />)
+  expect(await screen.findByText('会议录音 · 整段识别 · 带说话人分离 · 带时间戳')).toBeInTheDocument()
+  expect(screen.getByText('会议录音整段提交，结果包含说话人与发言时间。')).toBeInTheDocument()
+  expect(screen.queryByText(/暂不能用于会议纪要/)).not.toBeInTheDocument()
 })
 
 it('loads a saved key only on demand and clears it when hidden', async () => {
@@ -82,8 +146,8 @@ it('shows all configured models including unavailable ones without resurrecting 
   expect(screen.queryByText(/removed-model/)).not.toBeInTheDocument()
   expect(useAppModeStore.getState().config?.llm_model).toBe('removed-model')
   await userEvent.keyboard('{Escape}')
-  await userEvent.click(screen.getAllByRole('combobox')[0])
-  expect(screen.getByRole('option', { name: /已停用语音服务/ })).toHaveAttribute('aria-disabled', 'true')
+  expect(screen.getAllByRole('combobox')[0]).toBeDisabled()
+  expect(screen.queryByRole('option', { name: /已停用语音服务/ })).not.toBeInTheDocument()
   expect(vi.mocked(apiJson).mock.calls.every(([, init]) => !init?.method)).toBe(true)
 })
 
