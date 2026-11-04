@@ -50,7 +50,10 @@ it('retains both complete source entries, writing, readable rows and source navi
   expect(screen.getAllByRole('button', { name: /^删除《/ })).toHaveLength(5)
   expect(document.querySelector('button button')).toBeNull()
   fireEvent.click(within(sources).getByRole('link', { name: /粘贴链接/ }))
-  expect(current().path).toBe('/generate?mode=url')
+  const target = new URL(current().path, 'https://local.invalid')
+  expect(target.searchParams.get('mode')).toBe('url')
+  expect(target.searchParams.get('intent')).toBe('import')
+  expect(target.searchParams.get('draft')).toBeTruthy()
   expect(decodeURIComponent(current().state.returnTo)).toBe('/notes?project=项目A#results')
   expect(data.remove).not.toHaveBeenCalled()
 })
@@ -84,9 +87,10 @@ it('canceling local trash preserves the same parent and filters without requirin
 it('archive keeps browsing and restore responsibilities without duplicating generation entries', () => {
   mount('/notes?archived=1')
   expect(screen.queryByRole('region', { name: '生成总结笔记' })).not.toBeInTheDocument()
-  expect(screen.getByRole('tab', { name: '未归档' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '筛选 · 已启用' }))
+  expect(screen.getByLabelText('归档筛选')).toHaveValue('archived')
   expect(screen.getByText('没有归档内容')).toBeInTheDocument()
-  expect(screen.getByText('归档的内容会显示在这里；切换到未归档可继续浏览当前笔记。')).toBeInTheDocument()
+  expect(screen.getByText('归档的内容会显示在这里；选择全部内容可继续按日期浏览。')).toBeInTheDocument()
 })
 
 it('keeps cached update feedback in the same browsing slot and reveals the complete cause only on request', () => {

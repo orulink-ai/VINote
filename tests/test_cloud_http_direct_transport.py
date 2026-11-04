@@ -133,6 +133,21 @@ def assert_direct_once(wire):
 def assert_summary_not_replayable(error, tmp_path, *, terminal_context=None):
     expected = {'error_code': 'summary_result_unconfirmed', 'retryable': False}
     if terminal_context is not None:
+        stream = (error.summary_failure_context or {}).get('stream')
+        if stream is not None:
+            assert set(stream) == {'content_chars', 'content_deltas', 'elapsed_seconds', 'finish', 'done_seen', 'request_id',
+                                   'line_count', 'event_count', 'first_line_ms', 'last_line_ms', 'idle_gap_ms'}
+            # The collector now persists bounded timing/count diagnostics, never
+            # raw SSE lines. Keep the exact allowlist and verify their types.
+            for key in ('line_count', 'event_count', 'first_line_ms', 'last_line_ms', 'idle_gap_ms'):
+                assert type(stream[key]) is int and 0 <= stream[key] <= 100000000
+            assert stream['line_count'] >= 1
+            assert stream['event_count'] <= stream['line_count']
+            assert stream['first_line_ms'] <= stream['last_line_ms']
+            assert stream['content_chars'] in (0, len(PARTIAL))
+            assert stream['content_deltas'] == int(stream['content_chars'] > 0)
+            assert stream['request_id'] is None and stream['done_seen'] is False
+            terminal_context = {**terminal_context, 'stream': stream}
         expected['summary_failure_context'] = terminal_context
     assert failure_details(error) == expected
     artifacts = TaskArtifactService(tmp_path)
@@ -193,7 +208,8 @@ def test_524_after_post_is_not_replayed_or_exposed_as_success(kind, wire, monkey
     assert_direct_once(wire)
     assert caught.value.cloud_failure_context['http_status'] == 524
     assert SECRET not in caught.value.detail + caplog.text
-    assert_summary_not_replayable(caught.value, tmp_path)
+    assert_summary_not_replayable(caught.value, tmp_path, terminal_context={
+        'diagnostic_protocol': 'summary_transport/1', 'category': 'http524'})
 
 
 @pytest.mark.parametrize('truncated', [False, True])
@@ -206,7 +222,7 @@ def test_partial_sse_eof_or_disconnect_never_replays_or_returns_partial(
     assert_direct_once(wire)
     assert caught.value.status_code == 502
     assert PARTIAL not in caught.value.detail + caplog.text
-    terminal_context = None if truncated else {
+    terminal_context = {'diagnostic_protocol': 'summary_transport/1', 'category': 'connection'} if truncated else {
         'diagnostic_protocol': 'sse_terminal/1', 'done_seen': False, 'finish': 'missing',
         'category': 'missing_done_and_non_stop_finish',
     }
@@ -221,7 +237,8 @@ def test_read_timeout_after_post_is_typed_and_never_replayed(kind, wire, monkeyp
     with pytest.raises(HTTPException) as caught:
         invoke(kind, wire, monkeypatch)
     assert_direct_once(wire)
-    assert_summary_not_replayable(caught.value, tmp_path)
+    assert_summary_not_replayable(caught.value, tmp_path, terminal_context={
+        'diagnostic_protocol': 'summary_transport/1', 'category': 'timeout'})
     assert SECRET not in caught.value.detail + caplog.text
 
 
@@ -236,7 +253,8 @@ def test_overall_deadline_during_sse_keeps_single_post_and_blocks_retry(
         invoke('stream', wire, monkeypatch)
     assert caught.value.status_code == 504
     assert_direct_once(wire)
-    assert_summary_not_replayable(caught.value, tmp_path)
+    assert_summary_not_replayable(caught.value, tmp_path, terminal_context={
+        'diagnostic_protocol': 'summary_transport/1', 'category': 'timeout'})
 
 
 @pytest.mark.parametrize('kind', ['request', 'stream', 'refresh'])

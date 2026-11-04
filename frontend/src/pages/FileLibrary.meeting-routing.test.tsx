@@ -86,7 +86,9 @@ it('routes the ordinary meeting-original primary link to its dossier header and 
   expect(target.scrollIntoView).toHaveBeenCalledWith({ block: 'center', behavior: 'auto' });
   expect(screen.getByText('2 份纪要')).toBeInTheDocument(); expect(document.querySelectorAll('[data-meeting-row-ids]')).toHaveLength(1);
   expect(screen.getByRole('textbox', { name: '搜索记录' })).toHaveValue('不匹配的旧搜索');
+  await userEvent.click(screen.getByRole('button', { name: '筛选会议 · 已筛选' }));
   expect(screen.getByRole('tab', { name: '未生成' })).toHaveAttribute('aria-selected', 'true');
+  await userEvent.click(screen.getByRole('button', { name: '完成筛选' }));
   expect(JSON.parse(sessionStorage.getItem('vinote:view:owner:recordings-filter')!)).toBe('未生成');
   const back = screen.getByRole('link', { name: '返回文件库' }); expect(back).toHaveAttribute('href', filesPath);
   await userEvent.click(back); await screen.findByRole('dialog');
@@ -100,8 +102,8 @@ it('locates an unassociated historical meeting note in pending instead of making
   state.notes = [note('saved-a', 'child-a'), note('other-note', 'other-task', 'canonical-b')];
   mount('/files?purpose=meeting&file=note%3Asaved-a');
   await userEvent.click(await screen.findByRole('link', { name: '查看会议档案' }));
-  await screen.findByText('此纪要尚未关联到会议，已定位待归档内容。原筛选已保留。');
-  expect(screen.getByRole('tab', { name: '待归档' })).toHaveAttribute('aria-selected', 'true');
+  await screen.findByText('此纪要尚未关联到会议，已定位未关联原录制内容。原筛选已保留。');
+  expect(screen.getByRole('tab', { name: '未关联原录制' })).toHaveAttribute('aria-selected', 'true');
   expect(document.querySelectorAll('[data-meeting-row-ids]')).toHaveLength(0);
   const pendingNote = document.querySelector<HTMLElement>('[data-meeting-located="true"]')!;
   expect(pendingNote).toHaveAttribute('data-meeting-return-target', 'personal::note:saved-a');
@@ -272,7 +274,7 @@ it.each(['note', '', null, false, 7, ['meeting']])('rejects invalid state-only f
 it('clears meeting focus when deliberately switching to pending, preserving unrelated query', async () => {
   mount('/meetings?locate_note=saved-a&locate_focus=meeting&project=Research', { meetingLocator: { ownerId: 'owner', noteId: 'saved-a', focus: 'meeting' } });
   await screen.findByText('已定位原会议档案。原筛选已保留。');
-  await userEvent.click(screen.getByRole('tab', { name: '待归档' }));
+  await userEvent.click(screen.getByRole('tab', { name: '未关联原录制' }));
   expect(snapshot().path).not.toContain('locate_');
   expect(snapshot().path).toContain('view=pending');
   expect(snapshot().path).toContain('project=Research');

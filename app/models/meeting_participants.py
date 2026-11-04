@@ -18,3 +18,14 @@ class MeetingParticipantConfirmationDB(Base):
     revision: Mapped[int] = mapped_column(Integer)
     participants_json: Mapped[str] = mapped_column(Text)
     confirmed_at: Mapped[float] = mapped_column(Float)
+
+
+class MeetingSpeakerConfirmationDB(Base):
+    """Separate table so existing devices need no ALTER of attendance rows."""
+    __tablename__ = "meeting_speaker_confirmations"
+    owner: Mapped[str] = mapped_column(String(128), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    binding_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    revision: Mapped[int] = mapped_column(Integer)
+    evidence_revision: Mapped[str] = mapped_column(String(64))
+    matches_json: Mapped[str] = mapped_column(Text)

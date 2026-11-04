@@ -49,3 +49,8 @@ def save_working_draft(artifacts, folder: Path, text: str) -> None:
 def save_source_reads(artifacts, folder: Path, diagnostic: dict) -> None:
     """Private observations only, never a lease, checkpoint or retry authority."""
     _save_private(artifacts, folder, 'meeting_source_reads.json', diagnostic)
+
+
+def save_working_draft_retry(artifacts, folder: Path, text: str) -> None:
+    _save_private(artifacts, folder, 'meeting_working_draft_retry.json',
+                  {'version': 1, 'kind': 'source_preservation_draft_retry', 'text': text})

@@ -39,11 +39,11 @@ def bind_video_material(evidence, capabilities):
         _material.reset(token)
 
 
-def video_user_content(prompt: str) -> str | list[dict]:
+def video_user_content(prompt: str, *, prepare_audio=False) -> str | list[dict]:
     from app.llm.meeting_source_bundle import SourcePrompt, chronological_content
     binding = _material.get()
     if binding is None:
-        return chronological_content(prompt) if isinstance(prompt, SourcePrompt) else prompt
+        return chronological_content(prompt, prepare_audio=prepare_audio) if isinstance(prompt, SourcePrompt) else prompt
     evidence, capabilities = binding
     return evidence.user_content(prompt, capabilities=capabilities)
 

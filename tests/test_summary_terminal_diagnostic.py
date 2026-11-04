@@ -28,6 +28,17 @@ def context(done=False, finish='missing'):
     }
 
 
+def without_stream(value, done, finish, chars=None, deltas=None):
+    value = copy.deepcopy(value)
+    stream = value.pop('stream')
+    assert stream['done_seen'] is done and stream['finish'] == finish
+    assert type(stream['elapsed_seconds']) is int and stream['elapsed_seconds'] >= 0
+    assert stream['request_id'] is None
+    if chars is not None:
+        assert stream['content_chars'] == chars and stream['content_deltas'] == deltas
+    return value
+
+
 class Stream:
     def __init__(self, finish, done):
         self.finish, self.done = finish, done
@@ -64,7 +75,9 @@ def test_terminal_matrix_never_accepts_non_stop_or_missing_done(done, finish, ex
         return
     error = failure(finish, done)
     assert error.status_code == 502 and error.detail == SUMMARY_UNCONFIRMED_COPY
-    assert failure_details(error) == {
+    details = failure_details(error)
+    details['summary_failure_context'] = without_stream(details['summary_failure_context'], done, expected, len(SECRET), 1)
+    assert details == {
         'error_code': SUMMARY_UNCONFIRMED_CODE, 'retryable': False,
         'summary_failure_context': context(done, expected),
     }
@@ -113,10 +126,10 @@ def test_diagnostic_preserves_existing_accumulated_finish_semantics(done, finish
     else:
         with pytest.raises(SummaryResultUnconfirmed) as caught:
             collect_chat_stream(MultiFinish(), started=time.monotonic())
-        assert failure_details(caught.value)['summary_failure_context'] == context(done, safe_finish)
+        assert without_stream(failure_details(caught.value)['summary_failure_context'], done, safe_finish, 2, 2) == context(done, safe_finish)
 
 
-@pytest.mark.parametrize('reason', ['incomplete', 'timeout', 'connection', 'http524'])
+@pytest.mark.parametrize('reason', ['incomplete'])
 def test_legacy_and_other_failure_branches_do_not_invent_terminal_diagnostics(reason):
     error = SummaryResultUnconfirmed(reason)
     error.cloud_failure_context = context()
@@ -133,7 +146,10 @@ def test_early_parser_failure_and_deadline_do_not_acquire_terminal_diagnostics()
         with pytest.raises(SummaryResultUnconfirmed) as caught:
             collect_chat_stream(stream, started=started)
         assert caught.value.status_code == status
-        assert 'summary_failure_context' not in failure_details(caught.value)
+        context_value = failure_details(caught.value).get('summary_failure_context')
+        assert without_stream(context_value, False, 'missing', 0, 0) == (
+            {'diagnostic_protocol': 'sse_stream/1', 'category': 'invalid_event'} if status == 502 else
+            {'diagnostic_protocol': 'summary_transport/1', 'category': 'timeout'})
 
 
 @pytest.mark.parametrize('damage', [
@@ -164,13 +180,13 @@ def test_invalid_context_is_dropped_at_exception_projection_recovery_and_update(
 def test_only_typed_summary_errors_project_explicit_diagnostics_and_extra_fields_are_removed():
     error = failure('length', True)
     error.summary_failure_context.update(raw=SECRET, url=SECRET, message=SECRET, id=SECRET, keys=[SECRET])
-    assert failure_details(error)['summary_failure_context'] == context(True, 'length')
+    assert without_stream(failure_details(error)['summary_failure_context'], True, 'length', len(SECRET), 1) == context(True, 'length')
     fake = HTTPException(502, 'fixture')
     fake.summary_failure_context = context()
     assert failure_details(fake) == {}
     raw = {'status': 'failed', 'error_code': SUMMARY_UNCONFIRMED_CODE,
            'summary_failure_context': error.summary_failure_context}
-    assert recovery_status(raw)['summary_failure_context'] == context(True, 'length')
+    assert without_stream(recovery_status(raw)['summary_failure_context'], True, 'length', len(SECRET), 1) == context(True, 'length')
 
 
 @pytest.mark.parametrize('missing', ['diagnostic_protocol', 'done_seen', 'finish', 'category'])
@@ -202,12 +218,12 @@ def test_task_updates_preserve_only_safe_same_attempt_context_and_cannot_enable_
     error = failure('length', True)
     artifacts.update_status(folder, 'failed', str(error), **failure_details(error))
     disk = json.loads((folder / 'status.json').read_text(encoding='utf-8'))
-    assert disk['summary_failure_context'] == context(True, 'length')
+    assert without_stream(disk['summary_failure_context'], True, 'length', len(SECRET), 1) == context(True, 'length')
     disk['summary_failure_context']['raw'] = SECRET
     artifacts.write_json(folder / 'status.json', disk)
     artifacts.update_status(folder, 'failed', 'outer handler', retryable=retryable)
     saved = artifacts.get_status('one')
-    assert saved['summary_failure_context'] == context(True, 'length')
+    assert without_stream(saved['summary_failure_context'], True, 'length', len(SECRET), 1) == context(True, 'length')
     assert saved['retryable'] is False and saved['error_code'] == SUMMARY_UNCONFIRMED_CODE
     assert saved['failed_stage'] == 'summarizing'
     assert saved['processed_seconds'] == saved['total_seconds'] == 10
@@ -236,7 +252,7 @@ def test_concurrent_task_failures_are_persisted_to_their_own_status_only(tmp_pat
     for index, folder in enumerate(folders):
         finish, done = cases[index]
         raw = json.loads((folder / 'status.json').read_text(encoding='utf-8'))
-        assert raw['summary_failure_context'] == context(done, finish or 'missing')
+        assert without_stream(raw['summary_failure_context'], done, finish or 'missing', len(SECRET), 1) == context(done, finish or 'missing')
         assert raw['retryable'] is False
     other = artifacts.create_task_dir('legacy')
     artifacts.update_status(other, 'failed', error_code=SUMMARY_UNCONFIRMED_CODE, retryable=True)

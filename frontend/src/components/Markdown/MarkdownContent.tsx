@@ -63,7 +63,7 @@ function createHeading(level: 'h1' | 'h2' | 'h3', className: string) {
         <span>{children}</span>
         <a
           href={`#${id}`}
-          className="ml-2 align-middle text-sm text-muted-foreground no-underline opacity-0 transition hover:text-primary group-hover:opacity-100"
+          className="ml-2 align-middle text-sm text-muted-foreground no-underline opacity-0 transition-opacity hover:text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2"
           aria-label={`Link to ${id}`}
         >
           #
@@ -91,10 +91,10 @@ export function MarkdownContent({ content, compact = false, className, videoUrl,
           ),
           tbody: ({ children }) => <tbody>{children}</tbody>,
           tr: ({ children }) => (
-            <tr className="border-b border-border transition-colors hover:bg-muted/50">{children}</tr>
+            <tr className="border-b border-border">{children}</tr>
           ),
           th: ({ children }) => (
-            <th className="border-b-2 border-border px-4 py-2.5 text-left font-semibold text-foreground">{children}</th>
+            <th className="border-b border-border px-4 py-2.5 text-left font-medium text-foreground">{children}</th>
           ),
           td: ({ children }) => (
             <td className="px-4 py-2.5 text-muted-foreground">{children}</td>
@@ -117,10 +117,10 @@ export function MarkdownContent({ content, compact = false, className, videoUrl,
               </code>
             )
           },
-          h1: createHeading('h1', compact ? 'text-base font-medium mb-3 scroll-mt-24' : 'text-xl font-medium mb-4 scroll-mt-24'),
-          h2: createHeading('h2', compact ? 'text-sm font-medium mt-5 mb-2 scroll-mt-24' : 'text-lg font-medium mt-6 mb-3 scroll-mt-24'),
-          h3: createHeading('h3', compact ? 'text-sm font-medium mt-4 mb-2 scroll-mt-24' : 'text-base font-medium mt-4 mb-2 scroll-mt-24'),
-          p: ({ children }) => <p className="mb-3 leading-relaxed">{children}</p>,
+          h1: createHeading('h1', compact ? 'text-base font-medium mb-3 scroll-mt-24' : 'text-2xl font-medium mt-8 mb-5 leading-snug first:mt-0 scroll-mt-24'),
+          h2: createHeading('h2', compact ? 'text-sm font-medium mt-5 mb-2 scroll-mt-24' : 'text-xl font-medium mt-8 mb-4 leading-snug scroll-mt-24'),
+          h3: createHeading('h3', compact ? 'text-sm font-medium mt-4 mb-2 scroll-mt-24' : 'text-base font-medium mt-5 mb-2 leading-relaxed scroll-mt-24'),
+          p: ({ children }) => <p className="mb-4 leading-7">{children}</p>,
           ul: ({ children }) => <ul className="list-disc pl-6 mb-3">{children}</ul>,
           ol: ({ children }) => <ol className="list-decimal pl-6 mb-3">{children}</ol>,
           li: ({ children }) => <li className="mb-1">{children}</li>,
@@ -160,7 +160,7 @@ export function MarkdownContent({ content, compact = false, className, videoUrl,
           },
           img: ({ src, alt }) => <ContentImage key={content} src={src} alt={alt} remoteImagePolicy={remoteImagePolicy} imageSessionKey={imageSessionKey} />,
           blockquote: ({ children }) => (
-            <blockquote className="my-4 border-l-4 border-primary pl-4 italic text-muted-foreground">
+            <blockquote className="my-4 border-l-2 border-border pl-4 text-muted-foreground">
               {children}
             </blockquote>
           ),

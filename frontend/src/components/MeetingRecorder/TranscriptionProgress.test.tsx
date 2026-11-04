@@ -25,10 +25,9 @@ describe('TranscriptionProgress', () => {
   })
   it.each([
     [undefined, 60], [30, undefined], [30, 0], [Infinity, 60], [30, NaN], [-1, 60],
-  ])('shows an indeterminate bar when coverage is unavailable (%s / %s)', (processedSeconds, totalSeconds) => {
+  ])('shows status without a misleading bar when coverage is unavailable (%s / %s)', (processedSeconds, totalSeconds) => {
     render(<TranscriptionProgress zh processedSeconds={processedSeconds} totalSeconds={totalSeconds} etaSeconds={10} />)
-    expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow')
-    expect(screen.getByRole('progressbar').firstElementChild).toHaveClass('motion-reduce:animate-none')
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
     expect(screen.getByText('正在转写完整录音')).toBeVisible()
     expect(screen.queryByText(/预计还需/)).not.toBeInTheDocument()
   })
@@ -39,7 +38,7 @@ describe('TranscriptionProgress', () => {
     expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuenow', '100')
     expect(screen.getByText('Transcribed 1:00 / 1:00 (100%)')).toBeVisible()
     rerender(<TranscriptionProgress zh={false} />)
-    expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow')
-    expect(screen.getByRole('progressbar')).toHaveAttribute('aria-valuetext', 'Transcribing; waiting for measured progress')
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+    expect(screen.getByText('Transcribing the complete recording')).toBeVisible()
   })
 })

@@ -1,5 +1,5 @@
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
-import { MemoryRouter } from 'react-router-dom'
+import { MemoryRouter, Routes, Route } from 'react-router-dom'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 const api = vi.hoisted(() => ({ disable: vi.fn(), status: vi.fn(), catalog: vi.fn(), runs: vi.fn(), run: vi.fn(), preview: vi.fn(), retry: vi.fn(), detail: vi.fn() }))
 vi.mock('@/lib/feishu', () => ({ feishuStatus: api.status, disableDeviceAutomaticDelivery: api.disable }))
@@ -22,7 +22,7 @@ afterEach(() => { cleanup(); vi.restoreAllMocks() })
 function mount(owner = 'a') { return render(<MemoryRouter><ConnectorPluginStore owner={owner} returnTo="/connections?note=original" /></MemoryRouter>) }
 it('installs only on successful persistence, disables, returns with durable state and searches', async () => {
   const view = mount()
-  await screen.findByText('已有飞书授权，可直接管理；商店模块尚未安装。')
+  await screen.findByText('飞书授权：已连接')
   fireEvent.click(screen.getByRole('button', { name: '安装', exact: true }))
   await screen.findByText('已启用')
   fireEvent.click(screen.getByRole('button', { name: '停用', exact: true }))
@@ -114,7 +114,7 @@ it('ignores late authorization response after switching accounts', async () => {
   api.status.mockResolvedValue({ connected: false })
   view.rerender(<MemoryRouter><ConnectorPluginStore key="b" owner="b" returnTo="/connections" /></MemoryRouter>)
   await act(async () => { resolve({ connected: true }) })
-  expect(screen.queryByText('已有飞书授权，可直接管理；商店模块尚未安装。')).not.toBeInTheDocument()
+  expect(screen.queryByText('飞书授权：已连接')).not.toBeInTheDocument()
 })
 
 it('discards an old response after switching away and back and keeps current controls usable', async () => {
@@ -127,25 +127,34 @@ it('discards an old response after switching away and back and keeps current con
     useAuthStore.setState({ user: { id: 'a' } } as never)
   })
   await act(async () => resolve({ connected: true }))
-  expect(screen.queryByText('已有飞书授权，可直接管理；商店模块尚未安装。')).not.toBeInTheDocument()
+  expect(screen.queryByText('飞书授权：已连接')).not.toBeInTheDocument()
   fireEvent.click(screen.getByRole('button', { name: '安装', exact: true }))
   await screen.findByText('已启用')
 })
 
-it('hides diagram generation but keeps the original historical run and frozen result reachable', async () => {
-  api.catalog.mockResolvedValue([{ id: 'diagram', name: '流程图整理', description: '历史', installed: true, enabled: true, option: 'none' }])
-  const historical = { id: 'original-diagram', plugin_id: 'diagram', note_key: 'note', status: 'ready', source_title: '原纪要', source_content: '固定原文', source_version_id: 'original', output: '历史图表结果', language: 'zh', base_revision: 1, retry_safe: true, model: 'original-model', error: '', created_at: '2026-10-12T00:00:00Z' }
+it('shows installation and authorization separately, with the delivery implications available', async () => {
+  api.status.mockResolvedValue({ connected: false })
+  localStorage.setItem(connectorPluginKey('a'), JSON.stringify({ version: 1, feishu: { installed: true, enabled: true } }))
+  mount()
+  await screen.findByText('飞书授权：未连接')
+  expect(screen.getByText('已启用')).toBeVisible()
+  expect(screen.getByRole('link', { name: '管理' })).toHaveAttribute('href', '/settings/feishu')
+  const details = screen.getByText('安装与停用说明').closest('details')!
+  expect(details).not.toHaveAttribute('open')
+  fireEvent.click(screen.getByText('安装与停用说明'))
+  expect(details).toHaveAttribute('open')
+  expect(screen.getByText(/安装或启用本身不会开启自动交付/)).toBeVisible()
+})
+
+it('redirects the retired tools route to Feishu without reading or mutating historical runs', async () => {
+  const historical = { id: 'original-diagram', plugin_id: 'diagram', note_key: 'note', status: 'ready', source_title: '原纪要', source_content: '固定原文', source_version_id: 'original', output: '历史图表结果' }
   api.runs.mockResolvedValue([historical]); api.run.mockResolvedValue(historical)
-  api.detail.mockResolvedValue({ key: 'note', title: '原纪要', revision: 2, metadata: {}, versions: [] })
-  render(<MemoryRouter><Connections /></MemoryRouter>)
-  const history = await screen.findByRole('button', { name: /流程图整理 · 已保存内容/ })
+  localStorage.setItem('vinote:a:mcp-invocations:v1', JSON.stringify([historical]))
+  const retained = localStorage.getItem('vinote:a:mcp-invocations:v1')
+  render(<MemoryRouter initialEntries={['/connections']}><Routes><Route path="/connections" element={<Connections />} /><Route path="/settings/feishu" element={<div>飞书设置</div>} /></Routes></MemoryRouter>)
+  expect(await screen.findByText('飞书设置')).toBeVisible()
   expect(screen.queryByRole('button', { name: '选择内容' })).not.toBeInTheDocument()
-  fireEvent.click(history)
-  await screen.findByText('历史图表结果')
-  expect(screen.getByText('固定原文')).toBeInTheDocument()
-  expect(api.run).toHaveBeenCalledWith('original-diagram')
-  expect(screen.queryByRole('button', { name: '生成预览' })).not.toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: '重试生成预览' })).not.toBeInTheDocument()
-  expect(screen.queryByRole('button', { name: '另选内容' })).not.toBeInTheDocument()
-  expect(api.preview).not.toHaveBeenCalled(); expect(api.retry).not.toHaveBeenCalled()
+  expect(api.catalog).not.toHaveBeenCalled(); expect(api.runs).not.toHaveBeenCalled(); expect(api.run).not.toHaveBeenCalled()
+  expect(api.preview).not.toHaveBeenCalled(); expect(api.retry).not.toHaveBeenCalled(); expect(api.detail).not.toHaveBeenCalled()
+  expect(localStorage.getItem('vinote:a:mcp-invocations:v1')).toBe(retained)
 })

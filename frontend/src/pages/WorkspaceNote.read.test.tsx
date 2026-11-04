@@ -62,6 +62,8 @@ function mount(path = `/workspace/${key}`, state?: object) {
       <Route path="/settings/mcp" element={<ContextReturn />} />
       <Route path="/connections" element={<ContextReturn />} />
       <Route path="/files" element={<ContextReturn />} />
+      <Route path="/notes/files" element={<ContextReturn />} />
+      <Route path="/meetings/files" element={<ContextReturn />} />
     </Routes>
   </MemoryRouter>);
 }
@@ -195,7 +197,7 @@ it('labels missing or invalid version times honestly and keeps the original-file
   expect(screen.getByRole('option', { name: '正文编辑 · 时间未记录' })).toHaveValue('edit-revision');
   const sourceLink = screen.getByRole('link', { name: '查看原始资料' });
   const sourceUrl = new URL(sourceLink.getAttribute('href')!, 'https://vinote.invalid');
-  expect(sourceUrl.pathname).toBe('/files');
+  expect(sourceUrl.pathname).toBe('/notes/files');
   expect(sourceUrl.searchParams.get('note')).toBe('local-original');
   expect(sourceUrl.searchParams.has('file')).toBe(false);
   expect(sourceUrl.searchParams.get('returnTo')).toContain(`/workspace/${key}`);
@@ -212,7 +214,7 @@ it('closes source Sheet before the file-library handoff and retains the exact se
   fireEvent.change(screen.getByLabelText(/已保存版本/), { target: { value: 'v1' } });
   const link = screen.getByRole('link', { name: '查看原始资料' });
   const url = new URL(link.getAttribute('href')!, 'https://vinote.invalid');
-  expect(url.pathname).toBe('/files'); expect(url.searchParams.get('note')).toBe('real-local-id');
+  expect(url.pathname).toBe('/notes/files'); expect(url.searchParams.get('note')).toBe('real-local-id');
   const context = new URL(url.searchParams.get('returnTo')!, 'https://vinote.invalid');
   expect(context.pathname).toBe(`/workspace/${key}`); expect(context.searchParams.get('version')).toBe('v1');
   expect(context.searchParams.get('returnTo')).toBe(parent);
@@ -220,6 +222,16 @@ it('closes source Sheet before the file-library handoff and retains the exact se
   fireEvent.click(screen.getByRole('link', { name: '返回内容详情' }));
   await screen.findByText('历史正文');
   expect(api.json.mock.calls.every(([, options]) => !options?.method)).toBe(true);
+});
+
+it('opens a meeting original in the meeting context with its exact note identity', async () => {
+  seed({ ...note(), source_type: 'meeting_recording' });
+  useWorkspaceStore.setState({ mappings: { 'meeting-local': { key } } } as never);
+  mount(); await screen.findByText('精确网络正文'); actions();
+  fireEvent.click(screen.getByRole('button', { name: '来源与版本' }));
+  const target = new URL(screen.getByRole('link', { name: '查看原始资料' }).getAttribute('href')!, 'https://vinote.invalid');
+  expect(target.pathname).toBe('/meetings/files');
+  expect(target.searchParams.get('note')).toBe('meeting-local');
 });
 
 it('groups only genuine generated versions and retains imported, unclassified and equal-content records with exact default identity', async () => {
@@ -346,18 +358,12 @@ it('offers initialization recovery rather than an endless spinner when device ca
   await screen.findByText(note().content); expect(api.readCache).toHaveBeenCalledWith('alice');
 });
 
-it('the tools link preserves the content parent across its return URL', async () => {
+it('keeps the content parent while retired tools are absent', async () => {
   seed(currentVersion());
   mount(`/workspace/${key}`, { returnTo: '/meetings?filter=old' });
-  await screen.findByText('精确网络正文');
-  actions();
-  expect(screen.getByRole('link', { name: '全文翻译 · MCP' })).toHaveAttribute('href', `/settings/mcp?mode=translation&note=${key}&version=current`);
-  expect(screen.getByRole('button', { name: '返回会议' })).toBeInTheDocument();
+  await screen.findByText('精确网络正文'); actions();
+  expect(screen.queryByRole('link', { name: '全文翻译 · MCP' })).not.toBeInTheDocument();
   expect(api.json).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole('link', { name: '全文翻译 · MCP' }));
-  expect(screen.getByRole('link', { name: '返回内容详情' })).toHaveAttribute('href', `/workspace/${key}?returnTo=${encodeURIComponent('/meetings?filter=old')}`);
-  fireEvent.click(screen.getByRole('link', { name: '返回内容详情' }));
-  await screen.findByText('精确网络正文');
   fireEvent.click(screen.getByRole('button', { name: '返回会议' }));
   await screen.findByText('原会议列表');
 });
@@ -370,12 +376,12 @@ it('waits for owner cache initialization before loading a cold deep link', async
   await screen.findByText('精确网络正文'); expect(api.json).not.toHaveBeenCalled();
 });
 
-it('has five primary actions and one discoverable secondary container, preserving classification and deletion', async () => {
+it('has two primary actions and one discoverable secondary container, preserving classification and deletion', async () => {
   seed(currentVersion()); mount(); await screen.findByText('精确网络正文');
   const primary = screen.getByRole('group', { name: '主要内容操作' });
-  expect(within(primary).getAllByRole('button')).toHaveLength(5);
+  expect(within(primary).getAllByRole('button')).toHaveLength(2);
   expect(within(primary).getByRole('button', { name: '编辑' })).toBeInTheDocument();
-  for (const name of ['导出 Markdown', '分享', '删除', '发布到飞书']) expect(within(primary).getByRole('button', { name })).toBeInTheDocument();
+  expect(within(primary).getByRole('button', { name: '发布到飞书' })).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '来源与版本' })).not.toBeVisible();
   actions();
   expect(screen.getByRole('button', { name: '来源与版本' })).toBeVisible();
@@ -404,10 +410,11 @@ it('edits a labelled meeting title and only adds live Markdown preview after an 
   expect(screen.getByText('精确网络正文', { selector: 'p' })).toBeInTheDocument();
   fireEvent.change(screen.getByLabelText('会议名称'), { target: { value: '会议草稿' } });
   const primary = screen.getByRole('group', { name: '主要内容操作' });
-  expect(within(primary).getAllByRole('button')).toHaveLength(5);
+  expect(within(primary).getAllByRole('button')).toHaveLength(2);
   expect(within(primary).getByRole('button', { name: '保存' })).toBeInTheDocument();
-  for (const name of ['导出 Markdown', '分享', '删除', '发布到飞书']) expect(within(primary).getByRole('button', { name })).toBeDisabled();
-  actions(); expect(screen.getByRole('link', { name: '全文翻译 · MCP' })).toHaveAttribute('aria-disabled', 'true');
+  actions();
+  for (const name of ['导出 Markdown', '分享', '删除', '发布到飞书']) expect(screen.getByRole('button', { name })).toBeDisabled();
+  expect(screen.queryByRole('link', { name: '全文翻译 · MCP' })).not.toBeInTheDocument();
 });
 
 it('uses selected history title and content, merges only its matching first H1 and exports intact history', async () => {
@@ -421,7 +428,7 @@ it('uses selected history title and content, merges only its matching first H1 a
   expect(screen.getByRole('heading', { level: 1, name: '历史标题' })).toBeInTheDocument();
   expect(screen.getByText('历史内容')).toBeInTheDocument();
   expect(screen.getByRole('button', { name: '导出 Markdown' })).toHaveAttribute('data-export-content', '# 历史标题\n\n历史内容');
-  expect(screen.getByRole('link', { name: '全文翻译 · MCP' })).toHaveAttribute('href', `/settings/mcp?mode=translation&note=${key}&version=history`);
+  expect(screen.queryByRole('link', { name: '全文翻译 · MCP' })).not.toBeInTheDocument();
 });
 
 it.each([['document', '完整结构化笔记'], ['video', '完整结构化笔记'], ['meeting_recording', '完整会议纪要'], ['meeting_video', '完整会议纪要']])('uses the confirmed target for %s, closes the version Sheet and preserves the previous body after generation failure', async (sourceType, label) => {
@@ -493,35 +500,20 @@ it('has visible classification cancel and comparison close, preserving content w
   expect(api.json.mock.calls.every(([, options]) => !options?.method)).toBe(true);
 });
 
-it.each(['全文翻译 · MCP', '流程图整理（选择已保存内容）'])('retains file filter and selected item through %s with a real source version', async name => {
+it('retains file filter and selection after removing content-tool entry points', async () => {
   const parent = '/files?type=file&q=Word&file=file-1';
   seed(currentVersion()); mount(`/workspace/${key}?returnTo=${encodeURIComponent(parent)}&view=summary`, { returnTo: parent });
-  await screen.findByText('精确网络正文'); actions(); fireEvent.click(screen.getByRole('link', { name }));
-  const link = screen.getByRole('link', { name: '返回内容详情' });
-  const context = new URL(link.getAttribute('href')!, 'https://vinote.invalid');
-  expect(context.searchParams.get('returnTo')).toBe(parent); expect(context.searchParams.get('view')).toBe('summary');
-  expect(screen.getByLabelText('目标地址')).toHaveTextContent('version=current');
-  fireEvent.click(link); await screen.findByText('精确网络正文');
+  await screen.findByText('精确网络正文'); actions();
+  expect(screen.queryByRole('region', { name: '内容工具' })).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '返回文件库' }));
   expect(screen.getByLabelText('目标地址').textContent).toBe(parent);
 });
-
-it('explains unavailable source versions and does not substitute another version for translation', async () => {
-  mount(); await screen.findByText('精确网络正文'); actions();
-  const tool = screen.getByRole('link', { name: '全文翻译 · MCP' });
-  expect(tool).toHaveAttribute('aria-disabled', 'true'); expect(tool.getAttribute('href')).not.toContain('version=');
-  fireEvent.click(tool); expect(screen.getByText('精确网络正文')).toBeInTheDocument();
-  expect(screen.getByText(/请先保存修改并读取完整正文版本/)).toBeInTheDocument();
-});
-
-it('returns from MCP to the same real historical title and body, not the latest view', async () => {
+it('keeps existing historical title and body available without tool actions', async () => {
   seed(currentVersion()); mount(); await screen.findByText('精确网络正文'); actions();
   fireEvent.click(screen.getByRole('button', { name: '来源与版本' }));
   fireEvent.change(screen.getByLabelText(/已保存版本/), { target: { value: 'v1' } });
   fireEvent.click(screen.getByRole('button', { name: '关闭' }));
-  fireEvent.click(screen.getByRole('link', { name: '全文翻译 · MCP' }));
-  expect(screen.getByRole('link', { name: '返回内容详情' }).getAttribute('href')).toContain('version=v1');
-  fireEvent.click(screen.getByRole('link', { name: '返回内容详情' }));
-  await screen.findByText('历史正文'); expect(screen.getByRole('heading', { name: '第一版', level: 1 })).toBeInTheDocument();
-  expect(screen.queryByText('精确网络正文')).not.toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: /MCP|流程图/ })).not.toBeInTheDocument();
+  expect(screen.getByText('历史正文')).toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: '第一版', level: 1 })).toBeInTheDocument();
 });

@@ -70,7 +70,7 @@ it('unmount and a changed connection discard late reads and do not mutate an ali
   vi.mocked(apiJson).mockImplementationOnce(() => new Promise(resolve => { old = resolve }));
   const view = mount(); view.rerender(<FeishuObjectHotwords connectionKey={2} connectionCurrent={() => true} />);
   await screen.findByLabelText('别称'); view.unmount(); await act(async () => old(directory));
-  expect(apiJson).toHaveBeenCalledTimes(2); expect(vi.mocked(apiJson).mock.calls.every(([, options]) => !options?.method)).toBe(true);
+  expect(apiJson).toHaveBeenCalledTimes(2); expect(vi.mocked(apiJson).mock.calls.every(([url]) => url === '/api/feishu/object-hotwords/refresh')).toBe(true);
 });
 it('a late mutation from an earlier owner visit cannot replace the new directory or restore its alias', async () => {
   let oldSave!: (value: Directory) => void;
@@ -99,4 +99,20 @@ it('binds the explicitly selected visible contact without an employment check or
   expect(apiJson).toHaveBeenCalledTimes(2);
   expect(apiJson).toHaveBeenLastCalledWith('/api/feishu/object-hotwords', { method: 'POST', body: JSON.stringify({ alias: '负责同事', target_id: 'ou_one' }) });
   expect(vi.mocked(apiJson).mock.calls.some(([path]) => path.includes('authorize') || path.includes('deliveries'))).toBe(false);
+});
+
+
+it('searches visible contacts remotely and explains a bounded result without fake pagination', async () => {
+  vi.mocked(apiJson).mockResolvedValueOnce({ ...directory, objects: [directory.objects[1]] }).mockResolvedValue({ ...directory, has_more: true });
+  mount(); await screen.findByLabelText('搜索飞书联系人');
+  fireEvent.change(screen.getByLabelText('搜索飞书联系人'), { target: { value: '同名' } });
+  fireEvent.click(screen.getByRole('button', { name: '搜索联系人' }));
+  await screen.findByText('联系人结果尚未显示完整，请输入更具体的姓名再搜索。');
+  expect(apiJson).toHaveBeenLastCalledWith('/api/feishu/object-hotwords/refresh?query=%E5%90%8C%E5%90%8D', { method: 'POST' });
+});
+
+
+it('discovers contacts on entry instead of presenting the groups-only cache as a directory', async () => {
+  mount(); await screen.findByLabelText('别称');
+  expect(apiJson).toHaveBeenNthCalledWith(1, '/api/feishu/object-hotwords/refresh', { method: 'POST' });
 });

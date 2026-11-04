@@ -1,5 +1,7 @@
 import { beforeEach, expect, it, vi } from 'vitest'
 import type { PendingMeeting, MeetingGenerationSelection } from './audioStorage'
+const notify = vi.hoisted(() => vi.fn())
+vi.mock('./taskNotifications', () => ({ trackGenerationNotification: notify }))
 
 const mocks = vi.hoisted(() => ({ read: vi.fn(), write: vi.fn(), audio: vi.fn(), api: vi.fn(), submit: vi.fn(), resume: vi.fn(), complete: vi.fn(), save: vi.fn(), owner: 'owner', publish: vi.fn(), models: vi.fn(), speech: vi.fn() }))
 vi.mock('./audioStorage', () => ({ getPendingMeeting: mocks.read, updatePendingMeeting: mocks.write, getRecordedAudio: mocks.audio }))
@@ -59,6 +61,14 @@ it('persists the operation before submission and preserves the source identity',
   expect(record.id).toBe('source-recording')
   expect(record.generationOperation?.outputLanguage).toBe('zh')
   expect(record.processingStatus).toBe('completed')
+  expect(notify).toHaveBeenCalledWith('owner', { taskId: 'new-task', recordingId: 'source-recording', meeting: true, mode: 'file' })
+})
+
+it('keeps accepted recording work running when notification storage is unavailable', async () => {
+  notify.mockImplementation(() => { throw new Error('storage unavailable') })
+  await processSavedMeeting(record, 'zh', undefined, { selection })
+  expect(record.processingStatus).toBe('completed')
+  expect(mocks.complete).toHaveBeenCalledOnce()
 })
 
 it('does not upload when persisting the model confirmation fails', async () => {
@@ -87,6 +97,7 @@ it('restores an existing task without reading newer global model configuration',
   expect(mocks.resume).toHaveBeenCalledWith('original-task')
   expect(mocks.submit).not.toHaveBeenCalled(); expect(mocks.api).not.toHaveBeenCalled()
   expect(record.generationOperation?.selection).toEqual(selection)
+  expect(notify).not.toHaveBeenCalled()
 })
 
 it('persists the real failed stage from non-retryable task readback without retry, upload or model execution', async () => {

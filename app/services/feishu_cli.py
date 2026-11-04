@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import subprocess
+import tempfile
 import threading
 import time
 import uuid
@@ -134,21 +135,21 @@ def qr(owner, url):
     if (parsed.scheme != "https" or parsed.hostname not in {"open.feishu.cn", "accounts.feishu.cn"}
             or parsed.username or parsed.password or parsed.port not in (None, 443)):
         raise FeishuError("飞书授权地址未通过校验", 502)
-    name = "authorization-" + uuid.uuid4().hex + ".png"
-    path = directory(owner) / name
     try:
-        # This command emits a human success line, not a JSON envelope.
-        result = subprocess.run(**_command(owner, ["auth", "qrcode", url, "--output", name]),
-                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                stderr=subprocess.DEVNULL, timeout=10)
-        data = path.read_bytes() if result.returncode == 0 else b""
+        # CLI protects its configuration directory against output writes.
+        with tempfile.TemporaryDirectory(prefix="vinote-feishu-qr-") as temp:
+            name = "authorization-" + uuid.uuid4().hex + ".png"
+            command = _command(owner, ["auth", "qrcode", url, "--output", name])
+            command["cwd"] = temp
+            result = subprocess.run(**command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=10)
+            path = Path(temp) / name
+            data = path.read_bytes() if result.returncode == 0 else b""
         if not data.startswith(b"\x89PNG\r\n\x1a\n") or len(data) > 1_000_000:
             raise ValueError()
         return "data:image/png;base64," + base64.b64encode(data).decode()
     except (OSError, ValueError, subprocess.TimeoutExpired):
         raise FeishuError("授权二维码暂时无法生成，请重新连接", 502) from None
-    finally:
-        path.unlink(missing_ok=True)
 
 
 def _view(owner, identifier, flow):
@@ -164,10 +165,13 @@ def _view(owner, identifier, flow):
 
 def _new_application(owner, flow):
     """Only initiated by an explicit connect action; approval happens in Feishu."""
+    launched = False
     try:
         command = _command(owner, ["config", "init", "--new", "--name", "VINote"])
-        with subprocess.Popen(**command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
-                              stderr=subprocess.STDOUT) as child:
+        child = subprocess.Popen(**command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE,
+                                 stderr=subprocess.STDOUT)
+        launched = True
+        with child:
             flow["process"] = child
             def expire():
                 if child.poll() is None:
@@ -195,7 +199,67 @@ def _new_application(owner, flow):
             finally:
                 timer.cancel()
     except Exception:
+        if not launched:
+            # No child existed, so no provider request could have been sent.
+            # Keep legacy, malformed, or different operation markers intact.
+            with _flow_lock:
+                marker = directory(owner) / "application-intent.json"
+                try:
+                    record = json.loads(marker.read_text(encoding="utf-8"))
+                    if (isinstance(record, dict) and flow.get("operation_id") and
+                            record.get("operation_id") == flow["operation_id"]):
+                        marker.unlink()
+                except (OSError, ValueError):
+                    pass
         flow["error"] = "飞书应用配置尚未完成，请重新连接"
+
+
+def registration_recovery_info(owner):
+    """Describe an old intent without exposing its contents or changing it."""
+    with _flow_lock:
+        root = directory(owner)
+        marker = root / "application-intent.json"
+        try:
+            if marker.is_symlink() or not marker.is_file():
+                return {"available": False}
+            raw = marker.read_bytes()
+            if len(raw) > 4096:
+                return {"available": False}
+            record = json.loads(raw)
+            started = record.get("started_at") if isinstance(record, dict) else None
+            if (type(started) not in (int, float) or not 0 < started <= time.time() - 1200
+                    or not isinstance(record.get("operation_id"), str)
+                    or not record["operation_id"] or (root / "config.json").exists()):
+                return {"available": False}
+            for flow in _flows.values():
+                if flow.get("owner") == owner and flow.get("stage") == "application":
+                    child = flow.get("process")
+                    if (child and child.poll() is None) or (not flow.get("error") and not flow.get("done")):
+                        return {"available": False}
+            return {"available": True, "revision": hashlib.sha256(raw).hexdigest()}
+        except (OSError, ValueError, TypeError):
+            return {"available": False}
+
+
+def recover_registration(owner, revision, confirmed):
+    if confirmed is not True:
+        raise FeishuError("请先确认已核对飞书应用后台", 422)
+    with _flow_lock:
+        info = registration_recovery_info(owner)
+        if not info.get("available") or info.get("revision") != revision:
+            raise FeishuError("原连接状态已变化或仍在处理中，请重新检查", 409)
+        root = directory(owner)
+        marker = root / "application-intent.json"
+        # Retain original bytes as an audit record. Recovery never starts CLI.
+        try:
+            marker.rename(root / ("application-intent-recovered-" + uuid.uuid4().hex + ".json"))
+        except OSError:
+            raise FeishuError("无法保存原连接记录，请稍后再试", 503) from None
+        for identifier, flow in list(_flows.items()):
+            if flow.get("owner") == owner and flow.get("stage") == "application":
+                flow["revoked"] = True
+                del _flows[identifier]
+        return {"recovered": True}
 
 
 def start(owner):
@@ -234,7 +298,8 @@ def start(owner):
                 json.dump({"operation_id": identifier, "started_at": time.time()}, handle)
                 handle.flush()
                 os.fsync(handle.fileno())
-            flow = {"owner": owner, "stage": "application", "until": time.time() + 600}
+            flow = {"owner": owner, "stage": "application", "until": time.time() + 600,
+                    "operation_id": identifier}
             flow["generation"] = _owner_generations[owner] = uuid.uuid4().hex
             _flows[identifier] = flow
             threading.Thread(target=_new_application, args=(owner, flow), daemon=True).start()

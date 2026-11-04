@@ -164,6 +164,96 @@ describe('NoteGenerator failed generation recovery', () => {
   })
   afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); vi.unstubAllEnvs() })
 
+  it('new import opens file choice and cancellation preserves previous failed and unknown receipts', () => {
+    languageMock.value = 'zh-CN'; queryMock.value = 'meeting=1&intent=import&draft=new-slot';
+    const old = JSON.stringify({ id: 'old-task', operationId: 'old-operation', submissionState: 'unknown', meeting: true, workspace: { scope: 'personal' }, sourceTitle: 'old.wav' });
+    localStorage.setItem('vinote:import-receipt:import-owner:meeting', old);
+    localStorage.setItem('vinote:source-receipt:import-owner:old-operation', old);
+    const view = renderGenerator('/meetings');
+    expect(screen.getByLabelText('选择或拖入会议音视频或逐字稿')).toBeInTheDocument();
+    expect(apiMock.apiJson).not.toHaveBeenCalled();
+    expect(screen.queryByText('old.wav')).not.toBeInTheDocument();
+    view.unmount();
+    expect(localStorage.getItem('vinote:import-receipt:import-owner:meeting')).toBe(old);
+    expect(localStorage.getItem('vinote:source-receipt:import-owner:old-operation')).toBe(old);
+  });
+
+  it.each([false, true])('accepted work can continue into an independent draft (meeting=%s) without losing history', async meeting => {
+    queryMock.value = meeting ? 'meeting=1' : '';
+    const old = JSON.stringify({ id: 'background-task', submissionState: 'accepted', workspace: { scope: 'personal' }, meeting, mode: 'url' });
+    localStorage.setItem(`vinote:import-receipt:import-owner:${meeting ? 'meeting' : 'note'}`, old);
+    apiMock.apiJson.mockResolvedValue({ task_id: 'background-task', status: 'transcribing' });
+    renderGenerator();
+    await userEvent.click(await screen.findByRole('button', { name: meeting ? '继续新建会议纪要' : '继续新建笔记' }));
+    const [url] = navigateMock.mock.calls.at(-1)!;
+    const target = new URL(url, 'https://local.invalid');
+    expect(target.searchParams.get('intent')).toBe('import');
+    expect(target.searchParams.get('draft')).toBeTruthy();
+    expect(target.searchParams.get('meeting')).toBe(meeting ? '1' : null);
+    expect(localStorage.getItem(`vinote:import-receipt:import-owner:${meeting ? 'meeting' : 'note'}`)).toBe(old);
+    expect(localStorage.getItem('vinote:source-task-receipt:import-owner:background-task')).toBe(old);
+    expect(apiMock.apiJson.mock.calls.every(([, options]) => !options?.method)).toBe(true);
+  });
+
+  it('unconfirmed submission does not offer background continuation as if accepted', async () => {
+    localStorage.setItem('vinote:import-receipt:import-owner:note', JSON.stringify({ operationId: 'uncertain', submissionState: 'unknown', workspace: { scope: 'personal' }, meeting: false }));
+    apiMock.apiJson.mockRejectedValue(new Error('still unknown')); renderGenerator();
+    await screen.findByRole('alert');
+    expect(screen.queryByRole('button', { name: '继续新建笔记' })).toBeNull();
+  });
+
+  it('explicit task still restores even alongside import intent', async () => {
+    queryMock.value = 'meeting=1&intent=import&draft=new-slot&task=old-task';
+    renderGenerator();
+    await waitFor(() => expect(apiMock.apiJson).toHaveBeenCalledWith('/api/task/old-task'));
+  });
+
+  it('new import refresh restores only its own unknown operation without overwriting global history', async () => {
+    queryMock.value = 'meeting=1&intent=import&draft=new-slot';
+    const old = JSON.stringify({ id: 'old-task', submissionState: 'accepted', meeting: true, workspace: { scope: 'personal' } });
+    const current = JSON.stringify({ operationId: 'new-operation', submissionState: 'unknown', meeting: true, workspace: { scope: 'personal' } });
+    localStorage.setItem('vinote:import-receipt:import-owner:meeting', old);
+    localStorage.setItem('vinote:import-draft:import-owner:new-slot', current);
+    localStorage.setItem('vinote:source-receipt:import-owner:new-operation', current);
+    apiMock.apiJson.mockRejectedValue(new Error('not yet confirmed'));
+    renderGenerator();
+    await waitFor(() => expect(apiMock.apiJson).toHaveBeenCalledWith('/api/source-requests/new-operation'));
+    expect(apiMock.apiJson.mock.calls.some(([path]) => path === '/api/task/old-task')).toBe(false);
+    expect(localStorage.getItem('vinote:import-receipt:import-owner:meeting')).toBe(old);
+  });
+
+  it('submitting a new import retains old history and writes only its independent draft and operation', async () => {
+    queryMock.value = 'meeting=1&intent=import&draft=submit-slot';
+    const old = JSON.stringify({ id: 'old-task', submissionState: 'accepted', meeting: true, workspace: { scope: 'personal' } });
+    localStorage.setItem('vinote:import-receipt:import-owner:meeting', old);
+    apiMock.apiJson.mockImplementation((path: string) => path === '/api/generate_from_upload' ? Promise.resolve({ task_id: 'new-task', state: 'accepted' }) : Promise.resolve({ status: 'preparing' }));
+    renderGenerator();
+    await userEvent.upload(screen.getByLabelText('选择或拖入会议音视频或逐字稿'), new File(['audio'], 'new.wav', { type: 'audio/wav' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Generate meeting minutes' }));
+    await waitFor(() => expect(apiMock.apiJson).toHaveBeenCalledWith('/api/task/new-task'));
+    expect(localStorage.getItem('vinote:import-receipt:import-owner:meeting')).toBe(old);
+    const draft = JSON.parse(localStorage.getItem('vinote:import-draft:import-owner:submit-slot')!);
+    expect(draft).toMatchObject({ id: 'new-task', sourceTitle: 'new.wav', submissionState: 'accepted' });
+    expect(JSON.parse(localStorage.getItem(`vinote:source-receipt:import-owner:${draft.operationId}`)!)).toMatchObject({ id: 'new-task' });
+  });
+
+  it('late import submission cannot replace a different newly opened draft', async () => {
+    queryMock.value = 'meeting=1&intent=import&draft=first';
+    const pending = deferred<{ task_id: string; state: string }>();
+    apiMock.apiJson.mockImplementation((path: string) => path === '/api/generate_from_upload' ? pending.promise : Promise.resolve({ status: 'preparing' }));
+    let push!: (path: string) => void;
+    function Driver() { const navigation = useContext(UNSAFE_NavigationContext); push = path => navigation!.navigator.push(path); return null }
+    render(<MemoryRouter initialEntries={['/generate?' + queryMock.value]}><Driver /><I18nProvider><NoteGenerator /></I18nProvider></MemoryRouter>);
+    await userEvent.upload(screen.getByLabelText('选择或拖入会议音视频或逐字稿'), new File(['audio'], 'first.wav', { type: 'audio/wav' }));
+    await userEvent.click(screen.getByRole('button', { name: 'Generate meeting minutes' }));
+    await act(async () => { queryMock.value = 'meeting=1&intent=import&draft=second'; push('/generate?' + queryMock.value); });
+    await act(async () => pending.resolve({ task_id: 'first-task', state: 'accepted' }));
+    expect(screen.getByLabelText('选择或拖入会议音视频或逐字稿')).toBeInTheDocument();
+    expect(apiMock.apiJson).not.toHaveBeenCalledWith('/api/task/first-task');
+    expect(localStorage.getItem('vinote:import-draft:import-owner:second')).toBeNull();
+    expect(localStorage.getItem('vinote:import-draft:import-owner:first')).not.toBeNull();
+  });
+
   function deferred<T>() {
     let resolve!: (value: T) => void
     let reject!: (cause: Error) => void
@@ -1313,7 +1403,7 @@ describe('failed meeting task summary-only entrance', () => {
     localStorage.setItem('vinote:import-receipt:import-owner:meeting', JSON.stringify({ id: 'old-intake', sourceTitle: 'Old intake title', meeting: true, workspace: { scope: 'personal' } }))
     renderGenerator('/tasks?tab=generation')
     const dialog = await prepare()
-    expect(dialog).toHaveTextContent('不重新转录')
+    expect(dialog).toHaveTextContent('不重新转写')
     expect(apiMock.apiJson.mock.calls.every(([, init]) => !init?.method)).toBe(true)
     await userEvent.click(within(dialog).getByRole('button', { name: '确认生成新版本' }))
     await waitFor(() => expect(navigateMock).toHaveBeenCalled())
@@ -1389,6 +1479,7 @@ describe('failed meeting task summary-only entrance', () => {
     await screen.findByRole('button', { name: '查看原任务状态' })
     expect(screen.queryByRole('button', { name: '重试处理原任务' })).toBeNull()
     expect(screen.queryByRole('button', { name: '确认原模型，开始新的处理' })).toBeNull()
+    await userEvent.click(screen.getByText('其他处理方式'))
     expect(screen.getByRole('button', { name: '生成新版本' })).toBeVisible()
     expect(screen.getByRole('alert')).not.toHaveTextContent('此次转写未完成')
     await userEvent.click(screen.getByRole('button', { name: '查看原任务状态' }))

@@ -32,7 +32,7 @@ function layoutTop(element: HTMLElement): number {
   return top
 }
 
-/** Only a related-minutes click -> content detail -> same meetings view. */
+/** Reset shared page scroll; restore a related-minutes return to the same view. */
 export function useMeetingReturnScroll(paneRef: RefObject<HTMLElement | null>) {
   const location = useLocation()
   const owner = useAuthStore(state => state.user?.id)
@@ -40,11 +40,19 @@ export function useMeetingReturnScroll(paneRef: RefObject<HTMLElement | null>) {
   const scope = JSON.stringify([owner, workspace.scope, workspace.scope === 'team' ? workspace.teamId : null])
   const route = location.pathname + location.search + location.hash
   const position = useRef<ReturnPosition | null>(null)
+  const previousPath = useRef(location.pathname)
   const contextualReturn = (location.state as { returnTo?: unknown } | null)?.returnTo
 
   useLayoutEffect(() => {
     const pane = paneRef.current
     if (!pane) return
+    if (previousPath.current !== location.pathname) {
+      const behavior = pane.style.scrollBehavior
+      pane.style.scrollBehavior = 'auto'
+      pane.scrollTop = 0
+      pane.style.scrollBehavior = behavior
+      previousPath.current = location.pathname
+    }
     if (!owner || position.current?.scope !== scope) position.current = null
     if (location.pathname.startsWith('/note/') || location.pathname.startsWith('/workspace/')) {
       const saved = position.current

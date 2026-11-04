@@ -146,10 +146,6 @@ def submit(request, user, source, options, background, *, upload=None, source_jo
         return claim.model_dump(exclude_none=True)
     needs_stt = options.source_type not in {"document", "transcript"}
     config = worker.prepare_models(user.user_id, options.model_dump(), needs_stt)
-    if needs_stt and options.diarize:
-        from app.services.speaker_diarization_service import SpeakerDiarizationService
-        if not SpeakerDiarizationService.readiness()["available"]:
-            raise HTTPException(503, "说话人分析尚未就绪，请联系服务管理员；未提交转写")
     storage = worker.artifacts()
     folder = storage.create_task_dir(claim.task_id)
     storage.write_text(folder / "recording_owner", user.user_id)

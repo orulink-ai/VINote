@@ -1,5 +1,18 @@
 # 会议总结形式与独立版本
 
+## 2026-11-04 15:04 Asia/Shanghai · 延续：整场文字复核输出去重
+
+- 作者：wugui（仓库配置）；实施：Codex。当前分支 `codex/meeting-asr-20261102`，保留已有未提交修改。本次未提交、未部署；真实桌面验收由主线程执行。
+- 延续用户要求：整场逐字稿一次输入，不拆三段；文字纪要仅调整详细/精简及 Markdown 标题层级。没有缩减来源、改模型、重跑 ASR 或重放未知操作。
+- 只读诊断：任务 `4e8efb3a-98cc-4774-a5b0-d99794feec35` 的最终复核含276条草稿命题，system 27,420字符、user 263,323字符；收到84,175字符后705秒连接中断，无终止标记。前一次同类完整响应的usage为131,437输入tokens，输出为空账本。现有证据不能归因于VILab破坏JSON，也不能把输入膨胀认定为网络中断的唯一原因。
+- 原逐字稿746段、正文33,182字符；严格只读重验草稿536个引文，其中532个匹配、4个不匹配，272条命题可采用紧凑确认。对应完整行124,635字符，紧凑确认22,469字符，减少重复序列化约82%；这不是模型质量或运行时成功证明。
+- 新增 `app/llm/meeting_compact_review.py` protocol 8，仅新VILab文字复核启用。模型必须逐ID明确 `unchanged:true` 确认原命题及全部引文原样有效；纠错、新增、拒绝使用完整行。Host只做精确冻结值展开，仍通过原protocol4的完整ID、来源、块引用和深度校验；无效/未核验引文及视觉解释不能通过紧凑确认继承。原始8响应原样保留，历史4仍严格读取/校验，不改历史产物。
+- TDD：新增模块前11项失败（模块缺失）；模块完成后11项通过；接线测试先因期望协议不匹配失败，接线及无视觉文本分派后通过。最终13文件组合428 passed、1条既有Starlette弃用警告，目标diff-check通过。`test_default_full_summary` 3项旧local fixture被固定公网门禁拒绝，已只更新合成服务快照与模型目录，未放宽产品门禁；修后11项通过。
+- 尚未证明：用户音频新版本真实生成、保存、飞书发布和回读。保持失败操作与原始记录不变；真实模型测试期间冻结后端文件修改。
+- 同日接线后只读复核发现协议提示词仍有两处完整行/紧凑行歧义：`Included requires ... evidence list` 未明确指展开后，`Never omit the key` 未明确只约束完整行。经主线程确认尚未发起真实测试后修正：紧凑行规则前置，证据列表要求明确为host展开后的语义要求，wire完整行才必须包含该字段。新增契约测试修前1 failed/13 passed；修后相同13文件组合429 passed、1条既有警告，diff-check通过，再次冻结后端。未改变验证器或输入结构。
+- 同日真实API任务 `4fa03b80-6367-4667-8c46-7597fc53e812` 在草稿JSON解析失败，尚未进入协议8复核；主线程记录完整实测。后续仅修错误可辨识性：格式失败显示“模型返回格式不完整”，分类为 `summary_output_invalid`、`failed_stage=summarizing`、`retryable=false`；`summary_format/1` 只保存语法/重复键/非法常量类别、draft/review阶段及JSON行列偏移，不保存正文或错误附近片段。事实来源验证错误继续保持原类别，不猜测缺失字段、不修补JSON、不改模型重试策略、不重写历史任务。
+- 格式诊断TDD新增5项修前4 failed/1 passed；完成分类、落盘及恢复白名单后，相关7文件组合279 passed、diff-check通过。未再调用模型，未部署；该修改不证明模型格式稳定性已解决。用户要求可阅读已生成草稿的独立只读API/UI由主线程另行处理，不能将草稿冒充已核验完成稿。
+
 - 时间：2026-10-20 16:12，Asia/Shanghai；建档作者：wugui（git config）；实施：Codex。
 - 分支：codex/meeting-delivery-formats-connections；同一 checkout，不切分支/worktree/commit。
 - 状态：后端候选于 2026-10-20 16:30（Asia/Shanghai）冻结可受控运行，前端本地已接入；未实测模型、未部署、未提交。真实验收由主 agent 统一执行。
@@ -255,3 +268,79 @@ A09 draft HTTP524未返回稿；Bbrief03完成draft/review但guardfailed。B只�
 
 - 参会人6项同为modern summary fixture缺模型快照/DB摘要，补真实合成证明后目标全部通过，四文件组合261 passed/81.07秒。未改runtime或放宽来源、缓存或交付权限；真实A/B/AHTML只读context复用及模型核验均true，41份原JSON哈希不变。
 - SavedRecordingChoice的5项失败及同根未捕获错误来自测试认证store缺subscribe，改用真实Zustand store并逐例设置owner，保留实际订阅/退订/换号清理。原失败文件9例与preview/录制相关10文件组合115 passed；未改产品或快照。所有已发现完整检查失败均已有对应修复/专项验证，接下来进行第二次完整yarn verify，尚不提前宣称全绿。
+
+
+## 2026-11-04 · 飞书对象联系人发现修复与只读验收
+
+- 根因：对象热词页面进入时只 GET 本地对象缓存；缓存真实计数为联系人 0、群 26。同一当前 CLI 账号的只读联系人查询成功返回 21 位、has_more=false；旧内部联系人过滤和包含外部的查询计数相同，因此本次不是权限不足，不能将筛选差异误报为实际根因。
+- 修复：进入对象页与重新读取时执行现有只读 refresh 发现联系人；刷新包含当前可见外部联系人。增加按姓名远端搜索，可查找未聊过但授权可见的联系人。安装版本 CLI 帮助明确无分页 cursor，has_more 时仅提示细化姓名，不假造翻页、不请求新授权。查询失败仍展示错误，不回退为成功空目录。保留账号/连接绑定及旧别称。
+- TDD：后端新增五项修前失败，修后对象相关 89 passed；前端远端搜索和首次发现测试均经历 RED→GREEN，最终三个文件 29 passed，tsc --noEmit 通过。无新增外部写入测试。
+- 经主线程明确授权，本机 HTTP cookie 仅内存传递，正常 POST /api/feishu/object-hotwords/refresh 真实验收 HTTP 200；响应计数联系人 21、群 26、partial=true、has_more=false，缓存已恢复。未记录联系人姓名、身份或凭据，未发送消息、发布内容或扩大授权。
+- 独立只读审查任务通知：已核对前后台分流、显式系统权限申请、成功/失败一次提醒、持久化终态去重、原任务恢复路径、网络失败不误判任务失败及Tauri监听/显示主窗接线。发现 TaskNotifications.current 仅比较 owner 字符串与 effect alive，A→B→A 同批切换可能接纳旧请求；建议使用同步身份epoch/publishScope并补ABA回归，已交主线程处理。producer 接线仍由主线程负责，本子任务不改通知文件、不重复运行其全套测试。系统通知真实OS显示/点击此次未实测。
+
+
+## 2026-11-04 · 飞书设置主流程简化
+
+- 用户明确要求链路已通后简化使用；保持所有授权、账号/连接冻结、回执和不重复发送行为。Refero live查询返回 NO_SUBSCRIPTION，沿用既有产品与用户指定 unslop 方向，并阅读 Refero craft-details/anti-ai-slop：平面细分隔、弱容器、紧凑单列、现有字体/色彩token；未增加装饰图形或引导授权。
+- FeishuSettings 删除授权/发送/热词三个页签，改同页账号连接→接收位置→发送偏好。连接状态、已选目的地直接可见。对象热词与HTTP应用接入仅在“高级设置”展开后挂载，低频权限/发送规则仍折叠。未增加“最近发送结果”推测值，因为当前状态响应无该字段。返回记录避免 Connections 重定向后的返回插件循环。
+- 去除多层卡片和大面积背景，收窄可读宽度；精简主面板说明，保留实际确认对话框中的发送范围和权限说明。移除“去插件商店/安装插件”用户文案，内部启用与失败补偿逻辑原样保留。
+- TDD：新增同页主流程测试先因旧tablist失败，实施后设置/CLI/热词35项通过；自动交付28项初轮因本机Node原生webstorage不可用失败，使用 --no-experimental-webstorage 后28项通过，tsc --noEmit通过。最后仅调整插件文案的28项再通过。保留授权显式点击、ABA、草稿恢复、失败补偿和冻结确认测试。真实页面视觉复核由主线程在既有窗口只截图执行，不重复操纵桌面。本子任务未发送消息或发布文档。
+- 独立审查会议显示元数据：owner/device/canonical/file边界和稳定ID未见越权问题；发现远端清空字段会经 || 回退旧本地人工名称/日期，已交review代理修正“metadata存在但字段为空”分支。
+
+
+## 2026-11-04 · 说话人与飞书联系人确认前端
+
+- 按已批准计划 `docs/superpowers/plans/2026-11-04-speaker-feishu-integration.md` 延续现有参会确认，不设置纪要阅读门槛。新增 MeetingSpeakerMatches：展示真实 speaker_id、短句、原始时间，time_overlap 明确为时间重叠参考；候选姓名及理由仅供核对，不自动选择，不作为发送授权。
+- 显式“查找联系人”定位到姓名查询；选择实际飞书对象后可把其对应到指定说话人。只读联系人证明仍经既有有效期/精确open_id核验，PUT speaker_matches 引用同次contacts。移除参会人会清理对应映射；清空映射和名单需要原有勾选确认。已保存人工对应与新对应待保存分开标识；没有真实speaker标识时不伪造，仍可人工确认参会名单。
+- NoteEditor嵌入新增 MeetingParticipantsEntry：读取实际飞书连接状态，连接有效即允许人工匹配，不因自动发布关闭或旧插件安装key而禁用。未连接、已过期、无法核验或畸形响应不挂载联系人面板；焦点返回时重读状态，revision和publishScope阻断旧owner/旧连接响应。不会自动搜索联系人或读取全通讯录。
+- TDD：初轮新增3个speaker测试失败、entry模块缺失，旧15项通过；实施后核心21项通过。补充未知speaker映射拒绝、无speaker、过期/不可核验/畸形连接、owner ABA和焦点重验后，最终2文件27 passed（--maxWorkers=1, --no-experimental-webstorage），tsc --noEmit exit0。扩大NoteEditor测试曾发现3个旧MCP入口断言，已交相应代理单独更新，不恢复被用户移除的MCP功能。
+- 不改原始逐字稿speaker_id、音视频或旧纪要；不做人脸/声纹识别，不触发实际发布/消息。后端canonical映射复用及未来摘要归属由其他代理分别实施，真实视觉/外部发布验收不由本子任务冒充完成。
+
+- 同轮独立审查指出焦点重验不应丢弃同一连接的未保存身份草稿；新增回归先1 failed/7 passed，修正为只读重验期间保留组件，确认同binding有效保留草稿，确认失效/变化才移除或重新挂载；request revision继续拒绝迟到响应。修后Entry 8 passed、tsc exit0。
+
+## 2026-11-04 · 统一会议导入与原文件展示
+
+- 研究腾讯会议录制上传与 Teams Recap 的同一会议对象模式，决策与来源记录于 docs/reviews/2026-11-04-meeting-intake-originals.md；Refero 订阅不可用，延续既定平面紧凑风格。
+- Meetings 工具栏收敛“录制会议”“导入会议”，保留独立 fresh draft receipt；会议 FileLibrary 取消重复导入，通用资料选择会议统一跳同一草稿，不再走 /api/files 会议上传。普通笔记上传不变。
+- 原文件标题读取 owner-scoped 显式会议名称，独立直达页无需 note store；原名作为次级信息可复制，展示格式、大小、位置。保留 dossier/未生成导入来源可达性、播放/另存为/文件夹/删除确认与文本保留规则。不修改未使用的 RetainedOriginals 组件。
+- 新行为 RED 3 failed；最终 Meetings 17 passed、FileLibrary 45 passed、npx tsc --noEmit exit0。未执行真实导入、删除或外部发送；代码已冻结交主任务最终构建和视觉验收。
+
+## 2026-11-04 · 飞书设置第二轮收敛
+
+- 按用户实际截图重新梳理层级：账号状态同一行，文档位置使用紧凑名称/更改，自动发布主开关在通知对象上方；本人、参会人、群、其他联系人四行，联系人选择放入单独对话框，关闭不丢未保存名单。手动模式仍可配置预设。
+- 合并长规则为“发送说明”帮助，历史版本归组移到高级设置，保存条贴近页面底部；保留原change/save/冻结consent和owner/revision保护。已验证连接可自动只读核验文档名称，旧服务器没有binding仍保留显式核验。
+- 新联系人对话框回归RED1→GREEN；FeishuSettings三文件55 passed。tsc唯一待主代理同时开发组件的hideHeading prop，不声称已通过；最终类型检查由集成继续。未实际发布或发送，未声称视觉验收。
+
+## 2026-11-04 · 飞书设置摘要页与实组件预览
+
+- 用户指出长页即使折叠说明仍显堆砌。默认界面改为账号连接状态、发布方式/位置摘要、通知对象摘要；两个编辑入口打开各自编辑区域，完成返回摘要，不触发保存也不丢草稿。正常连接管理收次级菜单，未保存时才出现保存条；接入异常、授权和冻结确认流程保持原保护。
+- 新摘要/编辑草稿回归RED1→GREEN；更新原测试先打开相应编辑入口，继续验证owner ABA、群分页、联系人proof及自动交付consent。最终3文件56 passed，tsc --noEmit exit0。
+- 使用已有Playwright依赖和本机Edge headless运行真实FeishuSettings及样式、mock账号与只读API，隔离浏览器无桌面输入、无真实发送。预览发现hidden属性被flex类覆盖，修为显式隐藏后重截图，pageerror=[]。截图 docs/reviews/2026-11-04-feishu-summary-preview.png 和 2026-11-04-feishu-notifications-preview.png；仅组件布局验收，不冒称原生客户端或真实账号验收。
+- 复查预览字体/标题：全局已含微软雅黑等中文fallback，不修改字体。CDP实测正文Microsoft YaHei UI 11glyphs、标题Microsoft YaHei UI 2glyphs；字体并非宋体。初版截图捕获TextReveal动画中间帧，重拍fixture隔离Vite HMR并等document.fonts.ready/有限动画结束，标题transform identity、opacity1，完整显示。两张预览已覆盖为稳定帧；仍仅模拟数据组件预览。
+
+## 2026-11-04 · 连续提交独立笔记与会议任务
+
+- 诊断：本机 /api/generate 每次独立 BackgroundTasks，active集合按task_id防重复，不是全局只能一份。前端普通笔记入口仍复用owner单回执；运行页没有继续新建入口，导致用户误以为必须等待。会议独立draft机制已存在。
+- Notes每次点击链接/文件入口生成新draft UUID。NoteGenerator对已accepted、本机回执保护成功的笔记与会议显示继续新建/全部处理记录；先保留独立source-task回执，再导航新draft，不覆盖旧operation，不重新提交旧任务。unknown、上传中、回执保存失败不显示已接受的继续动作，账户/Origin守卫仍保留。
+- Tasks既有source-receipt/source-task-receipt枚举可保留每任务恢复入口，任务详情读取准确进度；全局通知observer继续跟踪已接受任务。普通任务列表不是高频全量轮询，此次未引入额外并发请求。
+- 新测试RED3失败/1通过，实施后NoteGenerator+Notes.actions+Tasks.source147 passed，Notes.layout旧路径断言更新后8 passed；tsc exit0，diffcheck清洁。未发真实任务、未修改Python，真实B站转写继续运行。
+- 容量限制单独记录：Bearer内容服务middleware单槽持有到BackgroundTasks结束，workspace_generation也整次单槽，会429；本轮桌面连续提交不代表云端无限并发，队列容量另行设计。
+
+## 2026-11-04 · 会议/文件/任务统一紧凑层级
+
+- 依据本轮主任务明确参考锁与Refero bundled craft（可见焦点、表单标签、布局层级）实施，不触碰共享index.css。会议标题右侧保留录制/导入独立draft入口，搜索常显；日期/状态移入Dialog，关闭不重置筛选。真正空库隐藏无用工具栏，给录制第一场会议动作。原关联、录制恢复与原文件入口保留。
+- FileLibrary空库不显示无用搜索/格式栏，给第一份文件或统一会议导入动作；用途/格式栏减弱容器，结果行缩短，文件位置/处理关联保留详情与可访问文本，不删除原名/播放/另存为/文件夹/删除确认。
+- Tasks任务行集中右侧恢复操作、减少开发诊断噪声；有任务才展示来源标题搜索，本地过滤不发额外请求，不删除回执；无匹配可清空搜索。状态/重试与冻结版本信息保留。
+- TDD空库/筛选Dialog3项RED后，6文件133 passed；新增Tasks来源搜索RED→2文件40 passed（含1新增，总覆盖134）。初轮tsc通过；最后集成tsc仅报告其他代理正在改的TaskNotifications CircleAlert导出错误，已交回，不擅改共享文件。当前文件diffcheck通过。
+- 后台真实页面组件+模拟API/账号预览：760×600与1440×900，会议/文件/任务各空库与有内容共12张，全部pageerror=[]、scrollWidth=viewport。已查看760各页面和1440会议，控件不溢出；不冒称native或真实账户验收。
+- 可复用脚本保留repo外 D:/Project/Vi/.codex-ui-preview/harness.mjs 和 pages.mjs；截图同目录 meetings/files/tasks-{empty|rows}-{760|1440}.png。隔离Vite HMR，等待字体与有限动画后截图，临时入口自动清理，无实际发送/删除。
+
+## 2026-11-04 · 多任务中心完整只读跟踪
+
+- 修正此前只提供连续提交入口而没有逐任务状态闭环的缺口。新增useTaskCenter：每轮最多3个GET并发，不重叠轮询，单次读取20秒超时；前台4秒、页面隐藏30秒，回到前台即核验。owner/Origin变更含ABA立即取消，卸载停止；不POST、不重试模型任务。
+- accepted回执逐任务GET /api/task，unknown/reserved按原operation GET /api/source-requests；只有精确operation匹配且accepted才追踪返回task_id，不把未登记/网络失败当已受理。不修改冻结回执。
+- 每行展示可识别来源、真实阶段、服务返回的已转写秒数/总秒数；不使用估算progress生成百分比。失败展示实际原因和原恢复入口；传输失败保留上次阶段并提示暂时无法更新，不伪装任务失败。
+- 成功且正文完整后停止该task轮询，GET /api/notes按exact task_id与done定位已保存内容，直达note；尚未保存继续核验note出现。有operation链接原操作恢复保存，无operation只标查看处理结果，不放宽task只读路径。录制任务同样呈现真实状态。后台实际自动保存由主任务独立实现，本hook不写内容。
+- 测试：初始缺hook RED；9个hook测试覆盖多阶段、最多3并发、不重叠、前后台节奏、错误保留、owner/Origin ABA、exact操作解析、reserved拒绝跟错task、迟到保存查找、终态停止；1个Tasks真实集成测试覆盖多行进度/完成/失败/待保存与无POST。完整5文件52 passed，最后新增Origin测试和读取超时后核心10 passed，tsc exit0。
+- repo外D:/Project/Vi/.codex-ui-preview/tasks-live.mjs产生760/1440实组件模拟多任务截图；pageerror=[]、无横向溢出，已查看760图。未修改Python或发真实生成/外部消息。
+- 最后定向审查：summarizing文案改为适用笔记/会议的“生成内容中”；活动状态优先显示allowlist已知stage，未知stage回退status，failed/success绝不被stage覆盖。新增1项RED→GREEN，hook定向10 passed；未扩大测试/增加百分比。

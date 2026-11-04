@@ -32,8 +32,7 @@ import {
 
 const destinations = [
   { path: "/projects", icon: Folder, label: "项目", context: "按项目查看内容" },
-  { path: "/connections", icon: Plug, label: "插件", context: "飞书与 MCP 工具" },
-  { path: "/files", icon: Folder, label: "文件库", context: "当前设备上的原始文件" },
+  { path: "/settings/feishu", icon: Plug, label: "飞书", context: "发布与通知" },
   {
     path: "/notes",
     icon: FileText,

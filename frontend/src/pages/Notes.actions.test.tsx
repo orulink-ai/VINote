@@ -47,3 +47,12 @@ it('retains trash routing and its context through the canonical storage page', (
   expect(target.pathname).toBe('/settings/storage'); expect(target.hash).toBe('#trash');
   expect(decodeURIComponent(target.searchParams.get('returnTo')!)).toBe('/notes?project=项目A#results');
 });
+
+it('each intake click creates an independent draft instead of restoring the current task', () => {
+  mount(); fireEvent.click(screen.getByRole('link', { name: /粘贴链接/ }));
+  const first = new URL(where().path, 'https://local.invalid');
+  expect(first.searchParams.get('intent')).toBe('import');
+  expect(first.searchParams.get('draft')).toBeTruthy();
+  fireEvent.click(screen.getByRole('link', { name: /粘贴链接/ }));
+  expect(new URL(where().path, 'https://local.invalid').searchParams.get('draft')).not.toBe(first.searchParams.get('draft'));
+});

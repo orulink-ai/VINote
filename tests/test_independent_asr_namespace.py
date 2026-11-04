@@ -474,6 +474,11 @@ def test_real_note_pipeline_uses_seed_and_submits_only_remaining_audio(audio_cas
     from app.services.task_generation_context import frozen_generation_context
     from app.services.task_new_generation import NewGenerationConfirmation
     c = audio_case
+    # Exercise historical streamed recovery with a non-meeting presentation.
+    # Meeting-style execution requires whole-recording ASR.
+    c.artifacts.write_json(c.folder / 'request.json', {'request': {
+        'workflow': 'meeting', 'title': '讨论', 'style': 'detailed', 'diarize': False,
+        'model_profile_id': 'stale', 'model_name': 'wrong-default'}})
     # Replace the parent media with real WAV, rebuild the server-hashed context.
     c.original.write_bytes(c.wav.read_bytes())
     c.artifacts.record_source_media(c.folder, c.original, media_kind='audio')

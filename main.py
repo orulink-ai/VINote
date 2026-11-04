@@ -10,6 +10,9 @@ import logging
 
 import uvicorn
 
+from app.media_tools import configure_media_tools
+configure_media_tools()
+
 from app import create_app
 from app.config import settings
 

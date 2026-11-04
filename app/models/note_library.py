@@ -19,6 +19,13 @@ class MeetingSourceResponse(BaseModel):
     recording_started_at: datetime | None = None
 
 
+class OriginalSourceResponse(BaseModel):
+    """Display grouping only; does not authorize reading or regenerating media."""
+    owner_id: str
+    original_id: str
+    canonical_task_id: str
+
+
 class NoteRecordResponse(BaseModel):
     id: str
     title: str
@@ -29,6 +36,7 @@ class NoteRecordResponse(BaseModel):
     generation_client: Literal["mobile", "desktop", "web"] | None = None
     task_id: str | None = None
     meeting_source: MeetingSourceResponse | None = None
+    original_source: OriginalSourceResponse | None = None
     status: str
     scope: NoteScope = "personal"
     team_id: str | None = None

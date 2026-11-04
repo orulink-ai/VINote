@@ -95,7 +95,7 @@ def test_async_upload_persists_selected_workflow(environment, monkeypatch, sourc
     assert saved["request"]["style"] == "meeting"
     assert env.run.call_args.kwargs["req"].workflow == expected
     assert env.run.call_args.kwargs["req"].diarize is desktop
-    assert env.ready.call_count == int(desktop)
+    assert env.ready.call_count == 0
     if desktop:
         assert saved["trace"]["workflow"] == expected
     else:

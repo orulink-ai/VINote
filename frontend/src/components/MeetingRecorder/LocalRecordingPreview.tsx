@@ -1,5 +1,7 @@
 import { formatMeetingTitle } from '../../lib/meetingTitle'
-import { RecordingTitleEditor } from './RecordingTitleEditor'
+import { MeetingDisplayEditor } from './MeetingDisplayEditor'
+import { useMeetingDisplay } from '@/hooks/useMeetingDisplay'
+import { calendarDay } from '@/lib/contentDates'
 import { TranscriptionProgress } from './TranscriptionProgress'
 import { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Download, FileText, Play, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
@@ -24,6 +26,9 @@ const stageCopy: Record<PendingMeeting['processingStatus'], string> = { idle: '�
 export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confirmOnOpen = false, onRecordingUpdated }: LocalRecordingPreviewProps) {
   const { locale } = useI18n(); const zh = locale.startsWith('zh')
   const owner = useAuthStore(state => state.user?.id)
+  const display = useMeetingDisplay(recording.taskId ? owner : undefined)
+  const displayKey = recording.taskId ? `task:${recording.taskId}` : undefined
+  const displayInfo = displayKey ? display[displayKey] : undefined
   const [url, setUrl] = useState(''); const [error, setError] = useState(''); const [deleting, setDeleting] = useState(false); const [expanded, setExpanded] = useState(false)
   const [renamedTitle, setRenamedTitle] = useState('')
   const [confirmDelete, setConfirmDelete] = useState(false)
@@ -54,7 +59,7 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
   useEffect(() => {
     if (confirmOnOpen && recording.processingStatus !== 'completed') { setConfirmGeneration(true); void loadMode() }
   }, [confirmOnOpen, recording.id, recording.ownerId, loadMode])
-  const title = renamedTitle || recording.options.title || formatMeetingTitle(recording.startedAt, '', locale)
+  const title = (displayInfo ? displayInfo.title : renamedTitle || recording.displayTitle || recording.options.title) || formatMeetingTitle(recording.startedAt, '', locale)
   const isVideo = recording.options.meetingType === 'video' || recording.options.screen
   const processing = generating || !['idle', 'completed', 'failed'].includes(recording.processingStatus)
   useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
@@ -123,9 +128,9 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
 
   return <article className="flex min-w-0 flex-col gap-3">
     {expanded ? <div className="border-y bg-muted/20 py-3">{url ? isVideo ? <video src={url} controls preload="metadata" onError={playbackFailed} aria-label={zh ? '录屏回放' : 'Recording playback'} className="max-h-72 w-full rounded-md bg-black" /> : <audio src={url} controls preload="metadata" onError={playbackFailed} aria-label={zh ? '录音回放' : 'Recording playback'} className="w-full" /> : <button type="button" disabled={loading} onClick={() => void load(false)} className="flex min-h-32 w-full flex-col items-center justify-center rounded-md border border-dashed bg-background text-sm text-muted-foreground"><Play className="mb-2 size-5" />{loading ? (zh ? '正在读取文件…' : 'Loading file…') : (zh ? '重新加载并回放' : 'Reload and play')}</button>}</div> : null}
-    <div className="flex flex-col gap-3"><div className="py-2"><div className="flex items-start gap-3">{recording.processingStatus === 'completed' ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : <FileText className="mt-0.5 size-5 text-muted-foreground" />}<div className="min-w-0 flex-1"><p className="text-sm font-medium">{statusText}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{recording.processingStatus === 'failed' ? recording.processingError || (zh ? '原始媒体已保留，可重试。' : 'Original media is preserved and retryable.') : processing ? (zh ? '后台处理中，录制控制已经退出。' : 'Processing in the background; capture controls are closed.') : recording.processingStatus === 'completed' ? (zh ? '在详情中查看带说话人的逐字稿、代表画面证据和纪要。' : 'Open details for transcript, visual evidence and notes.') : (zh ? '原始媒体已保存在本机，可播放、下载或生成纪要。' : 'Original media is saved locally.')}</p></div></div></div>
+    <div className="flex flex-col gap-3"><div className="py-2"><div className="flex items-start gap-3">{recording.processingStatus === 'completed' ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : <FileText className="mt-0.5 size-5 text-muted-foreground" />}<div className="min-w-0 flex-1"><p className="text-sm font-medium">{statusText}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{recording.processingStatus === 'failed' ? recording.processingError || (zh ? '原始媒体已保留，可重试。' : 'Original media is preserved and retryable.') : processing ? (zh ? '后台处理中，录制控制已经退出。' : 'Processing in the background; capture controls are closed.') : recording.processingStatus === 'completed' ? (zh ? isVideo ? '在详情中查看逐字稿、画面证据和纪要。' : '在详情中查看逐字稿和纪要。' : isVideo ? 'Open transcript, visual evidence and notes.' : 'Open transcript and notes.') : (zh ? '原始媒体已保存在本机，可播放、下载或生成纪要。' : 'Original media is saved locally.')}</p></div></div></div>
       {recording.processingStatus === 'transcribing' ? <TranscriptionProgress processedSeconds={recording.processedSeconds} totalSeconds={recording.totalSeconds} etaSeconds={recording.etaSeconds} zh={zh} /> : null}
-      <details className="text-sm"><summary className="cursor-pointer text-muted-foreground">修改记录名称</summary><div className="pt-3"><RecordingTitleEditor recording={recording} title={title} onSaved={setRenamedTitle} /></div></details>
+      <MeetingDisplayEditor sourceKey={displayKey} recording={recording} title={(displayInfo ? displayInfo.title : recording.displayTitle || (recording.titleEdited ? recording.options.title : '')) || ''} date={(displayInfo ? displayInfo.meeting_date : recording.displayDate) || calendarDay(recording.startedAt)} onSaved={() => { void getPendingMeeting(recording.id).then(updated => { if (updated && updated.ownerId === useAuthStore.getState().user?.id) { setRenamedTitle(updated.displayTitle || ''); onRecordingUpdated?.(updated); } }); }} />
       {recording.generationOperation && <p className="text-xs leading-5 text-muted-foreground">本次语音转写：{recording.generationOperation.selection.asrLabel}；总结：{recording.generationOperation.selection.llmLabel}。恢复原任务沿用原选择。</p>}
       {recording.generationConfirmationRequired && recording.processingStatus !== 'failed' && recording.processingError && <p role="status" className="text-sm text-muted-foreground">{recording.processingError}</p>}
       <Dialog open={confirmGeneration} onOpenChange={setConfirmGeneration}><DialogContent closeLabel="关闭模型确认" className="max-h-[85dvh] overflow-y-auto">

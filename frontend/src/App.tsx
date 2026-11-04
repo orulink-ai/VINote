@@ -1,7 +1,7 @@
 import { isMeetingController } from "./lib/meetingController";
 import { MeetingRecorderController } from "./components/MeetingRecorder/MeetingRecorderController";
 import { Suspense, lazy, useEffect } from "react";
-import { BrowserRouter, Navigate, Route, Routes } from "react-router-dom";
+import { BrowserRouter, Navigate, Route, Routes, useLocation } from "react-router-dom";
 import { LoadingState, EmptyState } from "./components/Feedback/ResourceState";
 import { AuthGuard } from "./components/Auth/AuthGuard";
 import { MainLayout } from "./components/Layout/MainLayout";
@@ -20,15 +20,20 @@ const Tasks = lazy(async () => ({
 const StorageSettings = lazy(async () => ({
   default: (await import("./pages/StorageSettings")).StorageSettings,
 }));
-const MCPSettings = lazy(async () => ({
-  default: (await import("./pages/MCPSettings")).MCPSettings,
-}));
 const WorkspaceNote = lazy(async () => ({
   default: (await import("./pages/WorkspaceNote")).WorkspaceNote,
 }));
 const Projects = lazy(() => import('./pages/Projects').then(m => ({ default: m.Projects })));
 const Connections = lazy(() => import('./pages/Connections').then(m => ({ default: m.Connections })));
 const FileLibrary = lazy(() => import('./pages/FileLibrary').then(m => ({ default: m.FileLibrary })));
+function LegacyFilesRoute() {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  if (!params.get('note') && !params.get('file') && !params.get('purpose')) {
+    return <Navigate replace to={'/meetings/files' + location.search + location.hash} state={location.state} />;
+  }
+  return <FileLibrary />;
+}
 const Notes = lazy(async () => ({
   default: (await import("./pages/Notes")).Notes,
 }));
@@ -162,7 +167,9 @@ function App() {
                 <Route path="notes" element={<Notes />} />
                 <Route path="projects" element={<Projects />} />
                 <Route path="connections" element={<Connections />} />
-                <Route path="files" element={<FileLibrary />} />
+                <Route path="files" element={<LegacyFilesRoute />} />
+                <Route path="meetings/files" element={<FileLibrary scope="meeting" />} />
+                <Route path="notes/files" element={<FileLibrary scope="note" />} />
                 <Route path="generate" element={<NoteGenerator />} />
                 <Route path="note/:id" element={<NoteEditor />} />
                 <Route path="workspace/:key" element={<WorkspaceNote />} />
@@ -172,7 +179,7 @@ function App() {
                 />
                 <Route path="settings" element={<Settings />} />
                 <Route path="settings/feishu" element={<FeishuSettings />} />
-                <Route path="settings/mcp" element={<MCPSettings />} />
+                <Route path="settings/mcp" element={<Connections />} />
                 <Route path="settings/storage" element={<StorageSettings />} />
                 <Route path="settings/sync" element={<StorageSettings />} />
                 <Route path="team" element={<Team />} />

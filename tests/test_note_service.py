@@ -203,6 +203,21 @@ class NoteServiceTest(unittest.TestCase):
             self.assertEqual(stages, ["preparing", "transcribing", "transcript_ready", "summarizing",
                                       "enriching_media", "saving_result", "success"])
 
+    def test_audio_only_webm_never_collects_video_evidence(self):
+        with tempfile.TemporaryDirectory() as root:
+            artifacts = TaskArtifactService(Path(root))
+            folder = artifacts.create_task_dir("audio-webm-test")
+            audio = folder / "media" / "source_audio.webm"
+            audio.parent.mkdir()
+            audio.write_bytes(b"original audio")
+            artifacts.record_source_media(folder, audio, media_kind="audio")
+            service = NoteService(transcription_service=FakeTranscriptionService(),
+                                  llm_service=FakeLLMService(), artifact_service=artifacts)
+            with patch("app.services.video_evidence_service.VideoEvidenceService.collect") as collect:
+                service.generate_from_file(str(audio), "audio-webm-test", title="Audio meeting")
+            collect.assert_not_called()
+            assert service.llm_service.summarizer.calls[0]['video_evidence'] is None
+
     def test_uploaded_meeting_video_supplies_original_evidence_without_generated_illustrations(self):
         with tempfile.TemporaryDirectory() as root:
             artifacts = TaskArtifactService(Path(root))
@@ -428,6 +443,30 @@ class NoteServiceTest(unittest.TestCase):
             joined = '\n'.join(logs.output)
             self.assertIn('OSError', joined)
             self.assertNotIn('synthetic private', joined)
+
+    def test_review_attempt_details_are_persisted_for_failed_summary(self):
+        import json
+        from app.llm.meeting_presentation import presentation_state
+        with tempfile.TemporaryDirectory() as root:
+            artifacts = TaskArtifactService(Path(root) / 'output')
+            llm = FakeLLMService()
+            service = NoteService(transcription_service=FakeTranscriptionService(),
+                                  llm_service=llm, artifact_service=artifacts)
+            def fail(**kwargs):
+                state = presentation_state()
+                state.review_attempts_started = 2
+                state.review_attempts_completed = 2
+                state.empty_review_responses = 2
+                state.review_attempt_details = [{'claim_count': 3}, {'claim_count': 3}]
+                raise ValueError('synthetic failure')
+            transcript = TranscriptResult(language='zh', full_text='synthetic source',
+                segments=[TranscriptSegment(start=0, end=2, text='synthetic source')])
+            with patch.object(llm.summarizer, 'summarize', side_effect=fail):
+                with self.assertRaises(ValueError):
+                    service.generate_from_transcript(transcript, 'review-attempts')
+            data = json.loads((artifacts.find_task_dir('review-attempts') /
+                               'meeting_review_diagnostic.json').read_text(encoding='utf-8'))
+            self.assertEqual(data['attempts'], [{'claim_count': 3}, {'claim_count': 3}])
 
     def test_raw_review_write_failure_after_summary_success_is_not_suppressed(self):
         from app.llm.meeting_presentation import presentation_state

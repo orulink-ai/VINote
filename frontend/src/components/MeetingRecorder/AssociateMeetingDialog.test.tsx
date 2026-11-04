@@ -178,7 +178,7 @@ it('announces a confirmed association and focuses the pending tab when the old t
   await choose(); await userEvent.click(screen.getByRole('button', { name: '确认关联' }));
   await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   expect(screen.getByRole('status')).toHaveTextContent('关联已确认');
-  await waitFor(() => expect(screen.getByRole('tab', { name: '待归档' })).toHaveFocus());
+  await waitFor(() => expect(screen.getByRole('tab', { name: '未关联原录制' })).toHaveFocus());
   expect(puts()).toHaveLength(1); expect(done).toHaveBeenCalledOnce();
 });
 

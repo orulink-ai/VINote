@@ -31,6 +31,11 @@ from app.services.transcription_service import TranscriptionService
 logger = logging.getLogger(__name__)
 
 
+def should_partition_audio_summary(segments, *, style, depth, presentation, mode, video):
+    # Meeting length never authorizes splitting the user's source.
+    return False
+
+
 @dataclass(slots=True)
 class PipelineContext:
     task_id: str
@@ -188,9 +193,6 @@ class NoteService:
         step_timings: dict[str, float] = {}
 
         try:
-            if diarize:
-                from app.services.speaker_diarization_service import SpeakerDiarizationService
-                SpeakerDiarizationService.require_ready()
             from app.services.vilab_cloud_service import VILabCloudService
 
             VILabCloudService().validate_ready(user_id, needs_stt=True)
@@ -621,7 +623,8 @@ class NoteService:
             video_kwargs['video_evidence'] = context.video_evidence.align(
                 summary_segments, transcript.metadata.get('speaker_evidence', []))
         from app.llm.source_references import capture_working_draft
-        from app.services.meeting_draft_artifact import save_working_draft
+        from app.services.meeting_draft_artifact import save_working_draft, save_working_draft_retry
+        from app.llm.vilab_llm import VILabLLM
         source_reads_enabled = getattr(llm, 'source_reading_enabled', False) is True
         if source_reads_enabled:
             from app.services.meeting_draft_artifact import save_source_reads
@@ -630,7 +633,7 @@ class NoteService:
         # Diagnostic working material only: never a saved result, a checkpoint
         # authorizing another model call, or evidence of a successful review.
         from app.llm.meeting_presentation import presentation_scope
-        with presentation_scope(getattr(context, 'content_depth', None), getattr(context, 'presentation', None)) as presentation_state, capture_working_draft(lambda text: save_working_draft(self.artifact_service, context.task_dir, text)):
+        with presentation_scope(getattr(context, 'content_depth', None), getattr(context, 'presentation', None)) as presentation_state, capture_working_draft(lambda text: save_working_draft(self.artifact_service, context.task_dir, text), lambda text: save_working_draft_retry(self.artifact_service, context.task_dir, text)):
             try:
                 markdown = llm.summarize(
                     title=context.audio_meta.title,
@@ -649,6 +652,19 @@ class NoteService:
             finally:
                 import sys
                 original_failure = sys.exc_info()[0] is not None
+                if presentation_state.review_attempts_started:
+                    try:
+                        self.artifact_service.write_json(context.task_dir / 'meeting_review_diagnostic.json', {
+                            'protocol': 1,
+                            'attempts_started': presentation_state.review_attempts_started,
+                            'attempts_completed': presentation_state.review_attempts_completed,
+                            'empty_responses': presentation_state.empty_review_responses,
+                            'attempts': presentation_state.review_attempt_details,
+                        })
+                    except Exception as error:
+                        if not original_failure:
+                            raise
+                        logger.warning('Review diagnostic could not be persisted: kind=%s', type(error).__name__)
                 if presentation_state.raw_review is not None:
                     try:
                         self.artifact_service.write_json(context.task_dir / 'meeting_fact_review.json', {

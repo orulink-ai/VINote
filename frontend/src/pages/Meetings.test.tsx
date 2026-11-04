@@ -1,3 +1,4 @@
+vi.mock('@/hooks/useMeetingDisplay', () => ({ useMeetingDisplay: () => ({}), MEETING_DISPLAY_CHANGED: 'vinote-meeting-display-changed' }));
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -25,9 +26,9 @@ vi.mock('@/components/MeetingRecorder/SavedRecordingChoice', () => ({ SavedRecor
 vi.mock('@/components/MeetingRecorder/MicrophoneCheck', () => ({ MicrophoneCheck: () => null }))
 vi.mock('@/components/MeetingRecorder/LocalRecordingPreview', () => ({ LocalRecordingPreview: () => <p>本机原件操作</p> }))
 import { Meetings } from './Meetings'
-import { meetingRecordingTitle } from '@/lib/meetingGroups'
+import { useWorkspaceStore } from '@/stores/workspaceStore'
 const captureTime = (task: string) => new Date(Date.UTC(2026, 9, 10, 7, [...task].reduce((sum, c) => sum + c.charCodeAt(0), 0) % 60)).toISOString()
-const heading = (id: string, state = '已完成', task = 'task-' + id) => `${meetingRecordingTitle(captureTime(task))} · ${state}`
+const heading = (id: string, state = '已完成', _task = 'task-' + id) => `${id} · ${state}`
 
 function note(id: string, archived = false, sourceType = 'meeting_recording', taskId?: string): LibraryNote {
   const canonicalTaskId = taskId || 'task-' + id
@@ -52,6 +53,7 @@ function mount(path = '/meetings') {
 }
 beforeEach(() => {
   vi.clearAllMocks(); sessionStorage.clear()
+  useWorkspaceStore.setState({ owner: 'owner', ready: true, items: [] })
   state.notes = [note('正在使用'), note('已归档纪要', true), note('录屏纪要', true, 'meeting_video'), note('普通文档', true, 'document'), note('名称不是类型', true, 'meeting_unknown')]
   state.recordings = [recording('尚未生成的原录制')]
   state.list.mockImplementation(async () => state.recordings)
@@ -59,13 +61,41 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); sessionStorage.clear() })
 
+it('shows retained failed source without a misleading large empty meeting state', async () => {
+  state.notes = []; state.recordings = []
+  state.api.mockImplementation(async (path: string) => path === '/api/files' ? { items: [{ id: 'task:source', filename: '原会议.wav', purpose: 'meeting', task_id: 'source', processing_status: 'failed' }] } : {})
+  mount()
+  expect(await screen.findByText('处理未完成，原文件已保留。')).toBeInTheDocument()
+  expect(screen.getByText('未命名会议')).toBeInTheDocument()
+  expect(screen.queryByText('还没有会议档案')).not.toBeInTheDocument()
+  expect(screen.getByText('1 场会议')).toBeInTheDocument()
+  expect(screen.queryByText('0 场会议')).not.toBeInTheDocument()
+})
+
+it('offers the trash when a personal meeting is deleted without restoring it automatically', async () => {
+  state.notes = []; state.recordings = []
+  useWorkspaceStore.setState({ items: [{ key: 'desktop-example', deleted: true, source_type: 'meeting_recording' } as never] })
+  mount()
+  const link = await screen.findByRole('link', { name: '前往内容回收站' })
+  expect(link).toHaveAttribute('href', '/settings/storage#trash')
+  expect(useWorkspaceStore.getState().items[0].deleted).toBe(true)
+})
+
+  it('does not add a standalone trash banner without confirmed deleted meetings', async () => {
+    state.notes = []; state.recordings = []
+    useWorkspaceStore.setState({ ready: false, items: [] })
+    mount()
+    expect(screen.queryByRole('link', { name: '前往内容回收站' })).not.toBeInTheDocument()
+    expect(screen.queryByText('有会议内容在回收站。')).not.toBeInTheDocument()
+  })
+
 it('shows every linked meeting dossier including historical personal archived content', async () => {
   mount()
-  await screen.findByRole('button', { name: `${meetingRecordingTitle('2026-10-11T00:00:00Z')} · 未生成` })
-  expect(screen.getByRole('tab', { name: '全部会议' })).toHaveAttribute('aria-selected', 'true')
+  await screen.findByRole('button', { name: '未命名会议 · 未生成' })
+  expect(screen.getByRole('tab', { name: '按日期浏览' })).toHaveAttribute('aria-selected', 'true')
   expect(screen.getByRole('button', { name: heading('正在使用') })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: heading('已归档纪要') })).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: '导入会议文件' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '导入会议' })).toBeInTheDocument()
 })
 it('keeps legacy archived deep links reachable without applying the old personal archive filter', async () => {
   mount('/meetings?archived=1')
@@ -74,10 +104,10 @@ it('keeps legacy archived deep links reachable without applying the old personal
   expect(screen.getByRole('button', { name: heading('录屏纪要') })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: /普通文档|名称不是类型/ })).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: heading('正在使用') })).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: `${meetingRecordingTitle('2026-10-11T00:00:00Z')} · 未生成` })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '未命名会议 · 未生成' })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: '录制会议' })).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: '导入会议文件' })).toBeInTheDocument()
-  expect(screen.getByRole('tab', { name: '全部会议' })).toHaveAttribute('aria-selected', 'true')
+  expect(screen.getByRole('button', { name: '导入会议' })).toBeInTheDocument()
+  expect(screen.getByRole('tab', { name: '按日期浏览' })).toHaveAttribute('aria-selected', 'true')
   expect(screen.queryByText('本机原件操作')).not.toBeInTheDocument()
   expect(state.update).not.toHaveBeenCalled()
   expect(state.api.mock.calls.every(([, options]) => !options?.method)).toBe(true)
@@ -86,12 +116,15 @@ it('preserves project/query/hash and the meeting status filter when switching to
   state.notes.push({ ...note('未关联旧稿', true), taskId: undefined, meetingSource: undefined })
   mount('/meetings?project=Review&filter=processing#list')
   const user = userEvent.setup()
+  await user.click(screen.getByRole('button', { name: '筛选会议' }))
   await user.click(screen.getByRole('tab', { name: '需处理' }))
-  await user.click(screen.getByRole('tab', { name: '待归档' }))
+  await user.click(screen.getByRole('button', { name: '完成筛选' }))
+  await user.click(screen.getByRole('tab', { name: '未关联原录制' }))
   expect(screen.getByLabelText('测试位置')).toHaveTextContent('project=Review&filter=processing&view=pending#list')
   expect(screen.getByRole('button', { name: /查看纪要 · 未关联旧稿/ })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: heading('已归档纪要') })).not.toBeInTheDocument()
-  await user.click(screen.getByRole('tab', { name: '全部会议' }))
+  await user.click(screen.getByRole('tab', { name: '按日期浏览' }))
+  await user.click(screen.getByRole('button', { name: /筛选会议/ }))
   expect(screen.getByRole('tab', { name: '需处理' })).toHaveAttribute('aria-selected', 'true')
   expect(screen.getByLabelText('测试位置')).not.toHaveTextContent('view=pending')
   expect(screen.getByLabelText('测试位置')).toHaveTextContent('project=Review&filter=processing#list')
@@ -109,14 +142,14 @@ it('keeps old and new archive flags inside one dossier and out of pending associ
   const old = note('较早归档历史', true, 'meeting_recording', 'same-task')
   const current = { ...note('当前会议', false, 'meeting_recording', 'same-task'), updatedAt: '2026-10-12T00:00:00Z' }
   state.notes = [old, current]; mount('/meetings?archived=1')
-  expect(await screen.findByRole('button', { name: heading('较早归档历史', '已完成', 'same-task') })).toBeInTheDocument()
+  expect(await screen.findByRole('button', { name: heading('当前会议', '已完成', 'same-task') })).toBeInTheDocument()
   expect(document.querySelectorAll('[data-meeting-row-ids]')).toHaveLength(2) // the separate retained recording also remains visible
   expect(screen.getByText(/^关联纪要（2条）/)).toBeInTheDocument()
-  await userEvent.click(screen.getByText(/^关联纪要（2条）/))
+  await userEvent.click(screen.getByText(/^关联纪要（2条）/).closest('details')!.previousElementSibling as HTMLElement)
   expect(screen.getByRole('button', { name: /查看纪要 · 较早归档历史/ })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /查看纪要 · 当前会议/ })).toBeInTheDocument()
-  await userEvent.click(screen.getByRole('tab', { name: '待归档' }))
-  expect(screen.getByText('暂无待归档内容')).toBeInTheDocument()
+  await userEvent.click(screen.getByRole('tab', { name: '未关联原录制' }))
+  expect(screen.getByText('暂无未关联原录制内容')).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: /查看纪要/ })).not.toBeInTheDocument()
 })
 it('retains every version and original under the same dossier despite historical archive flags', async () => {
@@ -126,9 +159,9 @@ it('retains every version and original under the same dossier despite historical
   state.recordings = [{ ...recording('保留原件'), taskId: 'same-task', noteId: current.id }]
   const before = JSON.stringify({ notes: state.notes, recordings: state.recordings })
   mount('/meetings?archived=1'); await waitFor(() => expect(state.list).toHaveBeenCalled())
-  expect(await screen.findAllByRole('button', { name: heading('保留原件', '已完成', 'same-task') })).toHaveLength(1)
+  expect(await screen.findAllByRole('button', { name: heading('当前归档会议', '已完成', 'same-task') })).toHaveLength(1)
   expect(document.querySelectorAll('[data-meeting-row-ids]')).toHaveLength(1)
-  await userEvent.click(screen.getByText('关联纪要（2条）与原录制'))
+  await userEvent.click(screen.getByText('关联纪要（2条）与原录制').closest('details')!.previousElementSibling as HTMLElement)
   expect(screen.getByRole('button', { name: /查看纪要 · 较早活动历史/ })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /查看纪要 · 当前归档会议/ })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /查看原录制 · 保留原件/ })).toBeInTheDocument()
@@ -139,9 +172,9 @@ it('clears search within pending association without changing the dossier view o
   state.notes.push({ ...note('未关联旧稿', true), taskId: undefined, meetingSource: undefined })
   mount('/meetings?view=pending')
   await userEvent.type(screen.getByRole('textbox', { name: '搜索记录' }), 'missing')
-  expect(screen.getByText('没有匹配的待归档内容')).toBeInTheDocument()
+  expect(screen.getByText('没有匹配的未关联原录制内容')).toBeInTheDocument()
   await userEvent.click(screen.getByRole('button', { name: '清除筛选' }))
-  expect(within(screen.getByRole('tablist', { name: '会议档案视图' })).getByRole('tab', { name: '待归档' })).toHaveAttribute('aria-selected', 'true')
+  expect(within(screen.getByRole('tablist', { name: '会议档案视图' })).getByRole('tab', { name: '未关联原录制' })).toHaveAttribute('aria-selected', 'true')
   expect(screen.getByRole('button', { name: /查看纪要 · 未关联旧稿/ })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: heading('已归档纪要') })).not.toBeInTheDocument()
 })
@@ -219,3 +252,20 @@ it('renders a default-done retained placeholder from its failed task rather than
   expect(state.api).toHaveBeenCalledWith('/api/task/failed-capture', expect.objectContaining({ signal: expect.any(AbortSignal) }))
   expect(state.api.mock.calls.every(([, init]) => !init?.method)).toBe(true)
 })
+
+it('import action opens a new independent import draft and keeps return location', async () => {
+  mount('/meetings?date=2026-11-04');
+  await userEvent.click(screen.getByRole('button', { name: '导入会议' }));
+  const location = JSON.parse(screen.getByLabelText('测试位置').textContent!);
+  const url = new URL(location.path, 'https://local.invalid');
+  expect(url.searchParams.get('intent')).toBe('import');
+  expect(url.searchParams.get('draft')).toMatch(/^[a-f0-9-]{36}$/);
+  expect(location.state.returnTo).toBe('/meetings?date=2026-11-04');
+});
+
+it('keeps one recording and one import entry without a competing originals entry', async () => {
+  mount('/meetings');
+  expect(await screen.findByRole('button', { name: '录制会议' })).toBeVisible();
+  expect(screen.getByRole('button', { name: '导入会议' })).toBeVisible();
+  expect(screen.queryByRole('button', { name: '会议原文件' })).toBeNull();
+});

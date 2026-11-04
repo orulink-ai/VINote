@@ -26,7 +26,7 @@ from app.services.feishu_service import FeishuError, FeishuService
 
 BINDING = {"owner": "alice", "connection_id": "synthetic-connection", "sender_open_id": "ou_sender",
            "app_id": "cli_synthetic", "tenant_key": "synthetic-tenant"}
-ARGS = ["contact", "+search-user", "--has-chatted", "--exclude-external-users",
+ARGS = ["contact", "+search-user", "--has-chatted",
         "--page-size", "30", "--as", "user", "--json"]
 
 
@@ -245,3 +245,91 @@ def test_refresh_endpoint_exposes_contact_page_has_more_and_partial(catalog, mon
     assert response.json()["partial"] is True and response.json()["has_more"] is True
     assert {item["kind"] for item in response.json()["objects"]} == {"contact", "group"}
     assert len(catalog.calls) == 1
+
+
+def test_refresh_includes_visible_external_contacts(catalog, monkeypatch):
+    def read(owner, args, **kwargs):
+        assert '--exclude-external-users' not in args
+        return page([{'open_id': 'ou_external', 'localized_name': 'External',
+                      'is_cross_tenant': True, 'has_chatted': True}], False)
+    monkeypatch.setattr(cli, 'run', read)
+    result = catalog.service.refresh_objects('alice')
+    assert result['objects'][0]['id'] == 'ou_external'
+
+
+def test_named_search_does_not_require_prior_chat_or_invent_pagination(catalog, monkeypatch):
+    def read(owner, args, **kwargs):
+        assert args == ['contact', '+search-user', '--query', 'Lookup', '--page-size', '30', '--as', 'user', '--json']
+        return page([{'open_id': 'ou_found', 'localized_name': 'Lookup', 'has_chatted': False}], True)
+    monkeypatch.setattr(cli, 'run', read)
+    result = catalog.service.refresh_objects('alice', query=' Lookup ')
+    assert result['has_more'] is True
+    assert result['objects'][0]['id'] == 'ou_found'
+
+
+@pytest.mark.parametrize('query', ['x' * 51, 'bad\x00query', None])
+def test_bad_query_does_not_dispatch(catalog, query):
+    with pytest.raises(FeishuError):
+        catalog.service.refresh_objects('alice', query=query)
+    assert catalog.calls == []
+
+
+@pytest.mark.parametrize('query', ['Same Name', '  same name  '])
+def test_real_name_search_keeps_uncached_same_name_results(catalog, monkeypatch, query):
+    catalog.cache.record_objects('alice', BINDING, [{'id': 'ou_known', 'name': 'Same Name', 'kind': 'contact'}])
+    users = [{'open_id': 'ou_known', 'name': 'Same Name', 'selection_token': 'proof-a'},
+             {'open_id': 'ou_new', 'name': 'Same Name', 'selection_token': 'proof-b'}]
+    monkeypatch.setattr(FeishuService, 'contacts', lambda *args: {'items': deepcopy(users), 'has_more': False, 'page_token': ''})
+    result = catalog.service.contacts('alice', query)
+    assert result['items'] == users
+
+
+def test_explicit_alias_still_filters_to_its_verified_target(catalog, monkeypatch):
+    catalog.cache.record_objects('alice', BINDING, [{'id': 'ou_known', 'name': 'Same Name', 'kind': 'contact'}])
+    catalog.cache.add_alias('alice', BINDING, 'Colleague', 'ou_known')
+    calls = []
+    def search(self, owner, query, size, cursor):
+        calls.append(query)
+        return {'items': [{'open_id': identifier, 'name': 'Same Name', 'selection_token': 'fresh-proof'}
+                          for identifier in ('ou_known', 'ou_other')], 'has_more': False, 'page_token': ''}
+    monkeypatch.setattr(FeishuService, 'contacts', search)
+    result = catalog.service.contacts('alice', 'Colleague')
+    assert calls == ['Same Name']
+    assert [item['open_id'] for item in result['items']] == ['ou_known']
+
+
+def test_empty_query_reads_recent_visible_people_and_mints_fresh_bound_proofs(catalog, monkeypatch):
+    from cryptography.fernet import Fernet
+    monkeypatch.setattr(settings, 'model_profile_encryption_key', Fernet.generate_key().decode())
+    catalog.cache.record_objects('alice', BINDING, [{'id': 'ou_stale', 'name': 'Old cached person', 'kind': 'contact'}])
+    result = catalog.service.contacts('alice', '')
+    assert [item['open_id'] for item in result['items']] == ['ou_alpha']
+    assert result['partial'] is True and result['search_required'] is True
+    assert result['has_more'] is False and result['page_token'] == ''
+    proof = catalog.service.validate_contacts('alice', [{'open_id': result['items'][0]['open_id'], 'selection_token': result['items'][0]['selection_token']}])
+    assert proof[0]['name'] == '合成成员甲'
+    assert len(catalog.calls) == 1 and 'groups_read' not in catalog.events
+
+
+def test_recent_results_reject_connection_change_during_cli_read(catalog, monkeypatch):
+    def read(*args, **kwargs):
+        catalog.binding['connection_id'] = 'changed'
+        return page()
+    monkeypatch.setattr(cli, 'run', read)
+    with pytest.raises(FeishuError) as error:
+        catalog.service.contacts('alice', '')
+    assert error.value.code == 'connection_changed'
+
+
+def test_contacts_http_route_allows_explicit_empty_query_for_recent_cli_people(catalog, monkeypatch):
+    from app.routers import feishu as routes
+    from cryptography.fernet import Fernet
+    monkeypatch.setattr(settings, 'model_profile_encryption_key', Fernet.generate_key().decode())
+    monkeypatch.setattr(routes, 'proxy', lambda *args: (False, None))
+    app = FastAPI(); app.include_router(routes.router, prefix='/api')
+    app.dependency_overrides[routes.principal] = lambda: ('alice', 'alice')
+    with TestClient(app) as client:
+        response = client.get('/api/feishu/contacts', params={'query': ''})
+    assert response.status_code == 200
+    assert response.json()['items'][0]['selection_token']
+    assert response.headers['cache-control'] == 'no-store'

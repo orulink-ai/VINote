@@ -14,15 +14,15 @@ export function ConversationContent({ className, ...props }: React.ComponentProp
 }
 
 export function ConversationEmptyState({ title, description, icon }: { title: string; description?: string; icon?: React.ReactNode }) {
-  return <div className="flex flex-1 animate-in flex-col items-center justify-center gap-4 px-6 py-16 text-center fade-in zoom-in-95 duration-300"><div className="flex size-11 items-center justify-center rounded-full bg-muted text-muted-foreground">{icon}</div><div><p className="font-medium">{title}</p>{description ? <p className="mt-1 max-w-sm text-sm leading-6 text-muted-foreground">{description}</p> : null}</div></div>
+  return <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 py-16 text-center"><div className="flex size-10 items-center justify-center rounded-full bg-muted text-muted-foreground">{icon}</div><div><p className="font-medium">{title}</p>{description ? <p className="mt-1 max-w-sm text-sm leading-6 text-muted-foreground">{description}</p> : null}</div></div>
 }
 
 export function ConversationScrollButton() {
   const { isAtBottom, scrollToBottom } = useStickToBottomContext()
   if (isAtBottom) return null
-  return <Button variant="secondary" size="icon" className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full shadow-lg animate-in fade-in zoom-in-95" onClick={() => scrollToBottom()} aria-label="Scroll to latest"><ArrowDown /></Button>
+  return <Button variant="secondary" size="icon" className="absolute bottom-4 left-1/2 -translate-x-1/2 rounded-full shadow-sm" onClick={() => scrollToBottom()} aria-label="Scroll to latest"><ArrowDown /></Button>
 }
 
-export function ConversationMessage({ speaker, time, children, active, activeLabel = 'Live' }: { speaker: string; time?: string; children: React.ReactNode; active?: boolean; activeLabel?: string }) {
-  return <article aria-current={active ? 'true' : undefined} className={cn('group flex animate-in gap-4 border-b px-4 py-4 fade-in slide-in-from-bottom-2 duration-300 transition-all hover:bg-muted/35', active && 'bg-muted/60')}><Avatar className="size-9 shrink-0"><AvatarFallback className="text-xs font-semibold">{speaker.slice(0, 2)}</AvatarFallback></Avatar><div className="min-w-0 flex-1"><div className="mb-1.5 flex items-center gap-2"><span className="text-sm font-semibold">{speaker}</span>{time ? <span className="text-xs tabular-nums text-muted-foreground">{time}</span> : null}{active ? <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">{activeLabel}</Badge> : null}</div><div className="text-sm leading-6 text-foreground/90">{children}</div></div></article>
+export function ConversationMessage({ speaker, time, children, active, activeLabel = 'Live', continuation = false }: { speaker: string; time?: string; children: React.ReactNode; active?: boolean; activeLabel?: string; continuation?: boolean }) {
+  return <article aria-current={active ? 'true' : undefined} className={cn('group flex gap-4 px-4 transition-colors duration-150 hover:bg-muted/35', continuation ? 'py-1' : 'border-t pt-4 pb-1', active && 'bg-muted/60')}>{continuation ? <div className="size-9 shrink-0" aria-hidden="true" /> : <Avatar className="size-9 shrink-0"><AvatarFallback className="text-xs font-semibold">{speaker.slice(0, 2)}</AvatarFallback></Avatar>}<div className="min-w-0 flex-1"><div className="mb-1.5 flex items-center gap-2">{!continuation && <span className="text-sm font-semibold">{speaker}</span>}{time ? <span className="text-xs tabular-nums text-muted-foreground">{time}</span> : null}{active ? <Badge variant="secondary" className="h-5 px-1.5 text-[10px]">{activeLabel}</Badge> : null}</div><div className="text-sm leading-6 text-foreground/90">{children}</div></div></article>
 }

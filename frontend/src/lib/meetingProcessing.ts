@@ -1,3 +1,4 @@
+import { trackGenerationNotification } from './taskNotifications'
 import { modelEligible, type ModelEligibilityInput } from './modelEligibility'
 import { meetingReady, type RecordedAudioModel } from './recordedAudioPolicy'
 import { getPendingMeeting, getRecordedAudio, updatePendingMeeting, type PendingMeeting, type MeetingGenerationSelection } from './audioStorage'
@@ -125,6 +126,9 @@ async function run(recording: PendingMeeting, language: string, audio?: Blob, co
       meetingSessionId: id, meetingMode: 'minutes', meetingType: pending.options.meetingType,
     }, { onStage })
     await persist({ taskId: response.task_id, processingStatus: 'preparing_media' })
+    if (!resumed) {
+      try { trackGenerationNotification(pending.ownerId, { taskId: response.task_id, recordingId: id, meeting: true, mode: 'file' }) } catch { /* Notification storage cannot fail an accepted recording. */ }
+    }
     if (useAuthStore.getState().user?.id !== pending.ownerId) throw new Error('账号已切换，请用原账号恢复任务保存。')
     const library = useNoteLibraryStore.getState()
     draftId = pending.draftNoteId

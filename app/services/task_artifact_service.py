@@ -224,9 +224,9 @@ class TaskArtifactService:
             payload["retryable"] = retryable
         if error_code is not None:
             from app.services.asr_stream_service import _KNOWN_CODES
-            from app.services.summary_failure import SUMMARY_UNCONFIRMED_CODE
+            from app.services.summary_failure import SUMMARY_UNCONFIRMED_CODE, SUMMARY_OUTPUT_INVALID_CODE
             from app.services.summary_preflight import SUMMARY_PREFLIGHT_CODES
-            if error_code in _KNOWN_CODES or error_code == SUMMARY_UNCONFIRMED_CODE or error_code in SUMMARY_PREFLIGHT_CODES:
+            if error_code in _KNOWN_CODES or error_code in (SUMMARY_UNCONFIRMED_CODE, SUMMARY_OUTPUT_INVALID_CODE) or error_code in SUMMARY_PREFLIGHT_CODES:
                 payload["error_code"] = error_code
         if failed_stage:
             payload["failed_stage"] = failed_stage
@@ -270,13 +270,13 @@ class TaskArtifactService:
                             payload["retryable"] = False
                     payload.setdefault("retryable", True)
                     from app.services.summary_failure import (
-                        SUMMARY_UNCONFIRMED_CODE, safe_summary_failure_context,
+                        SUMMARY_UNCONFIRMED_CODE, SUMMARY_OUTPUT_INVALID_CODE, safe_summary_failure_context,
                     )
-                    if payload.get('error_code') == SUMMARY_UNCONFIRMED_CODE:
+                    if payload.get('error_code') in (SUMMARY_UNCONFIRMED_CODE, SUMMARY_OUTPUT_INVALID_CODE):
                         summary_context = safe_summary_failure_context(summary_failure_context)
                         if (summary_context is None and not restarting
                                 and previous.get('status') == 'failed'
-                                and previous.get('error_code') == SUMMARY_UNCONFIRMED_CODE):
+                                and previous.get('error_code') == payload.get('error_code')):
                             summary_context = safe_summary_failure_context(previous.get('summary_failure_context'))
                         if summary_context is not None:
                             payload['summary_failure_context'] = summary_context

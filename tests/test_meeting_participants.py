@@ -1194,3 +1194,147 @@ def test_sibling_resume_cas_cannot_overwrite_a_later_execution_state(waiting_mee
         if race == "accepted": assert row.job_id == "real-accepted-job"
         if race == "lease": assert row.lease_until == 1e20
         assert json.loads(row.payload) == ({**payload, "title": "concurrent replacement"} if race == "payload" else payload)
+
+
+def speaker_fixture(saved):
+    value = transcript("我是测试甲。")
+    value['segments'][0]['speaker_id'] = 'speaker_1'
+    (saved.folder / 'transcript.json').write_text(json.dumps(value), encoding='utf-8')
+    return value
+
+
+def test_speaker_projection_is_explainable_and_never_confirms_identity():
+    value = transcript('我是测试甲。')
+    value['segments'][0]['speaker_id'] = 'speaker_1'
+    words = snapshot(); words['objects'][1]['name'] = '测试甲'
+    result = module.resolve_attendance(words, {'transcript': value})
+    speaker, = result['speakers']
+    assert speaker['speaker_id'] == 'speaker_1'
+    assert speaker['samples'] == [{'text': '我是测试甲。', 'start': 0, 'end': 4, 'association': 'segment_speaker'}]
+    assert {c['open_id'] for c in speaker['candidates']} == {'ou_synthetic_a', 'ou_synthetic_b'}
+    assert all('name_collision' in c['reasons'] for c in speaker['candidates'])
+    assert result['contacts'] == []
+
+
+def test_independent_turn_overlap_does_not_claim_sentence_attribution():
+    value = transcript('我是测试甲。')
+    result = module.resolve_attendance(snapshot(), {'transcript': value, 'speaker': [{'speaker_id': 'spk2', 'start': 0, 'end': 2}]})
+    speaker, = result['speakers']
+    assert speaker['samples'][0]['association'] == 'time_overlap'
+    assert speaker['samples'][0]['end'] == 4
+    assert 'time_overlap_not_identity' in speaker['candidates'][0]['reasons']
+
+
+def test_speaker_mapping_persisted_without_tokens_and_legacy_updates_preserve_or_clear(confirmable):
+    saved = confirmable; speaker_fixture(saved)
+    matches = [{'speaker_id': 'speaker_1', 'open_id': 'ou_synthetic_a'}]
+    view = confirm(saved, speaker_matches=matches)
+    assert view['confirmation']['speaker_matches'] == matches
+    assert confirm(saved)['confirmation']['speaker_matches'] == matches
+    assert resolve(saved)['speaker_matches'] == matches
+    assert confirm(saved, speaker_matches=[])['confirmation']['speaker_matches'] == []
+    confirm(saved, speaker_matches=matches)
+    assert confirm(saved, selections=[])['confirmation']['speaker_matches'] == []
+
+
+@pytest.mark.parametrize('matches', [[{'speaker_id': 'invented', 'open_id': 'ou_synthetic_a'}], [{'speaker_id': 'speaker_1', 'open_id': 'ou_synthetic_b'}], [{'speaker_id': 'speaker_1', 'open_id': 'ou_synthetic_a'}]*2, [{'speaker_id': '../bad', 'open_id': 'ou_synthetic_a'}]])
+def test_mapping_requires_real_speaker_same_request_contact_and_unique_assignment(confirmable, matches):
+    speaker_fixture(confirmable)
+    with pytest.raises(HTTPException) as error:
+        confirm(confirmable, speaker_matches=matches)
+    assert error.value.status_code == 422
+    assert module.get_meeting_participants(confirmable.service, confirmable.owner, confirmable.key)['confirmation']['revision'] == 0
+
+
+def test_mapping_not_exposed_after_evidence_or_connection_changes(confirmable):
+    saved = confirmable; speaker_fixture(saved)
+    confirm(saved, speaker_matches=[{'speaker_id': 'speaker_1', 'open_id': 'ou_synthetic_a'}])
+    (saved.folder / 'transcript.json').write_text(json.dumps(transcript('不同材料。')), encoding='utf-8')
+    assert module.get_meeting_participants(saved.service, saved.owner, saved.key)['confirmation']['speaker_matches'] == []
+    assert resolve(saved).get('speaker_matches', []) == []
+    speaker_fixture(saved); saved.binding['connection_id'] = 'changed'
+    assert module.get_meeting_participants(saved.service, saved.owner, saved.key)['confirmation']['speaker_matches'] == []
+
+
+def test_http_speaker_mapping_contract(participants_api):
+    saved, client, _ = participants_api; speaker_fixture(saved)
+    path = '/api/meeting-participants/' + saved.key
+    view = client.get(path).json()
+    assert view['speakers'][0]['speaker_id'] == 'speaker_1'
+    matches = [{'speaker_id': 'speaker_1', 'open_id': 'ou_synthetic_a'}]
+    response = client.put(path, json={**http_payload(saved, view), 'speaker_matches': matches})
+    assert response.status_code == 200
+    assert response.json()['confirmation']['speaker_matches'] == matches
+
+
+def test_confirmed_speaker_context_is_read_only_and_scoped(confirmable):
+    saved = confirmable; speaker_fixture(saved)
+    confirm(saved, speaker_matches=[{'speaker_id': 'speaker_1', 'open_id': 'ou_synthetic_a'}])
+    saved.events.clear()
+    value = module.confirmed_speaker_context(saved.service, saved.owner, saved.key)
+    assert value['speaker_matches'] == [{'speaker_id': 'speaker_1', 'open_id': 'ou_synthetic_a', 'name': '测试甲'}]
+    assert value['canonical_task_id'] == saved.task
+    assert value['confirmation_revision'] == 1
+    assert saved.events == []
+    saved.binding['connection_id'] = 'new-connection'
+    assert module.confirmed_speaker_context(saved.service, saved.owner, saved.key)['speaker_matches'] == []
+
+
+def test_estimated_speaker_sentence_labels_are_not_real_speaker_ids():
+    value = transcript('合成话语。')
+    value['segments'][0].update(speaker_id='estimated', timestamp_estimated=True)
+    assert module.resolve_attendance(snapshot(), {'transcript': value})['speakers'] == []
+
+
+@pytest.mark.parametrize('speaker', ['speaker_unknown', 'speaker_overlap'])
+def test_unknown_and_overlap_sentinels_cannot_be_confirmed_as_one_person(confirmable, speaker):
+    value = speaker_fixture(confirmable); value['segments'][0]['speaker_id'] = speaker
+    (confirmable.folder / 'transcript.json').write_text(json.dumps(value), encoding='utf-8')
+    view = module.get_meeting_participants(confirmable.service, confirmable.owner, confirmable.key)
+    assert view['speakers'] == []
+    with pytest.raises(HTTPException) as error:
+        confirm(confirmable, speaker_matches=[{'speaker_id': speaker, 'open_id': 'ou_synthetic_a'}])
+    assert error.value.status_code == 422
+
+
+def test_late_self_introduction_is_associated_and_prioritized_without_more_preview_samples():
+    segments = [{'text': '普通讨论。', 'start': i, 'end': i+1, 'speaker_id': 'speaker_1'} for i in range(12)]
+    segments[-1]['text'] = '我是测试甲。'
+    value = {'full_text': ''.join(s['text'] for s in segments), 'segments': segments}
+    result = module.resolve_attendance(snapshot(), {'transcript': value})
+    speaker, = result['speakers']
+    assert speaker['candidates'][0]['open_id'] == 'ou_synthetic_a'
+    assert len(speaker['samples']) == 3
+    assert speaker['samples'][0]['text'] == '我是测试甲。'
+
+
+def test_verified_frame_ocr_candidates_only_apply_at_overlapping_speaker_times():
+    value = {'full_text': '先讨论。再讨论。', 'segments': [
+        {'text': '先讨论。', 'start': 0, 'end': 4, 'speaker_id': 'speaker_1'},
+        {'text': '再讨论。', 'start': 4, 'end': 8, 'speaker_id': 'speaker_2'}]}
+    result = module.resolve_attendance(snapshot(), {'transcript': value,
+        'visual': {'text': '测试乙。'}, 'visual_frames': [{'text': '测试甲。', 'offsets': [2]}]})
+    speakers = {s['speaker_id']: s for s in result['speakers']}
+    assert [c['open_id'] for c in speakers['speaker_1']['candidates']] == ['ou_synthetic_a']
+    assert 'time_overlap_not_identity' in speakers['speaker_1']['candidates'][0]['reasons']
+    assert speakers['speaker_2']['candidates'] == []
+    assert result['contacts'] == []
+
+
+def test_late_independent_turn_candidate_survives_preview_budget():
+    segments = [{'text': '普通讨论。', 'start': i, 'end': i+1} for i in range(12)]
+    segments[-1]['text'] = '我是测试甲。'
+    value = {'full_text': ''.join(s['text'] for s in segments), 'segments': segments}
+    turns = [{'speaker_id': 'speaker_1', 'start': i, 'end': i+1} for i in range(12)]
+    speaker, = module.resolve_attendance(snapshot(), {'transcript': value, 'speaker': turns})['speakers']
+    assert speaker['samples'][0]['text'] == '我是测试甲。'
+    assert speaker['samples'][0]['association'] == 'time_overlap'
+    assert speaker['candidates'][0]['open_id'] == 'ou_synthetic_a'
+
+
+def test_frame_overlap_uses_speaker_turn_not_broader_asr_sample_window():
+    value = {'full_text': '普通讨论。', 'segments': [{'text': '普通讨论。', 'start': 0, 'end': 10}]}
+    result = module.resolve_attendance(snapshot(), {'transcript': value,
+        'speaker': [{'speaker_id': 'speaker_1', 'start': 0, 'end': 1}],
+        'visual_frames': [{'text': '测试甲。', 'offsets': [9]}]})
+    assert result['speakers'][0]['candidates'] == []

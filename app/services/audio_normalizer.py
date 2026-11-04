@@ -18,7 +18,7 @@ both faster-whisper and openai-whisper can decode without warnings.
 
 The function is idempotent: if the input is already a valid audio file that
 ffprobe can read without errors, it is left untouched. The output is always
-16 kHz mono PCM WAV at `upload_path.with_suffix('.wav')`, which both the
+16 kHz mono PCM WAV at a unique sibling path, which both the
 existing transcription path and faster-whisper consume natively.
 
 The original upload is preserved next to the normalized file so the user can
@@ -29,6 +29,7 @@ from __future__ import annotations
 import logging
 import shutil
 import subprocess
+import uuid
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -109,7 +110,7 @@ def normalize_audio_for_transcription(upload_path: Path) -> Path:
 
     If the uploaded file is already a readable audio file, returns it
     unchanged. If ffprobe rejects it (corrupt header, partial cluster, etc.)
-    this runs an ffmpeg recovery re-encode into ``upload_path.with_suffix('.wav')``
+    this runs an ffmpeg recovery re-encode into a unique WAV file
     next to the original and returns the WAV path.
     """
     if not upload_path.exists():
@@ -122,7 +123,9 @@ def normalize_audio_for_transcription(upload_path: Path) -> Path:
         "[AudioNormalizer] %s is unreadable by ffprobe; re-encoding to WAV",
         upload_path.name,
     )
-    wav_target = upload_path.with_suffix(".wav")
+    # A distinct name is required even for a damaged .wav input; never let
+    # ffmpeg overwrite the original or an unrelated existing recording.
+    wav_target = upload_path.with_name(f"{upload_path.stem}.recovered-{uuid.uuid4().hex}.wav")
     if _reencode_to_wav(upload_path, wav_target):
         return wav_target
 

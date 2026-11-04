@@ -89,6 +89,8 @@ export interface MeetingGenerationSelection {
 }
 
 export interface PendingMeeting {
+  displayTitle?: string
+  displayDate?: string | null
   id: string
   ownerId: string
   workspace: import('../stores/teamStore').WorkspaceSelection

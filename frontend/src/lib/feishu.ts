@@ -1,7 +1,7 @@
 import { apiJson } from "./api";
 import type { FormattingReceipt } from './feishuFormatting';
 import { useAuthStore } from '@/stores/authStore';
-import { publishScope, markPublishAttempt, type PublishAttempt } from './feishuPublishReceipt';
+import { publishScope, markPublishAttempt, markPublishRejected, type PublishAttempt } from './feishuPublishReceipt';
 import { createConnectorPluginStore } from './connectorPlugins';
 import { feishuVerificationUnavailable } from './feishuConnectionState';
 
@@ -64,7 +64,7 @@ export const completeFeishuAuthorization = (flow_id: string) => apiJson<FeishuAu
 
 export type FeishuObject = { id: string; name: string; kind: 'contact' | 'group' };
 export type FeishuObjectAlias = { id: string; alias: string; target_id: string; target_name: string; kind: 'contact' | 'group' };
-export type FeishuObjectHotwords = { objects: FeishuObject[]; aliases: FeishuObjectAlias[]; partial: boolean; updated_at?: number };
+export type FeishuObjectHotwords = { objects: FeishuObject[]; aliases: FeishuObjectAlias[]; partial: boolean; updated_at?: number; has_more?: boolean };
 const validObjectKind = (value: unknown) => value === 'contact' || value === 'group';
 const nonempty = (value: unknown): value is string => typeof value === 'string' && !!value.trim();
 export const normalizeObjectAlias = (alias: string) => alias.normalize('NFKC').trim().toLocaleLowerCase();
@@ -72,13 +72,14 @@ function validateObjectHotwords(value: FeishuObjectHotwords): FeishuObjectHotwor
   if (!value || !Array.isArray(value.objects) || !Array.isArray(value.aliases) || typeof value.partial !== 'boolean'
     || value.objects.some(item => !item || !nonempty(item.id) || !nonempty(item.name) || !validObjectKind(item.kind))
     || value.aliases.some(item => !item || !nonempty(item.id) || !nonempty(item.alias) || !nonempty(item.target_id) || !nonempty(item.target_name) || !validObjectKind(item.kind))
+    || value.has_more !== undefined && typeof value.has_more !== 'boolean'
     || new Set(value.objects.map(item => item.id)).size !== value.objects.length
     || new Set(value.aliases.map(item => item.id)).size !== value.aliases.length
     || value.updated_at !== undefined && (!Number.isFinite(value.updated_at) || value.updated_at < 0)) throw new Error('对象目录响应未核验，请重新读取');
   return value;
 }
 export const feishuObjectHotwords = async () => validateObjectHotwords(await apiJson<FeishuObjectHotwords>('/api/feishu/object-hotwords', { cache: 'no-store' }));
-export const refreshFeishuObjectHotwords = async () => validateObjectHotwords(await apiJson<FeishuObjectHotwords>('/api/feishu/object-hotwords/refresh', { method: 'POST' }));
+export const refreshFeishuObjectHotwords = async (query = '') => validateObjectHotwords(await apiJson<FeishuObjectHotwords>('/api/feishu/object-hotwords/refresh' + (query.trim() ? '?' + new URLSearchParams({ query: query.trim() }) : ''), { method: 'POST' }));
 export const bindFeishuObjectAlias = async (alias: string, target_id: string) => validateObjectHotwords(await apiJson<FeishuObjectHotwords>('/api/feishu/object-hotwords', { method: 'POST', body: JSON.stringify({ alias, target_id }) }));
 export const deleteFeishuObjectAlias = async (id: string) => validateObjectHotwords(await apiJson<FeishuObjectHotwords>('/api/feishu/object-hotwords/' + encodeURIComponent(id), { method: 'DELETE' }));
 export type FeishuGroup = { chat_id: string; name: string };
@@ -100,7 +101,7 @@ export function automaticConsentNeeded(next: AutomaticTarget, saved?: AutomaticT
   const contactIds = (value?: AutomaticTarget) => JSON.stringify([...new Set((value?.contacts || []).map(contact => contact.open_id))].sort());
   return contactIds(next) !== contactIds(saved) || next.auto_publish && (!saved?.auto_publish || target(next) !== target(saved));
 }
-export type FeishuContactPage = { items: FeishuContact[]; has_more: boolean; page_token: string; selection_expires_in: number };
+export type FeishuContactPage = { items: FeishuContact[]; has_more: boolean; page_token: string; selection_expires_in: number; partial?: boolean; search_required?: boolean };
 export const contactRecipients = (contacts: FeishuContact[]) => contacts.map(({ open_id, selection_token }) => ({ open_id, selection_token }));
 export const contactsValid = (contacts: FeishuContact[]) => contacts.every(item => !!item.name?.trim() && !!item.selection_token && !!item.expiresAt && item.expiresAt > Date.now());
 export async function feishuContacts(query: string, page_token = "") {
@@ -247,7 +248,13 @@ export const publishToFeishu = async (
     throw cause;
   }
   if (attempt) markPublishAttempt(attempt, 'unknown');
-  const result = await apiJson<Delivery | null>("/api/feishu/deliveries", { method: "POST", body });
+  let result: Delivery | null;
+  try {
+    result = await apiJson<Delivery | null>("/api/feishu/deliveries", { method: "POST", body });
+  } catch (cause) {
+    if (attempt && cause && typeof cause === 'object' && 'status' in cause && cause.status === 409 && 'detail' in cause) markPublishRejected(attempt, cause.detail);
+    throw cause;
+  }
   guard();
   return result;
 };

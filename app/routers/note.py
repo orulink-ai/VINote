@@ -40,6 +40,7 @@ router = APIRouter(tags=["notes"])
 _note_service = NoteService()
 _FILE_TASK_LOCK = threading.RLock()
 _ACTIVE_FILE_TASKS: set[str] = set()
+_URL_DOWNLOAD_RETRIES: dict[str, str] = {}
 _UPLOADING_MEETINGS: set[str] = set()
 _source_requests = SourceRequestService()
 
@@ -703,6 +704,23 @@ def retry_media_task(task_id: str, background_tasks: BackgroundTasks, user=Depen
             _ACTIVE_FILE_TASKS.add(task_id)
             background_tasks.add_task(_run_source_job, task_id, job, user.user_id)
             return {"task_id": task_id, "status": "preparing"}
+        saved_request = folder / "request.json"
+        saved_url = json.loads(saved_request.read_text(encoding="utf-8")) if saved_request.exists() else {}
+        if saved_url.get("kind") == "media_url" and status.get("failed_stage") == "downloading":
+            if status.get("status") not in {"failed", "error"} or status.get("retryable") is not True:
+                raise HTTPException(409, "原下载结果尚未确认，不能重复执行。")
+            if model_confirmation is not None:
+                raise HTTPException(409, "原链接下载恢复只能使用冻结模型，不能确认或更换模型。")
+            req = NoteRequest(**saved_url["request"])
+            ensure_source(folder, user.user_id, {**req.model_dump(), "needs_stt": True})
+            trace = DesktopTraceContext(**saved_url["trace"]) if saved_url.get("trace") else None
+            claim = uuid.uuid4().hex
+            artifacts.update_status(folder, "downloading", "正在恢复原链接下载…",
+                                    attempt=(status.get("attempt") or 1) + 1, retryable=False)
+            _ACTIVE_FILE_TASKS.add(task_id)
+            _URL_DOWNLOAD_RETRIES[task_id] = claim
+            background_tasks.add_task(_run_task, task_id, req, user.user_id, trace, download_retry_claim=claim)
+            return {"task_id": task_id, "status": "downloading"}
         source = artifacts.resolve_source_media(folder)
         if not source or not (folder / "request.json").exists():
             raise HTTPException(409, "原任务缺少可恢复信息，请保留本地录制。")
@@ -884,9 +902,6 @@ async def generate_from_upload(
         diarize = diarize or (desktop_request and normalized_source_type not in {"transcript", "document"})
         if desktop_request:
             speaker_count = None
-        if diarize and normalized_source_type not in {"transcript", "document"}:
-            from app.services.speaker_diarization_service import SpeakerDiarizationService
-            SpeakerDiarizationService.require_ready()
         task_id = str(uuid.uuid4())
 
         if normalized_source_type == "document":
@@ -1256,10 +1271,33 @@ def _persist_url_request(task_id: str, req: NoteRequest, user_id: str | None,
 
 
 def _run_task(task_id: str, req: NoteRequest, user_id: str | None,
-              trace_context: DesktopTraceContext | None = None):
+              trace_context: DesktopTraceContext | None = None, *, download_retry_claim: str | None = None):
+    owns_worker = False
     try:
-        if not _persist_url_request(task_id, req, user_id, trace_context):
-            return
+        with _FILE_TASK_LOCK:
+            if download_retry_claim is not None:
+                if (_URL_DOWNLOAD_RETRIES.get(task_id) != download_retry_claim
+                        or task_id not in _ACTIVE_FILE_TASKS):
+                    return
+                _URL_DOWNLOAD_RETRIES.pop(task_id)
+                owns_worker = True
+                artifacts = _note_service.artifact_service
+                folder = artifacts.find_task_dir(task_id)
+                if (not folder or (folder / "new_generation.json").exists()
+                        or (folder / "recording_owner").read_text(encoding="utf-8") != user_id
+                        or artifacts.get_status(task_id).get("status") != "downloading"):
+                    return
+                saved = json.loads((folder / "request.json").read_text(encoding="utf-8"))
+                if saved.get("kind") != "media_url" or saved.get("request") != req.model_dump(exclude={"api_key", "base_url", "model_name"}):
+                    return
+                ensure_source(folder, user_id, {**req.model_dump(), "needs_stt": True})
+            else:
+                if task_id in _ACTIVE_FILE_TASKS:
+                    return
+                _ACTIVE_FILE_TASKS.add(task_id)
+                owns_worker = True
+                if not _persist_url_request(task_id, req, user_id, trace_context):
+                    return
         with desktop_trace(trace_context):
             _note_service.generate(
                 video_url=req.video_url, task_id=task_id, platform=req.platform,
@@ -1286,6 +1324,10 @@ def _run_task(task_id: str, req: NoteRequest, user_id: str | None,
                                         retryable=False)
         except Exception:
             logger.warning("[Background] cannot persist URL preparation failure task_id=%s", task_id)
+    finally:
+        if owns_worker:
+            with _FILE_TASK_LOCK:
+                _ACTIVE_FILE_TASKS.discard(task_id)
 
 
 def _persist_file_request(task_dir: Path, req: LocalFileRequest, user_id: str | None,

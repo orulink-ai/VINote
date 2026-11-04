@@ -1,3 +1,4 @@
+import { calendarDay, dayLabel } from '@/lib/contentDates';
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
@@ -7,9 +8,9 @@ import {
   PenLine,
   Edit3,
   Trash2,
-  ArrowUpRight,
   FileUp,
   Link2,
+  SlidersHorizontal,
 } from "lucide-react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { useLibraryNotes, libraryNoteUrl, type LibraryNote } from "@/hooks/useLibraryNotes";
@@ -17,6 +18,7 @@ import { useWorkspaceStore } from "@/stores/workspaceStore";
 import { useI18n } from "@/lib/i18n";
 import { noteOrigin } from "@/lib/noteOrigin";
 import { notePreview } from "@/lib/notePreview";
+import { groupNoteDossiers } from '@/lib/noteDossiers';
 import { serverTimestamp } from '@/lib/serverTimestamp';
 import { useNoteLibraryStore } from "@/stores/noteLibraryStore";
 import { useTeamStore } from "@/stores/teamStore";
@@ -24,6 +26,7 @@ import { PageHeading } from "@/components/Layout/PageHeading";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Popover, PopoverTrigger, PopoverContent } from '@/components/ui/popover';
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Skeleton } from "@/components/ui/skeleton";
@@ -53,6 +56,8 @@ export function Notes() {
   const notes = useLibraryNotes();
   const [params, setParams] = useSearchParams();
   const archived = params.get("archived") === "1";
+  const selectedDate = params.get("date") || "";
+  const setDate = (value: string) => setParams(previous => { const next = new URLSearchParams(previous); value ? next.set("date", value) : next.delete("date"); return next; });
   const contentError = useWorkspaceStore((s) => s.error);
   const workspaceBusy = useWorkspaceStore((s) => s.busy);
   const [deleteTarget, setDeleteTarget] = useState<LibraryNote | null>(null);
@@ -71,6 +76,8 @@ export function Notes() {
   ).sort();
   const zh = locale.startsWith("zh");
   const hasCache = notes.length > 0;
+  const hasFilters = !!(query || selectedDate || archived || project !== 'all' || filter !== 'all');
+  const showFilters = hasCache || hasFilters;
   const readErrorIdentity = JSON.stringify([error, contentError]);
   const hasReadError = !!(error || contentError);
   const readErrorsExpanded = hasReadError && expandedReadError === readErrorIdentity;
@@ -93,7 +100,7 @@ export function Notes() {
   }, [currentWorkspace, loadNotes]);
   const filtered = useMemo(
     () =>
-      notes.filter((note) => {
+      groupNoteDossiers(notes.filter((note) => {
         const source = note.sourceType || "";
         const meeting = source.startsWith("meeting");
         const media = ["video", "audio"].some((type) => source.includes(type));
@@ -103,16 +110,22 @@ export function Notes() {
           (filter === "media" && media && !meeting) ||
           (filter === "text" && !meeting && !media);
         return (
-          (project !== 'all' || !meeting) && Boolean(note.archived) === archived &&
+          (project !== 'all' || !meeting) && (!archived || Boolean(note.archived)) &&
           (project === "all" || note.project === project) &&
-          matchesType &&
-          `${note.title} ${note.tags?.join(" ") || ""} ${notePreview(note.content)}`
-            .toLowerCase()
-            .includes(query.trim().toLowerCase())
+          matchesType
         );
-      }),
-    [filter, notes, query, archived, project],
+      })).filter(group => group.versions.some(note =>
+        `${note.title} ${note.tags?.join(' ') || ''} ${notePreview(note.content)}`
+          .toLowerCase().includes(query.trim().toLowerCase())))
+      .map(group => ({ ...group, savedDate: group.versions.map(note => calendarDay(note.createdAt)).sort().reverse()[0] || '' }))
+      .filter(group => !selectedDate || group.savedDate === selectedDate)
+      .sort((a, b) => b.savedDate.localeCompare(a.savedDate) || a.id.localeCompare(b.id)),
+    [filter, notes, query, archived, project, selectedDate],
   );
+  const deletingGroupedVersion = !!deleteTarget?.originalSource && notes.some(note =>
+    note.id !== deleteTarget.id && note.scope === deleteTarget.scope && note.teamId === deleteTarget.teamId &&
+    note.originalSource?.ownerId === deleteTarget.originalSource?.ownerId &&
+    note.originalSource?.originalId === deleteTarget.originalSource?.originalId);
   const filters: Array<[Filter, string]> = [
     ["all", zh ? "全部" : "All"],
     ["media", zh ? "音视频" : "Media"],
@@ -146,25 +159,25 @@ export function Notes() {
     }
   };
   return (
-    <div className="workspace-page [&>.page-heading]:pb-3" style={{ gap: 16 }}>
+    <div className="workspace-page notes-page">
       {project !== "all" && <PageReturn to="/projects" label="返回项目" />}
       <PageHeading
         title={archived ? '归档内容' : project !== "all" ? project : zh ? "笔记" : "Content"}
         description={
-          archived ? "已归档的笔记与纪要，保留全部版本。" : "从网页、视频、PDF 或 Word 提炼内容，也可以直接写笔记。"
+          archived ? "已归档的笔记与纪要，保留全部版本。" : "把资料整理成值得回看的知识。"
         }
         actions={
-          <Button variant="outline" asChild><Link to="/write" state={{ returnTo }}><PenLine data-icon="inline-start" />写笔记</Link></Button>
+          <><Button variant="ghost" asChild><Link to={'/notes/files?' + new URLSearchParams({ returnTo })} state={{ returnTo }}>笔记原文件</Link></Button><Button asChild><Link to="/write" state={{ returnTo }}><PenLine data-icon="inline-start" />写笔记</Link></Button></>
         }
       />
-      {!archived && <section aria-label="生成总结笔记" className="grid gap-3 sm:grid-cols-2">
+      {!archived && <section aria-label="生成总结笔记" className="notes-intake">
+        <span className="text-xs text-muted-foreground">添加资料</span>
         {[
           { mode: 'url', icon: Link2, title: '粘贴链接', description: 'B 站等公开视频、普通网页或公开文档 → 总结笔记' },
           { mode: 'file', icon: FileUp, title: '导入文件', description: 'PDF、Word、音视频或文字文件 → 总结笔记' },
-        ].map(({ mode, icon: Icon, title, description }) => <Link key={mode} to={`/generate?mode=${mode}`} state={{ returnTo }} className="group flex min-w-0 items-center gap-3 rounded-2xl border bg-card p-4 transition-colors hover:border-foreground/20 hover:bg-muted/40 motion-reduce:transition-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-          <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted"><Icon aria-hidden="true" className="size-5" /></span>
-          <div className="min-w-0 flex-1"><h2 className="text-sm font-medium">{title}</h2><p className="mt-1 text-xs leading-5 text-muted-foreground">{description}</p></div>
-          <ArrowUpRight aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
+        ].map(({ mode, icon: Icon, title, description }) => <Link key={mode} to={`/generate?mode=${mode}&intent=import`} onClick={event => { if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return; event.preventDefault(); navigate(`/generate?mode=${mode}&intent=import&draft=${crypto.randomUUID()}`, { state: { returnTo } }); }} state={{ returnTo }} title={description} className="inline-flex min-h-10 items-center gap-2 rounded-md px-3 text-sm transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+          <Icon aria-hidden="true" className="size-4 text-muted-foreground" />
+          <span>{title}</span><span className="sr-only">{description}</span>
         </Link>)}
       </section>}
       {!hasCache && error && (
@@ -199,18 +212,7 @@ export function Notes() {
           aria-label="笔记列表"
           className="notes-list min-w-0"
         >
-          <div className="notes-filters flex flex-wrap items-center gap-2 border-b pb-2">
-            <Tabs
-              value={archived ? "archived" : "active"}
-              onValueChange={(value) =>
-                setParams(previous => { const next = new URLSearchParams(previous); value === "archived" ? next.set("archived", "1") : next.delete("archived"); return next; })
-              }
-            >
-              <TabsList className="h-auto min-h-11" aria-label="归档筛选">
-                <TabsTrigger className="min-h-11" value="active">未归档</TabsTrigger>
-                <TabsTrigger className="min-h-11" value="archived">已归档</TabsTrigger>
-              </TabsList>
-            </Tabs>
+          {showFilters && <div className="notes-filters flex flex-wrap items-center gap-2 border-b pb-2">
             <div className="relative min-w-60 flex-1">
               <Search
                 className="absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
@@ -230,14 +232,14 @@ export function Notes() {
                 onValueChange={(value) => setFilter(value as Filter)}
               >
                 <TabsList
-                  className="h-auto flex-wrap justify-start gap-1 rounded-full border border-border/60 bg-muted p-1"
+                  className="h-auto flex-wrap justify-start gap-0 rounded-md bg-transparent p-0"
                   aria-label="内容类型"
                 >
                   {filters.map(([value, label]) => (
                     <TabsTrigger
                       key={value}
                       value={value}
-                      className="min-h-11 rounded-full px-3 py-1.5 transition-colors duration-200"
+                      className="min-h-10 rounded-md px-3 py-1.5 text-xs shadow-none data-[state=active]:bg-muted data-[state=active]:shadow-none"
                       title={value === 'text' ? '文档与文字：网页文章、PDF、Word、文字与字幕笔记' : undefined}
                     >
                       {label}
@@ -265,7 +267,14 @@ export function Notes() {
                 </div>
               )}
             </div>
-          </div>
+            <Popover><PopoverTrigger asChild><Button variant="outline" size="sm"><SlidersHorizontal />筛选{(selectedDate || archived) ? ' · 已启用' : ''}</Button></PopoverTrigger><PopoverContent align="end" className="grid gap-4">
+              <p className="text-sm font-medium">筛选笔记</p>
+              <label className="grid gap-2 text-xs text-muted-foreground">保存日期<Input type="date" aria-label="按保存日期筛选" value={selectedDate} onChange={event => setDate(event.target.value)} /></label>
+              <label className="grid gap-2 text-xs text-muted-foreground">归档状态<NativeSelect aria-label="归档筛选" value={archived ? 'archived' : 'all'} onChange={event => setParams(previous => { const next = new URLSearchParams(previous); event.target.value === 'archived' ? next.set('archived', '1') : next.delete('archived'); return next; })}><NativeSelectOption value="all">全部内容</NativeSelectOption><NativeSelectOption value="archived">仅已归档</NativeSelectOption></NativeSelect></label>
+              {(selectedDate || archived) && <Button variant="ghost" size="sm" onClick={() => { setParams(previous => { const next = new URLSearchParams(previous); next.delete('date'); next.delete('archived'); return next; }); }}>清除日期与归档筛选</Button>}
+            </PopoverContent></Popover>
+            {selectedDate && <Button variant="secondary" size="sm" aria-label="全部日期" title="清除日期筛选" onClick={() => setDate('')}>{selectedDate} ×</Button>}
+          </div>}
           <div aria-label="列表数量与读取状态" className="flex min-h-11 flex-wrap items-center justify-between gap-x-3 text-xs text-muted-foreground">
             <p>{!hasCache && (hasReadError || loading) ? (zh ? '数量待核验' : 'Count not verified') : zh ? `${filtered.length} 篇笔记` : `${filtered.length} notes`}</p>
             <div className="flex min-h-11 min-w-0 flex-1 flex-wrap items-center justify-end gap-x-2">
@@ -285,14 +294,16 @@ export function Notes() {
           </div>}
           {loading && !notes.length
             ? [1, 2, 3].map((i) => <Skeleton key={i} className="mb-3 h-20" />)
-            : filtered.map((note) => (
-                <div key={note.id} className="flex items-center border-b" data-note-row={note.id}>
+            : filtered.map(({ id, representative: note, versions, savedDate }, index) => (
+                <div key={id} className="border-b" data-note-row={note.id}>
+                {(index === 0 || filtered[index - 1].savedDate !== savedDate) && <h2 className="border-b bg-background px-3 pb-2 pt-6 text-sm font-medium">{dayLabel(savedDate, '保存日期未记录')}</h2>}
+                <div className="flex items-center">
                 <button
                   type="button"
                   aria-label={`${note.title.slice(0, 120)} · ${note.status === "failed" ? "需处理" : note.status === "done" ? "已保存" : "处理中"}`}
                   onClick={() => open(note.id)}
                   className={cn(
-                    "flex min-w-0 flex-1 items-center gap-3 px-2 py-3 text-left hover:bg-muted/50 focus-visible:outline focus-visible:outline-ring",
+                    "flex min-w-0 flex-1 items-center gap-4 px-3 py-4 text-left hover:bg-muted/50 focus-visible:outline focus-visible:outline-ring",
                   )}
                 >
                   <span className="grid size-9 shrink-0 place-items-center rounded-md bg-muted/50">
@@ -303,7 +314,7 @@ export function Notes() {
                     )}
                   </span>
                   <span className="min-w-0 flex-1">
-                    <span className="block truncate text-sm font-medium">
+                    <span className="block truncate text-[15px] font-medium">
                       {note.title}
                     </span>
                     <span className="mt-1 line-clamp-1 text-xs text-muted-foreground">
@@ -312,10 +323,8 @@ export function Notes() {
                     </span>
                     <span className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
                       <span>
-                      {note.recordingStartedAt
-                        ? "录制于 "
-                        : `${note.dateLabel === '同步于' ? '记录于' : note.dateLabel || "保存于"} `}
-                      {formatDate(note.recordingStartedAt || savedTimes.get(note.id)?.toISOString() || note.createdAt)}{savedTimes.has(note.id) ? ` ${savedTimeFormat.format(savedTimes.get(note.id)!)}` : ''} ·{" "}
+                      {`${note.dateLabel === '同步于' ? '记录于' : note.dateLabel || "保存于"} `}
+                      {formatDate(savedTimes.get(note.id)?.toISOString() || note.createdAt)}{savedTimes.has(note.id) ? ` ${savedTimeFormat.format(savedTimes.get(note.id)!)}` : ''} ·{" "}
                       {note.sourceDevice === 'desktop' ? (zh ? '桌面端' : 'Desktop') : note.sourceDevice === 'mobile' ? (zh ? '手机' : 'Mobile') : note.sourceDevice === 'web' ? (zh ? '网页端' : 'Web') : note.sourceDevice || noteOrigin(note.generationClient, zh)}
                       {note.teamName ? ` · ${note.teamName}` : ""}
                       </span>
@@ -323,40 +332,53 @@ export function Notes() {
                   </span>
                   <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
                 </button>
-                <div className="flex shrink-0 flex-wrap items-center gap-1">
-                  <Button variant="ghost" size="sm" className="min-h-11" aria-label={`编辑《${note.title}》`} disabled={workspaceBusy || deleting} onClick={() => open(note.id, true)}><Edit3 aria-hidden="true" />编辑</Button>
-                  <Button variant="ghost" size="sm" className="min-h-11 text-destructive" aria-label={`删除《${note.title}》`} disabled={workspaceBusy || deleting} onClick={() => { setDeleteError(''); setDeleteTarget(note); }}><Trash2 aria-hidden="true" />删除</Button>
+                <div className="notes-row-actions flex shrink-0 items-center gap-1 pr-2">
+                  <Button variant="ghost" size="icon" title={versions.length > 1 ? '编辑当前版本' : '编辑笔记'} aria-label={`编辑${versions.length > 1 ? '当前版本' : ''}《${note.title}》`} disabled={workspaceBusy || deleting} onClick={() => open(note.id, true)}><Edit3 aria-hidden="true" className="size-4" /></Button>
+                  <Button variant="ghost" size="icon" title={versions.length > 1 ? '仅将当前版本移入回收站' : '移入回收站'} aria-label={`删除${versions.length > 1 ? '当前版本' : ''}《${note.title}》`} disabled={workspaceBusy || deleting} onClick={() => { setDeleteError(''); setDeleteTarget(note); }}><Trash2 aria-hidden="true" className="size-4" /></Button>
                 </div>
+                </div>
+                {versions.length > 1 && <details className="px-3 pb-3 pl-16 text-sm">
+                  <summary className="w-fit cursor-pointer rounded-sm py-1 text-xs text-muted-foreground hover:text-foreground focus-visible:outline focus-visible:outline-ring">{versions.length} 个总结版本</summary>
+                  <ul className="mt-1 grid gap-1 border-l pl-3">
+                    {versions.map((version, index) => <li key={version.id}>
+                      <Link to={libraryNoteUrl(version)} state={{ returnTo }} className="flex min-h-9 flex-wrap items-center justify-between gap-x-3 rounded-sm px-2 py-1 hover:bg-muted focus-visible:outline focus-visible:outline-ring">
+                        <span className="min-w-0 break-words">{version.title}{index === 0 && <span className="ml-2 text-xs text-muted-foreground">最新</span>}</span>
+                        <span className="text-xs text-muted-foreground">{formatDate(version.updatedAt || version.createdAt)}</span>
+                      </Link>
+                    </li>)}
+                  </ul>
+                </details>}
                 </div>
               ))}
           {!loading && !filtered.length && !error && !contentError && (
-            <Empty>
+            <Empty className="notes-empty">
+              <span className="grid size-12 place-items-center rounded-xl border bg-background text-muted-foreground"><FileText className="size-6" aria-hidden="true" /></span>
               <EmptyHeader>
                 <EmptyTitle>
                   {zh
-                    ? query || filter !== "all" || project !== "all"
+                    ? query || selectedDate || filter !== "all" || project !== "all"
                       ? "没有匹配的笔记"
                       : archived ? "没有归档内容" : "还没有保存的笔记"
                     : "No notes found"}
                 </EmptyTitle>
                 <EmptyDescription>
                   {zh
-                    ? archived ? "归档的内容会显示在这里；切换到未归档可继续浏览当前笔记。" : "从上方粘贴网页或视频链接、导入 PDF、Word 或音视频生成总结，也可以直接写笔记。"
+                    ? archived ? "归档的内容会显示在这里；选择全部内容可继续按日期浏览。" : "导入一份资料，或写下第一篇笔记。"
                     : "Summarize a video link or a local file, or write a note."}
                 </EmptyDescription>
               </EmptyHeader>
-              {query || filter !== "all" || project !== "all" ? (
+              {query || selectedDate || filter !== "all" || project !== "all" ? (
                 <Button
                   variant="outline"
                   onClick={() => {
                     setQuery("");
                     setFilter("all");
-                    setProject("all");
+                    setParams(previous => { const next = new URLSearchParams(previous); next.delete("project"); next.delete("date"); return next; });
                   }}
                 >
                   {zh ? "清除筛选" : "Clear filters"}
                 </Button>
-              ) : null}
+              ) : !archived ? <Button onClick={() => navigate(`/generate?mode=url&intent=import&draft=${crypto.randomUUID()}`, { state: { returnTo } })}><Link2 />从链接生成第一篇笔记</Button> : null}
             </Empty>
           )}
         </div>
@@ -366,7 +388,7 @@ export function Notes() {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>将《{deleteTarget?.title}》移入回收站？</AlertDialogTitle>
-            <AlertDialogDescription>正文与版本移入回收站，可在存储页恢复。原文件与已发布飞书文档保留。</AlertDialogDescription>
+            <AlertDialogDescription>{deletingGroupedVersion ? '仅此总结版本及其编辑历史移入回收站，其他总结版本不受影响。' : '正文与版本移入回收站，可在存储页恢复。'}原文件与已发布飞书文档保留。</AlertDialogDescription>
           </AlertDialogHeader>
           {deleteError && <p role="alert" className="text-sm text-destructive">{deleteError}</p>}
           <AlertDialogFooter>

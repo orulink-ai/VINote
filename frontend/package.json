@@ -1,7 +1,7 @@
 {
   "name": "vinote-frontend",
   "private": true,
-  "version": "0.3.3",
+  "version": "0.3.4",
   "description": "VINote desktop and web frontend",
   "type": "module",
   "author": "VINote",
@@ -36,6 +36,9 @@
     "@radix-ui/react-toggle-group": "^1.1.19",
     "@radix-ui/react-tooltip": "^1.2.16",
     "@tauri-apps/api": "^2.11.0",
+    "@tauri-apps/plugin-notification": "^2.8.0",
+    "@tauri-apps/plugin-process": "^2.4.0",
+    "@tauri-apps/plugin-updater": "^2.14.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.0",
     "cmdk": "^1.1.1",

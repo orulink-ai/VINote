@@ -6,6 +6,7 @@ import re
 _indices = ContextVar('meeting_source_indices', default=None)
 _texts = ContextVar('meeting_original_asr_texts', default=None)
 _draft_observer = ContextVar('meeting_working_draft_observer', default=None)
+_draft_retry_observer = ContextVar('meeting_working_draft_retry_observer', default=None)
 _bundle = ContextVar('meeting_chronological_source', default=None)
 
 
@@ -43,16 +44,24 @@ def source_prompt(prefix: str, source: str, suffix: str):
 
 
 @contextmanager
-def capture_working_draft(observer):
+def capture_working_draft(observer, retry_observer=None):
     token = _draft_observer.set(observer)
+    retry_token = _draft_retry_observer.set(retry_observer)
     try:
         yield
     finally:
+        _draft_retry_observer.reset(retry_token)
         _draft_observer.reset(token)
 
 
 def record_working_draft(text: str):
     observer = _draft_observer.get()
+    if observer is not None:
+        observer(text)
+
+
+def record_working_draft_retry(text: str):
+    observer = _draft_retry_observer.get()
     if observer is not None:
         observer(text)
 

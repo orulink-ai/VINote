@@ -98,6 +98,7 @@ export function useLibraryNotes() {
             localId: resolvedLocalId,
             taskId: source?.taskId,
             meetingSource: source?.meetingSource,
+            originalSource: source?.originalSource,
             sourceIds: ids,
             // Keep local-only history reachable even when the list uses a shared
             // representative. Projection does not migrate or delete versions.

@@ -1,3 +1,5 @@
+const displayState = vi.hoisted(() => ({ values: {} as Record<string, { source_key: string; title: string; meeting_date: string | null }> }));
+vi.mock('@/hooks/useMeetingDisplay', () => ({ useMeetingDisplay: () => displayState.values, MEETING_DISPLAY_CHANGED: 'vinote-meeting-display-changed' }));
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -10,9 +12,8 @@ vi.mock('@/stores/authStore', () => ({
 }))
 vi.mock('./LocalRecordingPreview', () => ({ LocalRecordingPreview: () => <p>原件操作</p> }))
 import { MeetingWorkbench } from './MeetingWorkbench'
-import { meetingRecordingTitle } from '@/lib/meetingGroups'
 const captureTime = (task: string) => new Date(Date.UTC(2026, 9, 10, 7, [...task].reduce((sum, c) => sum + c.charCodeAt(0), 0) % 60)).toISOString()
-const heading = (task: string, state = '已完成') => `${meetingRecordingTitle(captureTime(task))} · ${state}`
+const heading = (task: string, state = '已完成') => `${({ 'failed-task': 'Synthetic retained capture', 'task-a': '会议一', 'source-a': '第一场会议', 'source-b': '第二场会议', canonical: '原会议档案' } as Record<string, string>)[task] || '同名纪要'} · ${state}`
 
 const savedAt = '2026-10-10T15:47:34Z'
 function note(id: string, overrides: Partial<LibraryNote> = {}): LibraryNote {
@@ -29,11 +30,11 @@ function mount(notes: LibraryNote[], open = vi.fn()) {
 }
 async function expand(count: number) {
   const label = new RegExp(`^关联纪要（${count}条）`)
-  await userEvent.click(screen.getByText(label))
+  await userEvent.click(screen.getByText(label).closest('details')!.previousElementSibling as HTMLElement)
   await waitFor(() => expect(screen.getByText(label).closest('details')).toHaveAttribute('open'))
   return screen.getByRole('region', { name: '关联纪要' })
 }
-beforeEach(() => { account.owner = 'owner-a'; sessionStorage.clear() })
+beforeEach(() => { displayState.values = {}; account.owner = 'owner-a'; sessionStorage.clear() })
 afterEach(() => { cleanup(); sessionStorage.clear() })
 
 it('opens the actual meeting content in edit mode from a visible action without a sync status', async () => {
@@ -134,7 +135,7 @@ it('restores warm-return expansion and search for the same owner without carryin
   const otherOwner = mount(notes)
   expect(screen.queryByText(/^关联纪要（2条）/)).not.toBeInTheDocument()
   expect(screen.queryByText('查看纪要 · 同名纪要')).not.toBeInTheDocument()
-  expect(screen.getByRole('textbox', { name: '搜索记录' })).toHaveValue('')
+  expect(screen.queryByRole('textbox', { name: '搜索记录' })).toBeNull()
   otherOwner.unmount()
 
   account.owner = 'owner-a'
@@ -161,7 +162,7 @@ it('keeps provenance-free records in history and does not infer state from their
   const rows = [note('pending', { title: 'A normal subject', taskId: undefined, status: 'pending' }), note('failed', { title: 'Another subject', taskId: undefined, status: 'failed' }), note('done', { title: '待生成纪要', taskId: undefined, status: 'done' })]
   mount(rows)
   expect(document.querySelectorAll('[data-meeting-row-ids]')).toHaveLength(0)
-  await userEvent.click(screen.getByRole('tab', { name: '待归档' }))
+  await userEvent.click(screen.getByRole('tab', { name: '未关联原录制' }))
   expect(screen.getByRole('button', { name: /查看纪要 · A normal subject.*状态未核验/ })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /查看纪要 · Another subject.*需处理/ })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: /查看纪要 · 待生成纪要.*已完成/ })).toBeInTheDocument()
@@ -184,9 +185,9 @@ it('opens the meeting contents instead of automatically opening its newest summa
   const view = render(<MeetingWorkbench recordings={[recording]} notes={notes} loading={false} onOpenNote={open} onDeleted={vi.fn()} />)
   expect(document.querySelectorAll('[data-meeting-row-ids]')).toHaveLength(1)
   expect(screen.getByText('3 份纪要')).toBeInTheDocument()
-  await userEvent.click(screen.getByRole('button', { name: `${meetingRecordingTitle(savedAt)} · 已完成` }))
+  await userEvent.click(screen.getByRole('button', { name: '最新可读稿 · 已完成' }))
   expect(open).not.toHaveBeenCalled()
-  expect(screen.getByRole('button', { name: `${meetingRecordingTitle(savedAt)} · 已完成` })).toHaveAttribute('aria-expanded', 'true')
+  expect(screen.getByRole('button', { name: '最新可读稿 · 已完成' })).toHaveAttribute('aria-expanded', 'true')
   await userEvent.type(screen.getByRole('textbox', { name: '搜索记录' }), '旧稿独有检索词')
   const history = screen.getByRole('region', { name: '关联纪要' })
   expect(within(history).getAllByRole('button', { name: /查看纪要/ })).toHaveLength(3)
@@ -217,8 +218,8 @@ it('lists two meeting dossiers and keeps unlinked synthetic or manual notes in t
   await userEvent.click(screen.getByRole('button', { name: heading('task-a') }))
   expect(open).not.toHaveBeenCalled()
   expect(screen.getByRole('button', { name: /查看纪要 · 详细文字稿/ })).toBeVisible()
-  await userEvent.click(screen.getByRole('tab', { name: '待归档' }))
-  const history = screen.getByRole('region', { name: '待归档内容' })
+  await userEvent.click(screen.getByRole('tab', { name: '未关联原录制' }))
+  const history = screen.getByRole('region', { name: '未关联原录制内容' })
   expect(screen.queryByRole('button', { name: heading('task-a') })).not.toBeInTheDocument()
   await userEvent.click(within(history).getByRole('button', { name: /查看纪要 · 虚构验收笔记/ }))
   expect(open).toHaveBeenLastCalledWith('synthetic')
@@ -255,7 +256,7 @@ it('opens an unnamed recording as a meeting with its original and no invented su
     options: { title: '' }, startedAt: savedAt, elapsedSeconds: 20, recordingStatus: 'saved', processingStatus: 'idle' } as PendingMeeting
   const open = vi.fn()
   render(<MeetingWorkbench recordings={[original]} notes={[]} loading={false} onOpenNote={open} onDeleted={vi.fn()} />)
-  await userEvent.click(screen.getByRole('button', { name: `${meetingRecordingTitle(savedAt)} · 未生成` }))
+  await userEvent.click(screen.getByRole('button', { name: '未命名会议 · 未生成' }))
   expect(screen.queryByRole('button', { name: /查看纪要/ })).not.toBeInTheDocument()
   expect(open).not.toHaveBeenCalled()
   await userEvent.click(screen.getByRole('button', { name: /查看原录制 · 未命名录制/ }))
@@ -266,8 +267,8 @@ it.each([false, true])('classifies dossiers by proven sources regardless of the 
   const notes = [
     note('source-a', { title: '第一场会议', taskId: 'source-a', archived }),
     note('source-b', { title: '第二场会议', taskId: 'source-b', archived: !archived }),
-    note('unlinked-active', { title: '待归档旧稿一', taskId: undefined, meetingSource: undefined, archived: false }),
-    note('unlinked-archived', { title: '待归档旧稿二', taskId: undefined, meetingSource: undefined, archived: true }),
+    note('unlinked-active', { title: '未关联原录制旧稿一', taskId: undefined, meetingSource: undefined, archived: false }),
+    note('unlinked-archived', { title: '未关联原录制旧稿二', taskId: undefined, meetingSource: undefined, archived: true }),
   ]
   const before = JSON.stringify(notes), open = vi.fn()
   const props = { recordings: [], notes, loading: false, onOpenNote: open, onDeleted: vi.fn() }
@@ -275,12 +276,12 @@ it.each([false, true])('classifies dossiers by proven sources regardless of the 
   expect(document.querySelectorAll('[data-meeting-row-ids]')).toHaveLength(2)
   expect(screen.getByRole('button', { name: heading('source-a') })).toBeVisible()
   expect(screen.getByRole('button', { name: heading('source-b') })).toBeVisible()
-  expect(screen.queryByText('查看纪要 · 待归档旧稿一')).not.toBeInTheDocument()
+  expect(screen.queryByText('查看纪要 · 未关联原录制旧稿一')).not.toBeInTheDocument()
   view.rerender(<MeetingWorkbench {...props} view="pending" />)
   expect(document.querySelectorAll('[data-meeting-row-ids]')).toHaveLength(0)
-  const pending = screen.getByRole('region', { name: '待归档内容' })
+  const pending = screen.getByRole('region', { name: '未关联原录制内容' })
   expect(within(pending).getAllByRole('button', { name: /查看纪要/ })).toHaveLength(2)
-  await userEvent.click(within(pending).getByRole('button', { name: /查看纪要 · 待归档旧稿二/ }))
+  await userEvent.click(within(pending).getByRole('button', { name: /查看纪要 · 未关联原录制旧稿二/ }))
   expect(open).toHaveBeenLastCalledWith('unlinked-archived')
   expect(JSON.stringify(notes)).toBe(before)
 })
@@ -295,7 +296,7 @@ it('keeps a new version in the same meeting dossier even when its old archive fl
     meetingSource: original.meetingSource, createdAt: '2026-10-20T00:00:00Z' })
   view.rerender(<MeetingWorkbench {...props} notes={[original, child]} view="meetings" />)
   expect(document.querySelectorAll('[data-meeting-row-ids]')).toHaveLength(1)
-  expect(screen.getByRole('button', { name: heading('canonical') })).toBeVisible()
+  expect(screen.getByRole('button', { name: '图文新版本 · 已完成' })).toBeVisible()
   expect(screen.getByText('2 份纪要')).toBeInTheDocument()
   expect(identity).toContain('canonical')
   view.rerender(<MeetingWorkbench {...props} notes={[original, child]} view="pending" />)
@@ -306,7 +307,7 @@ it('never promotes a note placeholder, saved time or workspace recording hint to
   const record = note('clock-unknown', { title: '2026-10-19 15:41｜待生成纪要',
     recordingStartedAt: '2099-01-01T12:00:00Z', meetingSource: { ownerId: account.owner, canonicalTaskId: 'source' } })
   mount([record])
-  const header = screen.getByRole('button', { name: '录制时间未记录 · 已完成' })
+  const header = screen.getByRole('button', { name: '未命名会议 · 已完成' })
   expect(header).not.toHaveTextContent('待生成纪要')
   expect(header).not.toHaveTextContent('2026')
   expect(header).not.toHaveTextContent('2099')
@@ -314,3 +315,46 @@ it('never promotes a note placeholder, saved time or workspace recording hint to
   await userEvent.click(header)
   expect(screen.getByRole('button', { name: /查看纪要 · 2026-10-19 15:41｜待生成纪要/ })).toBeVisible()
 })
+
+
+it('groups by explicit meeting day and never uses saved-note dates for unknown recordings', async () => {
+  const known = note('dated', { taskId: 'day-one', meetingSource: { ownerId: 'owner-a', canonicalTaskId: 'day-one', recordingStartedAt: '2026-11-04T08:00:00Z' } });
+  const unknown = note('unknown', { title: '日期未知讨论', taskId: 'no-date', meetingSource: { ownerId: 'owner-a', canonicalTaskId: 'no-date' }, createdAt: '2026-11-04T08:00:00Z' });
+  mount([known, unknown]);
+  expect(screen.getByRole('heading', { name: '录制日期未记录' })).toBeVisible();
+  await userEvent.click(screen.getByRole('button', { name: '筛选会议' }));
+  const input = screen.getByLabelText('按会议日期筛选');
+  const { fireEvent } = await import('@testing-library/react');
+  fireEvent.change(input, { target: { value: '2026-11-04' } });
+  await userEvent.click(screen.getByRole('button', { name: '完成筛选' }));
+  expect(screen.queryByRole('button', { name: '日期未知讨论 · 已完成' })).not.toBeInTheDocument();
+  await userEvent.click(screen.getByRole('button', { name: /筛选会议/ }));
+  await userEvent.click(screen.getByRole('button', { name: '全部日期' }));
+  await userEvent.click(screen.getByRole('button', { name: '完成筛选' }));
+  expect(screen.getByRole('button', { name: '日期未知讨论 · 已完成' })).toBeVisible();
+});
+
+it('clearing server display fields skips stale local edits and preserves capture day and canonical identity', () => {
+  displayState.values['task:stable'] = { source_key: 'task:stable', title: '', meeting_date: null };
+  const recording = { id: 'local', ownerId: 'owner-a', taskId: 'stable', workspace: { scope: 'personal' }, mediaKind: 'audio', options: { title: 'old local title' }, titleEdited: true, displayTitle: 'stale title', displayDate: '2099-01-01', startedAt: '2026-11-04T08:00:00Z', elapsedSeconds: 20, recordingStatus: 'saved', processingStatus: 'completed' } as PendingMeeting;
+  render(<MeetingWorkbench recordings={[recording]} notes={[note('topic', { taskId: 'stable', title: '采购讨论', meetingSource: { ownerId: 'owner-a', canonicalTaskId: 'stable', recordingStartedAt: recording.startedAt } })]} loading={false} onOpenNote={vi.fn()} onDeleted={vi.fn()} />);
+  expect(screen.getByRole('button', { name: '采购讨论 · 已完成' })).toBeVisible();
+  expect(screen.queryByText(/stale title|2099/)).not.toBeInTheDocument();
+  expect(screen.getByRole('heading', { name: /2026年11月4日/ })).toBeVisible();
+  expect(recording.taskId).toBe('stable');
+});
+
+it('keeps an empty meeting library free of date, status and search controls', () => {
+  mount([]);
+  expect(screen.getByText('还没有会议档案')).toBeVisible();
+  expect(screen.queryByRole('textbox', { name: '搜索记录' })).toBeNull();
+  expect(screen.queryByLabelText('按会议日期筛选')).toBeNull();
+});
+it('puts date and status in a filter dialog while search remains on the list', async () => {
+  mount([note('one')]);
+  expect(screen.getByRole('textbox', { name: '搜索记录' })).toBeVisible();
+  expect(screen.queryByLabelText('按会议日期筛选')).toBeNull();
+  await userEvent.click(screen.getByRole('button', { name: '筛选会议' }));
+  expect(screen.getByRole('dialog', { name: '筛选会议' })).toBeVisible();
+  expect(screen.getByLabelText('按会议日期筛选')).toBeVisible();
+});

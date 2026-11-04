@@ -15,7 +15,7 @@ describe('source input labels', () => {
     render(<FileUploader {...callbacks()} videoUrl="" />)
     const input = screen.getByRole('textbox', { name: '网页或视频链接' })
     expect(screen.getByLabelText('网页或视频链接')).toBe(input)
-    expect(input).toHaveAccessibleDescription('支持普通网页、B 站等公开视频、PDF 和 DOCX 文档链接。需要登录的来源请导出文件再导入。')
+    expect(input).toHaveAccessibleDescription('支持网页、B 站公开视频、X 公开单条帖子的文字，以及 PDF、DOCX 链接。需要登录的来源请导出文件再导入。')
     await userEvent.click(screen.getByText('网页或视频链接'))
     expect(input).toHaveFocus()
   })

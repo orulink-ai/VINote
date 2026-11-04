@@ -20,6 +20,10 @@ class GenerateFromUploadRouterTest(unittest.TestCase):
         self.app = FastAPI()
         self.app.include_router(note.router, prefix="/api")
         self.client = TestClient(self.app)
+        self.app.dependency_overrides[note.get_optional_current_user] = lambda: SimpleNamespace(user_id="owner")
+        self.source_patch = patch.object(note, "ensure_source")
+        self.source_patch.start()
+        self.addCleanup(self.source_patch.stop)
 
     def tearDown(self):
         note._ACTIVE_FILE_TASKS.clear()

@@ -17,6 +17,22 @@ vi.mock("../../lib/i18n", () => ({
   }),
 }));
 afterEach(cleanup);
+it("shows elapsed task time from the persisted creation timestamp", () => {
+  const createdAt = new Date(Date.now() - 125000).toISOString();
+  render(<GenerateProgress meeting status="processing" currentStep="transcribing" createdAt={createdAt} message="正在转写完整录音，服务暂未提供识别百分比…" />);
+  expect(screen.getByText("任务已用时 02:05")).toBeVisible();
+  expect(screen.getByText("正在准备或等待云端识别结果；服务未提供识别百分比。")).toBeVisible();
+});
+it("does not invent elapsed time without a valid timestamp", () => {
+  render(<GenerateProgress meeting status="processing" currentStep="transcribing" createdAt="invalid" />);
+  expect(screen.queryByText(/任务已用时/)).not.toBeInTheDocument();
+});
+it("shows a single unified meeting recognition state when the service provides no percentage", () => {
+  render(<GenerateProgress meeting status="processing" currentStep="transcribing" message="正在转写完整录音，服务暂未提供识别百分比…" />);
+  expect(screen.getByText("正在准备或等待云端识别结果；服务未提供识别百分比。")).toBeVisible();
+  expect(screen.queryByRole("heading", { name: "说话人分析" })).not.toBeInTheDocument();
+  expect(screen.queryByRole("progressbar")).not.toBeInTheDocument();
+});
 it('does not advertise screenshots for Bilibili audio intake and keeps saving pending', () => {
   render(<GenerateProgress audioOnlySource status="processing" currentStep="transcribing" />);
   expect(screen.queryByText('截图')).not.toBeInTheDocument();
@@ -192,7 +208,7 @@ it('shows video verification after ready ASR without inventing a video percentag
   expect(screen.getByRole('heading', { name: '整理共享画面与发言资料' })).toBeVisible()
   expect(screen.getByRole('listitem', { name: '整理共享画面与发言资料：进行中' })).toHaveAttribute('aria-current', 'step')
   expect(screen.getByRole('listitem', { name: '转写与说话人分析：已完成' })).toBeVisible()
-  expect(screen.getByRole('listitem', { name: '生成并核对会议纪要：待开始' })).toBeVisible()
+  expect(screen.getByRole('listitem', { name: '生成会议纪要：待开始' })).toBeVisible()
   expect(screen.getByRole('listitem', { name: '保存会议纪要：待开始' })).toBeVisible()
   expect(screen.getByRole('progressbar')).not.toHaveAttribute('aria-valuenow')
   expect(screen.queryByText(/100%|80%/)).toBeNull()
@@ -220,6 +236,13 @@ it.each([
 
 it.each(['constructor', 'provider-debug https://invalid.test/private task-id', '<script>raw</script>'])('does not surface unrecognized diagnostics %s', message => {
   render(<GenerateProgress meeting status="processing" currentStep="summarizing" message={message} />)
-  expect(screen.getByText('正在整理并核对会议纪要。')).toHaveAttribute('role', 'status')
+  expect(screen.getByText('正在根据完整资料生成会议纪要，完成后即可阅读。')).toHaveAttribute('role', 'status')
   expect(screen.queryByText(message)).toBeNull()
 })
+
+it('describes direct Markdown generation without a mandatory fact-review gate', () => {
+  render(<GenerateProgress meeting reuseTranscript status="processing" currentStep="summarizing" />);
+  expect(screen.getByRole('listitem', { name: '生成会议纪要：进行中' })).toBeVisible();
+  expect(screen.getByText('正在根据完整资料生成会议纪要，完成后即可阅读。')).toHaveAttribute('role', 'status');
+  expect(screen.queryByText('生成并核对会议纪要')).toBeNull();
+});

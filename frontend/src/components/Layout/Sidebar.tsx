@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { ChevronLeft, ChevronDown, ChevronsUpDown, Search, FileText, ListTodo, LogOut, Mic2, Settings2, Folder, Plug, Send, Wrench } from 'lucide-react'
+import { ChevronLeft, ChevronDown, ChevronsUpDown, Search, FileText, ListTodo, LogOut, Mic2, Settings2, Plug } from 'lucide-react'
 import { Link, NavLink, useLocation, useNavigate } from 'react-router-dom'
 import packageJson from '../../../package.json'
 import { useI18n } from '@/lib/i18n'
@@ -17,6 +17,7 @@ import { ErrorState } from '@/components/Feedback/ResourceState'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuGroup, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Sidebar as SidebarFrame, SidebarContent, SidebarFooter, SidebarHeader, useSidebar } from '@/components/ui/sidebar'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { ActiveTaskBadge } from './ActiveTaskBadge'
 
 export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const navigate = useNavigate()
@@ -46,23 +47,20 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
   const noteId = /^\/note\/([A-Za-z0-9_-]+)$/.exec(location.pathname)?.[1]
   const noteSourceType = useNoteLibraryStore(s => noteId ? s.notes.find(note => note.id === noteId)?.sourceType : undefined)
   const returnTo = contextualPageParent(location.pathname, location.search, location.state?.returnTo)
-  const meetingContext = location.pathname === '/meetings'
+  const meetingContext = (location.pathname === '/meetings' || location.pathname === '/meetings/files')
     || location.pathname === '/generate' && new URLSearchParams(location.search).get('meeting') === '1'
     || !!noteId && (noteSourceType ? noteSourceType.startsWith('meeting_') : returnTo?.split(/[?#]/)[0] === '/meetings')
   const navigation = [
     { id: 'meetings', path: '/meetings', icon: Mic2, label: zh ? '会议' : 'Meetings', active: meetingContext, children: [] },
     { id: 'notes', path: '/notes', icon: FileText, label: zh ? '笔记' : 'Notes', active: !meetingContext && (location.pathname === '/' || /^\/(notes|note|workspace|generate|write|archive|projects)(\/|$)/.test(location.pathname)), children: [] },
-    { id: 'files', path: '/files?type=all', icon: Folder, label: zh ? '文件库' : 'Files', active: location.pathname === '/files', children: [] },
-    { id: 'plugins', path: '/connections', icon: Plug, label: zh ? '插件' : 'Plugins', active: location.pathname === '/connections' || /^\/settings\/(feishu|mcp)/.test(location.pathname), children: [
-      { path: '/settings/feishu', label: '飞书', icon: Send }, { path: '/settings/mcp', label: 'MCP 工具', icon: Wrench },
-    ] },
+    { id: 'tasks', path: '/tasks', icon: ListTodo, label: zh ? '任务' : 'Tasks', active: location.pathname === '/tasks', children: [] },
+    { id: 'plugins', path: '/settings/feishu', icon: Plug, label: zh ? '飞书' : 'Feishu', active: location.pathname === '/connections' || /^\/settings\/(feishu|mcp)/.test(location.pathname), children: [] as { path: string; label: string }[] },
   ]
   const selected = (path: string) => path.includes('?')
     ? location.pathname === path.split('?')[0] && (new URLSearchParams(location.search).get('type') || 'all') === new URLSearchParams(path.split('?')[1]).get('type')
     : location.pathname === path
   useEffect(() => {
-    const group = location.pathname === '/files' ? 'files'
-      : location.pathname === '/connections' || /^\/settings\/(feishu|mcp)/.test(location.pathname) ? 'plugins'
+    const group = location.pathname === '/connections' || /^\/settings\/(feishu|mcp)/.test(location.pathname) ? 'plugins'
         : null
     setExpandedGroup(group)
   }, [location.pathname])
@@ -91,8 +89,9 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
         <nav aria-label={zh ? '主要功能' : 'Main navigation'}><ul className="workspace-navigation-list">
           {navigation.map(item => <li key={item.id} className="workspace-nav-group">
             <div className={cn('workspace-nav-parent', item.active && 'is-active')}>
-              <Tooltip><TooltipTrigger asChild><Link to={item.path} onClick={() => { setExpandedGroup(item.id); closeMobile() }} className="workspace-nav-parent-link" aria-label={item.label} aria-current={item.active && item.children.length === 0 ? 'page' : undefined}>
-                <item.icon aria-hidden="true" className="size-4 shrink-0" />{!collapsed && <span className="truncate">{item.label}</span>}
+              <Tooltip><TooltipTrigger asChild><Link to={item.path} onClick={() => { setExpandedGroup(item.id); closeMobile() }} className="workspace-nav-parent-link" aria-label={item.label} aria-describedby={item.id === 'tasks' ? 'vinote-task-activity' : undefined} aria-current={item.active && item.children.length === 0 ? 'page' : undefined}>
+                <span className="relative"><item.icon aria-hidden="true" className="size-4 shrink-0" />{item.id === 'tasks' && collapsed && <ActiveTaskBadge owner={user?.id} compact zh={zh} />}</span>{!collapsed && <span className="truncate">{item.label}</span>}
+                {item.id === 'tasks' && !collapsed && <ActiveTaskBadge owner={user?.id} zh={zh} />}
               </Link></TooltipTrigger>{collapsed && <TooltipContent side="right">{item.label}</TooltipContent>}</Tooltip>
               {!collapsed && item.children.length > 0 && <button type="button" className="workspace-nav-disclosure" aria-label={`${expandedGroup === item.id ? '收起' : '展开'}${item.label}`} aria-expanded={expandedGroup === item.id} aria-controls={`nav-${item.id}`} onClick={() => setExpandedGroup(current => current === item.id ? null : item.id)}><ChevronDown aria-hidden="true" className={cn('size-4 transition-transform motion-reduce:transition-none', expandedGroup !== item.id && '-rotate-90')} /></button>}
             </div>
@@ -118,7 +117,6 @@ export function Sidebar({ onSearch }: { onSearch: () => void }) {
           <DropdownMenuLabel className="truncate">{user?.email}</DropdownMenuLabel>
           <DropdownMenuGroup>
             <DropdownMenuItem onClick={() => { closeMobile(); requestPageNavigation(accountSettingsPath, navigate) }}><Settings2 />账号与个人资料</DropdownMenuItem>
-            <DropdownMenuItem onClick={() => { closeMobile(); requestPageNavigation(`/tasks?returnTo=${encodeURIComponent(location.pathname + location.search)}`, navigate) }}><ListTodo />处理历史与恢复</DropdownMenuItem>
             <DropdownMenuItem onClick={() => { setError(''); setLogout(true) }}><LogOut />退出此设备</DropdownMenuItem>
           </DropdownMenuGroup><DropdownMenuSeparator /><DropdownMenuLabel className="text-xs font-normal text-muted-foreground">VINote v{packageJson.version}</DropdownMenuLabel>
         </DropdownMenuContent></DropdownMenu>

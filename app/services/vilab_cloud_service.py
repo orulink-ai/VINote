@@ -21,6 +21,11 @@ def _chat_failure(response):
     """Project a bounded error envelope; never expose/log arbitrary messages."""
     if response.status_code == 524:
         failure = SummaryResultUnconfirmed('http524')
+        from app.services.summary_failure import safe_summary_failure_context
+        failure.summary_failure_context = safe_summary_failure_context({
+            **failure.summary_failure_context,
+            'http_request_id': response.headers.get('x-request-id'),
+        })
         failure.cloud_failure_context = {'category': 'summary_result_unconfirmed', 'http_status': 524}
         logger.warning('Cloud chat result unconfirmed: %s', failure.cloud_failure_context)
         return failure

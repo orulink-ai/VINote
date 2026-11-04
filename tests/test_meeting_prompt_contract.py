@@ -107,6 +107,19 @@ def test_structured_stages_do_not_inherit_markdown_only_outer_response(presentat
     assert 'This core ledger has no' not in review['system_prompt']
 
 
+def test_final_review_claim_field_limit_preserves_top_level_envelope():
+    source = '[ASR:0001] The full original source.'
+    with presentation_scope('detailed', 'text'):
+        prompt = build_meeting_review_prompts(source=source, draft='{}',
+                                              extras=None, output_language='zh-CN')
+    rules = prompt['system_prompt']
+    _assert_final_envelope(rules, 'text', 4)
+    assert ("Within each claim row, use only the claim fields defined by this stage's protocol; "
+            'the top-level JSON must still contain protocol, claims, and blocks' in rules)
+    assert 'Output only the final claim fields defined by this stage' not in rules
+    assert prompt['user_prompt'].count(source) == 1
+
+
 @pytest.mark.parametrize('presentation', ['text', 'html', 'illustrated', 'comic', 'infographic'])
 def test_legacy_contract_builder_keeps_protocol_four_and_original_label_schema(presentation):
     rules = review_protocol(presentation)

@@ -12,7 +12,59 @@ from app.llm.meeting_presentation import PresentationState, presentation_state
 from app.llm.structured_output_policy import frozen_binding, select_policy
 
 
+def _safe_review_parse_diagnostic(content):
+    """Describe JSON failures without retaining any model-generated text."""
+    import json
+    class DuplicateKey(ValueError):
+        pass
+    class InvalidConstant(ValueError):
+        pass
+    def pairs(items):
+        result = {}
+        for key, value in items:
+            if key in result:
+                raise DuplicateKey()
+            result[key] = value
+        return result
+    def constant(_):
+        raise InvalidConstant()
+    result = dict(category='ok', offset=None, line=None, column=None, tail_chars=None, context=None)
+    try:
+        json.loads(content, object_pairs_hook=pairs, parse_constant=constant)
+    except json.JSONDecodeError as error:
+        allowed = set('{}[],:"\\ ')
+        result.update(category='syntax', offset=error.pos, line=error.lineno, column=error.colno,
+                      tail_chars=len(content) - error.pos,
+                      context=''.join(c if c in allowed else ' ' for c in content[max(0, error.pos-24):error.pos+24]))
+    except DuplicateKey:
+        result['category'] = 'duplicate_key'
+    except InvalidConstant:
+        result['category'] = 'invalid_constant'
+    except (ValueError, TypeError, RecursionError):
+        result['category'] = 'other_invalid'
+    return result
+
+
 class VILabLLM(_BasePromptLLM):
+    compact_review_enabled = True
+
+    def _can_retry_invalid_draft(self):
+        # Only a complete SSE response reaches draft validation. Native JSON
+        # mode has its own fail-closed contract and is never replayed here.
+        return (not self.source_reading_enabled and self._output_binding is not None
+                and self._output_policy is not None and self._output_policy.mode == 'unchanged')
+
+    def _can_retry_empty_review(self):
+        # Only a complete SSE response can reach the empty-result check.
+        return True
+
+    def _permit_completed_empty_review_retry(self):
+        if self.source_reading_enabled:
+            with self._source_reads_lock:
+                if not self._source_review_started or self._source_post_count != 4:
+                    raise ValueError('Empty review retry is unavailable')
+                self._source_review_retry_permitted = True
+
     def __init__(self, user_id: str, model: str):
         self.user_id = user_id
         self.model = model
@@ -27,6 +79,7 @@ class VILabLLM(_BasePromptLLM):
         self._source_read_failed = False
         self._source_read_error = None
         self._source_review_started = False
+        self._source_review_retry_permitted = False
         self._source_post_count = 0
         self._window_evidence_version = None
         self._window_summary_started = False
@@ -104,6 +157,10 @@ class VILabLLM(_BasePromptLLM):
             raise RuntimeError('Structured output source binding changed')
 
     def _structured_output_policy(self, cloud):
+        from app.llm.meeting_presentation import direct_markdown_active
+        if direct_markdown_active():
+            self._verify_output_binding()
+            return None
         state = presentation_state()
         if (not isinstance(state, PresentationState) or state.depth not in ('brief', 'concise', 'detailed')
                 or state.presentation not in (None, 'text', 'html', 'illustrated', 'comic', 'infographic')):
@@ -124,8 +181,10 @@ class VILabLLM(_BasePromptLLM):
             return self._complete(system_prompt=system_prompt, user_prompt=user_prompt)
         with self._source_reads_lock:
             if (self._source_read_failed or self._source_reads is None
-                    or self._source_reads['state'] != 'combined' or self._source_review_started):
+                    or self._source_reads['state'] != 'combined'
+                    or (self._source_review_started and not self._source_review_retry_permitted)):
                 raise ValueError('Source reading review is unavailable or already claimed')
+            self._source_review_retry_permitted = False
             self._source_review_started = True
         return self._complete_whole_review(system_prompt=system_prompt, user_prompt=user_prompt)
 
@@ -144,7 +203,7 @@ class VILabLLM(_BasePromptLLM):
             from app.llm.meeting_source_bundle import SourcePrompt
             state = presentation_state()
             if (not isinstance(user_prompt, SourcePrompt) or state is None
-                    or state.depth != 'detailed' or state.presentation != 'text'
+                    or state.depth not in ('brief', 'concise', 'detailed') or state.presentation not in (None, 'text')
                     or self._output_binding is None):
                 raise ValueError('Source reading requires a frozen structured detailed text meeting')
             self._source_read_binding = copy.deepcopy((self.user_id, self.model, _task_source.get()))
@@ -180,11 +239,12 @@ class VILabLLM(_BasePromptLLM):
         update_current(metadata=metadata)
         update_current(input=[{"role": "system", "content": content_summary(system_prompt)},
                               {"role": "user", "content": content_summary(user_prompt)}])
-        content = video_user_content(user_prompt)
+        content = video_user_content(user_prompt, prepare_audio=partition) if partition else video_user_content(user_prompt)
         if partition:
             return self._complete_source_reads(cloud, system_prompt, user_prompt, content, output_parameters)
+        from app.llm.meeting_presentation import direct_markdown_active
         return self._send_prepared(cloud, system_prompt, content, output_parameters,
-                                   verify_binding=output_policy is not None)
+                                   verify_binding=output_policy is not None or direct_markdown_active())
 
     def _send_prepared(self, cloud, system_prompt, content, output_parameters, *, raw_observer=None,
                        verify_binding=True):
@@ -197,6 +257,19 @@ class VILabLLM(_BasePromptLLM):
                          {"role": "user", "content": list(content) if isinstance(content, list) else content}],
         }
         payload.update(output_parameters)
+        state = presentation_state()
+        diagnostic = state.active_review_attempt if state is not None else None
+        if diagnostic is not None:
+            # Measure text only; never persist prompt, image data, or arbitrary metadata.
+            user_text = ([content] if isinstance(content, str) else
+                         [part.get('text') for part in content
+                          if isinstance(part, dict) and part.get('type') == 'text'
+                          and isinstance(part.get('text'), str)] if isinstance(content, list) else [])
+            diagnostic.update(system_chars=len(system_prompt),
+                              system_utf8_bytes=len(system_prompt.encode('utf-8')),
+                              user_chars=sum(len(part) for part in user_text),
+                              user_utf8_bytes=sum(len(part.encode('utf-8')) for part in user_text),
+                              json_mode='json_object' if output_parameters.get('response_format') == {'type': 'json_object'} else 'unchanged')
         if verify_binding:
             self._verify_output_binding()
         if self.source_reading_enabled:
@@ -204,13 +277,33 @@ class VILabLLM(_BasePromptLLM):
                 if self._source_read_failed:
                     raise ValueError('Another source read failed; no further dispatch')
                 self._verify_source_read_binding()
-                if self._source_post_count >= 4:
+                if self._source_post_count >= 5:
                     raise ValueError('Source reading request limit reached')
                 self._source_post_count += 1
         data = cloud.request(self.user_id, "POST", "/openai/v1/chat/completions", json=payload)
         record_usage(data.get("usage"))
         choices = data.get("choices") or []
         content = choices[0].get("message", {}).get("content") if choices else None
+        if diagnostic is not None:
+            usage = data.get('usage')
+            diagnostic['usage'] = {key: usage[key] for key in ('prompt_tokens', 'completion_tokens', 'total_tokens')
+                                   if isinstance(usage, dict) and type(usage.get(key)) is int and usage[key] >= 0}
+            finish = choices[0].get('finish_reason') if choices and isinstance(choices[0], dict) else None
+            diagnostic['finish_reason'] = finish if finish in ('stop', 'length', 'content_filter', 'tool_calls', 'function_call') else ('missing' if finish is None else 'other')
+            summary = {'chars': len(content) if isinstance(content, str) else 0, 'json_object': False}
+            if isinstance(content, str):
+                summary['parse'] = _safe_review_parse_diagnostic(content)
+                try:
+                    from app.llm.meeting_final_claim_ledger import decode_final_review
+                    value = decode_final_review(content)
+                    if isinstance(value, dict):
+                        summary['json_object'] = True
+                        summary['protocol'] = value.get('protocol') if type(value.get('protocol')) is int else None
+                        for key in ('claims', 'blocks'):
+                            summary[key + '_count'] = len(value[key]) if isinstance(value.get(key), list) else None
+                except (ValueError, TypeError):
+                    pass
+            diagnostic['output'] = summary
         if not isinstance(content, str) or not content.strip():
             raise RuntimeError("VILab LLM returned no summary")
         if raw_observer is not None:
@@ -254,7 +347,7 @@ class VILabLLM(_BasePromptLLM):
                     parts[index].validate()
                     # Revalidate retained pixels/OCR/source before each dispatch,
                     # without replacing any byte of the frozen partition.
-                    current = video_user_content(user_prompt)
+                    current = video_user_content(user_prompt, prepare_audio=True)
                     if source_content_sha256(current) != content.root_sha256:
                         raise ValueError('Whole source changed before source-read dispatch')
                     row['state'] = 'dispatched'

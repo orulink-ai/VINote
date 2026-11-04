@@ -1,5 +1,18 @@
 # Repository Guidelines
 
+## Speaker/contact attribution and meeting intake (2026-11-04)
+
+- Speaker-to-contact mappings are explicit human confirmations, stored separately from original ASR and bound to owner, canonical meeting, evidence revision and the actual Feishu connection. Unknown/overlapping speaker placeholders are not people. Screen OCR at a speaking interval is only a candidate clue, not identity proof; do not infer a face's name or register voiceprints automatically.
+- Summary-only versions may use a frozen, still-current confirmed name mapping with genuine raw segment speaker labels. Revoked/unavailable mappings are omitted without blocking the summary. Previous minutes and original transcripts are never silently rewritten.
+- Connecting Feishu enables manual contact matching; automatic document publication and notification require the explicit saved automatic-delivery preference. Reuse the existing outbox/frozen recipients and never replay accepted or unknown deliveries. Confirmation can resume only the original definitely-unsent waiting intent.
+- A fresh meeting import owns an independent draft receipt. Do not let an old failed or unknown global receipt intercept the import entry, delete its history, or let a late response overwrite another draft. Meeting originals belong to the meeting detail; use one meeting import flow, preserving original-file and deletion/recovery operations.
+
+## Current meeting text generation (2026-11-04, user override)
+
+The user explicitly rejected the mandatory fact-ledger/JSON review gate after it repeatedly prevented reading generated results. Default and oneshot text meetings now use the complete original transcript in one model request and return reader-facing Markdown directly. Do not require protocol-3 claims, protocol-8 review, exhaustive claim accounting, or a second model call before viewing/saving ordinary text minutes. Do not label generated text as fact-verified. Preserve source ownership, frozen model/connection, complete transport response, nonempty output and idempotent request protection. Never split the original transcript or use a previous summary as input. Retain historical artifacts and explicitly specialized presentation compatibility; the older structured-generation rules below no longer govern the default text path.
+
+Current acceptance is API testing and optimization, without desktop input or actual Feishu document publication. UI build/behavior tests do not establish visual acceptance.
+
 ## Meeting dossiers and explicit delivery (2026-10-20)
 
 - Desktop original media actions use “在文件夹中显示” for a verified existing OS file and “另存为…” for a copy. The Cookie/loopback-only `/api/files/{id}/local-path`, `/api/notes/{id}/media/local-path`, and `/api/task/{id}/original/local-path` return owned original paths with no-store headers. Tauri reveals/selects the file without launching it. IndexedDB-only recordings have no OS path until saved; never invent a folder or reveal a playback derivative. Browser and cloud clients do not receive OS-location controls.
@@ -489,3 +502,9 @@ New App content is local-only unless explicitly enabled. Existing acknowledged a
 ## VINote meeting model boundary (2026-11-03)
 
 Meeting processing uses only the fixed public model service. Validate whole-recording meeting capability before provider upload, including default selections and fresh/retry operations; never fall back to realtime ASR. Confirmed uploads carry concrete ASR/LLM IDs. Summary-only reuse validates the frozen public LLM without requiring available ASR. Historical receipt/snapshot reads remain offline and do not rewrite or replay operations. See `docs/vilab-model-connections.md`.
+
+## Original grouping projection (2026-11-04)
+
+Personal note list/detail responses include optional `original_source` display metadata (`owner_id`, `original_id`, `canonical_task_id`). It derives only from owned task metadata and a unique owned registered file or a validated single-hop source reference with matching original manifest; it grants no playback/generation/publication permission. `noteDossiers.ts` groups these verified IDs by owner and workspace scope and keeps every saved note/version reachable. Missing evidence remains separate; never group by title, URL or content similarity. Existing per-note edit history remains under `/notes/{id}/versions`.
+
+VILab text meeting reviews use compact protocol 8: explicit per-ID `unchanged:true` decisions may reference the frozen original text and exact ASR/OCR evidence instead of repeating it. Corrected/new/rejected claims retain full rows. Host expansion still runs complete protocol-4 source, identity, block and depth validation; unverified quotes and image interpretations cannot be adopted through shorthand. Complete source input, raw response preservation and unknown-result non-replay stay unchanged. Historical protocol 4 remains readable; offline tests do not establish actual model or Feishu acceptance.

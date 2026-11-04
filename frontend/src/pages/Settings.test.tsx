@@ -118,3 +118,11 @@ describe('Settings page layout', () => {
     expect(target.searchParams.get('returnTo')).toBe(parent)
   })
 })
+
+it('opens real task notification preferences from settings navigation', async () => {
+  renderSettings('/settings');
+  await userEvent.click(screen.getByRole('button', { name: '任务通知' }));
+  expect(screen.getByRole('heading', { name: '任务通知' })).toBeVisible();
+  expect(screen.getByRole('switch', { name: '后台使用系统通知' })).toBeDisabled();
+  expect(screen.getByText('系统通知可在桌面应用中启用；当前使用应用内提示。')).toBeVisible();
+});

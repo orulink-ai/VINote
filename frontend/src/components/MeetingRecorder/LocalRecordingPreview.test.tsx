@@ -7,7 +7,8 @@ vi.mock('@/lib/audioStorage', () => ({ deleteLocalRecording: storage.remove, get
 vi.mock('../../lib/meetingProcessing', () => ({ processSavedMeeting: storage.process, isMeetingProcessing: storage.busy }))
 vi.mock('../Settings/ModelSourcePanel', () => ({ ModelSourcePanel: () => <div>现有转写与总结选择组件</div> }))
 vi.mock('../../lib/i18n', () => ({ useI18n: () => ({ locale: 'zh' }) }))
-vi.mock('./RecordingTitleEditor', () => ({ RecordingTitleEditor: () => null }))
+vi.mock('./MeetingDisplayEditor', () => ({ MeetingDisplayEditor: () => null }))
+vi.mock('@/hooks/useMeetingDisplay', () => ({ useMeetingDisplay: () => ({}) }))
 vi.mock('../../lib/recordingDownload', async importOriginal => ({ ...await importOriginal<typeof import('../../lib/recordingDownload')>(), downloadRecording: vi.fn() }))
 import { LocalRecordingPreview } from './LocalRecordingPreview'
 import type { PendingMeeting } from '../../lib/audioStorage'

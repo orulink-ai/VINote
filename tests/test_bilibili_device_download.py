@@ -160,11 +160,14 @@ class LLM:
 def pipeline(intake, monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "data_dir", tmp_path / "downloaded")
     monkeypatch.setattr(settings, "output_dir", tmp_path / "output")
+    from tests.test_meeting_model_boundary import CAPABILITIES
+    frozen = {"version": 1, "owner": "device-user", "mode": "cloud", "server_url": settings.vilab_server_url,
+              "asr_model": "offline-asr", "llm_model": "offline-fixture", "needs_stt": True}
     monkeypatch.setattr("app.services.vilab_cloud_service.VILabCloudService.status",
-                        lambda *a, **k: {"mode": "local"})
-    frozen = {"version": 1, "owner": "device-user", "mode": "local", "server_url": "",
-              "asr_model": "", "llm_model": "", "local_llm_fingerprint": "0" * 64,
-              "local_stt_fingerprint": "0" * 64}
+                        lambda *a, **k: {**frozen, "configured": True})
+    monkeypatch.setattr("app.services.vilab_cloud_service.VILabCloudService.models", lambda *a, **k: [
+        {"id": "offline-asr", "modelType": "asr", "runtimeStatus": "available", "capabilities": CAPABILITIES},
+        {"id": "offline-fixture", "modelType": "llm", "runtimeStatus": "available"}])
     monkeypatch.setattr("app.services.task_model_source.capture_source", lambda *a, **k: frozen)
     forbidden_visual = Mock(side_effect=AssertionError("must not fetch video or render screenshots"))
     screenshots = SimpleNamespace(prepare_local_video=forbidden_visual, inject_screenshots=forbidden_visual)

@@ -18,6 +18,12 @@ export interface TranscriptEvidence {
 
 export type TranscriptTextMode = 'clean' | 'raw'
 
+export function speakerDisplayName(segment: TranscriptEvidenceSegment, aliases: Record<string, string>, zh: boolean) {
+  const id = segment.speaker_id || 'speaker_unknown'
+  const generic = zh ? '说话人' : 'Speaker'
+  return aliases[id] || segment.speaker_label || (id === 'speaker_unknown' || id === 'speaker_overlap' ? generic : `${generic} ${id}`)
+}
+
 export function transcriptText(segment: TranscriptEvidenceSegment, mode: TranscriptTextMode) {
   if (mode === 'raw') {
     return segment.raw_text || segment.text
@@ -52,8 +58,7 @@ export function renderTranscriptMarkdown(
 ) {
   return evidence.segments
     .map((segment) => {
-      const speakerId = segment.speaker_id || 'speaker_unknown'
-      const speaker = evidence.aliases[speakerId] || segment.speaker_label || 'Speaker'
+      const speaker = speakerDisplayName(segment, evidence.aliases, false)
       return `**${speaker}** _${formatTranscriptTimestamp(segment.start)}_\n\n${transcriptText(segment, mode)}`
     })
     .join('\n\n---\n\n')

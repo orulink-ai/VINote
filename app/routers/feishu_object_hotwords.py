@@ -1,5 +1,5 @@
 """Cookie-authenticated desktop CLI object aliases; never a cloud/proxy route."""
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.config import settings
@@ -49,11 +49,11 @@ def list_hotwords(context=Depends(_context)):
 
 
 @router.post("/refresh")
-def refresh_hotwords(context=Depends(_context)):
+def refresh_hotwords(context=Depends(_context), query: str = Query(default="", max_length=50)):
     service, provider, owner, binding = context
     # A bounded has-chatted contact page joins the visible-group/search cache.
     # Even has_more=false completes only this filtered page, not a directory.
-    page = provider.refresh_objects(owner)
+    page = provider.refresh_objects(owner, query=query) if query else provider.refresh_objects(owner)
     result = service.refresh(owner, binding)
     return {**result, "has_more": page["has_more"], "partial": True}
 

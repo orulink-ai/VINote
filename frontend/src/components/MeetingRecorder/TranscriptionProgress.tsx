@@ -52,7 +52,7 @@ export function TranscriptionProgress({
             : "Transcribing the complete recording"}
       </p>
       </div>
-      <div
+      {measured && <div
         role="progressbar"
         aria-label={zh ? "音频转写进度" : "Audio transcription progress"}
         aria-valuemin={0}
@@ -66,11 +66,10 @@ export function TranscriptionProgress({
         <div
           className={cn(
             "h-full rounded-sm bg-primary",
-            !measured && "w-1/3 opacity-60 motion-safe:animate-pulse motion-reduce:animate-none",
           )}
           style={percentage !== undefined ? { width: `${percentage}%` } : undefined}
         />
-      </div>
+      </div>}
       <p className="text-xs leading-5 text-muted-foreground">
         {complete
           ? zh
@@ -78,11 +77,11 @@ export function TranscriptionProgress({
             : "Transcription complete; preparing results."
           : hasEstimate
             ? zh
-              ? `转写预计还需约 ${Math.ceil(etaSeconds!)} 秒，以实际服务速度为准。`
-              : `About ${Math.ceil(etaSeconds!)} seconds remaining for transcription; service speed may vary.`
+              ? `预计还需约 ${Math.ceil(etaSeconds!)} 秒`
+              : `About ${Math.ceil(etaSeconds!)} seconds remaining`
             : zh
-              ? "等待实际分段结果，暂无法估算剩余时间。"
-              : "Waiting for measured results; remaining time is not yet available."}
+              ? measured ? "暂无法估算剩余时间，正在等待识别结果。" : "服务尚未提供识别百分比，完成后会自动更新结果。"
+              : "Remaining time is not yet available."}
       </p>
     </div>
   );

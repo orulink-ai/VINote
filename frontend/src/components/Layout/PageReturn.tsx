@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 export function PageReturn({ to, label, contextual = true }: { to: string; label: string; contextual?: boolean }) {
   const location = useLocation()
   const parent = (contextual ? contextualPageParent(location.pathname, location.search, location.state?.returnTo) : null) || resolvePageParent(to)
-  return <div><Button asChild variant="ghost" size="sm">
+  return <div className="page-return"><Button asChild variant="ghost" size="sm">
     <Link to={parent}><ArrowLeft data-icon="inline-start" />{parent === to ? label : pageParentLabel(parent)}</Link>
   </Button></div>
 }

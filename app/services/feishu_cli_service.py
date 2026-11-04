@@ -381,8 +381,8 @@ class FeishuCLIService(FeishuService):
         return super().recover_document(owner, job_id,
             self.config.feishu_doc_base_url + "/" + document[1] + "/" + document[2])
 
-    def refresh_objects(self, owner):
-        """Read one filtered contact page and the current visible groups.
+    def _visible_contact_page(self, owner, query=""):
+        """Read one fresh filtered contact page without enumerating groups.
 
         CLI v1.0.60 emits data.users[{open_id, localized_name, ...}] and
         data.has_more. This is a read shortcut (its search HTTP method is POST),
@@ -391,11 +391,18 @@ class FeishuCLIService(FeishuService):
         import re
         import unicodedata
 
+        if (not isinstance(query, str) or len(query) > 50
+                or any(unicodedata.category(char).startswith("C") for char in query)):
+            raise FeishuError("联系人查询参数无效", 422, code="invalid_contact_query")
+        query = query.strip()
         if owner != self.owner or not cli.enabled():
             raise FeishuError("请使用当前桌面账号读取飞书可见对象", 403)
         self.user_token(owner)
         binding = dict(self.contact_binding(owner))
-        raw = cli.run(owner, ["contact", "+search-user", "--has-chatted", "--exclude-external-users",
+        # This shortcut has no cursor. Narrow named searches when has_more;
+        # neither mode excludes externally visible contacts.
+        filters = ["--query", query] if query else ["--has-chatted"]
+        raw = cli.run(owner, ["contact", "+search-user", *filters,
                               "--page-size", "30", "--as", "user", "--json"],
                       credential_identity={"app_id": binding["app_id"], "open_id": binding["sender_open_id"]})
         # cli.run propagates permission/auth failures; never turn them into [].
@@ -416,7 +423,7 @@ class FeishuCLIService(FeishuService):
             if (not isinstance(object_id, str) or not re.fullmatch(r"ou_[A-Za-z0-9_-]{1,196}", object_id) or
                     not isinstance(name, str) or not name.strip() or len(name) > 500 or
                     any(unicodedata.category(char).startswith("C") for char in name) or
-                    item.get("is_cross_tenant") is True or item.get("has_chatted") is False):
+                    (not query and item.get("has_chatted") is False)):
                 raise FeishuError("飞书联系人与当前筛选不匹配，请重新读取", 502,
                                   code="contacts_response_invalid")
             value = {"id": object_id, "name": name.strip(), "kind": "contact"}
@@ -428,11 +435,15 @@ class FeishuCLIService(FeishuService):
         self.user_token(owner)
         if self.contact_binding(owner) != binding:
             raise FeishuError("飞书连接已变化，请重新读取可见对象", 409, code="connection_changed")
+        return binding, {"objects": list(objects.values()), "has_more": data["has_more"], "partial": True}
+
+    def refresh_objects(self, owner, query=""):
+        binding, result = self._visible_contact_page(owner, query)
         self.groups(owner)
         if self.contact_binding(owner) != binding:
             raise FeishuError("飞书连接已变化，请重新读取可见对象", 409, code="connection_changed")
-        self._remember(owner, binding, list(objects.values()))
-        return {"objects": list(objects.values()), "has_more": data["has_more"], "partial": True}
+        self._remember(owner, binding, result["objects"])
+        return result
 
     def groups(self, owner):
         self.user_token(owner)
@@ -458,18 +469,39 @@ class FeishuCLIService(FeishuService):
         record_objects(owner, binding, objects)
 
     def contacts(self, owner, query, page_size=20, page_token=""):
-        from app.services.feishu_object_hotwords import resolve
+        from app.services.feishu_object_hotwords import resolve, _key
+        if isinstance(query, str) and not query.strip():
+            if type(page_size) is not int or not 1 <= page_size <= 50 or page_token != "":
+                raise FeishuError("最近联系人没有后续页，请输入姓名缩小范围", 422, code="invalid_contact_query")
+            with _lock(owner):
+                binding, visible = self._visible_contact_page(owner, query)
+                items = []
+                for person in visible["objects"][:page_size]:
+                    identity = {"open_id": person["id"], "name": person["name"]}
+                    selection = _cipher().encrypt(json.dumps({"purpose": "feishu_contact_selection_v1",
+                                                              **binding, **identity}).encode()).decode()
+                    items.append({**identity, "selection_token": selection})
+                self._remember(owner, binding, visible["objects"])
+                return {"items": items, "has_more": False, "page_token": "", "partial": True,
+                        "search_required": visible["has_more"] or len(visible["objects"]) > page_size,
+                        "selection_expires_in": 900, "reading_permission": "not_checked",
+                        "bot_availability": "not_checked"}
         self.user_token(owner)
         binding = self.contact_binding(owner)
         alias = resolve(owner, binding, query)
         # Aliases provide a query, not authority. Resolve actual contact results
         # and issue the existing fresh selection proof before it can be chosen.
-        actual_query = alias[0]["name"] if len(alias) == 1 and alias[0]["kind"] == "contact" else query
+        # A partial cache may know only one of several people with this name.
+        # Only an explicit alias narrows identity; real-name searches retain
+        # every fresh API result, including contacts absent from that cache.
+        alias_target = (alias[0] if len(alias) == 1 and alias[0]["kind"] == "contact"
+                        and _key(query) != _key(alias[0]["name"]) else None)
+        actual_query = alias_target["name"] if alias_target else query
         result = super().contacts(owner, actual_query, page_size, page_token)
         self._remember(owner, binding, [{"id": i["open_id"], "name": i["name"], "kind": "contact"}
                                for i in result["items"]])
-        if len(alias) == 1 and alias[0]["kind"] == "contact":
-            result["items"] = [i for i in result["items"] if i["open_id"] == alias[0]["id"]]
+        if alias_target:
+            result["items"] = [i for i in result["items"] if i["open_id"] == alias_target["id"]]
         return result
 
     def send_message(self, owner, target, job):

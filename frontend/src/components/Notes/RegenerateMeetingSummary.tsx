@@ -1,3 +1,4 @@
+import { trackGenerationNotification } from '@/lib/taskNotifications'
 import { useLayoutEffect, useRef, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { apiJson, ApiError } from '@/lib/api'
@@ -11,7 +12,7 @@ import { ToggleGroup, ToggleGroupItem } from '@/components/ui/toggle-group'
 import { NativeSelect } from '@/components/ui/native-select'
 import { Checkbox } from '@/components/ui/checkbox'
 import { modelEligibility, type ModelEligibilityInput } from '@/lib/modelEligibility'
-import { depthLabels, presentationLabels } from '@/lib/summaryPresentation'
+import { depthLabels } from '@/lib/summaryPresentation'
 import { meetingVersionOperationKey, isMeetingVersionReceipt, type MeetingVersionContext, type MeetingVersionModels, type ContentDepth, type Presentation } from '@/lib/meetingVersion'
 import { isRejectedVersionReceipt, readVersionReceipt, versionRejectionKey, versionSourceLocation, versionPreflightRejection, versionNotAcceptedCopy } from '@/lib/meetingVersionRecovery'
 
@@ -261,6 +262,7 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
       if (!active()) return
       if (result.operation_id !== operationId || !result.task_id || result.task_id === taskId || !['reserved', 'accepted'].includes(result.state)) throw new Error('提交结果尚未确认，请查询本次操作。')
       localStorage.setItem(key, JSON.stringify({ ...pending, id: result.task_id, submissionState: result.state }))
+      try { trackGenerationNotification(owner, { taskId: result.task_id, operationId, meeting: true, mode: 'file' }) } catch { /* Keep the accepted generation independent of notification storage. */ }
       openOperation(operationId)
     } catch (cause) {
       if (!active()) return
@@ -291,7 +293,7 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
     </div>}
     {error && !confirmation && <p role="alert" className="text-sm text-destructive">{error}</p>}
     <Dialog open={!!confirmation} onOpenChange={open => { if (!open && !busy) setConfirmation(null) }}>
-      <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] flex-col !overflow-hidden" closeLabel="关闭" onCloseAutoFocus={restoreOpener}><DialogHeader className="shrink-0 pr-6"><DialogTitle>确认生成新版本</DialogTitle><DialogDescription>{asrMode === 'reuse' ? '复用原始 ASR 转写、独立说话人及可用画面证据，不以上一版纪要为输入，不重新转录。' : '明确重新识别原录制并生成纪要，将额外使用 ASR 与 LLM 额度。'}新纪要独立保存，已有记录和原文件保留；总结可能产生模型费用。</DialogDescription></DialogHeader>
+      <DialogContent className="flex max-h-[calc(100dvh-2rem)] w-[calc(100%-2rem)] flex-col !overflow-hidden" closeLabel="关闭" onCloseAutoFocus={restoreOpener}><DialogHeader className="shrink-0 pr-6"><DialogTitle>确认生成新版本</DialogTitle><DialogDescription>{asrMode === 'reuse' ? '使用原始转写、说话人及可用画面，不重新转写，也不使用上一版纪要。' : '重新识别原录制会额外使用转写和总结额度。'}新版本独立保存，已有记录和原文件保留；总结可能产生模型费用。</DialogDescription></DialogHeader>
         <div data-testid="meeting-version-options" className="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto overscroll-contain pr-1">
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <FieldGroup>
@@ -320,7 +322,7 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
               <option value="" disabled>请选择本次总结模型</option>
               {llmMode === 'select' && models.map(model => <option key={model.id} value={model.id}>{model.name || model.id}</option>)}
             </NativeSelect>
-            <FieldDescription id="summary-model-help">默认沿用所选纪要的原模型，不修改全局模型偏好。只有明确更换时读取当前模型目录；草稿与事实复核使用同一模型。</FieldDescription>
+            <FieldDescription id="summary-model-help">默认沿用所选纪要的模型；更换只影响本次生成。</FieldDescription>
           </Field>
           {loadingModels && <p role="status">正在核验模型目录…</p>}
           {asrMode === 'fresh' && <>
@@ -332,19 +334,10 @@ function SummaryAction({ noteId, taskId, workspace, returnTo, disabled, owner }:
             </Field>
             <Field orientation="horizontal"><Checkbox id="summary-extra-asr" checked={asrConsent} disabled={busy} onCheckedChange={value => setAsrConsent(value === true)} /><FieldLabel htmlFor="summary-extra-asr">我确认重新识别会额外使用 ASR 与 LLM 额度</FieldLabel></Field>
           </>}
-          <Field><FieldLabel id="summary-depth-label">内容详略</FieldLabel>
+          <Field><FieldLabel id="summary-depth-label">总结方式</FieldLabel>
             <ToggleGroup type="single" variant="outline" value={contentDepth} disabled={busy} aria-labelledby="summary-depth-label" onValueChange={value => { if (value) setContentDepth(value as ContentDepth) }} className="justify-start flex-wrap">
-              {(Object.keys(depthLabels) as ContentDepth[]).map(value => <ToggleGroupItem key={value} value={value}>{depthLabels[value]}</ToggleGroupItem>)}
+              {(['concise', 'detailed'] as ContentDepth[]).map(value => <ToggleGroupItem key={value} value={value}>{depthLabels[value]}</ToggleGroupItem>)}
             </ToggleGroup>
-          </Field>
-          <Field><FieldLabel id="summary-presentation-label">呈现形式</FieldLabel>
-            <ToggleGroup type="single" variant="outline" value={presentation} disabled={busy} aria-labelledby="summary-presentation-label" aria-describedby="summary-presentation-help" onValueChange={value => { if (value) setPresentation(value as Presentation) }} className="justify-start flex-wrap">
-              {(Object.keys(presentationLabels) as Presentation[]).map(value => {
-                const available = presentationOptions?.[value]?.available ?? ['text', 'html'].includes(value)
-                return <ToggleGroupItem key={value} value={value} disabled={!available} title={presentationOptions?.[value]?.reason || undefined}>{presentationLabels[value]}{!available ? '（不可用）' : ''}</ToggleGroupItem>
-              })}
-            </ToggleGroup>
-            <FieldDescription id="summary-presentation-help">图文只使用已核验的原视频截图，其他形式以当前可用能力为准，不会自动更换模型。每次生成独立保存，同形式可保留多个版本。</FieldDescription>
           </Field>
         </FieldGroup>
         <p className="text-sm">来源类型：{['video', 'meeting_video'].includes(confirmation?.context.source.type || '') ? '视频' : ['audio', 'meeting_audio', 'meeting_recording'].includes(confirmation?.context.source.type || '') ? '音频' : '已保留资料'}。仅使用已核验的证据，不将缺失内容当作静音。</p>

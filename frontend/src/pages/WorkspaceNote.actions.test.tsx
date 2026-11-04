@@ -32,15 +32,17 @@ async function mount(edit = false) {
     <Route path="/notes" element={<p>原项目列表</p>} />
   </Routes></MemoryRouter>); });
 }
-it('exposes edit/export/share/delete once without opening content actions or requiring synchronization', async () => {
+it('keeps editing primary and export/share/delete in content actions without requiring synchronization', async () => {
   await mount();
   const primary = screen.getByRole('group', { name: '主要内容操作' });
-  for (const name of ['编辑', '导出 Markdown', '分享', '删除']) expect(within(primary).getByRole('button', { name })).toBeVisible();
+  expect(within(primary).getByRole('button', { name: '编辑' })).toBeVisible();
+  expect(within(primary).queryByRole('button', { name: '删除' })).not.toBeInTheDocument();
   expect(screen.queryByRole('switch')).not.toBeInTheDocument();
   expect(screen.queryByText(/已同步|等待同步|暂停同步|先保存并确认同步/)).not.toBeInTheDocument();
   fireEvent.click(screen.getByRole('button', { name: '内容操作' }));
-  expect(screen.getByRole('link', { name: '全文翻译 · MCP' })).not.toHaveAttribute('aria-disabled', 'true');
-  expect(screen.getByRole('link', { name: '全文翻译 · MCP' })).toHaveAttribute('href', '/settings/mcp?mode=translation&note=real-content&version=real-version');
+  for (const name of ['导出 Markdown', '分享', '删除']) expect(screen.getByRole('button', { name })).toBeVisible();
+  expect(screen.queryByRole('link', { name: '全文翻译 · MCP' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('link', { name: '全文翻译 · MCP' })).not.toBeInTheDocument();
   expect(calls.api).not.toHaveBeenCalled();
 });
 it('previews the saved export and share with one dialog and cancels without changing or uploading content', async () => {

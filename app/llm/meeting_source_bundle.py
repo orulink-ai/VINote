@@ -170,7 +170,7 @@ def _source_duration(visual_header):
         return None
 
 
-def chronological_content(prompt: SourcePrompt, *, visual_header='', records=(), packets=()):
+def chronological_content(prompt: SourcePrompt, *, visual_header='', records=(), packets=(), prepare_audio=False):
     """Move complete windows/frame packets; never split text or infer attribution."""
     slot = prompt.slot
     slot.bundle.validate()
@@ -204,7 +204,7 @@ def chronological_content(prompt: SourcePrompt, *, visual_header='', records=(),
     for _, kind, index, blocks in sorted(events, key=lambda event: event[:3]):
         start = len(content)
         content.extend(blocks)
-        if images:
+        if images or prepare_audio:
             if kind == 0:
                 window = slot.bundle.windows[index]
                 units.append(SourceUnit('asr', window.source_ref, start, len(content),
@@ -216,6 +216,7 @@ def chronological_content(prompt: SourcePrompt, *, visual_header='', records=(),
                                         tuple(record.get('sample_offsets', ()))))
     content.append({'type': 'text', 'text': slot.suffix})
     slot.bundle.validate()
-    return (PreparedSourceContent(content, units=units, duration_seconds=_source_duration(visual_header),
-                                  validate_source=slot.bundle.validate) if images else
+    duration = _source_duration(visual_header) if images else max((w.end for w in slot.bundle.windows), default=0)
+    return (PreparedSourceContent(content, units=units, duration_seconds=duration,
+                                  validate_source=slot.bundle.validate) if images or prepare_audio else
             '\n\n'.join(block['text'] for block in content))

@@ -2,6 +2,7 @@
 from app.services.summary_failure import (
     SummaryResultUnconfirmed, SUMMARY_UNCONFIRMED_CODE, SUMMARY_UNCONFIRMED_COPY,
     safe_summary_failure_context,
+    SUMMARY_OUTPUT_INVALID_CODE, SUMMARY_OUTPUT_INVALID_COPY,
 )
 from app.services.asr_stream_service import (
     ASRServiceError,
@@ -62,6 +63,13 @@ def safe_asr_failure_context(value):
 
 
 def failure_details(error):
+    from app.llm.meeting_final_claim_ledger import FinalLedgerError
+    if isinstance(error, FinalLedgerError) and error.code in ('invalid_json', 'duplicate_json_key'):
+        result = {'error_code': SUMMARY_OUTPUT_INVALID_CODE, 'retryable': False, 'failed_stage': 'summarizing'}
+        context = safe_summary_failure_context(getattr(error, 'summary_failure_context', None))
+        if context is not None:
+            result['summary_failure_context'] = context
+        return result
     if isinstance(error, SummaryResultUnconfirmed):
         result = {'error_code': SUMMARY_UNCONFIRMED_CODE, 'retryable': False}
         context = safe_summary_failure_context(getattr(error, 'summary_failure_context', None))
@@ -94,6 +102,11 @@ def recovery_status(status):
     result = dict(status)
     code = result.get("error_code")
     context = safe_summary_failure_context(result.pop('summary_failure_context', None))
+    if code == SUMMARY_OUTPUT_INVALID_CODE:
+        if context is not None and result.get('status') in {'failed', 'error'}:
+            result['summary_failure_context'] = context
+        result.update(retryable=False, message=SUMMARY_OUTPUT_INVALID_COPY)
+        return result
     if code == SUMMARY_UNCONFIRMED_CODE:
         if context is not None and result.get('status') in {'failed', 'error'}:
             result['summary_failure_context'] = context

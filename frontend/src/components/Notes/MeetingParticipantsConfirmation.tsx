@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState } from 'react';
+import { MeetingSpeakerMatches, type MeetingSpeaker, type SpeakerMatch } from './MeetingSpeakerMatches';
 import { useLocation } from 'react-router-dom';
 import { ApiError, apiJson } from '@/lib/api';
 import { feishuContacts, type FeishuPreferenceContact } from '@/lib/feishu';
@@ -13,8 +14,9 @@ import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet 
 
 export type MeetingParticipantsContext = {
   note_key: string; task_id: string; canonical_task_id: string | null; evidence_revision: string; can_confirm: boolean;
+  speakers?: MeetingSpeaker[];
   candidates: { candidate_id: string; name: string; status: string; evidence: { role?: string; excerpt?: string; start?: number }[] }[];
-  confirmation: { revision: number; status: 'confirmed' | 'cleared' | 'stale' | 'unconfirmed'; participants: { open_id: string; name: string }[] };
+  confirmation: { revision: number; status: 'confirmed' | 'cleared' | 'stale' | 'unconfirmed'; participants: { open_id: string; name: string }[]; speaker_matches?: SpeakerMatch[] };
 };
 export type MeetingParticipantsConfirmationProps = {
   noteId: string; taskId: string; disabled?: boolean;
@@ -36,6 +38,19 @@ function checkedContext(value: MeetingParticipantsContext, noteId: string, taskI
     || new Set(value.confirmation.participants.map(p => p.open_id)).size !== value.confirmation.participants.length) {
     throw new Error('参会人资料未核验，请重新读取。');
   }
+  if (value.speakers !== undefined && (!Array.isArray(value.speakers) || value.speakers.length > 100
+    || value.speakers.some(speaker => !speaker || typeof speaker.speaker_id !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(speaker.speaker_id)
+      || !Array.isArray(speaker.samples) || speaker.samples.some(sample => !sample || typeof sample.text !== 'string'
+        || !Number.isFinite(sample.start) || sample.start < 0 || !Number.isFinite(sample.end) || sample.end < sample.start
+        || !['segment_speaker', 'time_overlap'].includes(sample.association))
+      || !Array.isArray(speaker.candidates) || speaker.candidates.some(candidate => !candidate || typeof candidate.open_id !== 'string' || !validId(candidate.open_id)
+        || typeof candidate.name !== 'string' || !Array.isArray(candidate.reasons) || candidate.reasons.some(reason => typeof reason !== 'string')))
+    || new Set(value.speakers.map(speaker => speaker.speaker_id)).size !== value.speakers.length)) throw new Error('说话人资料未核验，请重新读取。');
+  const matches = value.confirmation.speaker_matches;
+  if (matches !== undefined && (!Array.isArray(matches) || matches.length > 100
+    || matches.some(match => !match || !value.speakers?.some(speaker => speaker.speaker_id === match.speaker_id)
+      || !value.confirmation.participants.some(person => person.open_id === match.open_id))
+    || new Set(matches.map(match => match.speaker_id)).size !== matches.length)) throw new Error('说话人对应关系未核验，请重新读取。');
   return value;
 }
 
@@ -50,6 +65,7 @@ export function MeetingParticipantsConfirmation(props: MeetingParticipantsConfir
 function ConfirmationAction({ noteId, taskId, disabled = false, onConfirmed, owner }: MeetingParticipantsConfirmationProps & { owner?: string }) {
   const [open, setOpen] = useState(false), [view, setView] = useState<MeetingParticipantsContext | null>(null);
   const [selected, setSelected] = useState<FeishuPreferenceContact[]>([]), [attested, setAttested] = useState(false);
+  const [matches, setMatches] = useState<Record<string, string>>({}), [assigningSpeaker, setAssigningSpeaker] = useState('');
   const [query, setQuery] = useState(''), [items, setItems] = useState<FeishuPreferenceContact[]>([]), [cursor, setCursor] = useState('');
   const [busy, setBusy] = useState(false), [searching, setSearching] = useState(false);
   const [error, setError] = useState(''), [message, setMessage] = useState(''), [mustRead, setMustRead] = useState(false);
@@ -64,7 +80,7 @@ function ConfirmationAction({ noteId, taskId, disabled = false, onConfirmed, own
   const changeOpen = (next: boolean) => {
     ++generation.current; ++searchSequence.current; locked.current = false;
     setOpen(next); setBusy(false); setSearching(false); setView(null); setSelected([]); setItems([]); setCursor('');
-    setQuery(''); setAttested(false); setError(''); setMessage(''); setMustRead(false);
+    setQuery(''); setMatches({}); setAssigningSpeaker(''); setAttested(false); setError(''); setMessage(''); setMustRead(false);
     if (next) void read();
   };
   async function read() {
@@ -75,7 +91,9 @@ function ConfirmationAction({ noteId, taskId, disabled = false, onConfirmed, own
     try {
       const context = checkedContext(await apiJson<MeetingParticipantsContext>(path, { cache: 'no-store' }), noteId, taskId);
       if (!active(epoch)) return;
-      setView(context); setSelected(context.confirmation.participants); setMustRead(false);
+      setView(context); setSelected(context.confirmation.participants);
+      setMatches(Object.fromEntries((context.confirmation.status === 'confirmed' ? context.confirmation.speaker_matches || [] : []).map(match => [match.speaker_id, match.open_id])));
+      setAssigningSpeaker(''); setMustRead(false);
     } catch (cause) { if (active(epoch)) setError(cause instanceof Error ? cause.message : '读取参会人资料失败，请重试。') }
     finally { if (active(epoch)) { locked.current = false; setBusy(false) } }
   }
@@ -119,14 +137,15 @@ function ConfirmationAction({ noteId, taskId, disabled = false, onConfirmed, own
       const saved = checkedContext(await apiJson<MeetingParticipantsContext>(path, { method: 'PUT', body: JSON.stringify({
         confirmed: true, task_id: taskId, evidence_revision: view.evidence_revision,
         confirmation_revision: view.confirmation.revision, contacts,
+        ...(view.speakers !== undefined ? { speaker_matches: Object.entries(matches).map(([speaker_id, open_id]) => ({ speaker_id, open_id })) } : {}),
       }) }), noteId, taskId);
       if (!active(epoch)) return;
-      setView(saved); setSelected(saved.confirmation.participants); setAttested(false); setItems([]); setCursor('');
+      setView(saved); setSelected(saved.confirmation.participants); setMatches(Object.fromEntries((saved.confirmation.speaker_matches || []).map(match => [match.speaker_id, match.open_id]))); setAssigningSpeaker(''); setAttested(false); setItems([]); setCursor('');
       setMessage('已保存参会人确认。已启用且等待本次确认的自动交付会按会议通知设置继续处理。');
       onConfirmed?.();
     } catch (cause) {
       if (!active(epoch)) return;
-      if (dispatched) { setMustRead(true); setAttested(false); setSelected([]) }
+      if (dispatched) { setMustRead(true); setAttested(false); setSelected([]); setMatches({}); setAssigningSpeaker('') }
       setError(cause instanceof ApiError && cause.status === 409 ? '名单或会议资料已变化，请重新读取并确认。'
         : dispatched ? '保存结果尚未核验，请重新读取名单；不会自动重复保存。'
         : cause instanceof Error ? cause.message : '联系人暂不能核验，请重试。');
@@ -145,6 +164,9 @@ function ConfirmationAction({ noteId, taskId, disabled = false, onConfirmed, own
         {view && <>
           {view.confirmation.status === 'stale' && <p role="status">原确认的来源或连接已变化，请重新核对。</p>}
           {!view.can_confirm && <p role="status">当前来源资料无法完整核验，暂不能确认名单或选择不通知参会人。</p>}
+          {view.speakers !== undefined && <MeetingSpeakerMatches speakers={view.speakers} contacts={selected.map(person => ({ open_id: person.open_id, name: person.name || '' }))} matches={matches} confirmedMatches={Object.fromEntries((view.confirmation.status === 'confirmed' ? view.confirmation.speaker_matches || [] : []).map(match => [match.speaker_id, match.open_id]))} disabled={editingDisabled || !view.can_confirm}
+            onMatch={(speaker, contact) => { if (!active(generation.current)) return; setMatches(previous => { const next = { ...previous }; if (contact) next[speaker] = contact; else delete next[speaker]; return next; }); setAttested(false); }}
+            onSearch={(speaker, name) => { if (!active(generation.current)) return; ++searchSequence.current; setAssigningSpeaker(speaker); setQuery(name); queryRef.current = name; setItems([]); setCursor(''); setMessage(''); document.getElementById(`${id}-search`)?.focus(); }} />}
           <details><summary className="cursor-pointer text-sm">查看材料中的姓名线索（{view.candidates.length}）</summary>
             <ul className="flex flex-col gap-3 pt-2">{view.candidates.map(c => <li key={c.candidate_id} className="text-sm">
               <p className="break-words">{c.name} · 待核对</p>
@@ -155,8 +177,9 @@ function ConfirmationAction({ noteId, taskId, disabled = false, onConfirmed, own
             {!selected.length && <FieldDescription>尚未选择联系人。候选线索不会自动加入名单。</FieldDescription>}
             <ul className="flex flex-col gap-2">{selected.map(p => <li key={p.open_id} className="flex items-center justify-between gap-2">
               <span className="min-w-0 break-words text-sm">{p.name} · {p.open_id}</span>
-              <Button type="button" variant="ghost" size="sm" onClick={() => { if (!active(generation.current)) return; setSelected(selected.filter(item => item.open_id !== p.open_id)); setAttested(false) }} aria-label={`移除参会人${p.name}`}>移除</Button>
+              <Button type="button" variant="ghost" size="sm" onClick={() => { if (!active(generation.current)) return; setSelected(selected.filter(item => item.open_id !== p.open_id)); setMatches(previous => Object.fromEntries(Object.entries(previous).filter(([, contact]) => contact !== p.open_id))); setAttested(false) }} aria-label={`移除参会人${p.name}`}>移除</Button>
             </li>)}</ul>
+            {assigningSpeaker && <div className="flex items-center justify-between gap-2 text-sm"><p>正在为说话人 {assigningSpeaker} 查找联系人</p><Button type="button" variant="ghost" size="sm" onClick={() => setAssigningSpeaker('')}>取消对应</Button></div>}
             <FieldGroup><Field><FieldLabel htmlFor={`${id}-search`}>搜索飞书联系人</FieldLabel>
               <Input id={`${id}-search`} value={query} maxLength={50} disabled={!view.can_confirm} placeholder="输入联系人姓名"
                 onChange={event => { ++searchSequence.current; setQuery(event.target.value); queryRef.current = event.target.value; setItems([]); setCursor(''); setSearching(false); setMessage('') }} />
@@ -166,13 +189,15 @@ function ConfirmationAction({ noteId, taskId, disabled = false, onConfirmed, own
             <ul className="flex flex-col gap-2">{items.map(p => <li key={p.open_id}><Button type="button" variant="outline" className="h-auto w-full whitespace-normal justify-start" onClick={() => {
               if (!active(generation.current) || !p.expiresAt || p.expiresAt <= Date.now()) { setError('联系人选择已过期，请重新搜索。'); return }
               if (selected.length >= 20 && !selected.some(s => s.open_id === p.open_id)) { setError('最多选择20位参会人。'); return }
-              setSelected([...selected.filter(s => s.open_id !== p.open_id), p]); setAttested(false);
+              setSelected([...selected.filter(s => s.open_id !== p.open_id), p]);
+              if (assigningSpeaker) { setMatches(previous => ({ ...previous, [assigningSpeaker]: p.open_id })); setAssigningSpeaker(''); }
+              setAttested(false);
             }}>选择{p.name}（{p.open_id}）</Button></li>)}</ul>
             {cursor && <Button type="button" variant="outline" onClick={() => void search(true)}>下一页联系人</Button>}
           </FieldSet>
           <Field orientation="horizontal" data-disabled={editingDisabled}>
             <Checkbox id={`${id}-attest`} checked={attested} disabled={editingDisabled || !view.can_confirm} onCheckedChange={checked => setAttested(checked === true)} />
-            <FieldLabel htmlFor={`${id}-attest`}>{selected.length ? '我确认所选飞书对象实际参加了本次会议' : '本会议不通知参会人'}</FieldLabel>
+            <FieldLabel htmlFor={`${id}-attest`}>{Object.keys(matches).length ? '我确认以上说话人对应关系及所选参会人' : selected.length ? '我确认所选飞书对象实际参加了本次会议' : '本会议不通知参会人'}</FieldLabel>
           </Field>
           {!selected.length && <FieldDescription>需主动确认后保存；通知本人仍按独立设置执行。</FieldDescription>}
         </>}

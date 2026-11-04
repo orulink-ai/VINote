@@ -17,6 +17,7 @@ from app.llm.meeting_review import build_meeting_review_prompts
 from app.llm.meeting_draft import build_meeting_draft_prompts
 from app.llm.video_material import bind_video_material, video_user_content, anthropic_user_content
 from app.llm.source_references import (bind_source_references, record_working_draft,
+                                      record_working_draft_retry,
                                       segment_reference, without_internal_references,
                                       bind_chronological_source)
 from app.llm.prompts import (
@@ -45,28 +46,188 @@ class _BasePromptLLM(LLMSummarizer):
     def _complete_review(self, *, system_prompt: str, user_prompt: str) -> str:
         return self._complete(system_prompt=system_prompt, user_prompt=user_prompt)
 
+    def _can_retry_empty_review(self):
+        # Only transports that prove successful completion may opt in.
+        return False
+
+    def _can_retry_invalid_draft(self):
+        return False
+
+    def _permit_completed_empty_review_retry(self):
+        pass
+
     def _review_meeting_note(self, *, source, draft, extras, output_language,
                              intermediate=False, source_is_reviewed_notes=False):
         from app.llm.meeting_presentation import presentation_state
+        state = presentation_state()
+        if state is not None:
+            state.compact_review = bool(getattr(self, 'compact_review_enabled', False))
         model_draft = draft
         if not intermediate and presentation_state() and presentation_state().depth:
             from app.llm.meeting_review_draft_view import review_draft_input_view
             model_draft = review_draft_input_view(draft)
         review_name = "LLM｜核对会议分段" if intermediate else "LLM｜核对最终会议纪要"
-        with generation_name(review_name):
-            result = self._complete_review(**build_meeting_review_prompts(
-                source=source, draft=model_draft, extras=extras,
-                output_language=output_language, intermediate=intermediate,
-                source_is_reviewed_notes=source_is_reviewed_notes,
-            ))
+        prompts = build_meeting_review_prompts(
+            source=source, draft=model_draft, extras=extras,
+            output_language=output_language, intermediate=intermediate,
+            source_is_reviewed_notes=source_is_reviewed_notes,
+        )
+        state = presentation_state() if not intermediate else None
+        def complete_review(review_prompts):
+            if not (state and state.depth):
+                with generation_name(review_name):
+                    return self._complete_review(**review_prompts)
+            from app.llm.meeting_final_claim_ledger import decode_final_review, FinalLedgerError
+            try:
+                material = decode_final_review(draft)
+            except FinalLedgerError:
+                material = None
+            claims = material.get('claims') if isinstance(material, dict) else None
+            row = {'claim_count': len(claims) if isinstance(claims, list) else None,
+                   'outcome': 'started'}
+            state.review_attempt_details.append(row)
+            state.active_review_attempt = row
+            try:
+                with generation_name(review_name):
+                    response = self._complete_review(**review_prompts)
+                row['outcome'] = 'completed'
+                return response
+            except Exception as error:
+                from app.services.summary_failure import safe_summary_failure_context
+                diagnostic = safe_summary_failure_context(getattr(error, 'summary_failure_context', None))
+                row['outcome'] = 'unconfirmed' if diagnostic else 'failed'
+                if diagnostic:
+                    row['failure'] = diagnostic
+                    if diagnostic['diagnostic_protocol'] == 'sse_terminal/1':
+                        row['finish_reason'] = diagnostic['finish']
+                raise
+            finally:
+                state.active_review_attempt = None
+        if state and state.depth:
+            state.review_attempts_started += 1
+        result = complete_review(prompts)
+        if state and state.depth:
+            state.review_attempts_completed += 1
         if not intermediate and presentation_state() and presentation_state().depth:
             from app.llm.meeting_final_review import finalize_final_review
+            from app.llm.meeting_final_claim_ledger import decode_final_review, FinalLedgerError
+            state = presentation_state()
+            try:
+                value = decode_final_review(result or '')
+            except FinalLedgerError:
+                value = None
+            empty = (type(value) is dict and set(value) == {'protocol', 'claims', 'blocks'}
+                    and type(value['protocol']) is int and value['protocol'] in (4, 8)
+                    and value['claims'] == [] and isinstance(value['blocks'], list))
+            if empty:
+                state.empty_review_responses += 1
+            if self._can_retry_empty_review() and state.presentation in (None, 'text', 'html') and empty:
+                # Record the confirmed response even if the subsequent request fails.
+                state.raw_review = result
+                self._permit_completed_empty_review_retry()
+                retry_prompts = dict(prompts)
+                retry_prompts['system_prompt'] += (
+                    '\nThe previous completed response had empty claims and was rejected. '
+                    'Review the supplied source and draft again; account for every original claim and '
+                    'return nonempty report blocks with valid evidence under the same protocol.')
+                state.review_attempts_started += 1
+                result = complete_review(retry_prompts)
+                state.review_attempts_completed += 1
+                try:
+                    retry_value = decode_final_review(result or '')
+                except FinalLedgerError:
+                    retry_value = None
+                if (type(retry_value) is dict and set(retry_value) == {'protocol', 'claims', 'blocks'}
+                        and type(retry_value['protocol']) is int and retry_value['protocol'] in (4, 8)
+                        and retry_value['claims'] == [] and isinstance(retry_value['blocks'], list)):
+                    state.empty_review_responses += 1
             result = finalize_final_review(result or '', draft)
         else:
             result = (result or '').strip() if intermediate else without_internal_references(result or '')
         if not result:
             raise RuntimeError("会议纪要事实复核未返回内容，请重试。")
         return result
+
+    def _review_empty_in_batches(self, *, source, draft, extras, output_language, source_is_reviewed_notes):
+        import json
+        from app.llm.meeting_final_claim_ledger import decode_final_review, FinalLedgerError
+        from app.llm.meeting_batched_review import merge_batches
+        from app.llm.meeting_review_draft_view import review_draft_input_view
+        from app.llm.meeting_presentation import presentation_state
+
+        state = presentation_state()
+        material = decode_final_review(draft)
+        claims = material['claims']
+        if not claims or len(claims) > 600:
+            raise FinalLedgerError('invalid_batch_size')
+        results = []
+        for start in range(0, len(claims), 20):
+            subset = claims[start:start + 20]
+            batch_draft = json.dumps({**material, 'claims': subset}, ensure_ascii=False)
+            prompts = build_meeting_review_prompts(
+                source=source, draft=review_draft_input_view(batch_draft), extras=extras,
+                output_language=output_language, source_is_reviewed_notes=source_is_reviewed_notes)
+            prompts['system_prompt'] += (
+                '\nBATCH REVIEW: This request contains only a subset of the frozen draft claims. '
+                'These batch-specific instructions override conflicting whole-draft and no-extra-call wording above. '
+                'Account for every supplied claim ID, and do not use IDs from other batches. '
+                + ('Review the whole source for substantive omissions and include any new claims. '
+                   'For every new claim use a unique ID starting NEW_ followed by a number; '
+                   'never use C-number IDs for new claims, because they belong to other batches. '
+                   if start == 0 else 'Review only the supplied claims; do not add new claims. ')
+                + 'Write self-contained report blocks for this subset. The host validates every batch and the full merged ledger.')
+            state.review_attempts_started += 1
+            with generation_name("LLM｜分批核对最终会议纪要"):
+                response = self._complete_review(**prompts)
+            state.review_attempts_completed += 1
+            state.raw_review = response
+            value = decode_final_review(response or '')
+            subset_ids = {row['id'] for row in subset}
+            foreign_ids = {row['id'] for row in claims} - subset_ids
+            if (isinstance(value, dict) and isinstance(value.get('claims'), list)
+                    and any(isinstance(row, dict) and row.get('id') in foreign_ids
+                            for row in value['claims'])):
+                raise FinalLedgerError('foreign_batch_claim')
+            if start and (not isinstance(value, dict) or not isinstance(value.get('claims'), list)
+                          or any(not isinstance(row, dict) or row.get('id') not in subset_ids
+                                 for row in value['claims'])):
+                raise FinalLedgerError('unexpected_batch_claim')
+            # Validate each completed response before dispatching the next batch.
+            from app.llm.meeting_final_claim_ledger import validate_final_ledger
+            try:
+                validate_final_ledger(value, {**material, 'claims': subset}, depth=state.depth)
+            except FinalLedgerError as error:
+                if error.code != 'invalid_final_evidence':
+                    raise
+                from app.llm.meeting_fact_protocol import _evidence
+                invalid_ids = []
+                for row in value['claims']:
+                    evidence = row.get('evidence')
+                    if row.get('disposition') == 'omitted_for_depth' and evidence == []:
+                        continue
+                    try:
+                        _evidence(evidence)
+                    except ValueError:
+                        invalid_ids.append(row['id'])
+                retry = dict(prompts)
+                retry['system_prompt'] += (
+                    '\nThe previous completed batch failed exact source evidence validation. '
+                    'Regenerate this entire batch from the original source. Copy each quotation '
+                    'exactly from its indicated window, and verify every reference and offset. '
+                    + 'Rows needing evidence correction: ' + ', '.join(invalid_ids))
+                state.review_attempts_started +=  1
+                with generation_name("LLM｜重新核对批次来源"):
+                    response = self._complete_review(**retry)
+                state.review_attempts_completed += 1
+                state.raw_review = response
+                value = decode_final_review(response or '')
+                if (not isinstance(value, dict) or not isinstance(value.get('claims'), list)
+                    or any(not isinstance(row, dict) or row.get('id') in foreign_ids
+                           or (start and row.get('id') not in subset_ids) for row in value['claims'])):
+                    raise FinalLedgerError('unexpected_batch_claim')
+                validate_final_ledger(value, {**material, 'claims': subset}, depth=state.depth)
+            results.append((subset, value))
+        return json.dumps(merge_batches(material, results, depth=state.depth), ensure_ascii=False)
 
     @staticmethod
     def _format_time(seconds: float) -> str:
@@ -152,7 +313,23 @@ class _BasePromptLLM(LLMSummarizer):
         extras: str | None,
         output_language: str,
         progress_callback: SummaryProgressCallback | None = None,
+        direct_text: bool = True,
     ) -> str:
+        from app.llm.meeting_presentation import presentation_state, direct_markdown_scope
+        state = presentation_state()
+        if (direct_text and style == 'meeting'
+                and (state is None or state.presentation in (None, 'text'))
+                and not getattr(self, 'source_reading_enabled', False)
+                and getattr(self, '_window_evidence_version', None) is None):
+            from app.llm.meeting_direct_markdown import build_meeting_markdown_prompts
+            prompts = build_meeting_markdown_prompts(
+                title=title, source=self._build_segment_text(segments), extras=extras,
+                output_language=output_language)
+            with direct_markdown_scope():
+                result = self._complete_stage(stage="LLM｜生成会议纪要", **prompts)
+            if not isinstance(result, str) or not result.strip():
+                raise RuntimeError('模型未返回会议纪要正文')
+            return result.strip()
         prompts = (build_meeting_draft_prompts(
             title=title, source=self._build_segment_text(segments), extras=extras,
             output_language=output_language,
@@ -169,8 +346,22 @@ class _BasePromptLLM(LLMSummarizer):
         record_working_draft(draft)
         from app.llm.meeting_presentation import presentation_state
         if presentation_state() and presentation_state().depth:
-            from app.llm.meeting_final_review import prepare_final_draft
-            draft = prepare_final_draft(draft)
+            from app.llm.meeting_final_review import prepare_final_draft, InvalidDraftEvidenceKind
+            from app.llm.meeting_final_claim_ledger import FinalLedgerError
+            try:
+                draft = prepare_final_draft(draft)
+            except (FinalLedgerError, InvalidDraftEvidenceKind) as error:
+                if (not isinstance(error, InvalidDraftEvidenceKind)
+                        and error.code != 'invalid_json') or not self._can_retry_invalid_draft():
+                    raise
+                retry_prompts = dict(prompts)
+                retry_prompts['system_prompt'] += (
+                    '\nThe previous completed draft was invalid JSON or had an unsupported evidence kind. Generate the complete draft again '
+                    'from the supplied source; return one valid JSON object with every key followed '
+                    'by its colon and value. Check JSON syntax before returning.')
+                draft = self._complete_stage(stage="LLM｜生成会议纪要", **retry_prompts)
+                record_working_draft_retry(draft)
+                draft = prepare_final_draft(draft)
         if progress_callback:
             progress_callback("正在核对音视频材料并组织会议纪要…")
         return self._review_meeting_note(
@@ -197,6 +388,7 @@ class _BasePromptLLM(LLMSummarizer):
                 extras=extras,
                 output_language=output_language,
                 progress_callback=progress_callback,
+                direct_text=False,
             )
 
         chunk_notes: list[str] = []

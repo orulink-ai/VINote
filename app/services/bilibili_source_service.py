@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 import json
+import ipaddress
 import math
 import os
 from pathlib import Path
@@ -135,6 +136,43 @@ def _remaining(deadline):
     return min(20.0, remaining)
 
 
+def _resolve_public_dns(host, deadline, *, allow_x_publish=False):
+    """Fixed TLS DoH bootstrap for synthetic TUN DNS; no source URL or cookies.
+
+    AliDNS documents the IP HTTPS endpoint. No redirects, system proxy,
+    hostname retry, or disabling TLS verification is permitted here.
+    """
+    if not (host in INPUT_HOSTS or host == 'api.bilibili.com'
+            or any(host.endswith(suffix) for suffix in CDN_SUFFIXES)
+            or allow_x_publish is True and host == 'publish.x.com'):
+        raise ValueError('Unsupported DNS host')
+    with httpx.Client(timeout=min(8.0, _remaining(deadline)), trust_env=False, follow_redirects=False) as client:
+        with client.stream('GET', 'https://223.5.5.5/resolve', params={'name': host, 'type': 'A'},
+                           headers={'Accept': 'application/json', 'Accept-Encoding': 'identity'}) as response:
+            if response.status_code != 200:
+                raise ValueError('DNS unavailable')
+            raw = bytearray()
+            for chunk in response.iter_bytes(4096):
+                _remaining(deadline)
+                raw.extend(chunk)
+                if len(raw) > 65536:
+                    raise ValueError('DNS response too large')
+    body = json.loads(raw)
+    if not isinstance(body, dict) or type(body.get('Status')) is not int or body['Status'] != 0 or body.get('TC'):
+        raise ValueError('DNS unavailable')
+    question = body.get('Question')
+    if (not isinstance(question, dict) or not isinstance(question.get('name'), str)
+            or question['name'].rstrip('.').lower() != host or type(question.get('type')) is not int or question['type'] != 1):
+        raise ValueError('DNS question mismatch')
+    answers = body.get('Answer')
+    if not isinstance(answers, list):
+        raise ValueError('DNS answer missing')
+    addresses = [ipaddress.ip_address(item.get('data', '')) for item in answers if isinstance(item, dict) and item.get('type') == 1]
+    if not addresses or any(ip.version != 4 or not ip.is_global or ip.is_multicast or ip.is_reserved for ip in addresses):
+        raise ValueError('DNS answer not public')
+    return [str(ip) for ip in addresses]
+
+
 def _get(url, role, deadline, *, sink=None, limit=MAX_JSON_BYTES):
     """One isolated HTTPX session per hop, pinned TCP IP with original Host/SNI."""
     for hop in range(MAX_REDIRECTS + 1):
@@ -142,8 +180,8 @@ def _get(url, role, deadline, *, sink=None, limit=MAX_JSON_BYTES):
         if role == "short" and httpx.URL(url).host in PAGE_HOSTS:
             return validate_input(url)
         try:
-            original, target = _public_target(url)
-        except ValueError:
+            original, target = _public_target(url, fake_dns_resolver=lambda host: _resolve_public_dns(host, deadline))
+        except (ValueError, httpx.RequestError):
             # Includes DNS failure and nonpublic/mixed answers. A well-formed
             # source can become unavailable; never retry against its hostname.
             _fail("VIDEO_SOURCE_UNAVAILABLE")
@@ -271,8 +309,20 @@ def resolve(url: str) -> BilibiliSource:
     if not tracks:
         _fail("VIDEO_SOURCE_UNAVAILABLE")
     audio = min(tracks, key=lambda item: item["bandwidth"])
-    audio_url = audio.get("baseUrl") or audio.get("base_url")
-    _allowed(audio_url, "audio")
+    backups = audio.get('backupUrl', audio.get('backup_url', []))
+    candidates = [audio.get('baseUrl') or audio.get('base_url')]
+    if isinstance(backups, list):
+        candidates.extend(backups[:16])
+    audio_url = None
+    for candidate in candidates:
+        try:
+            _allowed(candidate, 'audio')
+        except BilibiliSourceError:
+            continue
+        audio_url = candidate
+        break
+    if audio_url is None:
+        _fail('VIDEO_SOURCE_UNAVAILABLE')
     return BilibiliSource(f"https://www.bilibili.com/video/{bvid}?p={page}", title,
                           f"{bvid}_p{page}", float(duration), audio_url, page, aid, part["cid"])
 

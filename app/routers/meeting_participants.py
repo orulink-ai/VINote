@@ -13,6 +13,12 @@ from app.services import meeting_participants as participants
 router = APIRouter(prefix="/meeting-participants", tags=["meeting-participants"])
 
 
+class SpeakerMatch(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True)
+    speaker_id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    open_id: str = Field(pattern=r"^ou_[A-Za-z0-9_-]{1,196}$")
+
+
 class ConfirmParticipants(BaseModel):
     model_config = ConfigDict(extra="forbid", strict=True)
     confirmed: Literal[True]
@@ -20,6 +26,7 @@ class ConfirmParticipants(BaseModel):
     evidence_revision: str = Field(pattern=r"^[a-f0-9]{64}$")
     confirmation_revision: int = Field(ge=0)
     contacts: list[ContactSelection] = Field(max_length=20)
+    speaker_matches: list[SpeakerMatch] | None = Field(default=None, max_length=100)
 
     @field_validator("confirmed", mode="before")
     @classmethod
@@ -57,7 +64,8 @@ def confirm_participants(note_key: str, payload: ConfirmParticipants, context=De
     result = participants.confirm_meeting_participants(provider, owner, note_key,
         confirmed=payload.confirmed, task_id=payload.task_id, evidence_revision=payload.evidence_revision,
         confirmation_revision=payload.confirmation_revision,
-        contacts=[item.model_dump() for item in payload.contacts])
+        contacts=[item.model_dump() for item in payload.contacts],
+        speaker_matches=[item.model_dump() for item in payload.speaker_matches] if payload.speaker_matches is not None else None)
     from app.services.feishu_auto_runtime import resume_participants
     resume_participants(owner, note_key)
     return result

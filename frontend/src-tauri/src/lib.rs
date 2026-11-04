@@ -42,7 +42,14 @@ pub fn run() {
         .manage(RecorderRuntimeState::default())
         .manage(original_download::Downloads::default())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(tauri_plugin_process::init())
         .setup(|_app| {
+            // Signed release builds inject the real key and endpoint. Development
+            // and unsigned builds must remain usable without a placeholder key.
+            if _app.config().plugins.0.contains_key("updater") {
+                _app.handle().plugin(tauri_plugin_updater::Builder::new().build())?;
+            }
             #[cfg(not(debug_assertions))]
             desktop_backend::start(_app)?;
             Ok(())

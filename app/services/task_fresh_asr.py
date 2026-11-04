@@ -354,9 +354,6 @@ def _dispatch(service, artifacts, folder, source, owner, task, req, link):
     The caller keeps both the fresh ASR lease and model snapshot live throughout.
     """
     started = time.time()
-    if req.diarize:
-        from app.services.speaker_diarization_service import SpeakerDiarizationService
-        SpeakerDiarizationService.require_ready()
     from app.services.asr_execution_binding import require_task_execution
     require_task_execution(owner, task, folder, source)
     artifacts.update_status(folder, 'preparing', '正在准备本次重新识别的录音…', retryable=False)

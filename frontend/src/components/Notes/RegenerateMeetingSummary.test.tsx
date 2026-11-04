@@ -6,7 +6,6 @@ import { RegenerateMeetingSummary } from './RegenerateMeetingSummary'
 import { useAuthStore } from '@/stores/authStore'
 import { useAppModeStore } from '@/stores/appModeStore'
 import { apiJson, ApiError } from '@/lib/api'
-import { presentationLabels } from '@/lib/summaryPresentation'
 import { readVersionReceipt, versionRejectionKey } from '@/lib/meetingVersionRecovery'
 vi.mock('@/lib/api', async original => ({ ...await original<typeof import('@/lib/api')>(), apiJson: vi.fn() }))
 const config = { configured: true, mode: 'cloud' as const, llm_model: 'selected-exact-model', asr_model: 'unchanged', server_url: 'https://model.invalid' }
@@ -30,6 +29,19 @@ beforeEach(() => {
   mock.mockImplementation(async path => path.includes('/meeting-version-models?') ? catalog : path === '/api/vilab/config' ? config : context)
 })
 afterEach(cleanup)
+it('offers only concise and detailed summary choices while submitting text', async () => {
+  mock.mockImplementation(async (_path, init) => init?.method === 'POST'
+    ? { operation_id: JSON.parse(init.body as string).operation_id, task_id: 'child', state: 'accepted' } : context)
+  show(); await open()
+  expect(screen.getByRole('radio', { name: '精简' })).toBeInTheDocument()
+  fireEvent.click(screen.getByRole('radio', { name: '详细' }))
+  for (const name of ['摘要', '文字', '图文', 'HTML', '画面分镜', '信息图'])
+    expect(screen.queryByRole('radio', { name })).not.toBeInTheDocument()
+  fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
+  await waitFor(() => expect(mock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(true))
+  const body = JSON.parse(mock.mock.calls.find(([, init]) => init?.method === 'POST')![1]!.body as string)
+  expect(body).toMatchObject({ content_depth: 'detailed', presentation: 'text' })
+})
 it.each(['meeting_version_context_changed', 'meeting_version_selection_changed'])(
   'retains a %s audit, leaves execution state untouched, and requires a fresh explicit confirmation', async code => {
     let attempts = 0
@@ -326,7 +338,7 @@ it('confirms exact selected LLM and persists the owner operation before a single
     return path.includes('/meeting-version-models?') ? catalog : path === '/api/vilab/config' ? config : context
   })
   show(); await open()
-  expect(screen.getByRole('dialog')).toHaveTextContent('不重新转录')
+  expect(screen.getByRole('dialog')).toHaveTextContent('不重新转写')
   expect(mock.mock.calls.every(([, init]) => !init?.method)).toBe(true)
   fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
   await waitFor(() => expect(screen.getByTestId('route')).toHaveTextContent('/generate?meeting=1&operation='))
@@ -403,15 +415,13 @@ it('freezes explicit depth and available format in the operation and POST', asyn
     ...context, presentation_options: { text: { available: true }, html: { available: true }, illustrated: { available: false }, comic: { available: false }, infographic: { available: false } },
   })
   show(); await open()
-  fireEvent.click(screen.getByRole('radio', { name: '摘要' }))
-  fireEvent.click(screen.getByRole('radio', { name: 'HTML' }))
-  expect(screen.getByRole('radio', { name: `${presentationLabels.comic}（不可用）` })).toBeDisabled()
+  fireEvent.click(screen.getByRole('radio', { name: '详细' }))
   fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
   await waitFor(() => expect(mock.mock.calls.some(([path]) => path.endsWith('/meeting-versions'))).toBe(true))
   const post = mock.mock.calls.find(([path]) => path.endsWith('/meeting-versions'))!
   const body = JSON.parse(post[1]!.body as string)
-  expect(body).toMatchObject({ content_depth: 'brief', presentation: 'html' })
-  expect(JSON.parse(localStorage.getItem(`vinote:source-receipt:owner:${body.operation_id}`)!)).toMatchObject({ contentDepth: 'brief', presentation: 'html' })
+  expect(body).toMatchObject({ content_depth: 'detailed', presentation: 'text' })
+  expect(JSON.parse(localStorage.getItem(`vinote:source-receipt:owner:${body.operation_id}`)!)).toMatchObject({ contentDepth: 'detailed', presentation: 'text' })
 })
 
 it('retains inherited context when the global connection changes at the same Origin', async () => {
@@ -435,7 +445,7 @@ it('selects the LLM per generation without changing global preferences or showin
   expect(screen.queryByRole('option', { name: 'unavailable-model' })).toBeNull()
   fireEvent.change(picker, { target: { value: 'another-task-model' } })
   expect(useAppModeStore.getState().config).toEqual(config)
-  expect(screen.getByRole('dialog')).toHaveTextContent('不以上一版纪要为输入')
+  expect(screen.getByRole('dialog')).toHaveTextContent('不使用上一版纪要')
   fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
   await waitFor(() => expect(mock.mock.calls.some(([path]) => path.endsWith('/meeting-versions'))).toBe(true))
   const post = mock.mock.calls.find(([path]) => path.endsWith('/meeting-versions'))!
@@ -526,13 +536,13 @@ it('requires an explicit failed-version action and a new model/format confirmati
   fireEvent.click(screen.getByRole('radio', { name: '更换总结模型' }))
   await screen.findByRole('option', { name: 'another-task-model' })
   fireEvent.change(screen.getByRole('combobox', { name: '本次总结模型' }), { target: { value: 'another-task-model' } })
-  fireEvent.click(screen.getByRole('radio', { name: 'HTML' }))
+  fireEvent.click(screen.getByRole('radio', { name: '详细' }))
   fireEvent.click(screen.getByRole('button', { name: '确认生成新版本' }))
   await waitFor(() => expect(mock.mock.calls.filter(([, init]) => init?.method === 'POST')).toHaveLength(1))
   const post = mock.mock.calls.find(([, init]) => init?.method === 'POST')!
   expect(post[0]).toBe('/api/task/parent/meeting-versions')
   const body = JSON.parse(post[1]!.body as string)
-  expect(body).toMatchObject({ model_name: 'another-task-model', presentation: 'html' })
+  expect(body).toMatchObject({ model_name: 'another-task-model', presentation: 'text', content_depth: 'detailed' })
   expect(body.operation_id).not.toBe('failed-operation')
   expect(localStorage.getItem(failedPointer)).toBe(body.operation_id)
   expect(localStorage.getItem(failedRecordKey)).toBe(old)

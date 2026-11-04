@@ -29,6 +29,13 @@ class FeishuPublishReceiptDB(Base):
     job_id: Mapped[str] = mapped_column(String(36), ForeignKey("feishu_deliveries.id"))
 
 
+class FeishuPublishRejectionDB(Base):
+    __tablename__ = "feishu_publish_rejections"
+    owner: Mapped[str] = mapped_column(String(128), primary_key=True)
+    operation_id: Mapped[str] = mapped_column(String(160), primary_key=True)
+    fingerprint: Mapped[str] = mapped_column(String(64))
+
+
 class FeishuWriteBatchDB(Base):
     __tablename__ = "feishu_write_batches"
     job_id: Mapped[str] = mapped_column(String(36), ForeignKey("feishu_deliveries.id"), primary_key=True)

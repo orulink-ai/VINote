@@ -1,3 +1,4 @@
+vi.mock('@/hooks/useTaskCenter', () => ({ useTaskCenter: () => ({}) }));
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { MemoryRouter } from 'react-router-dom'
@@ -54,7 +55,7 @@ it('reads both original tasks and distinguishes generated-unsaved from failed wi
   const save = await screen.findByRole('link', { name: '查看原结果并恢复保存' })
   expect(save).toHaveAttribute('href', '/generate?mode=file&meeting=1&operation=A')
   expect(screen.getByRole('heading', { name: '真实会议主题 · 新版本' })).toBeVisible()
-  expect(await screen.findByText('未完成 · 生成与事实复核')).toBeVisible()
+  expect(await screen.findByText('未完成 · 生成纪要')).toBeVisible()
   expect(screen.getByRole('link', { name: '查看失败处理记录' })).toHaveAttribute('href', '/generate?mode=file&meeting=1&operation=B')
   expect(screen.queryByText(/任务已接收，请查询原结果/)).toBeNull()
   expect(screen.queryByRole('heading', { name: /待生成纪要/ })).toBeNull()
@@ -179,7 +180,7 @@ it('aborts task readback when leaving the generation tab and ignores its late re
   api.json.mockImplementation((path, init) => path === '/api/task/A-child' ? task.promise : fallback(path, init))
   show(); await waitFor(() => expect(api.json).toHaveBeenCalledWith('/api/task/A-child', expect.anything()))
   const signal = api.json.mock.calls.find(([path]) => path === '/api/task/A-child')![1].signal
-  fireEvent.mouseDown(screen.getByRole('tab', { name: '飞书' }), { button: 0, ctrlKey: false })
+  fireEvent.mouseDown(screen.getByRole('tab', { name: '飞书发布' }), { button: 0, ctrlKey: false })
   await waitFor(() => expect(signal.aborted).toBe(true))
   await act(async () => task.resolve({ task_id: 'A-child', status: 'success', result: { title: '过期结果', markdown: '# 过期结果' } }))
   expect(api.json.mock.calls.some(([path]) => path.startsWith('/api/notes'))).toBe(false)

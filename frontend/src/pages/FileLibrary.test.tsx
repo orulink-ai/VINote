@@ -6,7 +6,7 @@ const mocks = vi.hoisted(() => ({ api: vi.fn(), recordings: vi.fn(), owner: 'own
 vi.mock('@/lib/api', () => ({ apiJson: mocks.api }))
 vi.mock('@/lib/audioStorage', () => ({ listPendingMeetings: mocks.recordings }))
 vi.mock('@/stores/authStore', () => ({ useAuthStore: Object.assign(() => mocks.owner, { getState: () => ({ user: { id: mocks.owner } }), subscribe: () => () => undefined }) }))
-vi.mock('@/stores/teamStore', () => ({ useTeamStore: { getState: () => ({ currentWorkspace: { scope: 'personal' } }) } }))
+vi.mock('@/stores/teamStore', () => ({ useTeamStore: Object.assign((selector: (state: unknown) => unknown) => selector({ currentWorkspace: { scope: 'personal' }, teams: [] }), { getState: () => ({ currentWorkspace: { scope: 'personal' } }) }), getWorkspaceLabel: () => '个人空间' }))
 vi.mock('@/components/MeetingRecorder/LocalRecordingPreview', () => ({ LocalRecordingPreview: () => null }))
 import { FileLibrary } from './FileLibrary'
 const file = { id: 'file-1', filename: 'test.md', purpose: 'note', category: 'file', size_bytes: 10, created_at: '2026-10-11T10:00:00Z', available: true, content_url: '/api/files/file-1/content', location: '当前电脑', media_type: 'text/markdown', can_delete: true, can_generate: true }
@@ -14,6 +14,33 @@ beforeEach(() => { mocks.owner = 'owner'; mocks.api.mockReset(); mocks.recording
 afterEach(cleanup)
 function Destination() { const location = useLocation(); return <><output aria-label="目标地址">{location.pathname + location.search}</output><output aria-label="返回来源">{location.state?.returnTo}</output><Link to={location.state?.returnTo || '/files'}>返回文件库</Link></> }
 function FileRoute() { const location = useLocation(); return <output aria-label="文件库地址">{location.pathname + location.search}</output> }
+it('discovers associated summaries from the canonical meeting original', async () => {
+  const canonical = '546bfcb5-4cf1-47f2-b4a7-34a1b3612970'
+  const child = '4e8efb3a-98cc-4774-a5b0-d99794feec35'
+  const operation = '6ef7260e-3815-4b07-a281-84bdf3e50929'
+  mocks.api.mockImplementation((path: string) => Promise.resolve(path === '/api/files' ? { items: [{ ...file, id: `task:${canonical}`, task_id: canonical, filename: 'meeting.wav', purpose: 'meeting', can_delete: false }] } : path.endsWith('summary-children') ? { canonical_task_id: canonical, items: [{ task_id: child, operation_id: operation }] } : { task_id: child, status: 'failed', updated_at: '2026-11-04T06:00:00Z' }))
+  mount('/files?purpose=meeting'); await userEvent.click(await screen.findByRole('button', { name: /meeting.wav/ }))
+  const records = within(screen.getByRole('dialog')).getByLabelText('关联纪要生成记录')
+  const summary = await within(records).findByText(/处理记录 · 1次/)
+  expect(summary).toHaveTextContent('最近状态 · 处理失败')
+  expect(summary.closest('details')).not.toHaveAttribute('open')
+  await userEvent.click(summary)
+  expect(within(records).getByText(/状态更新于.*处理失败/)).toBeInTheDocument()
+  const taskDetails = within(records).getByText(`任务编号：${child}`).closest('details')
+  expect(taskDetails).not.toHaveAttribute('open')
+  expect(within(records).queryByRole('button', { name: '恢复保存' })).not.toBeInTheDocument()
+  expect(mocks.api).toHaveBeenCalledWith(`/api/task/${canonical}/summary-children`)
+  expect(mocks.api).toHaveBeenCalledWith(`/api/task/${child}`)
+  expect(mocks.api.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true)
+})
+it.each([['meeting', '/meetings/files'], ['note', '/notes/files']] as const)('keeps %s conflicting source links in the missing-detail state', async (scope, path) => {
+  mocks.api.mockResolvedValue({ items: [file, { ...file, id: 'meeting-file', filename: 'meeting.wav', purpose: 'meeting' }] })
+  render(<MemoryRouter initialEntries={[path + '?purpose=' + (scope === 'note' ? 'meeting' : 'note') + '&file=' + (scope === 'note' ? 'meeting-file' : 'file-1')]}><FileLibrary scope={scope} /></MemoryRouter>)
+  expect(await screen.findByText('未找到这份原文件')).toBeInTheDocument()
+  expect(screen.queryByRole('list', { name: '原文件列表' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.queryByRole('group', { name: '资料用途' })).not.toBeInTheDocument()
+})
 const mount = (path = '/files?purpose=note', state?: Record<string, unknown>) => render(<MemoryRouter initialEntries={[{ pathname: path.split('?')[0], search: path.includes('?') ? '?' + path.split('?')[1] : '', state }]} future={{ v7_startTransition: true, v7_relativeSplatPath: true }}><FileRoute /><Routes><Route path="/files" element={<FileLibrary />} /><Route path="/note/:id" element={<Destination />} /><Route path="/workspace/:key" element={<Destination />} /><Route path="/generate" element={<Destination />} /><Route path="/notes" element={<Destination />} /><Route path="/meetings" element={<Destination />} /></Routes></MemoryRouter>)
 it('keeps already loaded files when a refresh fails and recovers in place', async () => {
   mocks.api.mockResolvedValueOnce({ items: [file] }).mockRejectedValueOnce(new Error('offline')).mockResolvedValue({ items: [file] })
@@ -105,11 +132,7 @@ it('saves only the original from the top action without invoking note generation
   mocks.api.mockImplementation((_path: string, init?: RequestInit) => Promise.resolve(init?.method === 'POST' ? file : { items: [file] }))
   mount(); await screen.findByRole('button', { name: /test.md/ })
   expect(screen.getByRole('button', { name: '导入资料' })).toBeEnabled()
-  const help = screen.getByText('文件库使用说明').closest('details')!
-  expect(help).not.toHaveAttribute('open')
-  await userEvent.click(screen.getByText('文件库使用说明'))
-  expect(help).toHaveAttribute('open')
-  expect(within(help).getByText(/导入后保留原文件/)).toBeInTheDocument()
+  expect(screen.getByLabelText('选择保存到文件库的原文件')).toHaveAttribute('aria-describedby', 'file-import-help')
   await userEvent.click(screen.getByRole('button', { name: '导入资料' })); await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /笔记资料/ }))
   await userEvent.upload(screen.getByLabelText('选择保存到文件库的原文件'), new File(['source'], 'source.pdf', { type: 'application/pdf' }))
   await screen.findByText('笔记资料原文件已保存，尚未生成正文。')
@@ -246,19 +269,15 @@ it('honors a previously selected purpose and authoritative purpose even for a PD
   await userEvent.click(within(screen.getByRole('group', { name: '资料用途' })).getByRole('button', { name: /会议资料/ }));
   expect(screen.getByRole('button', { name: /meeting.pdf/ })).toBeInTheDocument(); expect(screen.queryByRole('button', { name: /test.md/ })).not.toBeInTheDocument();
 });
-it('requires purpose before import and sends meeting purpose without generating content', async () => {
-  const meeting = { ...file, id: 'new-meeting-file', filename: 'meeting.wav', category: 'recording', media_type: 'audio/wav', purpose: 'meeting' };
-  mocks.api.mockImplementation((_path, init) => Promise.resolve(init?.method === 'POST' ? meeting : { items: [meeting] }));
+it('routes meeting imports into the unified fresh draft without uploading to the file library', async () => {
+  mocks.api.mockResolvedValue({ items: [{ ...file, purpose: 'meeting', filename: 'meeting.wav' }] });
   mount('/files'); await screen.findByRole('button', { name: /meeting.wav/ });
   await userEvent.click(screen.getByRole('button', { name: '导入资料' }));
-  const choice = screen.getByRole('dialog'); expect(within(choice).getByRole('heading', { name: '导入哪类资料？' })).toBeInTheDocument();
+  await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: /会议资料/ }));
+  const route = new URL(screen.getByLabelText('目标地址').textContent!, 'https://test.invalid');
+  expect(route.pathname).toBe('/generate'); expect(route.searchParams.get('meeting')).toBe('1');
+  expect(route.searchParams.get('intent')).toBe('import'); expect(route.searchParams.get('draft')).toMatch(/^[a-f0-9-]{36}$/);
   expect(mocks.api.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
-  await userEvent.click(within(choice).getByRole('button', { name: /会议资料/ }));
-  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
-  await userEvent.upload(screen.getByLabelText('选择保存到文件库的原文件'), new File(['audio'], 'meeting.wav', { type: 'audio/wav' }));
-  await screen.findByText('会议资料原文件已保存，尚未生成正文。');
-  const writes = mocks.api.mock.calls.filter(([, init]) => init?.method === 'POST');
-  expect(writes).toHaveLength(1); expect(writes[0][0]).toBe('/api/files'); expect(writes[0][1].body.get('purpose')).toBe('meeting');
 });
 it('starts meeting generation with a meeting receipt and preserves the source selection and parent', async () => {
   const meeting = { ...file, filename: 'meeting.wav', category: 'recording', media_type: 'audio/wav', purpose: 'meeting' };
@@ -324,7 +343,8 @@ it('retained failed meeting source queries the same task without another upload'
   mocks.api.mockResolvedValue({ items: [{ ...file, id: 'task:original', filename: 'discussion.webm', purpose: 'meeting', task_id: 'failed-video', processing_status: 'failed', error_code: 'unknown_result', can_generate: false, can_delete: false, media_type: 'video/webm', category: 'video' }] });
   mount('/files?purpose=meeting&file=task%3Aoriginal');
   expect(await screen.findByText('处理结果尚未确认。原文件已保留，请查询原结果，不重复提交。')).toBeInTheDocument();
-  expect(within(screen.getByRole('dialog')).getByLabelText('资料用途')).toBeDisabled();
+  expect(within(screen.getByRole('dialog')).queryByRole('combobox', { name: '资料用途' })).not.toBeInTheDocument();
+  expect(within(screen.getByRole('dialog')).getByLabelText('资料用途')).toHaveTextContent('会议资料');
   await userEvent.click(screen.getByRole('button', { name: /查看(纪要|笔记)生成进度/ }));
   await screen.findByLabelText('目标地址');
   expect(localStorage.getItem('vinote:import-receipt:owner:meeting')).toBeNull(); expect(screen.getByLabelText('目标地址')).toHaveTextContent('task=failed-video');
@@ -376,4 +396,55 @@ it('FileLibrary body scroll is separate from close control and keeps list query'
   expect(screen.getByLabelText('文件库地址')).toHaveTextContent('purpose=note');
   expect(screen.getByLabelText('文件库地址')).toHaveTextContent('q=test');
   expect(mocks.api.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+});
+
+it('opens a scoped original as a full detail page without library controls or a side sheet', async () => {
+  mocks.api.mockResolvedValue({ items: [{ ...file, purpose: 'meeting', filename: '整场会议.wav' }] })
+  render(<MemoryRouter initialEntries={['/meetings/files?file=file-1']}><FileLibrary scope="meeting" /></MemoryRouter>)
+  expect(await screen.findByRole('heading', { name: '未命名会议', level: 1 })).toBeInTheDocument()
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
+  expect(screen.queryByRole('region', { name: '文件筛选' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('list', { name: '原文件列表' })).not.toBeInTheDocument()
+  expect(screen.getByRole('link', { name: '返回会议' })).toHaveAttribute('href', '/meetings')
+  expect(screen.getByRole('heading', { name: '原件管理' })).toBeInTheDocument()
+})
+
+it.each(['meeting', 'note'] as const)('keeps %s source detail isolated through loading, failure and retry', async scope => {
+  let reject!: (reason: Error) => void
+  let attempt = 0
+  mocks.api.mockImplementation((path: string) => path === '/api/files' && attempt++ === 0 ? new Promise((_, fail) => { reject = fail }) : Promise.resolve({ items: path === '/api/files' ? [{ ...file, purpose: scope }] : [] }))
+  render(<MemoryRouter initialEntries={[`/${scope === 'meeting' ? 'meetings' : 'notes'}/files?file=file-1`]}><FileLibrary scope={scope} /></MemoryRouter>)
+  expect(screen.getByText('正在读取原文件…')).toBeInTheDocument()
+  expect(screen.queryByRole('list', { name: '原文件列表' })).not.toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '导入资料' })).not.toBeInTheDocument()
+  reject(new Error('offline'))
+  await screen.findByText('原文件暂未读取成功')
+  expect(screen.queryByRole('region', { name: '文件筛选' })).not.toBeInTheDocument()
+  await userEvent.click(screen.getByRole('button', { name: '重试' }))
+  await screen.findByRole('heading', { name: scope === 'meeting' ? '未命名会议' : 'test.md', level: 1 })
+  expect(screen.queryByRole('list', { name: '原文件列表' })).not.toBeInTheDocument()
+})
+
+
+it('meeting original management has no second upload entry and keeps originals reachable', async () => {
+  mocks.api.mockResolvedValue({ items: [{ ...file, purpose: 'meeting', filename: 'audio.wav', title: '项目讨论' }] });
+  render(<MemoryRouter initialEntries={['/meetings/files']}><FileLibrary scope="meeting" /></MemoryRouter>);
+  expect(await screen.findByRole('button', { name: /项目讨论/ })).toBeVisible();
+  expect(screen.queryByRole('button', { name: '导入资料' })).toBeNull();
+  expect(screen.queryByLabelText('选择保存到文件库的原文件')).toBeNull();
+});
+it('meeting files prefer the human meeting title and retain a copyable source filename', async () => {
+  mocks.api.mockImplementation(async (path: string) => path.endsWith('/display') ? { items: [{ source_key: 'file:file-1', title: '采购方案讨论', meeting_date: null }] } : { items: [{ ...file, purpose: 'meeting', filename: 'device_001.wav', title: '旧标题', category: 'recording', media_type: 'audio/wav' }] });
+  mount('/files?purpose=meeting');
+  await userEvent.click(await screen.findByRole('button', { name: /采购方案讨论/ }));
+  const detail = screen.getByRole('dialog');
+  expect(within(detail).getByRole('heading', { name: '采购方案讨论' })).toBeVisible();
+  expect(within(detail).getByText('device_001.wav')).toBeVisible();
+  expect(within(detail).getByRole('button', { name: '复制原始文件名' })).toBeVisible();
+});
+
+it('hides unused format filters and search in a truly empty file library', async () => {
+  mocks.api.mockResolvedValue({ items: [] }); mount();
+  await screen.findByText('暂无笔记资料');
+  expect(screen.queryByRole('region', { name: '文件筛选' })).toBeNull();
 });

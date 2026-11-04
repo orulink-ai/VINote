@@ -1,3 +1,7 @@
+import { useTaskCenter, type TaskWorkspace } from '@/hooks/useTaskCenter';
+import { TaskProgress } from '@/components/Feedback/TaskProgress';
+import { taskDisplayTitle, taskDisplayMessage } from '@/lib/taskDisplay';
+import { Input } from '@/components/ui/input';
 import { sourceHistoryAction } from '@/lib/taskRecoveryView';
 import { isRejectedVersionReceipt, readVersionReceipt, meetingVersionDetails } from '@/lib/meetingVersionRecovery';
 import { depthLabels, presentationLabels } from '@/lib/summaryPresentation';
@@ -8,7 +12,6 @@ import { RefreshCw } from "lucide-react";
 import { listPendingMeetings, type PendingMeeting } from "@/lib/audioStorage";
 import { useAuthStore } from "@/stores/authStore";
 import { deliveryStatus, type Delivery } from "@/lib/feishu";
-import { listMCPRuns, mcpRunLabel, type MCPRun } from "@/lib/mcpConnections";
 import { useLibraryNotes, libraryNoteUrl } from "@/hooks/useLibraryNotes";
 import { pageParentLabel, resolvePageParent } from '@/lib/navigation';
 import { PageReturn } from '@/components/Layout/PageReturn';
@@ -30,7 +33,7 @@ export function Tasks() {
 function TasksPage({ owner }: { owner?: string }) {
   const [params, setParams] = useSearchParams();
   const historyReturn = `/tasks${params.toString() ? `?${params.toString()}` : ''}`;
-  const tab = ["generation", "feishu", "mcp"].includes(
+  const tab = ["generation", "feishu"].includes(
     params.get("tab") || "",
   )
     ? params.get("tab")!
@@ -38,16 +41,16 @@ function TasksPage({ owner }: { owner?: string }) {
   const notes = useLibraryNotes();
   const legacySync = params.get('tab') === 'sync';
   const [recordings, setRecordings] = useState<PendingMeeting[]>([]);
-  type SourceImport = { id?: string; operationId?: string; meeting: boolean; mode?: string; submissionState?: string };
+  type SourceImport = { workspace?: TaskWorkspace; sourceTitle?: string; sourceUrl?: string; id?: string; operationId?: string; meeting: boolean; mode?: string; submissionState?: string };
   const [imports, setImports] = useState<SourceImport[]>([]);
   const [versionStates, setVersionStates] = useState<Record<string, VersionHistory>>({});
-  const [runs, setRuns] = useState<MCPRun[]>([]);
   const [deliveries, setDeliveries] = useState<
     { noteId: string; title: string; url: string; job: Delivery }[]
   >([]);
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(false);
   const [attempt, setAttempt] = useState(0);
+  const [query, setQuery] = useState("");
   useEffect(() => {
     if (legacySync) return;
     let active = true;
@@ -96,9 +99,7 @@ function TasksPage({ owner }: { owner?: string }) {
         const results = await Promise.allSettled([statuses(), device()]);
         const failed = results.find(result => result.status === 'rejected');
         if (failed?.status === 'rejected') throw failed.reason;
-      } else if (tab === "mcp") {
-        const next = await listMCPRuns();
-        if (active) setRuns(next.runs);
+
       } else if (tab === "feishu") {
         const next: typeof deliveries = [];
         // Serial readback avoids issuing one request per note simultaneously.
@@ -128,13 +129,29 @@ function TasksPage({ owner }: { owner?: string }) {
       controller.abort();
     };
   }, [owner, tab, attempt, legacySync, historyReturn]);
+  const taskStates = useTaskCenter(owner, [
+    ...imports.filter(item => !meetingVersionDetails(item, owner) && !isRejectedVersionReceipt(item, owner) && (!item.submissionState || item.submissionState === 'accepted')).flatMap(item => item.id ? [item.id] : []),
+    ...recordings.flatMap(item => item.taskId && !item.noteId ? [item.taskId] : []),
+  ], tab === 'generation' && !legacySync, attempt, imports.filter(item => !meetingVersionDetails(item, owner) && !isRejectedVersionReceipt(item, owner) && item.operationId && item.submissionState !== 'accepted').map(item => item.operationId!), Object.fromEntries([
+    ...imports.flatMap(item => item.workspace ? [
+      ...(item.id ? [[item.id, item.workspace] as const] : []),
+      ...(item.operationId ? [[`operation:${item.operationId}`, item.workspace] as const] : []),
+    ] : []),
+    ...recordings.filter(item => item.taskId && item.workspace).map(item => [item.taskId!, item.workspace] as const),
+  ]));
+  const matches = (...values: (string | undefined)[]) => values.join(' ').toLowerCase().includes(query.trim().toLowerCase());
+  const shownImports = imports.filter(item => matches(item.sourceTitle, item.sourceUrl, meetingVersionDetails(item, owner)?.title, item.meeting ? '会议导入任务' : '资料整理任务'));
+  const shownRecordings = recordings.filter(item => matches(item.options.title));
+  const shownDeliveries = deliveries.filter(item => matches(item.title));
+  const hasRows = tab === 'generation' ? imports.length + recordings.length > 0 : deliveries.length > 0;
+  const hasMatches = tab === 'generation' ? shownImports.length + shownRecordings.length > 0 : shownDeliveries.length > 0;
   if (legacySync) return <Navigate replace to={'/settings/storage?' + new URLSearchParams({ returnTo: resolvePageParent(params.get('returnTo')) })} />;
   return (
-    <div className="workspace-page max-w-5xl">
-      <PageReturn to={resolvePageParent(params.get("returnTo"))} label={pageParentLabel(resolvePageParent(params.get("returnTo")))} />
+    <div className="workspace-page tasks-page">
+      {params.get('returnTo') && <PageReturn to={resolvePageParent(params.get("returnTo"))} label={pageParentLabel(resolvePageParent(params.get("returnTo")))} />}
       <PageHeading
-        title="任务与恢复"
-        description="查看实际处理阶段与运行位置，从所属记录继续恢复。"
+        title="任务"
+        description="查看生成进度、打开结果或处理失败任务。"
         actions={
           <Button
             variant="outline"
@@ -146,17 +163,18 @@ function TasksPage({ owner }: { owner?: string }) {
           </Button>
         }
       />
-      <Tabs value={tab} onValueChange={(value) => setParams(previous => {
+      <div className="task-toolbar"><Tabs value={tab} onValueChange={(value) => setParams(previous => {
         const next = new URLSearchParams(previous);
         next.set('tab', value);
         return next;
       })}>
         <TabsList className="line-tabs">
-          <TabsTrigger value="generation">生成</TabsTrigger>
-          <TabsTrigger value="feishu">飞书</TabsTrigger>
-          <TabsTrigger value="mcp">MCP</TabsTrigger>
+          <TabsTrigger value="generation">内容生成</TabsTrigger>
+          <TabsTrigger value="feishu">飞书发布</TabsTrigger>
         </TabsList>
       </Tabs>
+      {hasRows && <Input aria-label="搜索处理记录" placeholder="搜索任务或原文件" value={query} onChange={event => setQuery(event.target.value)} className="h-9 max-w-sm" />}</div>
+      {hasRows && !hasMatches && <EmptyState title="没有匹配的处理记录" description="换个来源标题，或清除搜索。"><Button variant="outline" onClick={() => setQuery('')}>清除搜索</Button></EmptyState>}
       {error && (
         <ErrorState
           error={error}
@@ -166,43 +184,47 @@ function TasksPage({ owner }: { owner?: string }) {
       )}
       {loading && <LoadingState rows={1} label="正在更新任务状态…" />}
       {tab === "generation" && (
-        <>
-          {imports.map((item) => {
+        <div className="task-list">
+          {shownImports.map((item) => {
             const version = meetingVersionDetails(item, owner);
             const rejected = isRejectedVersionReceipt(item, owner);
             const status = version && !rejected ? versionStates[item.operationId || item.id || ''] || unverifiedVersionHistory() : null;
+            const live = !version ? (item.id ? taskStates[item.id] : undefined) || (item.operationId ? taskStates[`operation:${item.operationId}`] : undefined) : undefined;
             const operationUrl = `/generate?mode=${item.mode === 'url' ? 'url' : 'file'}${item.meeting ? '&meeting=1' : ''}${item.operationId ? `&operation=${encodeURIComponent(item.operationId)}` : item.id ? `&task=${encodeURIComponent(item.id)}` : ''}`;
-            const target = status?.noteId ? `/note/${encodeURIComponent(status.noteId)}`
+            const target = live?.noteId ? `/note/${encodeURIComponent(live.noteId)}` : status?.noteId ? `/note/${encodeURIComponent(status.noteId)}`
               : status?.taskId && !status.saveable && !status.failed ? `/generate?mode=file&meeting=1&task=${encodeURIComponent(status.taskId)}` : operationUrl;
-            return <article key={item.operationId || item.id} className="grid gap-2 border-b pb-4">
+            const originalTitle = version ? version.title : item.sourceTitle || item.sourceUrl;
+            const displayTitle = taskDisplayTitle(originalTitle, item.meeting, version ? status?.title : live?.title);
+            return <article key={item.operationId || item.id} className="task-row relative grid min-w-0 gap-2 border-b py-4 sm:pr-64">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="text-balance font-medium">{version ? `${versionHistoryTitle(status?.title || version.title)} · 新版本` : item.meeting ? '会议导入任务' : '资料整理任务'}</h2>
-              {status && <Badge variant={status.failed ? 'destructive' : 'secondary'}>{status.label}</Badge>}
+              <h2 className="break-words text-sm font-medium">{versionHistoryTitle(displayTitle)}{version ? ' · 新版本' : ''}</h2>
             </div>
-            {version && <dl className="grid gap-2 text-sm sm:grid-cols-2">
+            {version && <details className="task-details"><summary>处理详情</summary><dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
               {status?.title && <div><dt className="text-muted-foreground">录制来源</dt><dd>{versionHistoryTitle(version.title)}</dd></div>}
               <div><dt className="text-muted-foreground">本次选择的总结模型</dt><dd className="break-words">{version.model}</dd></div>
               <div><dt className="text-muted-foreground">内容与形式</dt><dd>{depthLabels[version.depth]} · {presentationLabels[version.presentation]}</dd></div>
               <div><dt className="text-muted-foreground">语音识别</dt><dd>{version.reuse ? '复用已有转写' : '重新识别（已确认）'}</dd></div>
               <div><dt className="text-muted-foreground">提交时间</dt><dd><time className="tabular-nums" dateTime={version.createdAt}>{new Date(version.createdAt).toLocaleString('zh-CN', { hour12: false })}</time></dd></div>
-            </dl>}
-            <p className="text-pretty text-sm text-muted-foreground">{rejected ? '本次未受理，未创建任务。失败记录已保留，重新生成需要返回来源再次核验确认。' : status ? status.detail : item.operationId && item.submissionState !== 'accepted' ? item.submissionState === 'reserved' ? '已收到提交，排队状态待确认；请查询原任务。' : '提交状态待确认，原来源已保留，请查询原任务。' : '任务已接收，请查询原结果，避免重复生成。'}</p>
-            {import.meta.env.DEV && <details className="text-xs text-muted-foreground"><summary>开发诊断</summary>{item.operationId && <p>提交编号：{item.operationId}</p>}{item.id && <p>任务编号：{item.id}</p>}</details>}
-            <Button variant="outline" className="w-fit" asChild><Link to={target} state={{ returnTo: historyReturn }}>{rejected ? '查看未受理记录' : status?.action || sourceHistoryAction(item)}</Link></Button>
+            </dl></details>}
+            <p className="task-description text-pretty text-sm text-muted-foreground">{live ? taskDisplayMessage(live, item.meeting) : rejected ? '本次未受理，未创建任务。失败记录已保留，重新生成需要返回来源再次核验确认。' : status ? status.detail : item.operationId && item.submissionState !== 'accepted' ? item.submissionState === 'reserved' ? '已收到提交，排队状态待确认；请查询原任务。' : '提交状态待确认，原来源已保留，请查询原任务。' : '任务已接收，请查询原结果，避免重复生成。'}</p>
+            {status && <span className={`text-xs ${status.failed ? 'text-destructive' : 'text-muted-foreground'}`}>{status.label}</span>}
+            {!version && originalTitle && displayTitle !== originalTitle && <details className="task-details"><summary>原文件与来源</summary><p className="mt-2 break-all text-xs">{originalTitle}</p></details>}
+
+            {live && <TaskProgress task={live} />}
+            <Button variant="outline" className="w-fit max-w-full whitespace-normal sm:absolute sm:right-0 sm:top-4" asChild><Link to={target} state={{ returnTo: historyReturn }}>{live?.noteId ? '打开已保存内容' : live?.complete ? item.operationId ? '打开结果并保存' : '查看处理结果' : live?.failed ? '查看失败原因与恢复' : rejected ? '查看未受理记录' : status?.action || sourceHistoryAction(item)}</Link></Button>
           </article>})}
-          {recordings.map((r) => (
-            <article key={r.id} className="flex flex-col gap-2 border-b pb-4">
+          {shownRecordings.map((r) => { const live = r.taskId ? taskStates[r.taskId] : undefined; const savedId = live?.noteId || r.noteId; return (
+            <article key={r.id} className="task-row relative flex min-w-0 flex-col gap-2 border-b py-4 sm:pr-64">
               <div className="flex justify-between gap-3">
-                <h2 className="font-medium">{versionHistoryTitle(r.options.title)}</h2>
-                <Badge
+                <h2 className="break-words text-sm font-medium">{versionHistoryTitle(r.options.title)}</h2>
+                {!live && <Badge
                   variant={
                     r.processingStatus === "failed"
                       ? "destructive"
                       : "secondary"
                   }
                 >
-                  {
-                    {
+                  {{
                       idle: "已保存",
                       queued: "排队中",
                       preparing_media: "准备资料",
@@ -217,23 +239,24 @@ function TasksPage({ owner }: { owner?: string }) {
                       failed: "需处理",
                     }[r.processingStatus]
                   }
-                </Badge>
+                </Badge>}
               </div>
               <p className="text-xs text-muted-foreground">
-                原录音已保留 · {r.noteId ? '纪要已保存' : r.processingStatus === 'completed' ? '生成已完成' : r.processingStatus === 'failed' ? '处理未完成' : r.taskId ? '查看处理记录' : '尚未生成纪要'}
+                原录音已保留 · {savedId ? '纪要已保存' : live ? live.complete ? '生成已完成' : live.failed ? '处理未完成' : '进度自动更新' : r.processingStatus === 'completed' ? '生成已完成' : r.processingStatus === 'failed' ? '处理未完成' : r.taskId ? '查看处理记录' : '尚未生成纪要'}
               </p>
-              {r.processingError && (
-                <p className="text-sm text-destructive">{r.processingError}</p>
+              {(live || r.processingError) && (
+                <p className="text-sm text-muted-foreground">{live ? taskDisplayMessage(live, true) : r.processingError}</p>
               )}
-              <Button variant="outline" className="w-fit" asChild>
-                <Link to={r.noteId ? `/note/${encodeURIComponent(r.noteId)}` : `/files?${new URLSearchParams({ type: 'all', q: '', file: `recording:${r.id}`, returnTo: historyReturn })}`} state={{ returnTo: historyReturn }}>
-                  {r.processingStatus === "failed"
+              {live && <TaskProgress task={live} />}
+              <Button variant="outline" className="w-fit max-w-full whitespace-normal sm:absolute sm:right-0 sm:top-4" asChild>
+                <Link to={savedId ? `/note/${encodeURIComponent(savedId)}` : live?.complete && r.taskId ? `/generate?meeting=1&task=${encodeURIComponent(r.taskId)}` : `/files?${new URLSearchParams({ type: 'all', q: '', file: `recording:${r.id}`, returnTo: historyReturn })}`} state={{ returnTo: historyReturn }}>
+                  {(live ? live.failed : r.processingStatus === "failed") && !savedId
                     ? "查看原录音与恢复选项"
-                    : r.noteId ? "查看会议纪要" : "查看原录音"}
+                    : savedId ? "查看会议纪要" : live?.complete ? "打开结果" : "查看原录音"}
                 </Link>
               </Button>
             </article>
-          ))}
+          )})}
           {!loading && !error && !recordings.length && !imports.length && (
             <EmptyState
               title="暂无生成任务"
@@ -244,14 +267,14 @@ function TasksPage({ owner }: { owner?: string }) {
               </Button>
             </EmptyState>
           )}
-        </>
+        </div>
       )}
       {tab === "feishu" && (
         <>
-          {deliveries.map((item) => (
+          {shownDeliveries.map((item) => (
             <div
               key={item.noteId}
-              className="flex flex-col gap-3 border-b py-3"
+              className="relative flex min-w-0 flex-col gap-2 border-b py-4 sm:pr-64"
             >
               <h2>{item.title}</h2>
               <p className="text-sm">
@@ -265,7 +288,7 @@ function TasksPage({ owner }: { owner?: string }) {
               {item.job.error && (
                 <p className="text-sm text-destructive">{item.job.error}</p>
               )}
-              <Button variant="outline" className="w-fit" asChild>
+              <Button variant="outline" className="w-fit max-w-full whitespace-normal sm:absolute sm:right-0 sm:top-4" asChild>
                 <Link to={item.url}>打开交付记录并恢复失败步骤</Link>
               </Button>
             </div>
@@ -282,34 +305,7 @@ function TasksPage({ owner }: { owner?: string }) {
           )}
         </>
       )}
-      {tab === "mcp" && (
-        <>
-          {runs.map((run) => (
-            <div key={run.id} className="border-b py-3">
-              <p>
-                {run.toolName} · {mcpRunLabel[run.status]}
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                集成服务 · {new Date(run.updatedAt).toLocaleString()}
-              </p>
-              {run.error && (
-                <p className="mt-2 text-sm text-destructive">
-                  {run.error.message}
-                </p>
-              )}
-            </div>
-          ))}
-          {!loading && !error && !runs.length && (
-            <EmptyState
-              title="暂无工具任务"
-              description="连接真实服务并确认调用后，在这里查看进度与结果。"
-            />
-          )}
-          <Button variant="outline" className="w-fit" asChild>
-            <Link to="/settings/mcp" state={{ returnTo: historyReturn }}>管理工具与运行记录</Link>
-          </Button>
-        </>
-      )}
+
     </div>
   );
 }

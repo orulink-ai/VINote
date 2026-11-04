@@ -87,6 +87,84 @@ def test_missing_or_ambiguous_catalog_never_enables_json(catalog):
     assert select_policy(frozen_binding(OWNER, MODEL, (OWNER, snapshot())), catalog).parameters() == {}
 
 
+def test_verified_codex_luna_pair_enables_json_without_enabling_other_openai_models():
+    binding = frozen_binding(OWNER, MODEL, (OWNER, snapshot()))
+    assert select_policy(binding, [entry(providerId='openai', providerModel='codex/gpt-6-luna')]).parameters() == {'response_format': JSON_OBJECT}
+    assert select_policy(binding, [entry(providerId='openai', providerModel='codex/other')]).parameters() == {}
+
+
+def test_review_attempt_diagnostics_keep_each_response_without_private_content(gateway):
+    from app.llm.meeting_final_claim_ledger import FinalLedgerError
+    from app.llm.source_references import bind_source_references
+    from test_meeting_empty_review_retry import DRAFT, EMPTY, SOURCE
+    gateway.outputs = [
+        {'choices': [{'message': {'content': EMPTY}, 'finish_reason': 'stop'}],
+         'usage': {'prompt_tokens': 10, 'completion_tokens': 4, 'secret': 'private'}},
+        {'choices': [{'message': {'content': EMPTY}, 'finish_reason': 'stop'}],
+         'usage': {'prompt_tokens': 12, 'completion_tokens': 5}},
+    ]
+    with (VILabCloudService().task_snapshot(OWNER, snapshot=snapshot()),
+          presentation_scope('detailed', 'text') as state,
+          bind_source_references([TranscriptSegment(0, 1, SOURCE)])):
+        llm = VILabLLM(OWNER, MODEL)
+        with pytest.raises(FinalLedgerError):
+            llm._review_meeting_note(source='[ASR:0001] '+SOURCE, draft=DRAFT,
+                                     extras='private context', output_language='en')
+        rows = state.review_attempt_details
+    assert len(rows) == 2
+    for row in rows:
+        assert row['claim_count'] == 1
+        assert row['system_chars'] > 0 and row['user_chars'] > 0
+        assert row['json_mode'] == 'json_object'
+        assert row['finish_reason'] == 'stop'
+        assert row['output']['claims_count'] == 0 and row['output']['blocks_count'] == 0
+    assert [row['usage']['prompt_tokens'] for row in rows] == [10, 12]
+    assert SOURCE not in json.dumps(rows) and 'private' not in json.dumps(rows)
+
+
+def test_review_attempt_diagnostic_records_safe_terminal_failure(gateway):
+    from app.llm.source_references import bind_source_references
+    from app.services.summary_failure import sse_terminal_context
+    from test_meeting_empty_review_retry import DRAFT, SOURCE
+    gateway.outputs = [SummaryResultUnconfirmed(terminal_diagnostic=sse_terminal_context(
+        done_seen=True, finish_reason='length', finish_observed=True))]
+    with (VILabCloudService().task_snapshot(OWNER, snapshot=snapshot()),
+          presentation_scope('detailed', 'text') as state,
+          bind_source_references([TranscriptSegment(0, 1, SOURCE)])):
+        with pytest.raises(SummaryResultUnconfirmed):
+            VILabLLM(OWNER, MODEL)._review_meeting_note(source='[ASR:0001] '+SOURCE,
+                draft=DRAFT, extras=None, output_language='en')
+    assert len(state.review_attempt_details) == 1
+    assert state.review_attempt_details[0]['finish_reason'] == 'length'
+    assert state.review_attempt_details[0]['outcome'] == 'unconfirmed'
+
+
+@pytest.mark.parametrize(('raw', 'category', 'has_position'), [
+    ('{"secret":"sensitive",\n "claims": [}', 'syntax', True),
+    ('{"secret":1,"secret":2}', 'duplicate_key', False),
+    ('{"secret": NaN}', 'invalid_constant', False),
+])
+def test_review_json_diagnostic_is_positioned_and_redacted(gateway, raw, category, has_position):
+    from app.llm.source_references import bind_source_references
+    from app.llm.meeting_final_claim_ledger import FinalLedgerError
+    from test_meeting_empty_review_retry import DRAFT, SOURCE
+    gateway.outputs = [raw]
+    with (VILabCloudService().task_snapshot(OWNER, snapshot=snapshot()),
+          presentation_scope('detailed', 'text') as state,
+          bind_source_references([TranscriptSegment(0, 1, SOURCE)])):
+        with pytest.raises(FinalLedgerError):
+            VILabLLM(OWNER, MODEL)._review_meeting_note(source='[ASR:0001] '+SOURCE,
+                draft=DRAFT, extras=None, output_language='en')
+    detail = state.review_attempt_details[0]['output']['parse']
+    assert detail['category'] == category
+    assert (detail['offset'] is not None) == has_position
+    if has_position:
+        assert detail['line'] == 2 and detail['column'] > 0
+        assert detail['tail_chars'] == len(raw) - detail['offset']
+        assert set(detail['context']) <= set('{}[],:"\\ ')
+    assert 'secret' not in json.dumps(detail) and 'sensitive' not in json.dumps(detail)
+
+
 @pytest.mark.parametrize('changes', [
     {'owner': 'another'}, {'mode': 'local'}, {'llm_model': 'changed'}, {'server_url': ''},
     {'server_url': 'https://name:secret@invalid'}, {'server_url': 'https://invalid?q=1'},
@@ -416,3 +494,13 @@ def test_review_transport_or_empty_failure_never_adds_a_third_call(case, gateway
         assert state.raw_review is None and not state.visual_review
     assert len(gateway.chats) == 2 and len(gateway.events) == 3
     assert all(chat['response_format'] == JSON_OBJECT and chat['model'] == MODEL for chat in gateway.chats)
+
+
+@pytest.fixture(autouse=True)
+def explicit_legacy_structured_pipeline(monkeypatch):
+    """This suite tests the retained JSON protocol, not default text minutes."""
+    from app.llm.openai_llm import _BasePromptLLM
+    original = _BasePromptLLM._summarize_one_shot
+    def legacy(self, **kwargs):
+        return original(self, **{**kwargs, 'direct_text': False})
+    monkeypatch.setattr(_BasePromptLLM, '_summarize_one_shot', legacy)

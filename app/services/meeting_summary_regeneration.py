@@ -16,6 +16,7 @@ from app.models.source_request import SourceInput, SourceSubmission
 from app.models.transcript import TranscriptResult, TranscriptSegment
 from app.services.meeting_evidence import original_asr_evidence
 from app.services.meeting_alias_context import capture_alias_context, alias_extras, alias_source_text
+from app.services.meeting_speaker_context import capture_speaker_context, speaker_extras
 from app.services.retained_task_source import SOURCE_LOCK, resolve_reference
 from app.services.source_request_service import SourceRequestService, _fingerprint
 from app.services.task_artifact_service import TaskArtifactService
@@ -158,6 +159,47 @@ def _evidence(folder):
 
 
 class SummaryRegenerationService:
+    def list_children(self, owner, canonical):
+        """Discover accepted summary submissions without changing task state."""
+        info, _ = TaskOriginalService().get(owner, 'task:' + canonical)
+        if info.get('purpose') != 'meeting':
+            raise HTTPException(404, 'Original not found')
+        parent = self.artifacts.find_task_dir(canonical)
+        manifest = _read_json(parent / 'source_media.json')
+        source_version = manifest.get('sha256')
+        items = []
+        for folder in self.artifacts.output_dir.iterdir():
+            try:
+                if (not folder.is_dir() or folder.is_symlink() or getattr(folder, 'is_junction', lambda: False)()
+                        or folder.resolve().parent != self.artifacts.output_dir.resolve() or (folder / '.task_id').is_symlink()):
+                    continue
+                task = (folder / '.task_id').read_text(encoding='utf-8').strip()
+                if str(UUID(task)) != task or self.artifacts.find_task_dir(task) != folder:
+                    continue
+                if (folder / 'recording_owner').is_symlink() or (folder / 'recording_owner').read_text(encoding='utf-8') != owner:
+                    continue
+                link = _read_json(folder / 'new_generation.json')
+                if link.get('contract') != 'meeting-summary-only-v1':
+                    continue
+                body = SummaryConfirmation(**{key: link[key] for key in SummaryConfirmation.model_fields if key in link})
+                reference = _read_json(folder / 'source_reference.json')
+                if reference != {'version': 1, 'owner': owner, 'parent_task_id': canonical, 'source_version': source_version} or body.source_version != source_version:
+                    continue
+                with self.receipts.sessions() as db:
+                    row = db.get(SourceRequestDB, (owner, str(body.operation_id)))
+                    if not row or row.state != 'accepted' or row.task_id != task or row.fingerprint != _fingerprint(_submission(link['parent_task_id'], body)):
+                        continue
+                presentation = _read_json(folder / 'summary_presentation.json')
+                if (presentation.get('task_id') != task or presentation.get('canonical_task_id') != canonical
+                        or presentation.get('operation_id') != str(body.operation_id)):
+                    continue
+                items.append({'task_id': task, 'operation_id': str(body.operation_id),
+                              'parent_task_id': link['parent_task_id'], 'content_depth': presentation.get('content_depth'),
+                              'presentation': presentation.get('presentation')})
+            except (OSError, ValueError, KeyError, TypeError, HTTPException):
+                continue
+        return {'canonical_task_id': canonical, 'items': items}
+
     def __init__(self, receipts=None):
         self.receipts = receipts or SourceRequestService()
         self.artifacts = TaskArtifactService(settings.output_dir)
@@ -253,6 +295,7 @@ class SummaryRegenerationService:
             child = self.artifacts.create_task_dir(claim.task_id)
             try:
                 alias_context = capture_alias_context(owner)
+                speaker_context = capture_speaker_context(owner, parent)
                 self.artifacts.write_text(child / 'recording_owner', owner)
                 self.artifacts.write_text(child / '.task_id', claim.task_id)
                 # Install the query-only guard before exposing a retryable request.
@@ -292,6 +335,7 @@ class SummaryRegenerationService:
                     bound['summary_ocr_layout_policy'] = POLICY
                     bound['summary_snapshot_sha256'] = _digest(snapshot)
                     bound['summary_alias_context'] = alias_context
+                    bound['summary_speaker_context'] = speaker_context
                     bound['summary_visual_reference_sha256'] = _digest(visual_link) if visual_link is not None else None
                     row.receipt_json = json.dumps(bound)
                     db.flush()
@@ -352,6 +396,7 @@ class SummaryRegenerationService:
                     raise ValueError()  # Disk artifacts and arbitrary IDs never authorize execution.
                 accepted_bound = json.loads(row.receipt_json or '{}')
                 alias_context = accepted_bound.get('summary_alias_context')
+                speaker_context = accepted_bound.get('summary_speaker_context')
                 accepted_snapshot_sha256 = accepted_bound.get('summary_snapshot_sha256')
                 layout_policy = accepted_bound.get('summary_ocr_layout_policy')
                 _preflight('summary_ocr_layout_policy' not in accepted_bound
@@ -416,6 +461,7 @@ class SummaryRegenerationService:
             options = _options(saved, body)
             extras = alias_extras(owner, options.get('extras'), alias_context,
                                   source_text=alias_source_text(transcript, visual))
+            extras = speaker_extras(owner, link['parent_task_id'], extras, speaker_context, transcript)
             if extras != options.get('extras'):
                 options['extras'] = extras
             with VILabCloudService().task_snapshot(owner, snapshot=snapshot):

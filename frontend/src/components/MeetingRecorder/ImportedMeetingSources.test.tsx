@@ -1,3 +1,5 @@
+vi.mock('./MeetingDisplayEditor', () => ({ MeetingDisplayEditor: () => null }));
+vi.mock('@/hooks/useMeetingDisplay', () => ({ useMeetingDisplay: () => ({}), MEETING_DISPLAY_CHANGED: 'vinote-meeting-display-changed' }));
 import { act, render, screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter } from 'react-router-dom';
@@ -12,13 +14,12 @@ beforeEach(() => { mocks.owner = 'owner'; mocks.listeners.clear(); mocks.api.moc
 afterEach(cleanup);
 it('failed upload without minutes has a source-only link and never posts', async () => {
   mocks.api.mockResolvedValue({ items: [source] }); mount();
-  expect(await screen.findByText('讨论.webm')).toBeInTheDocument();
+  expect((await screen.findAllByText('未命名会议')).length).toBeGreaterThan(0);
   expect(screen.getByRole('region', { name: '会议资料' })).toBeInTheDocument();
-  expect(screen.getByRole('heading', { level: 2, name: '会议资料' })).toHaveClass('text-balance');
-  expect(screen.getByRole('heading', { level: 3, name: '讨论.webm' })).toHaveClass('text-balance');
-  expect(screen.getByText('录音、视频与逐字稿分别保留，可查看原文件和处理记录。')).toHaveClass('text-pretty');
+  expect(screen.getByRole('heading', { level: 2, name: '待生成纪要的会议' })).toHaveClass('text-balance');
+  expect(screen.getByRole('heading', { level: 3, name: '未命名会议' })).toHaveClass('text-balance');
   expect(screen.getByText('处理结果尚未确认，原文件已保留。')).toBeInTheDocument();
-  expect(screen.getByRole('link', { name: '查看资料与处理记录' })).toHaveAttribute('href', '/files?purpose=meeting&file=task%3Aopaque');
+  expect(screen.getByRole('link', { name: '查看资料与处理记录' })).toHaveAttribute('href', '/meetings/files?purpose=meeting&file=task%3Aopaque');
   expect(screen.queryByText('same-task')).not.toBeInTheDocument();
   expect(mocks.api.mock.calls).toEqual([['/api/files']]);
 });
@@ -31,7 +32,7 @@ it('saved minutes and retained recording task dedupe while notes stay separate',
 it('a failed source read offers an in-place GET retry without empty claims', async () => {
   mocks.api.mockRejectedValueOnce(new Error('failure')).mockResolvedValue({ items: [source] }); mount();
   await userEvent.click(await screen.findByRole('button', { name: '重新读取会议资料' }));
-  expect(await screen.findByText('讨论.webm')).toBeInTheDocument();
+  expect((await screen.findAllByText('未命名会议')).length).toBeGreaterThan(0);
   expect(mocks.api.mock.calls).toEqual([['/api/files'], ['/api/files']]);
 });
 it('stale response after account changes cannot reveal an old source', async () => {
@@ -52,4 +53,23 @@ it('A-B-A account change invalidates an in-flight source read even when owner re
   finish({ items: [source] });
   });
   expect(screen.queryByText('讨论.webm')).not.toBeInTheDocument();
+});
+
+it('source-only meetings obey the shared list search and report the matching count', async () => {
+  mocks.api.mockResolvedValue({ items: [source, { ...source, id: 'task:second', task_id: 'second', filename: '其他.wav' }] });
+  const onSourceCount = vi.fn();
+  render(<MemoryRouter><ImportedMeetingSources owner="owner" coveredTasks={[]} returnTo="/meetings" query="讨论" filter="需处理" onSourceCount={onSourceCount} /></MemoryRouter>);
+  expect((await screen.findAllByText('未命名会议')).length).toBeGreaterThan(0);
+  expect(screen.queryByText('其他.wav')).not.toBeInTheDocument();
+  await waitFor(() => expect(onSourceCount).toHaveBeenLastCalledWith(1));
+});
+
+it.each(['uploaded', 'preparing', 'downloading', 'transcribing', 'diarizing', 'parallel_analysis', 'aligning', 'analyzing_video', 'summarizing', 'screenshots', 'saving_result'])('includes backend %s originals in the processing filter', async status => {
+  mocks.api.mockResolvedValue({ items: [{ ...source, processing_status: status }, { ...source, id: 'finished', filename: '完成.wav', processing_status: 'success' }, { ...source, id: 'failed', filename: '失败.wav', processing_status: 'failed' }] });
+  const onSourceCount = vi.fn();
+  render(<MemoryRouter><ImportedMeetingSources owner="owner" coveredTasks={[]} returnTo="/meetings" filter="处理中" onSourceCount={onSourceCount} /></MemoryRouter>);
+  expect((await screen.findAllByText('未命名会议')).length).toBeGreaterThan(0);
+  expect(screen.queryByText('完成.wav')).not.toBeInTheDocument();
+  expect(screen.queryByText('失败.wav')).not.toBeInTheDocument();
+  await waitFor(() => expect(onSourceCount).toHaveBeenLastCalledWith(1));
 });

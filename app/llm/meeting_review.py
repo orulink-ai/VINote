@@ -1,5 +1,7 @@
 """Ground meeting drafts in source evidence before returning the final note."""
 
+import json
+
 from app.llm.prompts import normalize_output_language
 from app.llm.meeting_prompt_contract import meeting_system_base
 from app.llm.source_references import source_prompt
@@ -19,7 +21,7 @@ The draft may be source-preservation working notes rather than polished prose. U
 The draft is not evidence: independently check the full original material. Preserve important source-supported facts and their relationships; correct errors locally and restore omissions from the source. Do not delete or generalize away supported information, or alter its relationships, merely to polish the prose. Remove or correct unsupported claims and relationships without discarding the supported facts around them.
 Internal ASR/FRAME references are addresses, not proof. Check each referenced source independently, including the actual image. For each material claim preserve its object, actor or explicitly documented assignee, value and unit, time role, direction, condition and state together. A compatible number or a nearby sentence cannot fill a missing relationship. Recheck that the cited material supports the entire claim rather than one shared keyword; remove or correct a wrong relationship, not merely append a disclaimer. Read the rest of the source too: a draft's citations do not limit coverage. Return only the report, without the internal ASR/FRAME references or an evidence ledger.
 Check actors, objects, negations, scope, conditions, and proposals versus confirmed decisions.
-ASR text and independent speaker intervals are separate evidence streams on recording offsets. Chunk/file timestamps do not establish word timing or sentence attribution. Never assign all chunk text to one speaker or infer a task owner from interval overlap alone.
+ASR text and independent speaker intervals are separate evidence streams on recording offsets. Chunk/file timestamps do not establish word timing or sentence attribution. Never infer a task owner from interval overlap alone.
 Only speaker labels explicitly attached to precisely timed ASR sentences establish attribution. Independent speaker intervals beside chunk/file text do not establish attribution: remove numbered speakers from those viewpoints and commitments and use anonymous wording. This restriction takes precedence over preserving labels from a draft or reviewed chunk notes. For directly attributed sentences preserve those exact labels; never conflate different speakers into consensus, infer real identities, or treat the person mentioning a task as its owner. Unknown, overlapping or uncertain attribution must remain explicitly uncertain.
 Do not turn an instruction to an automated tool into an instruction for a person to perform it manually.
 Do not turn separately described channels or capabilities into an unresolved either/or choice.
@@ -32,7 +34,7 @@ Actual meeting times must come from explicit context. Paused media duration and 
 Review the complete supplied visual evidence as well as speech. Independently legible, relevant document plans, assignments, quantities, conditions, due dates and unchecked tasks are usable facts about that document, even when speech does not repeat them. Preserve those details with their actual status; never promote a displayed proposal to spoken agreement, a document assignee to the identity of a speaker, or an unchecked task to completed work. A text-only request supplies extracted visual text only; never claim to have read images that were not supplied. Preserve material cross-source conflicts without inventing a resolution or silently replacing an earlier statement with a later screen value.
 Check omissions as well as false claims. Silently compare every major topic in the full speech and visual material against the draft, restoring supported alternatives, comparisons, changing plans, quantities, explicit responsibilities, dependencies and follow-up conditions that matter to the reader. Do not discard a substantive discussion simply because no final decision was made. Do not replace clearly recorded assignments or requirements with a vague statement that a document contains arrangements.
 Resolve references across the whole context before counting distinct events or objects. Different attributes or stages of the same event are not separate events unless the evidence distinguishes them. Keep alternatives, estimates and confirmed arrangements separate; preserve ambiguity without inventing an extra event.
-Let the actual content determine headings, structure and length; impose no fixed sections, outcome counts, action tables or report template. Preserve useful rationale, examples, constraints, disagreements and changes of position across the whole source. Omit empty sections and duplicate summaries.
+Let the actual content determine headings, structure and length; impose no forced thematic templates, outcome counts or action tables. Preserve useful rationale, examples, constraints, disagreements and changes of position across the whole source. Omit empty sections and duplicate summaries.
 Recognition gaps, empty transcript intervals, sampling limitations and processing diagnostics constrain reasoning internally; never turn them into recognition/coverage technical reports, meeting facts or invented open questions. Only a material factual ambiguity may receive a brief contextual verification note.
 Do not describe the editing process or write comments such as 'the draft should not say'. Avoid repetitive 'the transcript did not confirm' disclaimers: state the supported plan or material requirement directly, preserving only a substantive uncertainty in its own context. The result must read as the meeting report itself, not a review of the recognition or summarization process.
 Keep offsets internal unless the user explicitly requests recording references. In the default report remove repeated time citations and technical evidence commentary. Preserve substantive relationships in diagrams, the rationale for comparisons and supported follow-ups; do not reduce visual evidence to a list of labels."""
@@ -47,6 +49,8 @@ Keep offsets internal unless the user explicitly requests recording references. 
         rules += '\n' + depth_instructions()
         if state and state.depth:
             graphic_protocol = 7 if state.presentation in {'comic', 'infographic'} else 4
+            if state.presentation in (None, 'text') and getattr(state, 'compact_review', False):
+                graphic_protocol = 8
             state.expected_review_protocol = graphic_protocol
             from app.llm.meeting_fact_material import REVIEW_MATERIALITY_RULE, SOURCE_SWEEP_RULE, RELATION_FIDELITY_RULE
             from app.llm.meeting_final_review import review_protocol
@@ -64,7 +68,15 @@ Keep offsets internal unless the user explicitly requests recording references. 
                                       'Report blocks[].parts[] strings contain plain text facts only;')
                 rules = rules.replace('Let the actual content determine headings, structure and length;',
                                       'Let the actual content determine paragraph grouping, structure and length;')
+            if graphic_protocol == 8:
+                rules = rules.replace('protocol-4 report blocks', 'protocol-8 report blocks')
             rules += '\n\n' + REVIEW_MATERIALITY_RULE + SOURCE_SWEEP_RULE + RELATION_FIDELITY_RULE + review_protocol(state.presentation, protocol=graphic_protocol)
+            rules += ('\nThe instruction not to invent facts or claims never permits skipping original claim IDs: '
+                      'account for every original ID using the required disposition and genuine evidence rules. '
+                      'Never invent facts or evidence to satisfy this accounting.')
+            if graphic_protocol in (4, 8):
+                rules += (' For nonempty source, blocks must be nonempty; do not invent facts or evidence '
+                          'to populate them.')
             from app.llm.meeting_presentation import final_depth_selection
             rules += '\n' + final_depth_selection(state.depth)
             if state.depth == 'brief':
@@ -75,7 +87,8 @@ Keep offsets internal unless the user explicitly requests recording references. 
                           "a selected fact's relationships or necessary qualifiers. The complete source material and "
                           'claim ledger are outside this body-only budget.')
             from app.llm.meeting_visual_review import visual_review_instructions
-            rules += visual_review_instructions(state.presentation, protocol=graphic_protocol)
+            if graphic_protocol != 8:
+                rules += visual_review_instructions(state.presentation, protocol=graphic_protocol)
             if state.presentation == 'illustrated':
                 rules += ('\nIllustrated output: choose 1–8 genuinely relevant actual supplied frames during this review. '
                     'Use figures entries {"frame_ref":"[FRAME:0001]","claim_ids":["C1"],'
@@ -94,10 +107,35 @@ Keep offsets internal unless the user explicitly requests recording references. 
         f"{source_label}:\n{source}\n\nDraft to check:\n{draft}"
     )
     if structured:
+        from app.llm.meeting_final_claim_ledger import decode_final_review, FinalLedgerError
+        try:
+            view = decode_final_review(draft)
+        except FinalLedgerError:
+            view = None
+        wrapper = view.get('original_claims_view') if isinstance(view, dict) else None
+        original = wrapper if isinstance(wrapper, dict) else view
+        claim_path = 'original_claims_view.claims' if isinstance(wrapper, dict) else 'claims'
+        view_contract = ''
+        is_original = (isinstance(original, dict) and
+                       (original.get('protocol') == 3 or
+                        isinstance(wrapper, dict) and 'protocol' not in wrapper))
+        claims = original.get('claims') if is_original else None
+        if (isinstance(claims, list)
+                and all(isinstance(claim, dict) and isinstance(claim.get('id'), str)
+                        and claim['id'].strip() for claim in claims)
+                and len({claim['id'] for claim in claims}) == len(claims)):
+            ids = [claim['id'] for claim in claims]
+            view_contract = (
+                f'The frozen original claims are located at {claim_path}. '
+                f'Original claim count: {len(ids)}. Original claim IDs: {json.dumps(ids, ensure_ascii=False)}. '
+                'A missing quote in a claim evidence entry does not mean there are no claims or that the '
+                'claim lacks source support; recheck the original source at its reference and obtain valid '
+                'evidence independently. Account for every listed ID under the final ledger protocol.\n\n'
+            )
         # The working interpretation must not replace the original as the last
         # source text the reviewer sees. Keep both complete, without another call.
         user_prompt = source_prompt(
-            f"Fallible working draft to audit (not evidence):\n{draft}\n\n"
+            f"{view_contract}Fallible working draft to audit (not evidence):\n{draft}\n\n"
             f"Explicit context and terminology:\n{extras or '(none)'}\n\n"
             f"{source_label}:\n", source,
             "\n\nUse the original material to correct the working interpretation, then select the report "

@@ -387,7 +387,7 @@ it('blocks new publication on the currently deployed server without receipt prot
   const status = await feishuStatus();
   vi.mocked(feishuStatus).mockResolvedValue({ ...status, publish_receipt_protocol: undefined });
   openPanel();
-  await screen.findByText(/飞书服务需要升级发布回执协议/);
+  await screen.findByText(/飞书服务需要升级，暂不能发布或重试交付/);
   await verifyDestination();
   expect(screen.getByRole('button', { name: createLabel })).toBeDisabled();
   expect(publishToFeishu).not.toHaveBeenCalled();
@@ -508,7 +508,7 @@ it('temporary verification blocks the exact failed group retry without replacing
 it.each([false, true])('explicit inline activation reuses the linked account (installed=%s)', async installed => {
   localStorage.setItem('vinote:connector-plugins:v1:owner', JSON.stringify({ version: 1, feishu: { installed, enabled: false } }));
   openPanel();
-  const enable = await screen.findByRole('button', { name: '启用飞书插件' });
+  const enable = await screen.findByRole('button', { name: '启用飞书发布' });
   await verifyDestination();
   expect(screen.getByRole('button', { name: createLabel })).toBeDisabled();
   expect(JSON.parse(localStorage.getItem('vinote:connector-plugins:v1:owner')!).feishu.enabled).toBe(false);
@@ -517,7 +517,7 @@ it.each([false, true])('explicit inline activation reuses the linked account (in
   await waitFor(() => expect(screen.getByRole('button', { name: createLabel })).toBeEnabled());
   expect(JSON.parse(localStorage.getItem('vinote:connector-plugins:v1:owner')!).feishu).toEqual({ installed: true, enabled: true });
   expect(screen.getByText('已连接 · 测试账号')).toBeInTheDocument();
-  expect(screen.queryByRole('button', { name: '启用飞书插件' })).toBeNull();
+  expect(screen.queryByRole('button', { name: '启用飞书发布' })).toBeNull();
   expect(publishToFeishu).not.toHaveBeenCalled();
   const { readPublishDraft } = await import('@/lib/feishuPublishReceipt');
   expect(readPublishDraft('owner', 'meeting-a')?.state).toBe('draft');
@@ -546,13 +546,13 @@ it('preflight plugin refusal leaves the same operation editable and a double cli
 it('cancel and reopen preserve an unactivated draft without enabling the plugin', async () => {
   localStorage.removeItem('vinote:connector-plugins:v1:owner');
   openPanel();
-  await screen.findByRole('button', { name: '启用飞书插件' });
+  await screen.findByRole('button', { name: '启用飞书发布' });
   const { readPublishDraft } = await import('@/lib/feishuPublishReceipt');
   await waitFor(() => expect(readPublishDraft('owner', 'meeting-a')?.state).toBe('draft'));
   const original = readPublishDraft('owner', 'meeting-a')!;
   fireEvent.click(screen.getByRole('button', { name: 'Close' }));
   fireEvent.click(screen.getByRole('button', { name: '发布到飞书' }));
-  await screen.findByRole('button', { name: '启用飞书插件' });
+  await screen.findByRole('button', { name: '启用飞书发布' });
   expect(readPublishDraft('owner', 'meeting-a')).toMatchObject({ state: 'draft', operationId: original.operationId });
   expect(localStorage.getItem('vinote:connector-plugins:v1:owner')).toBeNull();
   expect(publishToFeishu).not.toHaveBeenCalled();
@@ -567,13 +567,13 @@ it('inline activation is guarded against double clicks and late account changes'
   const read = vi.fn(async (_owner: string, current: () => boolean) => { current(); return { installed: false, enabled: false }; });
   vi.spyOn(connectorPlugins, 'createConnectorPluginStore').mockReturnValue({ read, save });
   const view = openPanel();
-  const enable = await screen.findByRole('button', { name: '启用飞书插件' });
+  const enable = await screen.findByRole('button', { name: '启用飞书发布' });
   fireEvent.click(enable); fireEvent.click(enable);
   expect(save).toHaveBeenCalledTimes(1);
   changeOwner('other');
   view.rerender(<MemoryRouter><FeishuDelivery noteId="meeting-a" title="会议" content="# 纪要" /></MemoryRouter>);
   await act(async () => finish());
-  await screen.findByRole('button', { name: '启用飞书插件' });
+  await screen.findByRole('button', { name: '启用飞书发布' });
   expect(screen.queryByText('发布面板已变化')).toBeNull();
   expect(save).toHaveBeenCalledTimes(1);
   expect(localStorage.getItem('vinote:connector-plugins:v1:other')).toBeNull();
@@ -1069,4 +1069,17 @@ it.each(['failed', 'unknown'])('keeps the old grouping %s receipt and offers no 
   expect(publishToFeishu).not.toHaveBeenCalled();
   expect(retryDelivery).not.toHaveBeenCalled();
   expect(localStorage.getItem(originalKey)).toBe(originalReceipt);
+});
+
+it.each([false, true])('shows only the actionable connection blocker before device activation (configured=%s)', async configured => {
+  localStorage.clear();
+  const status = await feishuStatus();
+  vi.mocked(feishuStatus).mockResolvedValue({ ...status, configured, connected: false, publish_receipt_protocol: undefined });
+  openPanel();
+  await screen.findByText(configured ? /需连接或重新授权飞书/ : /飞书接入尚未配置/);
+  expect(screen.queryByText(/飞书服务需要升级/)).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: /启用飞书插件|启用飞书发布/ })).not.toBeInTheDocument();
+  if (!configured) expect(screen.queryByText(/需连接或重新授权飞书/)).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: '管理飞书连接' })).toBeEnabled();
+  expect(publishToFeishu).not.toHaveBeenCalled();
 });

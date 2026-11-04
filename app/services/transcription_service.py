@@ -497,8 +497,9 @@ class TranscriptionService:
             )
             if not chunk_specs:
                 if update_status:
-                    update_status("transcribing", "正在转写完整录音，等待服务返回结果…",
-                                  stage="transcribing", processed_seconds=0, total_seconds=duration)
+                    update_status("transcribing", "正在转写完整录音，服务暂未提供识别百分比…",
+                                  stage="transcribing", progress=None, processed_seconds=None,
+                                  total_seconds=None, eta_seconds=None)
                 result = None
                 if chunk_cache_dir is not None:
                     from app.services.task_artifact_service import TaskArtifactService
@@ -637,45 +638,12 @@ class TranscriptionService:
         if self._is_local_transcriber(resolved_config) and update_status:
             update_status("transcribing", "Loading local speech model...")
 
-        if diarize:
-            from app.services.speaker_diarization_service import SpeakerDiarizationService
-            duration = self.get_audio_duration(audio_path)
-            if isinstance(transcriber, VILabTranscriber):
-                transcript = self._transcribe_in_chunks(
-                    audio_path=audio_path, duration=duration, transcriber=transcriber,
-                    update_status=update_status, chunk_cache_dir=chunk_cache_dir,
-                    cache_identity=cache_identity,
-                )
-                model_speakers = transcript.metadata.get("model_speaker_diarization") is True and any(
-                    segment.speaker_id is not None for segment in transcript.segments)
-                if not model_speakers:
-                    transcript = SpeakerDiarizationService().transcribe(
-                        audio_path=audio_path,
-                        transcribe=lambda _path, **_context: transcript,
-                        speaker_count=speaker_count, update_status=update_status,
-                        evidence_dir=chunk_cache_dir.parent if chunk_cache_dir else None,
-                    )
-            else:
-                transcript = SpeakerDiarizationService().transcribe(
-                    audio_path=audio_path,
-                    transcribe=lambda path, **context: self._transcribe_in_chunks(
-                        audio_path=path,
-                        duration=float(context.get("audio_duration_seconds") or duration),
-                        transcriber=transcriber,
-                        update_status=update_status,
-                        chunk_cache_dir=chunk_cache_dir, cache_identity=cache_identity,
-                        trace_context=context,
-                    ),
-                    speaker_count=speaker_count, update_status=update_status,
-                    evidence_dir=chunk_cache_dir.parent if chunk_cache_dir else None,
-                )
-        else:
-            duration = self.get_audio_duration(audio_path)
-            transcript = self._transcribe_in_chunks(
-                audio_path=audio_path, duration=duration, transcriber=transcriber,
-                update_status=update_status,
-                chunk_cache_dir=chunk_cache_dir, cache_identity=cache_identity,
-            )
+        duration = self.get_audio_duration(audio_path)
+        transcript = self._transcribe_in_chunks(
+            audio_path=audio_path, duration=duration, transcriber=transcriber,
+            update_status=update_status,
+            chunk_cache_dir=chunk_cache_dir, cache_identity=cache_identity,
+        )
         if update_status:
             update_status("transcribing", "正在保存完整转写…", stage="saving_transcript")
 

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import { resolvePageParent, pageParentLabel } from '@/lib/navigation';
 import { PageReturn } from '@/components/Layout/PageReturn';
-import { ArrowLeft, GitBranch, Save, Wand2, Wrench, MoreHorizontal, Trash2 } from "lucide-react";
+import { ArrowLeft, GitBranch, Save, Wand2, MoreHorizontal, Trash2 } from "lucide-react";
 import { apiJson, ApiError } from "@/lib/api";
 import { readGenerationRecovery, writeGenerationRecovery, clearGenerationRecovery, type SavedGenerationRequest } from '@/lib/workspaceGenerationRecovery';
 import {
@@ -172,14 +172,11 @@ export function WorkspaceNote() {
     ? viewedContent.replace(/^#[ \t]+([^\r\n]+)(?:\r?\n|$)/, (heading, headingTitle: string) =>
         headingTitle.trim() === viewedTitle.trim() ? "" : heading)
     : viewedContent;
-  const toolVersion = selected?.id || note?.versions.find(version =>
-    version.content === baseline?.content && version.title === baseline?.title)?.id;
   const detailParams = new URLSearchParams(location.search);
   detailParams.set("returnTo", returnTo);
   if (selected) detailParams.set("version", selected.id);
   else detailParams.delete("version");
   const detailReturnTo = location.pathname + "?" + detailParams.toString() + location.hash;
-  const toolsBlocked = dirty || saving || !!note?.deleted || !!readError || loading || !toolVersion;
   const localId = Object.entries(mappings).find(
     ([, value]) => value.key === key,
   )?.[0];
@@ -390,7 +387,7 @@ export function WorkspaceNote() {
         : '这是已保存记录，未记录具体类型。';
   return (
     <div className="detail-page flex h-full min-h-0 flex-col">
-      <header className="flex shrink-0 flex-col gap-3 border-b bg-background px-6 py-4">
+      <header className="flex shrink-0 flex-col gap-3 border-b bg-background px-4 py-3 sm:px-6">
         <Button
           variant="ghost"
           className="w-fit"
@@ -399,7 +396,7 @@ export function WorkspaceNote() {
           <ArrowLeft />
           {returnLabel}
         </Button>
-        <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto]">
+        <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
           <div className="min-w-0 flex-1">
             <p className="mb-2 text-xs text-muted-foreground">{isMeeting ? "会议纪要" : "笔记"}</p>
             {editing ? (
@@ -428,9 +425,6 @@ export function WorkspaceNote() {
                 {editing ? "返回阅读" : "编辑"}
               </Button>
             )}
-            <ExportPanel title={viewedTitle} content={selected?.content ?? baseline.content} version={versionLabel} transcript={viewedTranscript?.full_text} disabled={dirty || saving || note.deleted} />
-            <SavedContentShare title={viewedTitle} content={selected?.content ?? baseline.content} disabled={dirty || saving || note.deleted} />
-            <Button size="sm" variant="ghost" className="text-destructive" disabled={dirty || saving || storeBusy || note.deleted} onClick={event => { deleteReturn.current = { element: event.currentTarget, owner, key }; setContextOpen(false); setDeleteOpen(true); }}><Trash2 />删除</Button>
             <FeishuDelivery noteId={key} title={viewedTitle} content={selected?.content ?? baseline.content}
               disabled={dirty || saving || note.deleted}
               versionId={selected?.id || note.versions.find(v => v.content === baseline.content && v.title === baseline.title)?.id}
@@ -445,32 +439,22 @@ export function WorkspaceNote() {
           </span>
 
         </div>
-        <details className="rounded-xl border bg-muted/20">
+        <details className="rounded-lg bg-muted/20">
           <summary role="button" className="flex min-h-10 cursor-pointer list-none items-center gap-2 px-3 py-2 text-sm font-medium focus-visible:outline focus-visible:outline-ring [&::-webkit-details-marker]:hidden">
             <MoreHorizontal className="size-4" aria-hidden="true" />内容操作
           </summary>
           <div className="grid max-h-[40vh] gap-4 overflow-auto border-t p-3 md:grid-cols-2 xl:grid-cols-3">
+            <section aria-label="导出与分享" className="flex flex-wrap content-start items-start gap-2">
+            <ExportPanel title={viewedTitle} content={selected?.content ?? baseline.content} version={versionLabel} transcript={viewedTranscript?.full_text} disabled={dirty || saving || note.deleted} />
+            <SavedContentShare title={viewedTitle} content={selected?.content ?? baseline.content} disabled={dirty || saving || note.deleted} />
+            <Button size="sm" variant="ghost" className="text-destructive" disabled={dirty || saving || storeBusy || note.deleted} onClick={event => { deleteReturn.current = { element: event.currentTarget, owner, key }; setContextOpen(false); setDeleteOpen(true); }}><Trash2 />删除</Button>
+            </section>
             <section aria-label="版本与来源" className="grid content-start gap-2">
               <h2 className="text-xs font-medium text-muted-foreground">版本与来源</h2>
               <div className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => setContextOpen(true)}><GitBranch />来源与版本</Button>
               </div>
               <p className="text-xs leading-5 text-muted-foreground">查看历史正文、输入证据和来源文件；查看不会修改当前内容。</p>
-            </section>
-            <section aria-label="内容工具" className="grid content-start gap-2">
-              <h2 className="text-xs font-medium text-muted-foreground">内容工具</h2>
-              <div className="flex flex-wrap gap-2">
-                <Button size="sm" variant="outline" asChild>
-                  <Link to={`/settings/mcp?mode=translation&note=${encodeURIComponent(key)}${toolVersion ? '&version=' + encodeURIComponent(toolVersion) : ''}`}
-                    state={{ returnTo: detailReturnTo }} aria-disabled={toolsBlocked || undefined} tabIndex={toolsBlocked ? -1 : undefined}
-                    className={toolsBlocked ? "pointer-events-none opacity-50" : undefined}
-                    onClick={event => { if (toolsBlocked) event.preventDefault(); }}><Wrench />全文翻译 · MCP</Link>
-                </Button>
-                <Button size="sm" variant="ghost" asChild>
-                  <Link to={toolVersion ? `/connections?note=${encodeURIComponent(key)}&version=${encodeURIComponent(toolVersion)}` : "/connections"} state={{ returnTo: detailReturnTo }}>流程图整理（选择已保存内容）</Link>
-                </Button>
-              </div>
-              <p className="text-xs leading-5 text-muted-foreground">{toolsBlocked ? "请先保存修改并读取完整正文版本，再在工具页确认发送范围；不发送草稿。" : "翻译使用当前查看的已保存版本，目标语言仅中文或英文；在工具页核对并授权。"}</p>
             </section>
             <section aria-label="分类与归档" className="grid content-start gap-2">
               <h2 className="text-xs font-medium text-muted-foreground">分类与归档</h2>
@@ -581,23 +565,23 @@ export function WorkspaceNote() {
                     }
                   />
                 ) : viewedTranscript?.segments.length ? (
-                  viewedTranscript.segments.map((s, i) => (
+                  <div className="mx-auto w-full max-w-4xl">{viewedTranscript.segments.map((s, i) => (
                     <p
                       key={i}
-                      className="mb-4 text-sm leading-7"
+                      className="mb-4 break-words text-sm leading-7"
                       style={{
                         contentVisibility: "auto",
                         containIntrinsicSize: "auto 80px",
                       }}
                     >
-                      <span className="mr-3 text-muted-foreground">
+                      <span className="mr-3 tabular-nums text-muted-foreground">
                         {Math.floor(s.start / 60)}:
                         {String(Math.floor(s.start % 60)).padStart(2, "0")} ·{" "}
                         {s.speaker_label || s.speaker_id || "未知说话人"}
                       </span>
                       {s.text}
                     </p>
-                  ))
+                  ))}</div>
                 ) : (
                   <EmptyState
                     title="没有逐字稿"
@@ -702,7 +686,7 @@ export function WorkspaceNote() {
         >
           <section
             aria-labelledby="source-heading"
-            className="flex flex-col gap-3 rounded-xl border border-border/70 bg-background p-4"
+            className="flex flex-col gap-3 border-b pb-5"
           >
             <h2
               id="source-heading"
@@ -717,7 +701,7 @@ export function WorkspaceNote() {
             </p>
             {localId ? (
               <Button variant="outline" asChild>
-                <Link to={`/files?${new URLSearchParams({ note: localId, type: 'all', q: '', returnTo: detailReturnTo }).toString()}`} state={{ returnTo: detailReturnTo }} onClick={() => setContextOpen(false)}>
+                <Link to={`${isMeeting ? '/meetings/files' : '/notes/files'}?${new URLSearchParams({ note: localId, type: 'all', q: '', returnTo: detailReturnTo }).toString()}`} state={{ returnTo: detailReturnTo }} onClick={() => setContextOpen(false)}>
                   查看原始资料
                 </Link>
               </Button>
@@ -729,7 +713,7 @@ export function WorkspaceNote() {
           </section>
           <section
             aria-label="版本与修订"
-            className="flex flex-col gap-3 rounded-xl border border-border/70 bg-background p-4"
+            className="flex flex-col gap-3"
           >
             <Field>
               <FieldLabel htmlFor="workspace-version">

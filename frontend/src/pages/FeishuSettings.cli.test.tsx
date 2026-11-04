@@ -12,7 +12,6 @@ vi.mock('@/components/Settings/FeishuApplicationSetup', () => ({ FeishuApplicati
 const base: FeishuStatus = { transport: 'cli', configured: false, connected: false, expired: false, name: '', notify_self: true, groups: [], auto_publish: false, destination: 'personal', setup: { cli_available: true } };
 const flow = (stage: 'application' | 'authorization', id = stage) => ({ url: 'https://accounts.feishu.cn/oauth/device', qr_data_url: 'data:image/png;base64,eA==', expires_at: Date.now() / 1000 + 600, flow_id: id, stage });
 const mount = () => render(<MemoryRouter><FeishuSettings /></MemoryRouter>);
-const tab = (name: string) => fireEvent.mouseDown(screen.getByRole('tab', { name }));
 beforeEach(() => {
   vi.resetAllMocks(); sessionStorage.clear();
   useAuthStore.setState({ user: { id: 'cli-owner', email: 'test@example.invalid' } });
@@ -20,20 +19,33 @@ beforeEach(() => {
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks() });
 
-it('offers three tabs and starts CLI application scan without configured credentials or an AppSecret form', async () => {
+it('requires explicit confirmation before recovering an old registration, then waits for a new connect click', async () => {
+  vi.mocked(apiJson).mockRejectedValueOnce(new Error('上次应用创建结果尚未确认'))
+    .mockResolvedValueOnce({ available: true, revision: 'a'.repeat(64) })
+    .mockResolvedValueOnce({ recovered: true });
+  mount(); fireEvent.click(await screen.findByRole('button', { name: '连接飞书' }));
+  expect(await screen.findByText(/已在飞书开放平台核对/)).toBeVisible();
+  const confirm = screen.getByRole('button', { name: '确认并允许重新连接' });
+  expect(confirm).toBeDisabled();
+  fireEvent.click(screen.getByRole('checkbox', { name: /已在飞书开放平台核对/ }));
+  fireEvent.click(confirm);
+  await screen.findByText(/已保留原连接记录/);
+  expect(apiJson).toHaveBeenCalledTimes(3);
+  expect(apiJson).toHaveBeenLastCalledWith('/api/feishu/authorize/recovery', { method: 'POST', body: JSON.stringify({ revision: 'a'.repeat(64), confirmed: true }) });
+});
+
+it('offers a single flow and starts CLI application scan without configured credentials or an AppSecret form', async () => {
   vi.mocked(apiJson).mockResolvedValue(flow('application'));
-  mount(); expect(screen.getAllByRole('tab').map(item => item.textContent)).toEqual(['授权', '会议纪要发送设置', '对象热词']);
+  mount(); expect(screen.queryByRole('tablist')).toBeNull();
   const connect = await screen.findByRole('button', { name: '连接飞书' }); await waitFor(() => expect(connect).toBeEnabled());
   expect(screen.queryByText('HTTP AppSecret 配置')).toBeNull(); fireEvent.click(connect);
   expect(await screen.findByText(/第一步：/)).toHaveTextContent('应用');
   expect(apiJson).toHaveBeenCalledWith('/api/feishu/authorize', { method: 'POST' });
   expect(screen.getByRole('button', { name: '我已完成授权' })).toBeEnabled();
 });
-it('programmatic focus restoration does not switch the active tab or submit authorization', async () => {
-  mount(); await screen.findByRole('button', { name: '连接飞书' });
-  const auth = screen.getByRole('tab', { name: '授权' }), delivery = screen.getByRole('tab', { name: '会议纪要发送设置' });
-  fireEvent.focus(delivery); expect(auth).toHaveAttribute('aria-selected', 'true');
-  tab('会议纪要发送设置'); fireEvent.focus(auth); expect(delivery).toHaveAttribute('aria-selected', 'true');
+it('focus restoration never submits authorization', async () => {
+  mount(); const connect = await screen.findByRole('button', { name: '连接飞书' });
+  fireEvent.focus(connect); fireEvent(window, new Event('focus'));
   expect(apiJson).not.toHaveBeenCalled();
 });
 it('completes only on explicit click, accepts the next QR stage, then reads verified status', async () => {
@@ -54,7 +66,8 @@ it('clears obsolete authorization messages after success while retaining unsaved
   vi.mocked(feishuStatus).mockResolvedValue({ ...base, configured: true, connected: true, name: '本人' });
   fireEvent.click(await screen.findByRole('button', { name: '我已完成授权' })); await screen.findByText('本人');
   expect(screen.getByText('已恢复未保存的设置，请核对后保存。')).toBeVisible(); expect(screen.queryByText('尚未收到飞书授权，请完成后再次核验。')).toBeNull();
-  tab('会议纪要发送设置'); expect(screen.getByRole('checkbox', { name: '发给我本人' })).not.toBeChecked();
+  fireEvent.click(screen.getByRole('button', { name: '编辑通知对象' }));
+  expect(screen.getByRole('checkbox', { name: '发给我本人' })).not.toBeChecked();
   expect(sessionStorage.getItem('vinote:feishu-preferences:cli-owner')).not.toBeNull();
 });
 it('rejects owner ABA and route-unmounted completion responses without completing a replacement flow', async () => {
@@ -70,9 +83,9 @@ it('requires an available CLI, while legacy HTTP authorization remains a status-
   vi.mocked(feishuStatus).mockResolvedValue({ ...base, setup: { cli_available: false } });
   const view = mount(); expect(await screen.findByRole('button', { name: '连接飞书' })).toBeDisabled(); view.unmount();
   vi.mocked(feishuStatus).mockResolvedValue({ ...base, transport: undefined, configured: true }); vi.mocked(apiJson).mockResolvedValue({ ...flow('authorization'), flow_id: undefined, stage: undefined });
-  mount(); expect(await screen.findByText('HTTP AppSecret 配置')).toBeVisible(); fireEvent.click(await screen.findByRole('button', { name: '连接飞书' }));
+  mount(); fireEvent.click(await screen.findByRole('button', { name: '高级设置' })); expect(await screen.findByText('HTTP AppSecret 配置')).toBeVisible(); fireEvent.click(await screen.findByRole('button', { name: '连接飞书' }));
   fireEvent.click(await screen.findByRole('button', { name: '我已完成授权' })); await waitFor(() => expect(feishuStatus).toHaveBeenCalledTimes(3)); expect(apiJson).toHaveBeenCalledTimes(1);
-  tab('会议纪要发送设置'); expect(screen.getByText(/请先在授权页签连接飞书/)).toBeVisible();
+  expect(screen.getByText(/连接飞书后，在这里选择/)).toBeVisible();
 });
 it('same-mounted route changes invalidate a pending completion and never complete a flow on navigation', async () => {
   let finish!: (result: ReturnType<typeof flow>) => void;
@@ -93,12 +106,12 @@ it('keeps an incomplete flow for explicit retry, prevents duplicate completion, 
   await screen.findByText('授权尚未完成，请在有效期内完成扫码后再次确认。'); expect(complete).toBeEnabled();
   expect(screen.getByRole('img')).toBeVisible(); expect(sessionStorage.length).toBe(0);
 });
-it('reads object hotwords only when its tab is opened, and switching tabs never initiates authorization', async () => {
+it('reads object hotwords only after advanced settings is opened, without initiating authorization', async () => {
   vi.mocked(feishuStatus).mockResolvedValue({ ...base, configured: true, connected: true, name: '本人' });
   vi.mocked(apiJson).mockResolvedValue({ objects: [], aliases: [], partial: false }); mount(); await screen.findByText('本人');
-  expect(apiJson).not.toHaveBeenCalled(); tab('对象热词'); await screen.findByText('当前没有可见对象，可更新后再试。');
-  expect(apiJson).toHaveBeenCalledTimes(1); expect(apiJson).toHaveBeenLastCalledWith('/api/feishu/object-hotwords', { cache: 'no-store' });
-  tab('授权'); fireEvent(window, new Event('focus')); expect(apiJson).toHaveBeenCalledTimes(1);
+  expect(apiJson).not.toHaveBeenCalled(); fireEvent.click(screen.getByRole('button', { name: '高级设置' })); await screen.findByText('当前没有可见对象，可更新后再试。');
+  expect(apiJson).toHaveBeenCalledTimes(1); expect(apiJson).toHaveBeenLastCalledWith('/api/feishu/object-hotwords/refresh', { method: 'POST' });
+  fireEvent(window, new Event('focus')); expect(apiJson).toHaveBeenCalledTimes(1);
 });
 it('shows a pending application process without a QR, and obtains each stage only by explicit completion', async () => {
   const pending = { ...flow('application'), pending: true, url: '', qr_data_url: '' };
@@ -116,4 +129,16 @@ it('shows a pending application process without a QR, and obtains each stage onl
   expect(screen.getByRole('button', { name: '我已完成授权' })).toBeEnabled();
   fireEvent.click(screen.getByRole('button', { name: '我已完成授权' })); await screen.findByText(/第二步：/);
   expect(apiJson).toHaveBeenCalledTimes(4); expect(sessionStorage.length).toBe(0);
+});
+
+
+it('shows connection, destination and delivery preferences together without navigation tabs', async () => {
+  vi.mocked(feishuStatus).mockResolvedValue({ ...base, configured: true, connected: true, name: '本人' });
+  mount(); await screen.findByText('本人');
+  expect(screen.queryByRole('tablist')).toBeNull();
+  expect(screen.getByRole('region', { name: '发布设置' })).toBeVisible();
+  expect(screen.queryByRole('checkbox', { name: '发给我本人' })).toBeNull();
+  expect(screen.getByRole('button', { name: '编辑通知对象' })).toBeVisible();
+  expect(screen.queryByRole('region', { name: '对象热词设置' })).toBeNull();
+  expect(screen.queryByRole('link', { name: /^返回/ })).toBeNull();
 });

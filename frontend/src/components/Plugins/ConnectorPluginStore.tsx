@@ -70,13 +70,11 @@ export function ConnectorPluginStore({ owner, returnTo }: { owner?: string; retu
   }, [owner, accountVersion])
   const matches = '飞书 feishu 文档 发布 通知'.includes(search.trim().toLowerCase())
   const card = <article className="object-card grid gap-4">
-    <div className="flex items-center gap-3"><span className="plugin-connection-icon"><Send aria-hidden="true" className="size-5" /></span><div className="flex-1"><h2 className="font-medium">飞书</h2><p className="text-sm text-muted-foreground">内置连接</p></div><Badge variant="secondary">{saved?.installed ? saved.enabled ? '已启用' : '已停用' : '未安装'}</Badge></div>
-    <p className="text-sm leading-6 text-muted-foreground">将选定的会议纪要或笔记发布为飞书文档，管理阅读权限与消息通知。</p>
-    <p className="text-sm text-muted-foreground">安装后可从详情发布文档，安装或启用本身不会开启自动交付。停用或卸载会先停止新的设备自动交付；服务已受理的原任务保留，不撤销飞书授权或删除文档。</p>
-    <div className="flex flex-wrap gap-2">{saved?.installed ? <><Button variant="outline" disabled={busy} onClick={() => void save({ installed: true, enabled: !saved.enabled })}>{busy ? '正在保存…' : saved.enabled ? '停用' : '启用'}</Button><Button variant="outline" disabled={busy} onClick={() => void save({ installed: false, enabled: false })}>卸载</Button><Button variant="outline" asChild><Link to="/settings/feishu" state={{ returnTo }}>管理</Link></Button></> : <><Button disabled={!saved || busy} onClick={() => void save({ installed: true, enabled: true })}>{busy ? '正在保存…' : '安装'}</Button><Button variant="ghost" asChild><Link to="/settings/feishu" state={{ returnTo }}>管理授权</Link></Button></>}</div>
+    <div className="flex items-center gap-3"><span className="plugin-connection-icon"><Send aria-hidden="true" className="size-5" /></span><div className="flex-1"><h2 className="font-medium">飞书</h2><p className="text-sm text-muted-foreground">发布会议纪要和笔记，管理文档权限与通知</p></div><Badge variant="secondary">{saved?.installed ? saved.enabled ? '已启用' : '已停用' : '未安装'}</Badge></div>
+    <p role="status" className="text-sm text-muted-foreground">{authorization === 'connected' ? '飞书授权：已连接' : authorization === 'none' ? '飞书授权：未连接' : authorization === 'loading' ? '正在核验飞书授权…' : '飞书授权：暂时无法核验'}</p>
+    <div className="flex flex-wrap gap-2">{saved?.installed ? <><Button asChild><Link to="/settings/feishu" state={{ returnTo }}>管理</Link></Button><Button variant="outline" disabled={busy} onClick={() => void save({ installed: true, enabled: !saved.enabled })}>{busy ? '正在保存…' : saved.enabled ? '停用' : '启用'}</Button><Button variant="ghost" disabled={busy} onClick={() => void save({ installed: false, enabled: false })}>卸载</Button></> : <><Button disabled={!saved || busy} onClick={() => void save({ installed: true, enabled: true })}>{busy ? '正在保存…' : '安装'}</Button><Button variant="ghost" asChild><Link to="/settings/feishu" state={{ returnTo }}>管理授权</Link></Button></>}</div>
+    <details className="text-sm text-muted-foreground"><summary className="cursor-pointer">安装与停用说明</summary><p className="mt-2 leading-6">安装后可从详情发布文档，安装或启用本身不会开启自动交付。停用或卸载会先停止新的设备自动交付；服务已受理的原任务保留，不撤销飞书授权或删除文档。</p></details>
     {message && <p role="status" className="text-sm text-muted-foreground">{message}</p>}
-    {authorization === 'connected' && !saved?.installed && <p role="status" className="text-sm text-muted-foreground">已有飞书授权，可直接管理；商店模块尚未安装。</p>}
-    {authorization === 'loading' && <p role="status" className="text-sm text-muted-foreground">正在核验已有授权…</p>}
     {authorization === 'failed' && <ErrorState error="已有授权暂时无法核验，可进入管理查看。" onRetry={() => void readAuthorization()} />}
   </article>
   return <section aria-label="插件商店" className="grid gap-4">

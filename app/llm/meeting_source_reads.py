@@ -41,6 +41,30 @@ def _decode(raw):
         raise ValueError('Invalid complete source-read JSON') from None
 
 
+def _decode_model_read(raw):
+    """Accept fullwidth JSON delimiters only outside strings; retain raw provenance."""
+    try:
+        return _decode(raw)
+    except ValueError as original:
+        if str(original) != 'Invalid complete source-read JSON':
+            raise
+    result, in_string, escaped = [], False, False
+    for char in raw:
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == '\\':
+                escaped = True
+            elif char == '"':
+                in_string = False
+        elif char == '"':
+            in_string = True
+        else:
+            char = {'，': ',', '：': ':'}.get(char, char)
+        result.append(char)
+    return _decode(''.join(result))
+
+
 @dataclass(frozen=True)
 class SourceRead:
     index: int  # One-based, also the ID namespace.
@@ -207,7 +231,7 @@ def combine_source_reads(rawstrings, allowed_refs):
                  and all(isinstance(ref, str) and re.fullmatch(r'\[(?:ASR|FRAME):\d{4,}\]', ref)
                          for ref in refs))
         refs_by_read.append(frozenset(refs))
-        value = _decode(raw)
+        value = _decode_model_read(raw)
         _require(isinstance(value, dict) and set(value) == {'protocol', 'topics', 'claims'}
                  and type(value['protocol']) is int and value['protocol'] == 3)
         topic_ids, claim_ids = _ids(value['topics']), _ids(value['claims'])
