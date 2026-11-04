@@ -41,7 +41,7 @@ def test_saved_draft_runs_only_final_review_and_normal_child_save(case, monkeypa
     receipt = start_recovery(c.service, runner, 'alice', c.parent, uuid4())
     child = c.artifacts.find_task_dir(receipt.task_id)
     assert c.artifacts.get_status(receipt.task_id)['status'] == 'success'
-    assert json.loads((child / 'result.json').read_text(encoding='utf-8'))['markdown']
+    assert json.loads((child / 'result.json').read_text(encoding='utf-8'))['markdown'] == '# Synthetic\n\n' + source
     assert (child / 'note.md').exists()
     assert len(calls) == 1 and source in calls[0]['user_prompt']
     assert (c.folder / 'meeting_working_draft.json').read_bytes() == before

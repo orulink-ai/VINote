@@ -21,35 +21,41 @@ from app.services.task_artifact_service import TaskArtifactService
 from app.services.tracing_service import DesktopTraceContext, desktop_trace, get_client, shutdown
 
 
-def run_check():
-    client = get_client()
-    if client is None:
-        raise SystemExit('Langfuse is disabled or missing configuration')
-    llm = OpenAILLM(api_key='synthetic-test-only', model='vinote-smoke-mock')
+def generate_synthetic_note(task_id, folder):
+    """Exercise ordinary note generation with an explicit, entirely mocked model."""
+    llm = OpenAILLM(api_key='synthetic-test-only', model='vinote-smoke-mock', base_url='https://synthetic.invalid/v1')
     service_llm = SimpleNamespace(
         resolve_config=lambda **kwargs: SimpleNamespace(model_name=llm.model),
         create_summarizer=lambda **kwargs: llm,
     )
     completion = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content='# Synthetic note'))],
                                  usage={'prompt_tokens': 20, 'completion_tokens': 10, 'total_tokens': 30})
+    artifacts = TaskArtifactService(Path(folder))
+    service = NoteService(llm_service=service_llm, artifact_service=artifacts)
+    with patch.object(llm.client.chat.completions, 'create', return_value=completion), patch(
+        'app.services.vilab_cloud_service.VILabCloudService.status', return_value={'mode': 'local'}
+    ):
+        with desktop_trace(DesktopTraceContext(
+            workflow='synthetic', source='build_validation', media_type='transcript',
+            channel=settings.langfuse_environment,
+            input={'synthetic': True, 'business': False, 'purpose': 'langfuse_connectivity'},
+        )):
+            service.generate_from_transcript(
+                TranscriptResult(language='en', full_text='Synthetic integration check.',
+                                 segments=[TranscriptSegment(start=0, end=1, text='Synthetic integration check.')]),
+                task_id, title='Langfuse synthetic integration check', style='detailed',
+                model_name=llm.model, api_key='synthetic-test-only', base_url='https://synthetic.invalid/v1',
+            )
+    return artifacts.get_status(task_id)
+
+
+def run_check():
+    client = get_client()
+    if client is None:
+        raise SystemExit('Langfuse is disabled or missing configuration')
     task_id = 'langfuse-smoke-' + uuid.uuid4().hex
     with tempfile.TemporaryDirectory(prefix='vinote-langfuse-') as folder:
-        artifacts = TaskArtifactService(Path(folder))
-        service = NoteService(llm_service=service_llm, artifact_service=artifacts)
-        with patch.object(llm.client.chat.completions, 'create', return_value=completion), patch(
-            'app.services.vilab_cloud_service.VILabCloudService.status', return_value={'mode': 'local'}
-        ):
-            with desktop_trace(DesktopTraceContext(
-                workflow='synthetic', source='build_validation', media_type='transcript',
-                channel=settings.langfuse_environment,
-                input={'synthetic': True, 'business': False, 'purpose': 'langfuse_connectivity'},
-            )):
-                service.generate_from_transcript(
-                    TranscriptResult(language='en', full_text='Synthetic integration check.',
-                                     segments=[TranscriptSegment(start=0, end=1, text='Synthetic integration check.')]),
-                    task_id, title='Langfuse synthetic integration check',
-                )
-        trace_id = artifacts.get_status(task_id).get('langfuse_trace_id')
+        trace_id = generate_synthetic_note(task_id, folder).get('langfuse_trace_id')
         if not trace_id:
             raise SystemExit('Pipeline did not produce a trace ID')
     client.flush()

@@ -12,12 +12,20 @@ import app.llm.meeting_review_draft_view as view_module
 from app.llm.meeting_final_claim_ledger import FinalLedgerError
 from app.llm.meeting_presentation import presentation_scope
 from app.llm.openai_llm import _BasePromptLLM
-from app.llm.vilab_llm import VILabLLM
+from app.llm.vilab_llm import VILabLLM as BaseVILabLLM
+
 from app.models.transcript import TranscriptSegment
 from test_meeting_final_review import SOURCE, case, response
 from test_meeting_final_review import finalize
 from test_meeting_visual_protocol5_adapter import seven
 from tests.test_meeting_summary_regeneration import case as summary_case, accept as accept_summary
+
+
+class VILabLLM(BaseVILabLLM):
+    """Explicit historical structured-review adapter for these view contracts."""
+    compact_review_enabled = False
+    def _summarize_one_shot(self, **kwargs):
+        return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
 
 
 def material():

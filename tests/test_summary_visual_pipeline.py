@@ -29,6 +29,9 @@ def test_actual_opt_in_layout_keeps_two_full_source_calls_and_original_responses
             claim.pop('text'); claim.pop('block_ids')
             claim['part_ref'] = {'block_id': 'B6', 'part_index': 0}
     class Automatic(_BasePromptLLM):
+        # Explicit compatibility host for retained structured layouts.
+        def _summarize_one_shot(self, **kwargs):
+            return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
         def __init__(self): self.calls = []
         def _complete(self, **prompts):
             self.calls.append(prompts)

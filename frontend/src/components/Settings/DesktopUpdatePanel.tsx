@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { getVersion } from '@tauri-apps/api/app';
+import { invoke } from '@tauri-apps/api/core';
 import { check, type Update } from '@tauri-apps/plugin-updater';
 import { relaunch } from '@tauri-apps/plugin-process';
 import { Button } from '@/components/ui/button';
@@ -12,6 +13,7 @@ type Phase = 'idle' | 'checking' | 'available' | 'current' | 'downloading' | 're
 export function DesktopUpdatePanel() {
   const desktop = isTauriRuntime();
   const [version, setVersion] = useState(packageJson.version);
+  const [availability, setAvailability] = useState<'loading' | 'enabled' | 'disabled'>('loading');
   const [phase, setPhase] = useState<Phase>('idle');
   const [update, setUpdate] = useState<Update | null>(null);
   const [error, setError] = useState('');
@@ -23,6 +25,9 @@ export function DesktopUpdatePanel() {
   useEffect(() => {
     mounted.current = true;
     if (desktop) void getVersion().then(value => { if (mounted.current) setVersion(value); }).catch(() => {});
+    if (desktop) void invoke<boolean>('desktop_update_available').then(enabled => {
+      if (mounted.current) setAvailability(enabled ? 'enabled' : 'disabled');
+    }).catch(() => { if (mounted.current) setAvailability('disabled'); });
     return () => {
       mounted.current = false;
       if (!busy.current) { void resource.current?.close().catch(() => {}); resource.current = null; }
@@ -33,7 +38,7 @@ export function DesktopUpdatePanel() {
     if (!mounted.current) { void resource.current?.close().catch(() => {}); resource.current = null; }
   };
   async function checkUpdate() {
-    if (!desktop || busy.current) return;
+    if (!desktop || availability !== 'enabled' || busy.current) return;
     busy.current = true;
     setError(''); setPhase('checking'); setUpdate(null);
     try {
@@ -78,7 +83,7 @@ export function DesktopUpdatePanel() {
   }
   return <div className="flex flex-col gap-3" aria-label="应用更新">
     <p className="text-sm text-muted-foreground">版本 {version}</p>
-    {!desktop ? <p className="text-sm text-muted-foreground">应用内更新仅适用于桌面客户端，浏览器无需安装更新。</p> : <>
+    {!desktop ? <p className="text-sm text-muted-foreground">应用内更新仅适用于桌面客户端，浏览器无需安装更新。</p> : availability !== 'enabled' ? <p className="text-sm text-muted-foreground" role="status">{availability === 'loading' ? '正在读取更新通道…' : '当前构建未启用签名更新通道（测试版或开发版）。请通过正式安装包更新。'}</p> : <>
       <p className="text-sm text-muted-foreground">手动检查稳定版更新。下载完成后由你决定何时安装。</p>
       <div role="status" aria-live="polite" className="text-sm">
         {phase === 'checking' && '正在检查更新…'}

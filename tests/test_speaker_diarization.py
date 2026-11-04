@@ -32,20 +32,24 @@ def test_overlapping_speech_is_transcribed_once_without_false_attribution():
 
 def test_diarization_request_does_not_reuse_plain_text_cache():
     cached = TranscriptResult('zh', 'whole file', [TranscriptSegment(0, 10, 'whole file')])
-    diarized = TranscriptResult('zh', 'two turns', [TranscriptSegment(0, 2, 'one', speaker_id='speaker_1')], {'speaker_diarization': True})
+    diarized = TranscriptResult('zh', 'two turns', [TranscriptSegment(0, 2, 'one', speaker_id='speaker_1')], {'speaker_diarization': True, 'model_speaker_diarization': True})
     saved = []
     service = TranscriptionService(transcriber=SimpleNamespace())
-    with patch('app.services.speaker_diarization_service.SpeakerDiarizationService.transcribe', return_value=diarized) as process:
+    with patch.object(service, 'get_audio_duration', return_value=10), \
+            patch.object(service, '_transcribe_in_chunks', return_value=diarized) as process, \
+            patch('app.services.speaker_diarization_service.SpeakerDiarizationService.transcribe', side_effect=AssertionError('legacy speaker pipeline is retired')):
         result = service.transcribe(audio_path='meeting.wav', load_cached=lambda: cached,
                                     save_transcript=saved.append, diarize=True, speaker_count=2)
     assert result is diarized
     assert saved == [diarized]
-    assert process.call_args.kwargs['speaker_count'] == 2
+    process.assert_called_once()
+    assert process.call_args.kwargs['audio_path'] == 'meeting.wav'
 
 
-def test_diarization_errors_are_not_silently_returned_as_success():
+def test_provider_transcription_errors_are_not_silently_returned_as_success():
     service = TranscriptionService(transcriber=SimpleNamespace())
-    with patch('app.services.speaker_diarization_service.SpeakerDiarizationService.transcribe', side_effect=ValueError('models missing')):
+    with patch.object(service, 'get_audio_duration', return_value=10), \
+            patch.object(service, '_transcribe_in_chunks', side_effect=ValueError('models missing')):
         with pytest.raises(ValueError, match='models missing'):
             service.transcribe(audio_path='meeting.wav', load_cached=lambda: None,
                                save_transcript=lambda _: pytest.fail('Should not save'), diarize=True)

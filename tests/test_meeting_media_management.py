@@ -65,7 +65,11 @@ def test_shared_or_unverified_task_cannot_be_deleted(recording):
         service.delete('owner', note.id)
     assert error.value.status_code == 403
     (folder / 'recording_owner').write_text('owner', encoding='utf-8')
-    NoteRepository().create_note('owner', NoteCreateRequest(title='copy', task_id=note.task_id))
+    # Historical duplicates remain protected, but new task saves are idempotent.
+    from app.db_models import NoteDB
+    from app.services.meeting_media_service import session_scope
+    with session_scope() as db:
+        db.add(NoteDB(title='historical copy', task_id=note.task_id, created_by='owner'))
     with pytest.raises(HTTPException):
         service.delete('owner', note.id)
     assert list((folder / 'media').glob('*.webm'))

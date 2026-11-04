@@ -72,6 +72,9 @@ def test_reference_only_review_is_not_a_saved_summary():
 def test_working_draft_capture_is_not_final_output_and_does_not_add_calls_or_leak():
     from app.llm.source_references import capture_working_draft
     class SourceFirst(_BasePromptLLM):
+        # Working drafts exist only in the historical reviewed path.
+        def _summarize_one_shot(self, **kwargs):
+            return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
         def __init__(self):
             self.calls = []
         def _complete(self, **prompts):

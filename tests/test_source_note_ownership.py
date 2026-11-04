@@ -16,6 +16,8 @@ def test_failed_generation_keeps_the_authenticated_owner_marker(tmp_path, source
     service.artifact_service = TaskArtifactService(tmp_path)
     monkeypatch.setattr(settings, "vilab_server_url", "https://models.invalid")
     # Mock the catalog dependency, not the durable capture/validation boundary.
+    monkeypatch.setattr("app.services.vilab_cloud_service.VILabCloudService.models", lambda *a: [
+        {"id": "frozen-llm", "modelType": "llm", "runtimeStatus": "available"}])
     with patch("app.services.vilab_cloud_service.VILabCloudService.status", return_value={
         "mode": "cloud", "server_url": "https://models.invalid", "asr_model": "frozen-asr", "llm_model": "frozen-llm",
     }), patch("app.services.vilab_cloud_service.VILabCloudService.defaults") as defaults, patch(

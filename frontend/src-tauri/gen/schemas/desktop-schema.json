@@ -345,6 +345,12 @@
       "description": "Permission identifier",
       "oneOf": [
         {
+          "description": "Read whether the current desktop build has a signed update channel.",
+          "type": "string",
+          "const": "desktop-update-status",
+          "markdownDescription": "Read whether the current desktop build has a signed update channel."
+        },
+        {
           "description": "Allow VINote meeting windows to manage microphone access and recorder windows.",
           "type": "string",
           "const": "meeting-recorder",

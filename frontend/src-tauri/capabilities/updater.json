@@ -5,6 +5,7 @@
   "windows": ["main"],
   "remote": { "urls": ["http://127.0.0.1:*"] },
   "permissions": [
+    "desktop-update-status",
     "updater:allow-check",
     "updater:allow-download",
     "updater:allow-install",

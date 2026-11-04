@@ -30,6 +30,14 @@ def inject_saved_draft(llm, path, frozen_bytes, draft):
         used = True
         return draft
 
+    # This explicit recovery command consumes a historical protocol-3 draft.
+    # Default text generation now returns Markdown directly, so the injected
+    # draft must enter the retained review path rather than become final output.
+    summarize_one_shot = llm._summarize_one_shot
+    def summarize_saved_draft(**kwargs):
+        return summarize_one_shot(**{**kwargs, 'direct_text': False})
+
+    llm._summarize_one_shot = summarize_saved_draft
     llm._complete_stage = complete_stage
 
 

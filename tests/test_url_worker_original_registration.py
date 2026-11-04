@@ -38,7 +38,8 @@ def env(tmp_path, monkeypatch):
         return dict(preferences)
 
     monkeypatch.setattr(gateway.VILabCloudService, "status", status)
-    catalog = Mock(return_value=[{"id": "chosen-asr", "modelType": "asr", "runtimeStatus": "available"},
+    from tests.test_meeting_model_boundary import CAPABILITIES
+    catalog = Mock(return_value=[{"id": "chosen-asr", "modelType": "asr", "runtimeStatus": "available", "capabilities": CAPABILITIES},
                                  {"id": "chosen-llm", "modelType": "llm", "runtimeStatus": "available"}])
     monkeypatch.setattr(gateway.VILabCloudService, "models", catalog)
     forbidden = Mock(side_effect=AssertionError("no generic/network/model implementation allowed"))

@@ -11,7 +11,7 @@ from app.llm.meeting_draft import build_meeting_draft_prompts
 from app.llm.meeting_final_claim_ledger import FinalLedgerError, REVIEW_PROTOCOL
 from app.llm.meeting_presentation import presentation_scope
 from app.llm.meeting_review import build_meeting_review_prompts
-from app.llm.vilab_llm import VILabLLM
+from app.llm.vilab_llm import VILabLLM as BaseVILabLLM
 from app.models.transcript import TranscriptSegment
 from test_meeting_final_review import SOURCE, case, finalize, response
 from test_meeting_visual_protocol5_adapter import five, six, seven
@@ -20,6 +20,13 @@ from test_meeting_visual_protocol5_adapter import five, six, seven
 OLD_ORDER = 'Write the report once in ordered blocks.'
 NEW_ORDER = ('Complete claims before blocks; their block_ids reference the report blocks that follow. '
              'Then write the report once in ordered blocks.')
+
+
+class VILabLLM(BaseVILabLLM):
+    """Explicit historical structured-review adapter for these view contracts."""
+    compact_review_enabled = False
+    def _summarize_one_shot(self, **kwargs):
+        return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
 
 
 def old_rules():
