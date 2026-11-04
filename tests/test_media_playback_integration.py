@@ -32,6 +32,19 @@ def video(tmp_path, request):
     return path
 
 
+def test_actual_remux_packet_and_seek_proof(video, tmp_path):
+    """Exercise verification directly so cross-version failures expose their cause."""
+    preview = tmp_path / 'proof.webm'
+    subprocess.run([
+        'ffmpeg', '-nostdin', '-y', '-v', 'error', '-threads', '1',
+        *service._LOCAL_WEBM_INPUT, '-i', str(video), '-map', '0:v:0?', '-map', '0:a:0?',
+        '-c', 'copy', '-f', 'webm', str(preview),
+    ], check=True, capture_output=True, timeout=30)
+    original = service._packet_manifest(video)
+    assert service._packet_manifest(preview)['streams'] == original['streams']
+    service._check_index(preview, original)
+
+
 def digest(path):
     with path.open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()

@@ -24,6 +24,8 @@ jobs:
           cache: pip
       - run: sudo apt-get update && sudo apt-get install -y ffmpeg libgl1
       - run: python -m pip install -r requirements.txt -r requirements.diarization.txt pytest pytest-asyncio
+      - name: Real FFmpeg compatibility smoke
+        run: python -m pytest -q tests/test_media_playback_integration.py::test_actual_remux_packet_and_seek_proof
       - name: Offline regression including filesystem security
         run: python -m pytest -q --junitxml=test-results.xml
       - uses: actions/upload-artifact@v4
