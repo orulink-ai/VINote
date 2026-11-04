@@ -14,7 +14,9 @@ concurrency:
 
 jobs:
   backend:
-    runs-on: ubuntu-latest
+    # 26.04 ships FFmpeg 8.0.1 with upstream Opus EOF false errors (#20954).
+    # Keep real packet/seek verification strict on the supported 24.04 runtime.
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4

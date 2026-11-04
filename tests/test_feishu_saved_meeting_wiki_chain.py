@@ -22,6 +22,8 @@ from sqlalchemy.orm import Session
 from app.config import settings
 from app.db import Base
 from app.db_models import FeishuConnectionDB, FeishuDeliveryDB
+from app.models.local_file import LocalFileDB  # noqa: F401; register before create_all
+from app.models.meeting_source_link import MeetingSourceLinkDB  # noqa: F401; register before create_all
 from app.models.auth import AuthenticatedUser
 from app.models.feishu_auto_delivery import FeishuAutoOutboxDB
 from app.models.feishu_destination import FeishuDeliveryDestinationDB, FeishuWriteBatchDB
@@ -67,6 +69,15 @@ def chain(tmp_path, monkeypatch):
 
     for module in (feishu_service, feishu_cli_service, runtime, outbox, wiki, note_repository, feishu):
         monkeypatch.setattr(module, 'session_scope', scope)
+    from functools import partial
+    from app.services import note_original_projection
+
+    # Source-link fallback resolves app.db sessions when constructing its service.
+    monkeypatch.setattr('app.db.session_scope', scope)
+    # The projection captures its default session at import; bind the real query
+    # to this fixture's database as well as the repository.
+    monkeypatch.setattr(note_original_projection, 'original_source',
+        partial(note_original_projection.original_source, sessions=scope))
     monkeypatch.setattr(runtime, 'background_ready', lambda: True)
     monkeypatch.setattr(runtime, 'wake', lambda: None)  # Test explicitly advances bounded dispatcher passes.
     monkeypatch.setattr(cli, 'executable', lambda: 'synthetic-lark-cli')
