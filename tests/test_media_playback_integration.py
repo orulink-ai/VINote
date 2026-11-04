@@ -40,6 +40,13 @@ def test_actual_remux_packet_and_seek_proof(video, tmp_path):
         *service._LOCAL_WEBM_INPUT, '-i', str(video), '-map', '0:v:0?', '-map', '0:a:0?',
         '-c', 'copy', '-f', 'webm', str(preview),
     ], check=True, capture_output=True, timeout=30)
+    packet_check = subprocess.run([
+        'ffmpeg', '-nostdin', '-v', 'error', '-threads', '1',
+        *service._LOCAL_WEBM_INPUT, '-i', str(video),
+        '-map', '0:v:0?', '-map', '0:a:0?', '-c', 'copy',
+        '-f', 'framehash', '-hash', 'sha256', '-',
+    ], check=True, capture_output=True, timeout=30)
+    assert not packet_check.stderr, packet_check.stderr.decode(errors='replace')
     original = service._packet_manifest(video)
     assert service._packet_manifest(preview)['streams'] == original['streams']
     service._check_index(preview, original)
