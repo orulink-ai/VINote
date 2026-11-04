@@ -212,6 +212,9 @@ def test_two_concurrent_meetings_each_use_exactly_two_calls_and_their_own_source
             | {key: value for key, value in by_id[claim['id']].items() if key != 'claim_id'}
             for claim in draft['claims']]}
         class Automatic(_BasePromptLLM):
+            # Explicit historical structured-review fixture; default text is one Markdown call.
+            def _summarize_one_shot(self, **kwargs):
+                return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
             def __init__(self): self.calls = []
             def _complete(self, **prompts):
                 self.calls.append(prompts)

@@ -22,6 +22,9 @@ def automatic(c, value):
     raw3, raw4 = json.dumps(c.material), json.dumps(value)
 
     class Host(_BasePromptLLM):
+        # Historical structured-review coverage; ordinary text uses direct Markdown.
+        def _summarize_one_shot(self, **kwargs):
+            return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
         def __init__(self):
             self.calls = []
             self.configure_video_capabilities({'vision': True}, image_input_verified=True)

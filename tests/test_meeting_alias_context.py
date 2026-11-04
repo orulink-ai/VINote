@@ -164,6 +164,9 @@ def test_actual_note_pipeline_both_prompts_use_same_immutable_context_and_origin
          'disposition': 'included', 'block_ids': ['B1'], 'evidence': proof}]}
 
     class Automatic(_BasePromptLLM):
+        # Explicit historical structured-review fixture; default text is one Markdown call.
+        def _summarize_one_shot(self, **kwargs):
+            return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
         def __init__(self): self.calls = []
         def _complete(self, **prompts):
             self.calls.append(prompts)

@@ -92,6 +92,9 @@ def test_all_new_hosts_keep_two_calls_full_source_raw4_and_real_rendering(case, 
                         lambda *args: saved.append(args[-1]))
 
     class Automatic(_BasePromptLLM):
+        # Historical structured-review coverage; ordinary text uses direct Markdown.
+        def _summarize_one_shot(self, **kwargs):
+            return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
         def __init__(self):
             self.model = 'frozen-selected-model'
             self.configure_video_capabilities({'vision': True}, image_input_verified=True)
@@ -248,6 +251,9 @@ def test_actual_host_rejects_raw_draft_duplicate_members_before_normalization(ca
                                         block_ids=[], evidence=[], reason='Shorten')
 
     class Automatic(_BasePromptLLM):
+        # Historical structured-review coverage; ordinary text uses direct Markdown.
+        def _summarize_one_shot(self, **kwargs):
+            return super()._summarize_one_shot(**{**kwargs, "direct_text": False})
         def __init__(self):
             self.calls = []
 
