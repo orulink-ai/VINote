@@ -67,7 +67,7 @@ it('shows retained failed source without a misleading large empty meeting state'
   mount()
   expect(await screen.findByText('处理未完成，原文件已保留。')).toBeInTheDocument()
   expect(screen.getByText('未命名会议')).toBeInTheDocument()
-  expect(screen.queryByText('还没有会议档案')).not.toBeInTheDocument()
+  await waitFor(() => expect(screen.queryByText('还没有会议档案')).not.toBeInTheDocument())
   expect(screen.getByText('1 场会议')).toBeInTheDocument()
   expect(screen.queryByText('0 场会议')).not.toBeInTheDocument()
 })
