@@ -236,9 +236,9 @@ function TasksPage({ owner }: { owner?: string }) {
               : status?.taskId && !status.saveable && !status.failed ? `/generate?mode=file&meeting=1&task=${encodeURIComponent(status.taskId)}` : operationUrl;
             const originalTitle = version ? version.title : item.sourceTitle || item.sourceUrl;
             const displayTitle = taskDisplayTitle(originalTitle, item.meeting, version ? status?.title : live?.title);
-            return <article key={item.operationId || item.id} className="task-row relative grid min-w-0 gap-2 border-b py-4 sm:pr-64">
+            return <article key={item.operationId || item.id} className="task-row relative grid min-w-0 gap-2 border-b py-4 lg:pr-64">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="break-words text-sm font-medium">{versionHistoryTitle(displayTitle)}{version ? ' · 新版本' : ''}</h2>
+              <h2 className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">{versionHistoryTitle(displayTitle)}{version ? ' · 新版本' : ''}</h2>
             </div>
             {version && <details className="task-details"><summary>处理详情</summary><dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
               {status?.title && <div><dt className="text-muted-foreground">录制来源</dt><dd>{versionHistoryTitle(version.title)}</dd></div>}
@@ -247,18 +247,18 @@ function TasksPage({ owner }: { owner?: string }) {
               <div><dt className="text-muted-foreground">语音识别</dt><dd>{version.reuse ? '复用已有转写' : '重新识别（已确认）'}</dd></div>
               <div><dt className="text-muted-foreground">提交时间</dt><dd><time className="tabular-nums" dateTime={version.createdAt}>{new Date(version.createdAt).toLocaleString('zh-CN', { hour12: false })}</time></dd></div>
             </dl></details>}
-            <p className="task-description text-pretty text-sm text-muted-foreground">{live ? taskDisplayMessage(live, item.meeting) : rejected ? '本次未受理，未创建任务。失败记录已保留，重新生成需要返回来源再次核验确认。' : status ? status.detail : item.operationId && item.submissionState !== 'accepted' ? item.submissionState === 'reserved' ? '已收到提交，排队状态待确认；请查询原任务。' : '提交状态待确认，原来源已保留，请查询原任务。' : '任务已接收，请查询原结果，避免重复生成。'}</p>
+            <p className="task-description min-w-0 text-pretty text-sm text-muted-foreground [overflow-wrap:anywhere]">{live ? taskDisplayMessage(live, item.meeting) : rejected ? '本次未受理，未创建任务。失败记录已保留，重新生成需要返回来源再次核验确认。' : status ? status.detail : item.operationId && item.submissionState !== 'accepted' ? item.submissionState === 'reserved' ? '已收到提交，排队状态待确认；请查询原任务。' : '提交状态待确认，原来源已保留，请查询原任务。' : '任务已接收，请查询原结果，避免重复生成。'}</p>
             {status && <span className={`text-xs ${status.failed ? 'text-destructive' : 'text-muted-foreground'}`}>{status.label}</span>}
             {!version && originalTitle && displayTitle !== originalTitle && <details className="task-details"><summary>原文件与来源</summary><p className="mt-2 break-all text-xs">{originalTitle}</p></details>}
 
             {live && <TaskProgress task={live} />}
-            {importRemoval(item) && <Button variant="ghost" size="sm" className="w-fit sm:absolute sm:right-0 sm:top-16" onClick={() => setRemoval(importRemoval(item))}>删除失败记录</Button>}
-            <Button variant="outline" className="w-fit max-w-full whitespace-normal sm:absolute sm:right-0 sm:top-4" asChild><Link to={target} state={{ returnTo: historyReturn }}>{live?.noteId ? '打开已保存内容' : live?.complete ? item.operationId ? '打开结果并保存' : '查看处理结果' : live?.failed ? '查看失败原因与恢复' : rejected ? '查看未受理记录' : status?.action || sourceHistoryAction(item)}</Link></Button>
+            {importRemoval(item) && <Button variant="ghost" size="sm" className="w-fit lg:absolute lg:right-0 lg:top-16" onClick={() => setRemoval(importRemoval(item))}>删除失败记录</Button>}
+            <Button variant="outline" className="w-fit max-w-full whitespace-normal lg:absolute lg:right-0 lg:top-4" asChild><Link to={target} state={{ returnTo: historyReturn }}>{live?.noteId ? '打开已保存内容' : live?.complete ? item.operationId ? '打开结果并保存' : '查看处理结果' : live?.failed ? '查看失败原因与恢复' : rejected ? '查看未受理记录' : status?.action || sourceHistoryAction(item)}</Link></Button>
           </article>})}
           {shownRecordings.map((r) => { const live = r.taskId ? taskStates[r.taskId] : undefined; const savedId = live?.noteId || r.noteId; return (
-            <article key={r.id} className="task-row relative flex min-w-0 flex-col gap-2 border-b py-4 sm:pr-64">
+            <article key={r.id} className="task-row relative flex min-w-0 flex-col gap-2 border-b py-4 lg:pr-64">
               <div className="flex justify-between gap-3">
-                <h2 className="break-words text-sm font-medium">{versionHistoryTitle(r.options.title)}</h2>
+                <h2 className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">{versionHistoryTitle(r.options.title)}</h2>
                 {!live && <Badge
                   variant={
                     r.processingStatus === "failed"
@@ -287,11 +287,11 @@ function TasksPage({ owner }: { owner?: string }) {
                 原录音已保留 · {savedId ? '纪要已保存' : live ? live.complete ? '生成已完成' : live.failed ? '处理未完成' : '进度自动更新' : r.processingStatus === 'completed' ? '生成已完成' : r.processingStatus === 'failed' ? '处理未完成' : r.taskId ? '查看处理记录' : '尚未生成纪要'}
               </p>
               {(live || r.processingError) && (
-                <p className="text-sm text-muted-foreground">{live ? taskDisplayMessage(live, true) : r.processingError}</p>
+                <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">{live ? taskDisplayMessage(live, true) : r.processingError}</p>
               )}
               {live && <TaskProgress task={live} />}
-              {recordingRemoval(r) && <Button variant="ghost" size="sm" className="w-fit sm:absolute sm:right-0 sm:top-16" onClick={() => setRemoval(recordingRemoval(r))}>删除失败记录</Button>}
-              <Button variant="outline" className="w-fit max-w-full whitespace-normal sm:absolute sm:right-0 sm:top-4" asChild>
+              {recordingRemoval(r) && <Button variant="ghost" size="sm" className="w-fit lg:absolute lg:right-0 lg:top-16" onClick={() => setRemoval(recordingRemoval(r))}>删除失败记录</Button>}
+              <Button variant="outline" className="w-fit max-w-full whitespace-normal lg:absolute lg:right-0 lg:top-4" asChild>
                 <Link to={savedId ? `/note/${encodeURIComponent(savedId)}` : live?.complete && r.taskId ? `/generate?meeting=1&task=${encodeURIComponent(r.taskId)}` : `/files?${new URLSearchParams({ type: 'all', q: '', file: `recording:${r.id}`, returnTo: historyReturn })}`} state={{ returnTo: historyReturn }}>
                   {(live ? live.failed : r.processingStatus === "failed") && !savedId
                     ? "查看原录音与恢复选项"
@@ -317,9 +317,9 @@ function TasksPage({ owner }: { owner?: string }) {
           {shownDeliveries.map((item) => (
             <div
               key={item.noteId}
-              className="relative flex min-w-0 flex-col gap-2 border-b py-4 sm:pr-64"
+              className="relative flex min-w-0 flex-col gap-2 border-b py-4 lg:pr-64"
             >
-              <h2>{item.title}</h2>
+              <h2 className="min-w-0 [overflow-wrap:anywhere]">{item.title}</h2>
               <p className="text-sm">
                 {item.job.status === "completed"
                   ? "已完成交付"
@@ -329,9 +329,9 @@ function TasksPage({ owner }: { owner?: string }) {
                 · 飞书集成服务
               </p>
               {item.job.error && (
-                <p className="text-sm text-destructive">{item.job.error}</p>
+                <p className="text-sm text-destructive [overflow-wrap:anywhere]">{item.job.error}</p>
               )}
-              <Button variant="outline" className="w-fit max-w-full whitespace-normal sm:absolute sm:right-0 sm:top-4" asChild>
+              <Button variant="outline" className="w-fit max-w-full whitespace-normal lg:absolute lg:right-0 lg:top-4" asChild>
                 <Link to={item.url}>打开交付记录并恢复失败步骤</Link>
               </Button>
             </div>

@@ -769,13 +769,6 @@ export function NoteEditor() {
             </div>
           </details>
         </div>
-        {pendingMeeting && currentNote && <MeetingTaskProgress note={currentNote} returnTo={detailReturnTo} zh={zh} hasUnsavedChanges={hasUnsavedChanges} onSaved={updated => {
-          if (updated.id !== id) return;
-          if (hasUnsavedChanges && owner) {
-            try { removeTextDraft(owner, `local:${id}`); } catch { setError(zh ? '无法清除草稿，请重试。' : 'Could not discard the draft. Please retry.'); return; }
-          }
-          setCurrentNote(updated); setLocalTitle(updated.title); setContent(updated.content); setTaskId(updated.taskId || ''); setWorkspaceMode('preview');
-        }} />}
         {currentNote ? (
           <RecordingRetryBar
             note={currentNote}
@@ -788,6 +781,15 @@ export function NoteEditor() {
           />
         ) : null}
       </header>
+      <div className="max-h-[24vh] shrink-0 overflow-y-auto px-4 sm:px-6 lg:px-8">
+        {pendingMeeting && currentNote && <MeetingTaskProgress note={currentNote} returnTo={detailReturnTo} zh={zh} hasUnsavedChanges={hasUnsavedChanges} onSaved={updated => {
+          if (updated.id !== id) return;
+          if (hasUnsavedChanges && owner) {
+            try { removeTextDraft(owner, `local:${id}`); } catch { setError(zh ? '无法清除草稿，请重试。' : 'Could not discard the draft. Please retry.'); return; }
+          }
+          setCurrentNote(updated); setLocalTitle(updated.title); setContent(updated.content); setTaskId(updated.taskId || ''); setWorkspaceMode('preview');
+        }} />}
+      </div>
       <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-b px-4 pt-2 sm:px-6 lg:px-8">
         <ToggleGroup
           type="single"
