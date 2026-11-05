@@ -301,7 +301,8 @@ it('reclassifies the original without losing its Sheet, format, selection or gen
   await waitFor(() => expect(screen.getByLabelText('文件库地址')).toHaveTextContent('purpose=meeting&type=document&q=test&file=file-1'));
   const writes = mocks.api.mock.calls.filter(([, init]) => init?.method); expect(writes).toHaveLength(1);
   expect(writes[0][0]).toBe('/api/files/file-1'); expect(writes[0][1].method).toBe('PATCH'); expect(JSON.parse(writes[0][1].body)).toEqual({ purpose: 'meeting' });
-  await userEvent.click(within(screen.getByRole('dialog')).getByRole('button', { name: '删除原始文件' })); await userEvent.click(screen.getByRole('button', { name: '取消' }));
+  expect(within(screen.getByRole('dialog')).queryByRole('button', { name: '删除原始文件' })).not.toBeInTheDocument();
+  expect(within(screen.getByRole('dialog')).getByRole('link', { name: '前往会议档案 · 删除整场会议' })).toBeInTheDocument();
   expect(within(await screen.findByRole('dialog')).getByLabelText('资料用途')).toHaveValue('meeting');
 });
 it('preserves the original purpose and file detail if reclassification fails', async () => {
@@ -368,8 +369,8 @@ it.each(['processing', 'failed', 'success'])('retained task original %s does not
   mocks.api.mockResolvedValue({ items: [{ ...file, id: 'task:retained', filename: 'retained.webm', purpose: 'meeting', task_id: 'selected-task', processing_status, can_delete: false, can_generate: false }] });
   mount('/files?purpose=meeting&file=task%3Aretained&q=retained');
   const dialog = await screen.findByRole('dialog');
-  expect(within(dialog).getByText('此原件作为处理记录的来源保留，当前不支持删除。')).toBeInTheDocument();
-  expect(within(dialog).getByRole('button', { name: '删除原始文件' })).toBeDisabled();
+  expect(within(dialog).getByRole('link', { name: '前往会议档案 · 删除整场会议' })).toHaveAttribute('href', expect.stringContaining('locate_task=selected-task'));
+  expect(within(dialog).queryByRole('button', { name: '删除原始文件' })).not.toBeInTheDocument();
   expect(within(dialog).queryByText(/请先完成或核验/)).not.toBeInTheDocument();
   expect(within(dialog).getByRole('button', { name: '导出原文件' })).toBeInTheDocument();
   expect(mocks.api.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
@@ -448,3 +449,24 @@ it('hides unused format filters and search in a truly empty file library', async
   await screen.findByText('暂无笔记资料');
   expect(screen.queryByRole('region', { name: '文件筛选' })).toBeNull();
 });
+
+it.each([{ task_id: 'meeting-task', note_id: 'meeting-note' }, {}])('meeting originals route to whole-meeting deletion even when can_delete is true: %j', async identities => {
+  mocks.api.mockResolvedValue({ items: [{ ...file, purpose: 'meeting', ...identities }] })
+  mount('/files?purpose=meeting&file=file-1')
+  const dialog = await screen.findByRole('dialog')
+  const link = within(dialog).getByRole('link', { name: '前往会议档案 · 删除整场会议' })
+  expect(link.getAttribute('href')).toContain('/meetings?')
+  expect(link.getAttribute('href')).toContain('returnTo=')
+  if ('task_id' in identities) expect(link.getAttribute('href')).toContain('locate_task=meeting-task')
+  else expect(within(dialog).getByText(/尚未关联会议档案/)).toBeInTheDocument()
+  expect(within(dialog).queryByRole('button', { name: '删除原始文件' })).not.toBeInTheDocument()
+  expect(mocks.api.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
+})
+
+it('does not restore original-only deletion after relabeling an evidenced meeting as a note', async () => {
+  mocks.api.mockResolvedValue({ items: [{ ...file, source_type: 'meeting_recording', task_id: 'meeting-task' }] })
+  mount('/files?purpose=note&file=file-1')
+  const dialog = await screen.findByRole('dialog')
+  expect(within(dialog).queryByRole('button', { name: '删除原始文件' })).not.toBeInTheDocument()
+  expect(within(dialog).getByRole('link', { name: '前往会议档案 · 删除整场会议' })).toHaveAttribute('href', expect.stringContaining('locate_task=meeting-task'))
+})

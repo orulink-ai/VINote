@@ -1,4 +1,5 @@
 import { apiJson } from './api'
+import { deletedMeetingTasks, rememberDeletedMeetingOperation } from './deletedMeetingTasks'
 
 export type VersionHistory = {
   label: string
@@ -32,12 +33,14 @@ export function versionHistoryTitle(title: string) {
   return title.replace(/\s*[｜|]\s*待生成纪要\s*$/, ' 录制')
 }
 
-/** Read only. Never persist readback, clear a pointer, retry, or submit work.
+/** Never clear a receipt, retry, or submit work. A verified deleted operation
+ * may be remembered as a display tombstone to avoid repeated lookups.
  * current() also guards concurrent receipt replacement/removal in another view. */
 export async function readMeetingVersionHistory(
   receipt: { operationId?: string; id?: string },
   signal: AbortSignal,
   current: () => boolean,
+  owner?: string,
 ): Promise<VersionHistory | null> {
   const value = receipt as Record<string, unknown>
   const pending = unverifiedVersionHistory()
@@ -56,6 +59,11 @@ export async function readMeetingVersionHistory(
     if (op.state === 'reserved') return { ...pending, label: '提交待确认', detail: '原提交仍为预留状态，请核验原结果，不重复提交。' }
     if (op.state !== 'accepted') return pending
     taskId = op.task_id
+    if (owner && deletedMeetingTasks(owner).has(taskId)) {
+      if (!current()) return null
+      rememberDeletedMeetingOperation(owner, receipt.operationId, taskId)
+      return null
+    }
     const task = object(await get(`/api/task/${encodeURIComponent(taskId)}`))
     const result = object(task.result)
     if (task.task_id !== taskId || task.operation_id !== undefined && task.operation_id !== receipt.operationId

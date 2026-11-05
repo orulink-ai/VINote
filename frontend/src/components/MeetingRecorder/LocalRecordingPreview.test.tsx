@@ -1,6 +1,9 @@
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import { act, cleanup, fireEvent, render as testingRender, screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
+
+const render = (ui: Parameters<typeof testingRender>[0]) => testingRender(ui, { wrapper: MemoryRouter })
 
 const storage = vi.hoisted(() => ({ remove: vi.fn(), read: vi.fn(), pending: vi.fn(), process: vi.fn(), busy: vi.fn() }))
 vi.mock('@/lib/audioStorage', () => ({ deleteLocalRecording: storage.remove, getRecordedAudio: storage.read, getPendingMeeting: storage.pending }))
@@ -117,17 +120,14 @@ it('invalidates an IndexedDB save immediately on account changes without relying
   expect(screen.queryByText(/已保存到所选位置/)).toBeNull()
 })
 
-it('retains failed deletion confirmation and permits retry without losing the recording', async () => {
+it('routes local meeting deletion to its dossier without deleting the recording separately', async () => {
   const deleted = vi.fn()
-  storage.remove.mockRejectedValueOnce(new Error('存储暂不可用')).mockResolvedValueOnce(undefined)
   render(<LocalRecordingPreview recording={recording} onDeleted={deleted} />)
-  await userEvent.click(screen.getByRole('button', { name: '删除录制文件' }))
-  await userEvent.click(screen.getByRole('button', { name: '确认删除文件' }))
-  await within(screen.getByRole('alertdialog')).findByText('存储暂不可用')
+  const link = screen.getByRole('link', { name: '前往会议档案 · 删除整场会议' })
+  expect(link.getAttribute('href')).toContain('locate_recording=' + recording.id)
+  expect(screen.queryByRole('button', { name: '删除录制文件' })).not.toBeInTheDocument()
+  expect(storage.remove).not.toHaveBeenCalled()
   expect(deleted).not.toHaveBeenCalled()
-  await userEvent.click(screen.getByRole('button', { name: '确认删除文件' }))
-  expect(deleted).toHaveBeenCalledOnce()
-  expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument()
 })
 
 it('recovers a player failure by reloading the original on demand', async () => {

@@ -71,3 +71,13 @@ it('does not override a damaged exact-task recovery receipt with another slot', 
   expect(await backgroundSaveCompletedTask('alice', 'task-1')).toBeNull();
   expect(state.api).not.toHaveBeenCalled();
 });
+it('does not save a result after its task was deleted during lookup', async () => {
+  saveReceipt();
+  let finish!: (value: unknown) => void;
+  state.api.mockImplementationOnce(() => new Promise(resolve => { finish = resolve; })).mockResolvedValue([]);
+  const pending = backgroundSaveCompletedTask('alice', 'task-1');
+  localStorage.setItem('vinote:deleted-meeting-tasks:v1:alice', JSON.stringify(['task-1']));
+  finish(result);
+  expect(await pending).toBeNull();
+  expect(state.api).toHaveBeenCalledTimes(1);
+});

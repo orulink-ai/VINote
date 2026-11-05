@@ -254,6 +254,9 @@ class MeetingSourceLinkService:
                 # so two workers cannot both create or bypass an updated note.
                 if db.get_bind().dialect.name == 'sqlite':
                     db.connection().exec_driver_sql('BEGIN IMMEDIATE')
+                from app.services.meeting_deletion import deleted_task
+                if deleted_task(db, payload.canonical_task_id):
+                    raise HTTPException(409, '会议已删除，不能建立关联')
                 note = self._note(db, owner, note_id, lock=True)
                 trusted = self._trusted_relation(owner, note)
                 if trusted and trusted[:2] != (payload.canonical_task_id, payload.source_version):

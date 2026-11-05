@@ -11,6 +11,15 @@ def utc_now():
     return datetime.now(timezone.utc)
 
 
+class MeetingDeletionDB(Base):
+    """Durable deletion receipt and cleanup plan for one canonical meeting."""
+    __tablename__ = 'meeting_deletions'
+    owner: Mapped[str] = mapped_column(String(128), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    plan_json: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String(16), default='pending')
+
+
 class FeishuApplicationDB(Base):
     __tablename__ = "feishu_applications"
     owner: Mapped[str] = mapped_column(String(128), primary_key=True)

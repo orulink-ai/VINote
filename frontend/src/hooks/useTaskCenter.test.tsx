@@ -91,3 +91,11 @@ it('carries an uncertain operation workspace to its resolved task and rejects an
  await act(async()=>vi.advanceTimersByTimeAsync(4000));expect(result.current['operation:op'].noteId).toBe('note');
  expect(api.mock.calls.some(([p])=>p==='/api/notes?scope=team&team_id=team-1')).toBe(true);
 });
+it('records a verified operation-to-deleted-task binding and does not poll the deleted task',async()=>{
+ localStorage.setItem('vinote:deleted-meeting-tasks:v1:owner', JSON.stringify(['deleted-task']));
+ api.mockImplementation(async p=>p==='/api/source-requests/op-deleted'?{operation_id:'op-deleted',state:'accepted',task_id:'deleted-task'}:{task_id:'deleted-task',status:'failed'});
+ renderHook(()=>useTaskCenter('owner',[],true,0,['op-deleted']));await flush();
+ expect(api.mock.calls.map(([p])=>p)).toEqual(['/api/source-requests/op-deleted']);
+ expect(JSON.parse(localStorage.getItem('vinote:deleted-meeting-operations:v1:owner')!)).toEqual({'op-deleted':'deleted-task'});
+ localStorage.removeItem('vinote:deleted-meeting-tasks:v1:owner');localStorage.removeItem('vinote:deleted-meeting-operations:v1:owner');
+});

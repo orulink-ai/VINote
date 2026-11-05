@@ -5,7 +5,9 @@ import { taskDisplayTitle, taskDisplayMessage } from '@/lib/taskDisplay';
 import { Input } from '@/components/ui/input';
 import { sourceHistoryAction } from '@/lib/taskRecoveryView';
 import { isRejectedVersionReceipt, readVersionReceipt, meetingVersionDetails } from '@/lib/meetingVersionRecovery';
+import { isMeetingVersionReceipt } from '@/lib/meetingVersion';
 import { depthLabels, presentationLabels } from '@/lib/summaryPresentation';
+import { deletedMeetingOperation, deletedMeetingTasks, MEETING_TASKS_DELETED } from '@/lib/deletedMeetingTasks';
 import { readMeetingVersionHistory, unverifiedVersionHistory, versionHistoryTitle, type VersionHistory } from '@/lib/meetingVersionHistory';
 import { useEffect, useState } from "react";
 import { Link, Navigate, useSearchParams } from "react-router-dom";
@@ -47,7 +49,7 @@ function TasksPage({ owner }: { owner?: string }) {
   const notes = useLibraryNotes();
   const legacySync = params.get('tab') === 'sync';
   const [recordings, setRecordings] = useState<PendingMeeting[]>([]);
-  type SourceImport = { workspace?: TaskWorkspace; sourceTitle?: string; sourceUrl?: string; id?: string; operationId?: string; meeting: boolean; mode?: string; submissionState?: string; historyReceiptKey?: string; historyReceiptRaw?: string };
+  type SourceImport = { workspace?: TaskWorkspace; sourceTitle?: string; sourceUrl?: string; id?: string; operationId?: string; parentTaskId?: string; meeting: boolean; mode?: string; submissionState?: string; historyReceiptKey?: string; historyReceiptRaw?: string };
   const [imports, setImports] = useState<SourceImport[]>([]);
   const [versionStates, setVersionStates] = useState<Record<string, VersionHistory>>({});
   const [deliveries, setDeliveries] = useState<
@@ -60,6 +62,11 @@ function TasksPage({ owner }: { owner?: string }) {
   const [removal, setRemoval] = useState<HistoryRemoval | null>(null);
   const [, setDismissalRevision] = useState(0);
   useEffect(() => {
+    const refresh = () => setAttempt(value => value + 1);
+    window.addEventListener(MEETING_TASKS_DELETED, refresh);
+    return () => window.removeEventListener(MEETING_TASKS_DELETED, refresh);
+  }, []);
+  useEffect(() => {
     if (legacySync) return;
     let active = true;
     const controller = new AbortController();
@@ -68,6 +75,7 @@ function TasksPage({ owner }: { owner?: string }) {
     setVersionStates({});
     const load = async () => {
       if (tab === "generation") {
+        const deletedTasks = owner ? deletedMeetingTasks(owner) : new Set<string>();
         const accepted = new Map<string, SourceImport>();
         const snapshots = new Map<string, { key: string; raw: string }>();
         const keys = owner ? ['note', 'meeting'].map(kind => `vinote:import-receipt:${owner}:${kind}`) : [];
@@ -82,6 +90,9 @@ function TasksPage({ owner }: { owner?: string }) {
               ? readVersionReceipt(localStorage, owner, key.slice(`vinote:source-receipt:${owner}:`.length)) as SourceImport
               : JSON.parse(raw);
             if (!saved) continue;
+            if (saved.id && deletedTasks.has(saved.id)) continue;
+            if (owner && saved.operationId && deletedMeetingOperation(owner, saved.operationId)) continue;
+            if (owner && isMeetingVersionReceipt(saved, owner) && typeof saved.parentTaskId === 'string' && deletedTasks.has(saved.parentTaskId)) continue;
             if ((typeof saved.id === 'string' && saved.id || typeof saved.operationId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(saved.operationId)) && typeof saved.meeting === 'boolean') {
               const identity = saved.operationId || saved.id;
               accepted.set(identity, { ...saved, historyReceiptKey: key, historyReceiptRaw: raw });
@@ -95,14 +106,14 @@ function TasksPage({ owner }: { owner?: string }) {
             if (!active) return;
             if (!meetingVersionDetails(item, owner) || isRejectedVersionReceipt(item, owner)) continue;
             const snapshot = snapshots.get(identity)!;
-            const current = () => active && localStorage.getItem(snapshot.key) === snapshot.raw;
-            const status = await readMeetingVersionHistory(item, controller.signal, current);
+            const current = () => active && !!owner && useAuthStore.getState().user?.id === owner && localStorage.getItem(snapshot.key) === snapshot.raw;
+            const status = await readMeetingVersionHistory(item, controller.signal, current, owner);
             if (status && current()) setVersionStates(previous => ({ ...previous, [identity]: status }));
           }
         };
         const device = async () => {
           const local = owner ? await listPendingMeetings(owner) : [];
-          if (active) setRecordings(local);
+          if (active) setRecordings(local.filter(item => !item.taskId || !deletedTasks.has(item.taskId)));
         };
         const results = await Promise.allSettled([statuses(), device()]);
         const failed = results.find(result => result.status === 'rejected');

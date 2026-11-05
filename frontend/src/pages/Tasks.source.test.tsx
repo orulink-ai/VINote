@@ -185,3 +185,19 @@ it('searches task sources locally and clearing the query keeps every recovery re
   expect(screen.getAllByRole('article')).toHaveLength(2);
   expect(localStorage.length).toBe(2);
 });
+
+it('hides only confirmed deleted meeting tasks after the task center reloads and retains their receipts', async () => {
+  const deleted = JSON.stringify({ id: 'deleted-task', operationId: 'deleted-op', meeting: true, sourceTitle: '已删会议', submissionState: 'accepted' });
+  localStorage.setItem('vinote:source-receipt:owner:deleted-op', deleted);
+  localStorage.setItem('vinote:source-task-receipt:owner:deleted-task', deleted);
+  localStorage.setItem('vinote:import-receipt:owner:meeting', deleted);
+  localStorage.setItem('vinote:source-receipt:owner:kept-op', JSON.stringify({ id: 'kept-task', operationId: 'kept-op', meeting: true, sourceTitle: '保留会议', submissionState: 'accepted' }));
+  localStorage.setItem('vinote:deleted-meeting-tasks:v1:owner', JSON.stringify(['deleted-task']));
+  const view = render(<MemoryRouter><Tasks /></MemoryRouter>);
+  expect(await screen.findByText('保留会议')).toBeVisible();
+  expect(screen.queryByText('已删会议')).not.toBeInTheDocument();
+  view.unmount(); render(<MemoryRouter><Tasks /></MemoryRouter>);
+  expect(await screen.findByText('保留会议')).toBeVisible();
+  expect(screen.queryByText('已删会议')).not.toBeInTheDocument();
+  expect(localStorage.getItem('vinote:source-receipt:owner:deleted-op')).toBe(deleted);
+});

@@ -183,3 +183,17 @@ it('never applies an old DELETE response to another account with the same cached
   expect(useWorkspaceStore.getState().details[bob.key].content).toBe('Bob must keep this body');
   expect(f.cache).not.toHaveBeenCalled();
 });
+
+it('durably clears confirmed meeting cache entries without issuing another backend delete', async () => {
+  await useWorkspaceStore.getState().clearDeletedMeetingCache('alice', [{ key: 'desktop-saved', revision: 4 }]);
+  expect(f.api).not.toHaveBeenCalled();
+  expect(useWorkspaceStore.getState().items.map(item => item.key)).toEqual(['unrelated']);
+  expect(useWorkspaceStore.getState().mappings.saved).toBeUndefined();
+  expect(f.cache).toHaveBeenCalledWith('alice', expect.objectContaining({ items: expect.not.arrayContaining([expect.objectContaining({ key: 'desktop-saved' })]) }));
+});
+
+it('refuses cache cleanup if a selected meeting record changed', async () => {
+  await expect(useWorkspaceStore.getState().clearDeletedMeetingCache('alice', [{ key: 'desktop-saved', revision: 3 }])).rejects.toThrow('已变化');
+  expect(f.cache).not.toHaveBeenCalled();
+  expect(useWorkspaceStore.getState().details['desktop-saved']).toBeDefined();
+});

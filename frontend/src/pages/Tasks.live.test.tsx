@@ -50,3 +50,17 @@ it('opens a saved team import using its retained workspace without changing its 
  expect(localStorage.getItem(key)).toBe(receipt);
  expect(api.mock.calls.every(([,options])=>!options?.method)).toBe(true);
 });
+it('persists verified operation identity for a deleted task and stops polling it after reload',async()=>{
+ const receipt=JSON.stringify({operationId:'old-op',meeting:true,sourceTitle:'已删的未知提交',submissionState:'unknown'});
+ localStorage.setItem('vinote:source-receipt:center-owner:old-op',receipt);
+ localStorage.setItem('vinote:deleted-meeting-tasks:v1:center-owner',JSON.stringify(['removed-task']));
+ api.mockImplementation(async path=>path==='/api/source-requests/old-op'?{operation_id:'old-op',state:'accepted',task_id:'removed-task'}:{});
+ const view=render(<MemoryRouter><Tasks/></MemoryRouter>);
+ await waitFor(()=>expect(JSON.parse(localStorage.getItem('vinote:deleted-meeting-operations:v1:center-owner')||'{}')).toEqual({'old-op':'removed-task'}));
+ await waitFor(()=>expect(screen.queryByText('已删的未知提交')).not.toBeInTheDocument());
+ expect(api.mock.calls.map(([path])=>path)).toEqual(['/api/source-requests/old-op']);
+ view.unmount();api.mockClear();render(<MemoryRouter><Tasks/></MemoryRouter>);
+ await waitFor(()=>expect(screen.queryByText('正在更新任务状态…')).not.toBeInTheDocument());
+ expect(screen.queryByText('已删的未知提交')).not.toBeInTheDocument();expect(api).not.toHaveBeenCalled();
+ expect(localStorage.getItem('vinote:source-receipt:center-owner:old-op')).toBe(receipt);
+});

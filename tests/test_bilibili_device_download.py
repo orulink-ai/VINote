@@ -1,5 +1,6 @@
 """Device audio intake and saved-note pipeline; all provider/model I/O is fake."""
 from dataclasses import asdict
+from contextlib import contextmanager
 import json
 import uuid
 from pathlib import Path
@@ -158,6 +159,20 @@ class LLM:
 
 @pytest.fixture
 def pipeline(intake, monkeypatch, tmp_path):
+    # Task original lookup consults the persistent deletion journal. Keep the
+    # synthetic pipeline isolated from the installed application's database.
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.db_models import MeetingDeletionDB
+    engine = create_engine(f"sqlite:///{tmp_path / 'pipeline.db'}")
+    MeetingDeletionDB.__table__.create(engine)
+
+    @contextmanager
+    def sessions():
+        with Session(engine) as db, db.begin():
+            yield db
+
+    monkeypatch.setattr('app.db.session_scope', sessions)
     monkeypatch.setattr(settings, "data_dir", tmp_path / "downloaded")
     monkeypatch.setattr(settings, "output_dir", tmp_path / "output")
     from tests.test_meeting_model_boundary import CAPABILITIES
@@ -177,8 +192,9 @@ def pipeline(intake, monkeypatch, tmp_path):
     service = NoteService(downloader=YtdlpDownloader(), transcription_service=transcriber,
                           llm_service=llm, artifact_service=artifacts,
                           screenshot_service=screenshots, media_service=media)
-    return SimpleNamespace(service=service, transcriber=transcriber, llm=llm,
-                           artifacts=artifacts, forbidden_visual=forbidden_visual)
+    yield SimpleNamespace(service=service, transcriber=transcriber, llm=llm,
+                          artifacts=artifacts, forbidden_visual=forbidden_visual)
+    engine.dispose()
 
 
 @pytest.mark.parametrize("style", ["meeting", "detailed"])

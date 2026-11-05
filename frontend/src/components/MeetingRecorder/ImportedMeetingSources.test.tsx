@@ -73,3 +73,34 @@ it.each(['uploaded', 'preparing', 'downloading', 'transcribing', 'diarizing', 'p
   expect(screen.queryByText('失败.wav')).not.toBeInTheDocument();
   await waitFor(() => expect(onSourceCount).toHaveBeenLastCalledWith(1));
 });
+
+it('confirms deletion of an unassociated imported meeting and removes it only after success', async () => {
+  mocks.api.mockResolvedValueOnce({ items: [{ id: 'file-1', filename: 'original.wav', purpose: 'meeting' }] }).mockResolvedValueOnce({ deleted: true });
+  mount();
+  await userEvent.click(await screen.findByRole('button', { name: '删除整场会议' }));
+  expect(screen.getByRole('dialog')).toHaveTextContent('已发布的飞书文档不会删除');
+  expect(mocks.api).toHaveBeenCalledTimes(1);
+  await userEvent.click(screen.getByRole('button', { name: '确认删除会议' }));
+  await waitFor(() => expect(screen.queryByRole('region', { name: '会议资料' })).not.toBeInTheDocument());
+  expect(mocks.api).toHaveBeenLastCalledWith('/api/files/file-1/orphan-meeting', { method: 'DELETE' });
+});
+
+it('keeps an imported meeting visible when deletion is rejected', async () => {
+  mocks.api.mockResolvedValueOnce({ items: [{ id: 'file-1', filename: 'original.wav', purpose: 'meeting' }] }).mockRejectedValueOnce(new Error('会议已关联，请重新读取'));
+  mount();
+  await userEvent.click(await screen.findByRole('button', { name: '删除整场会议' }));
+  await userEvent.click(screen.getByRole('button', { name: '确认删除会议' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('会议已关联');
+  await userEvent.click(screen.getByRole('button', { name: '取消' }));
+  expect(screen.getByRole('region', { name: '会议资料' })).toBeVisible();
+});
+
+it('uses the verified canonical identity for an imported task source', async () => {
+  const remove = vi.fn().mockResolvedValue(undefined);
+  mocks.api.mockResolvedValueOnce({ items: [source] });
+  render(<MemoryRouter><ImportedMeetingSources owner="owner" coveredTasks={[]} returnTo="/meetings" onDeleteTask={remove} /></MemoryRouter>);
+  await userEvent.click(await screen.findByRole('button', { name: '删除整场会议' }));
+  await userEvent.click(screen.getByRole('button', { name: '确认删除会议' }));
+  await waitFor(() => expect(remove).toHaveBeenCalledWith('opaque'));
+  await waitFor(() => expect(screen.queryByRole('region', { name: '会议资料' })).not.toBeInTheDocument());
+});

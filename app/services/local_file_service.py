@@ -112,7 +112,7 @@ class LocalFileService:
     def get(self, owner, identifier):
         if identifier.startswith("task:"):
             from app.services.task_original_service import TaskOriginalService
-            return TaskOriginalService().get(owner, identifier)
+            return TaskOriginalService(session_scope).get(owner, identifier)
         with session_scope() as db:
             row = db.get(LocalFileDB, identifier)
             if not row or row.owner != owner:
@@ -161,6 +161,21 @@ class LocalFileService:
             # Existing saved media stays accessible; only expose task sources with
             # an explicit owner marker. Imported task copies remain non-deletable.
             artifacts = TaskArtifactService(settings.output_dir)
+            from app.services.task_original_service import TaskOriginalService
+            for item in result:
+                if item.get('purpose') != 'meeting' or not item.get('task_id'):
+                    continue
+                folder = artifacts.find_task_dir(item['task_id'])
+                verified = TaskOriginalService(session_scope).info(owner, folder) if folder else None
+                if verified and verified[0]['task_id'] == item['task_id']:
+                    item['canonical_task_id'] = item['task_id']
+                elif folder:
+                    from app.services.meeting_deletion import verified_meeting
+                    try:
+                        verified_meeting(db, owner, item['task_id'], artifacts)
+                        item['canonical_task_id'] = item['task_id']
+                    except HTTPException:
+                        pass
             referenced_notes = {}
             for note in owned_notes:
                 if not note.task_id or note.task_id in tasks:
@@ -198,34 +213,48 @@ class LocalFileService:
                                "location": "当前电脑 · 已保留来源", "content_url": f"/api/notes/{note.id}/media"})
             from app.services.task_original_service import TaskOriginalService
             represented = {item.get("task_id") for item in result if item.get("task_id")}
-            for item in TaskOriginalService().list(owner):
+            for item in TaskOriginalService(session_scope).list(owner):
                 if item["task_id"] not in represented:
+                    if item['purpose'] == 'meeting':
+                        item['canonical_task_id'] = item['task_id']
                     note = next((n for n in owned_notes if n.task_id == item["task_id"]), None) or referenced_notes.get(item["task_id"])
                     if note:
                         item["note_id"] = note.id
                     result.append(item)
                     represented.add(item["task_id"])
+            from app.db_models import MeetingDeletionDB
+            for receipt in db.scalars(select(MeetingDeletionDB).where(
+                    MeetingDeletionDB.owner == owner, MeetingDeletionDB.state == 'pending')):
+                if receipt.task_id not in represented:
+                    result.append({'id': 'task:' + receipt.task_id, 'task_id': receipt.task_id,
+                        'canonical_task_id': receipt.task_id,
+                        'filename': '会议删除未完成', 'title': '会议删除未完成', 'purpose': 'meeting',
+                        'category': 'recording', 'size_bytes': 0, 'created_at': '',
+                        'available': False, 'can_delete': True, 'can_generate': False,
+                        'deletion_pending': True, 'location': '当前电脑', 'content_url': None})
             return {"items": result, "originals_sync": False}
 
     def attach_task(self, owner, identifier, task_id, purpose=None):
-        with session_scope() as db:
-            row = db.get(LocalFileDB, identifier)
-            if not row or row.owner != owner:
-                raise HTTPException(404, "找不到此文件")
-            row.task_id = task_id
-            if purpose in {"meeting", "note"}:
-                row.purpose = purpose
+        with _SUBMISSION_LOCK:
+            with session_scope() as db:
+                row = db.get(LocalFileDB, identifier)
+                if not row or row.owner != owner:
+                    raise HTTPException(404, "找不到此文件")
+                row.task_id = task_id
+                if purpose in {"meeting", "note"}:
+                    row.purpose = purpose
 
     def set_purpose(self, owner, identifier, purpose):
         if purpose not in {"meeting", "note"}:
             raise HTTPException(422, "请选择会议或笔记作为文件用途")
-        with session_scope() as db:
-            row = db.get(LocalFileDB, identifier)
-            if not row or row.owner != owner:
-                raise HTTPException(404, "找不到此文件")
-            row.purpose = purpose
-            db.flush()
-            return self._info(row, self._path(row))
+        with _SUBMISSION_LOCK:
+            with session_scope() as db:
+                row = db.get(LocalFileDB, identifier)
+                if not row or row.owner != owner:
+                    raise HTTPException(404, "找不到此文件")
+                row.purpose = purpose
+                db.flush()
+                return self._info(row, self._path(row))
 
     @contextmanager
     def generation_lease(self, owner, identifier):
@@ -247,6 +276,23 @@ class LocalFileService:
             if (owner, identifier) in _SUBMITTING:
                 raise HTTPException(409, "文件正在提交，请等待完成后删除")
             self._delete(owner, identifier)
+
+    def delete_orphan_meeting(self, owner, identifier):
+        """Delete an unsubmitted meeting file; linked meetings require a separate lifecycle."""
+        with _SUBMISSION_LOCK:
+            if (owner, identifier) in _SUBMITTING:
+                raise HTTPException(409, "文件正在提交，请等待完成后删除")
+            with session_scope() as db:
+                row = db.get(LocalFileDB, identifier)
+                if not row or row.owner != owner:
+                    raise HTTPException(404, "找不到此文件")
+                if row.purpose != 'meeting' or row.task_id:
+                    raise HTTPException(409, "此会议文件有关联记录，无法按孤立文件删除")
+                path = self._path(row, require_exists=False)
+                if path.name != row.id + path.suffix.lower() or path.suffix.lower() not in ALLOWED:
+                    raise HTTPException(409, "文件路径与索引不匹配，未删除")
+                path.unlink(missing_ok=True)
+                db.delete(row)
 
     def _delete(self, owner, identifier):
         with session_scope() as db:

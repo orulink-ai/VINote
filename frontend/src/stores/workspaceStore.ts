@@ -37,6 +37,7 @@ interface State extends CachedState {
   resolve: (operationId: string, content: string, title: string, comparedRevision?: number, expectedOwner?: string) => Promise<void>;
   changeDeleted: (key: string, deleted: boolean) => Promise<WorkspaceNote | null>;
   purgeDeleted: (key: string, expectedOwner: string, expectedRevision: number) => Promise<void>;
+  clearDeletedMeetingCache: (owner: string, entries: { key: string; revision: number }[]) => Promise<void>;
 }
 const blank = (): CachedState => ({ itemPolicies: {}, items: [], details: {}, mappings: {}, pending: [],
   lastSync: '', deviceId: crypto.randomUUID(), localOnlyVersion: 1, retainedSyncOperations: [], cloudBaselines: {},
@@ -323,6 +324,23 @@ export const useWorkspaceStore = create<State>((set, get) => {
         await commit(scope, () => accept(next));
         return next;
       } finally { if (currentScope(scope)) set({ busy: false }); }
+    },
+    clearDeletedMeetingCache: async (owner, entries) => {
+      const scope = scopeFor(); requireReady(scope);
+      if (owner !== scope.owner) throw new Error('账号已变化，请重新打开');
+      if (get().busy) throw new Error('正在保存，请稍后重试');
+      const selected = new Set(entries.map(entry => entry.key));
+      for (const entry of entries) {
+        const item = get().items.find(candidate => candidate.key === entry.key);
+        const detail = get().details[entry.key];
+        if (!item || item.revision !== entry.revision || detail && detail.revision !== entry.revision) throw new Error('会议内容已变化，请重新读取');
+      }
+      const next = purgeClearedContent({ ...snapshot(get()), clearedContentKeys: [...(get().clearedContentKeys || []), ...selected] });
+      const removed = new Set(next.clearedContentKeys);
+      if (get().items.some(item => removed.has(item.key) && !selected.has(item.key))) throw new Error('关联内容已变化，请重新读取');
+      set({ busy: true });
+      try { await commit(scope, () => set(next)); }
+      finally { if (currentScope(scope)) set({ busy: false }); }
     },
     purgeDeleted: async (reference, expectedOwner, expectedRevision) => {
       const scope = scopeFor(); requireReady(scope);

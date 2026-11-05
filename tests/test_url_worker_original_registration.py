@@ -1,5 +1,6 @@
 """Exercise the actual URL worker and pipeline, never hand-write request.json."""
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -25,6 +26,19 @@ URL = "https://www.bilibili.com/video/BV18tAnzvE9J?p=1"
 
 @pytest.fixture
 def env(tmp_path, monkeypatch):
+    # Task-original reads consult the deletion journal, not the user's DB.
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.db_models import MeetingDeletionDB
+    engine = create_engine(f"sqlite:///{tmp_path / 'worker.db'}")
+    MeetingDeletionDB.__table__.create(engine)
+
+    @contextmanager
+    def sessions():
+        with Session(engine) as db, db.begin():
+            yield db
+
+    monkeypatch.setattr('app.db.session_scope', sessions)
     monkeypatch.setattr(settings, "output_dir", tmp_path / "output")
     monkeypatch.setattr(settings, "data_dir", tmp_path / "downloaded")
     monkeypatch.setattr(settings, "vilab_server_url", "https://model-fixture.test")
@@ -94,9 +108,10 @@ def env(tmp_path, monkeypatch):
                           screenshot_service=SimpleNamespace(prepare_local_video=forbidden, inject_screenshots=forbidden),
                           media_service=SimpleNamespace(enrich_markdown=forbidden))
     monkeypatch.setattr(note, "_note_service", service)
-    return SimpleNamespace(artifacts=artifacts, service=service, transcriber=transcriber,
+    yield SimpleNamespace(artifacts=artifacts, service=service, transcriber=transcriber,
         llm=llm, catalog=catalog, resolve=resolve, download=downloaded, forbidden=forbidden,
         checks=checks, events=events, downloads=downloads)
+    engine.dispose()
 
 
 def queue(env, workflow="note_organization", **changes):

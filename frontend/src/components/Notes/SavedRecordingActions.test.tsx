@@ -1,4 +1,5 @@
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { MemoryRouter } from 'react-router-dom'
+import { act, cleanup, fireEvent, render as testingRender, screen } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
 import { SavedRecordingActions } from './SavedRecordingActions'
 import { apiJson, apiFetch } from '../../lib/api'
@@ -8,25 +9,22 @@ import { useAuthStore } from '../../stores/authStore'
 vi.mock('../../lib/api', () => ({ apiJson: vi.fn(), apiFetch: vi.fn() }))
 vi.mock('../../lib/i18n', () => ({ useI18n: () => ({ locale: 'zh-CN' }) }))
 vi.mock('../../lib/recordingDownload', async importOriginal => ({ ...await importOriginal<typeof import('../../lib/recordingDownload')>(), downloadOriginalFile: vi.fn() }))
+const render = (ui: Parameters<typeof testingRender>[0]) => testingRender(ui, { wrapper: MemoryRouter })
+
 const info = { available: true, deleted: false, can_delete: true, filename: 'meeting.m4a', size_bytes: 1000 }
 beforeEach(() => { vi.mocked(apiJson).mockResolvedValue(info); vi.mocked(downloadOriginalFile).mockResolvedValue('browser_started') })
 afterEach(() => { cleanup(); vi.resetAllMocks() })
 
-it('keeps the player and note intact when deletion fails', async () => {
+it('routes meeting deletion to its dossier without deleting original or notes', async () => {
   const deleted = vi.fn()
   render(<><audio data-testid="original" src="/api/notes/note-a/media" /><SavedRecordingActions noteId="note-a" title="会议" onDeleted={deleted} /></>)
   fireEvent.click(await screen.findByText('管理原录音'))
-  fireEvent.click(await screen.findByRole('button', { name: '删除录制' }))
-  vi.mocked(apiJson).mockRejectedValueOnce(new Error('删除失败，请重试'))
-  fireEvent.click(screen.getByRole('button', { name: '确认删除' }))
-  await screen.findByText('删除失败，请重试')
-  expect(screen.getByTestId('original').getAttribute('src')).toBe('/api/notes/note-a/media')
+  const link = screen.getByRole('link', { name: '前往会议档案 · 删除整场会议' })
+  expect(link.getAttribute('href')).toContain('locate_note=note-a')
+  expect(screen.queryByRole('button', { name: '删除录制' })).not.toBeInTheDocument()
+  expect(vi.mocked(apiJson).mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false)
   expect(deleted).not.toHaveBeenCalled()
-  expect(screen.getByRole('button', { name: '导出原音频' })).toBeEnabled()
-  expect(screen.queryByRole('button', { name: '重试导出' })).toBeNull()
-  fireEvent.click(screen.getByRole('button', { name: '重新核验原文件' }))
-  await screen.findByText(/原文件已保留/)
-  expect(downloadOriginalFile).not.toHaveBeenCalled()
+  expect(screen.getByTestId('original')).toHaveAttribute('src', '/api/notes/note-a/media')
 })
 
 it('can retry a failed recording lookup without leaving the meeting', async () => {

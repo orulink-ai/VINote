@@ -188,6 +188,8 @@ export function MeetingWorkbench({
   loading,
   onOpenNote,
   onDeleted,
+  onDeleteMeeting,
+  canDeleteMeeting,
   actions,
   taskStates = {},
   view,
@@ -206,6 +208,8 @@ export function MeetingWorkbench({
   loading: boolean;
   onOpenNote: (id: string, edit?: boolean) => void;
   onDeleted: (id: string) => void;
+  onDeleteMeeting?: (row: MeetingRow) => Promise<void>;
+  canDeleteMeeting?: (row: MeetingRow) => boolean;
   actions?: ReactNode;
   taskStates?: MeetingTaskStates;
   view?: MeetingArchiveView;
@@ -226,6 +230,10 @@ export function MeetingWorkbench({
   const [previewRecordingId, setPreviewRecordingId] = useState<string | null>(null);
   const [associating, setAssociating] = useState<{ note: NoteRecord; ownerId: string; context: string }>();
   const [associationFeedback, setAssociationFeedback] = useState('');
+  const [deletingRow, setDeletingRow] = useState<MeetingRow>();
+  const [deleteError, setDeleteError] = useState('');
+  const [deleteBusy, setDeleteBusy] = useState(false);
+  const deleteLock = useRef(false);
   const pendingTab = useRef<HTMLButtonElement>(null);
   const mounted = useRef(false);
   const listRef = useRef<HTMLElement>(null);
@@ -274,6 +282,7 @@ export function MeetingWorkbench({
   currentContext.current = actionContext;
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => { setAssociationFeedback(''); }, [actionContext]);
+  useEffect(() => { setDeletingRow(undefined); setDeleteError(''); }, [actionContext]);
   useEffect(() => {
     if (!associationFeedback) return;
     const frame = requestAnimationFrame(() => {
@@ -462,6 +471,7 @@ export function MeetingWorkbench({
                 <summary hidden data-meeting-row-fallback aria-label={`${row.title} · ${relatedLabel}`} className="min-h-11 cursor-pointer break-words rounded-md py-3 text-muted-foreground focus-visible:outline focus-visible:outline-ring">{relatedLabel}</summary>
                 <div className="grid min-w-0 gap-4 pb-3">
                   <div className="flex flex-wrap items-center justify-between gap-2"><span className="text-xs text-muted-foreground">{row.displayDate ? `会议日期 · ${row.displayDate}` : '可补填会议日期'}</span><MeetingDisplayEditor sourceKey={row.displayKey} recording={row.recording} title={(display[row.displayKey || ''] ? display[row.displayKey || ''].title : row.recording?.displayTitle || (row.recording?.titleEdited ? row.recording.options.title : '')) || ''} date={row.displayDate} onSaved={() => { void onAssociated?.(); }} /></div>
+                  {onDeleteMeeting && (!canDeleteMeeting || canDeleteMeeting(row)) && <Button variant="ghost" className="w-fit text-destructive" onClick={() => { setDeleteError(''); setDeletingRow(row); }}>删除整场会议</Button>}
                   {row.notes.length > 0 && <section aria-label="关联纪要" className="grid gap-2">
                     <h3 className="text-xs font-medium text-muted-foreground">纪要版本</h3>
 
@@ -563,6 +573,15 @@ export function MeetingWorkbench({
           )}
         </div></SheetContent></Sheet>
       </div>
+      <Dialog open={!!deletingRow} onOpenChange={open => { if (!open && !deleteBusy) setDeletingRow(undefined); }}><DialogContent><DialogHeader><DialogTitle>删除整场会议？</DialogTitle><DialogDescription>将删除此会议及其关联内容和原录制，删除后无法恢复。已发布的飞书文档不会删除。</DialogDescription></DialogHeader>
+        {deleteError && <p role="alert" className="text-sm text-destructive">{deleteError}</p>}
+        <div className="flex justify-end gap-2"><Button variant="outline" disabled={deleteBusy} onClick={() => setDeletingRow(undefined)}>取消</Button><Button variant="destructive" disabled={deleteBusy} onClick={() => {
+          if (!deletingRow || !onDeleteMeeting || deleteLock.current) return;
+          const context = actionContext;
+          deleteLock.current = true; setDeleteBusy(true); setDeleteError('');
+          void onDeleteMeeting(deletingRow).then(() => { if (mounted.current && currentContext.current === context) setDeletingRow(undefined); }).catch(error => { if (mounted.current && currentContext.current === context) setDeleteError(error instanceof Error ? error.message : '删除未完成，请重试。'); }).finally(() => { deleteLock.current = false; if (mounted.current) setDeleteBusy(false); });
+        }}>确认删除会议</Button></div>
+      </DialogContent></Dialog>
     </section>
   );
 }

@@ -1,6 +1,7 @@
 import { apiJson } from './api';
 import { readRuntimeConfig } from './runtimeConfig';
 import { useAuthStore } from '@/stores/authStore';
+import { deletedMeetingTasks } from './deletedMeetingTasks';
 
 /** Saves completed generated content only; never starts generation or sends messages. */
 export const BACKGROUND_NOTE_SAVED = 'vinote:background-note-saved';
@@ -47,7 +48,7 @@ function acceptedReceipt(owner: string, taskId: string): Receipt | null {
 }
 
 export function backgroundSaveCompletedTask(owner: string, taskId: string): Promise<string | null> {
-  if (!owner || !id(taskId) || useAuthStore.getState().user?.id !== owner) return Promise.resolve(null);
+  if (!owner || !id(taskId) || useAuthStore.getState().user?.id !== owner || deletedMeetingTasks(owner).has(taskId)) return Promise.resolve(null);
   const invocationKey = JSON.stringify([origin(), ownerEpoch, owner, taskId]);
   const previous = inFlight.get(invocationKey);
   if (previous) return previous;
@@ -61,7 +62,7 @@ async function save(owner: string, taskId: string): Promise<string | null> {
   if (!receipt) return null;
   const epoch = ownerEpoch, service = origin(), frozen = JSON.stringify(receipt);
   const active = () => ownerEpoch === epoch && origin() === service && useAuthStore.getState().user?.id === owner
-    && JSON.stringify(acceptedReceipt(owner, taskId)) === frozen;
+    && !deletedMeetingTasks(owner).has(taskId) && JSON.stringify(acceptedReceipt(owner, taskId)) === frozen;
   const data = await apiJson<{ task_id?: string; status: string; result?: { task_id: string; title: string; markdown: string } }>(`/api/task/${encodeURIComponent(taskId)}`);
   if (!active() || data.status !== 'success' || data.task_id && data.task_id !== taskId
       || data.result?.task_id !== taskId || typeof data.result.title !== 'string' || !data.result.title.trim()

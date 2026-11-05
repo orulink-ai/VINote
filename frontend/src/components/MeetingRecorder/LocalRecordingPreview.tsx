@@ -1,3 +1,4 @@
+import { Link, useLocation } from 'react-router-dom'
 import { formatMeetingTitle } from '../../lib/meetingTitle'
 import { MeetingDisplayEditor } from './MeetingDisplayEditor'
 import { useMeetingDisplay } from '@/hooks/useMeetingDisplay'
@@ -6,10 +7,9 @@ import { TranscriptionProgress } from './TranscriptionProgress'
 import { useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Download, FileText, Play, RotateCcw, Sparkles, Trash2 } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { deleteLocalRecording, getRecordedAudio, getPendingMeeting, type PendingMeeting, type MeetingGenerationSelection } from '../../lib/audioStorage'
+import { getRecordedAudio, getPendingMeeting, type PendingMeeting, type MeetingGenerationSelection } from '../../lib/audioStorage'
 import { processSavedMeeting, isMeetingProcessing } from '../../lib/meetingProcessing'
 import { ModelSourcePanel } from '../Settings/ModelSourcePanel'
 import { useAppModeStore } from '../../stores/appModeStore'
@@ -24,15 +24,16 @@ import { readRuntimeConfig } from '@/lib/runtimeConfig'
 interface LocalRecordingPreviewProps { recording: PendingMeeting; onDeleted: () => void; onOpenNote?: (noteId: string) => void; confirmOnOpen?: boolean; onRecordingUpdated?: (recording: PendingMeeting) => void }
 const stageCopy: Record<PendingMeeting['processingStatus'], string> = { idle: '尚未生成纪要', queued: '等待处理', preparing_media: '准备和校验媒体', transcribing: '云端转写完整音频', diarizing: '区分说话人', parallel_analysis: '转写与说话人分析同时进行', aligning: '对齐逐字稿', analyzing_video: '整理共享画面与发言资料', generating: '生成并校验纪要', saving_result: '保存结果', completed: '纪要已完成', failed: '处理失败' }
 
-export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confirmOnOpen = false, onRecordingUpdated }: LocalRecordingPreviewProps) {
+export function LocalRecordingPreview({ recording, onOpenNote, confirmOnOpen = false, onRecordingUpdated }: LocalRecordingPreviewProps) {
   const { locale } = useI18n(); const zh = locale.startsWith('zh')
   const owner = useAuthStore(state => state.user?.id)
   const display = useMeetingDisplay(recording.taskId ? owner : undefined)
+  const location = useLocation()
+  const meetingPath = '/meetings?' + new URLSearchParams({ locate_recording: recording.id, locate_focus: 'meeting', ...(recording.taskId ? { locate_task: recording.taskId } : {}), returnTo: location.pathname + location.search + location.hash }).toString()
   const displayKey = recording.taskId ? `task:${recording.taskId}` : undefined
   const displayInfo = displayKey ? display[displayKey] : undefined
-  const [url, setUrl] = useState(''); const [error, setError] = useState(''); const [deleting, setDeleting] = useState(false); const [expanded, setExpanded] = useState(false)
+  const [url, setUrl] = useState(''); const [error, setError] = useState(''); const [expanded, setExpanded] = useState(false)
   const [renamedTitle, setRenamedTitle] = useState('')
-  const [confirmDelete, setConfirmDelete] = useState(false)
   const [loading, setLoading] = useState(false)
   const [confirmGeneration, setConfirmGeneration] = useState(false)
   const [generating, setGenerating] = useState(false)
@@ -100,7 +101,6 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
   }
 
   const playbackFailed = () => { setUrl(''); setError(zh ? '文件暂时无法播放，请重新加载；也可以下载后使用播放器打开。' : 'Playback failed. Reload the file or download it to play.') }
-  const remove = async () => { setDeleting(true); setError(''); setUrl(''); try { await deleteLocalRecording(recording.id, recording.ownerId); setConfirmDelete(false); onDeleted() } catch (cause) { setError(cause instanceof Error ? cause.message : String(cause)) } finally { setDeleting(false) } }
   const selectedASR = speech.profiles.find(profile => profile.id === speech.selectedProfileId && profile.isActive)
   const selectedLLM = models.profiles.find(profile => profile.id === models.selectedProfileId && profile.isActive)
   const selection: MeetingGenerationSelection | null = config?.mode === 'cloud'
@@ -150,25 +150,19 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
         <div className="flex flex-wrap gap-2"><Button disabled={generating || !selection || modelSaving || !!modelError || models.loading || speech.loading} onClick={() => void generate(true)}>{generating ? '正在处理…' : '确认模型并开始生成'}</Button><Button variant="outline" onClick={() => setConfirmGeneration(false)}>{generating ? '收起处理进度' : '暂不生成'}</Button><Button variant="ghost" disabled={generating || modelSaving} onClick={() => { void loadMode(); if (config?.mode === 'local') { void models.loadProfiles(); void speech.loadProfiles() } }}>重新读取模型配置</Button></div>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </DialogContent></Dialog>
-      <div className="mt-auto grid gap-2">{recording.processingStatus === 'failed' ? <Alert variant="destructive"><AlertDescription>{recording.failedStage ? (zh ? '失败阶段：' : 'Failed stage: ') + (stageCopy[recording.failedStage as keyof typeof stageCopy] || recording.failedStage) + '。' : ''}{recording.processingError}</AlertDescription></Alert> : null}{recording.processingStatus === 'completed' && recording.noteId ? <Button onClick={() => onOpenNote?.(recording.noteId!)}><FileText />{zh ? '查看会议纪要' : 'Open meeting notes'}</Button> : <Button disabled={processing || deleting} onClick={restore}>{recording.processingStatus === 'failed' ? <RotateCcw /> : <Sparkles />}{processing ? statusText : recording.processingStatus === 'failed' ? (zh ? '重试会后处理' : 'Retry processing') : (zh ? '生成会议纪要' : 'Generate meeting notes')}</Button>}
+      <div className="mt-auto grid gap-2">{recording.processingStatus === 'failed' ? <Alert variant="destructive"><AlertDescription>{recording.failedStage ? (zh ? '失败阶段：' : 'Failed stage: ') + (stageCopy[recording.failedStage as keyof typeof stageCopy] || recording.failedStage) + '。' : ''}{recording.processingError}</AlertDescription></Alert> : null}{recording.processingStatus === 'completed' && recording.noteId ? <Button onClick={() => onOpenNote?.(recording.noteId!)}><FileText />{zh ? '查看会议纪要' : 'Open meeting notes'}</Button> : <Button disabled={processing} onClick={restore}>{recording.processingStatus === 'failed' ? <RotateCcw /> : <Sparkles />}{processing ? statusText : recording.processingStatus === 'failed' ? (zh ? '重试会后处理' : 'Retry processing') : (zh ? '生成会议纪要' : 'Generate meeting notes')}</Button>}
         {needsConfirmation && !processing && recording.processingStatus !== 'completed' && <p className="text-xs text-muted-foreground">点击后选择并确认本次模型，确认前不会开始处理。</p>}
         <div className="flex flex-wrap gap-1">
-          <Button variant="outline" size="sm" disabled={loading || deleting} onClick={() => void load(false)}><Play />{loading ? (zh ? '正在读取…' : 'Loading…') : (zh ? '预览' : 'Preview')}</Button>
-          {recording.taskId && <OriginalLocationButton taskId={recording.taskId} disabled={loading || deleting} zh={zh} />}
-          <Button variant="outline" size="sm" disabled={loading || deleting} aria-busy={loading && !!downloadStatus} onClick={() => void load(true)}><Download />{loading && downloadStatus ? (zh ? '正在保存…' : 'Saving…') : (zh ? '另存为…' : 'Save as…')}</Button>
+          <Button variant="outline" size="sm" disabled={loading} onClick={() => void load(false)}><Play />{loading ? (zh ? '正在读取…' : 'Loading…') : (zh ? '预览' : 'Preview')}</Button>
+          {recording.taskId && <OriginalLocationButton taskId={recording.taskId} disabled={loading} zh={zh} />}
+          <Button variant="outline" size="sm" disabled={loading} aria-busy={loading && !!downloadStatus} onClick={() => void load(true)}><Download />{loading && downloadStatus ? (zh ? '正在保存…' : 'Saving…') : (zh ? '另存为…' : 'Save as…')}</Button>
           {loading && downloadStatus && <Button variant="ghost" size="sm" onClick={() => downloadAbort.current?.abort()}>{zh ? '取消导出' : 'Cancel export'}</Button>}
-          <AlertDialog open={confirmDelete} onOpenChange={value => { if (!deleting) { setConfirmDelete(value); setError('') } }}>
-            <AlertDialogTrigger asChild><Button variant="ghost" size="sm" disabled={processing || deleting || loading} className="text-destructive hover:text-destructive"><Trash2 />{zh ? '删除录制文件' : 'Delete recording'}</Button></AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader><AlertDialogTitle>{zh ? '删除录制文件？' : 'Delete recording?'}</AlertDialogTitle><AlertDialogDescription>{zh ? '删除这台设备上的录制文件与列表记录。已有纪要、逐字稿和全部版本保留；尚未完成的处理将无法继续。' : 'This removes the recording on this device. Saved notes, transcripts and versions remain.'}</AlertDialogDescription></AlertDialogHeader>
-              {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
-              <AlertDialogFooter><AlertDialogCancel disabled={deleting}>{zh ? '取消' : 'Cancel'}</AlertDialogCancel><AlertDialogAction disabled={deleting} onClick={event => { event.preventDefault(); void remove() }}>{deleting ? (zh ? '正在删除…' : 'Deleting…') : (zh ? '确认删除文件' : 'Delete recording')}</AlertDialogAction></AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
+          <Button variant="ghost" size="sm" className="h-auto whitespace-normal text-destructive" asChild><Link to={meetingPath}><Trash2 />{zh ? '前往会议档案 · 删除整场会议' : 'Meeting dossier · Delete entire meeting'}</Link></Button>
+          <p className="w-full text-xs text-muted-foreground">{zh ? '原录制与相关纪要一起删除，请到会议档案确认。' : 'Delete the original and related notes together from the meeting dossier.'}</p>
         </div>
         {generationStatus && !confirmGeneration && <p role="status" className="text-sm text-muted-foreground">{generationStatus}</p>}
         {downloadStatus && <p role="status" aria-live="polite" className="text-sm text-muted-foreground">{downloadStatus}</p>}
-        {error && !confirmDelete && !confirmGeneration ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
+        {error && !confirmGeneration ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
       </div>
     </div>
   </article>

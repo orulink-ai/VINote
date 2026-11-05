@@ -1202,6 +1202,9 @@ class FeishuService:
                 # policy/pending-job reads, including across server processes.
                 db.execute(update(FeishuConnectionDB).where(FeishuConnectionDB.owner == owner)
                            .values(preferences=FeishuConnectionDB.preferences))
+            from app.services.meeting_deletion import deleted_note
+            if deleted_note(db, note_key):
+                raise FeishuError('会议已删除，不能发布其纪要', 409, code='meeting_deleted')
             account = db.scalar(select(FeishuConnectionDB).where(FeishuConnectionDB.owner == owner).with_for_update())
             if operation_id:
                 prior = receipts.operation_job(db, owner, operation_id, request_hash)
@@ -1830,9 +1833,18 @@ class FeishuService:
         # across their network calls: users must be able to revoke the policy.
         with nullcontext() if is_policy_job else _lock(owner):
             with session_scope() as db:
+                connection = db.connection()
+                if (connection.dialect.name == 'sqlite'
+                        and not connection.connection.driver_connection.in_transaction):
+                    # Serialize the claim with meeting deletion's preflight:
+                    # neither may act on a stale pre-deletion body.
+                    connection.exec_driver_sql('BEGIN IMMEDIATE')
                 job = db.get(FeishuDeliveryDB, job_id)
                 if not job or job.owner != owner:
                     raise FeishuError("交付记录不存在", 404)
+                from app.services.meeting_deletion import deleted_note
+                if deleted_note(db, job.note_key):
+                    raise FeishuError('会议已删除，不能继续此交付', 409, code='meeting_deleted')
                 if selected_recipients is not None:
                     self.validate_retry_recipients(job, selected_recipients)
                 if job.status == "completed" or float(job.lease_until) > time.time():

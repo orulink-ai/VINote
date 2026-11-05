@@ -18,9 +18,17 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useLocation, useNavigate, useSearchParams } from "react-router-dom";
 import { Mic, Upload } from "lucide-react";
 import { fetchTaskStatus } from "../lib/noteGenerationClient";
+import { apiJson, ApiError } from '@/lib/api';
+import type { MeetingRow } from '@/lib/meetingGroups';
+import { readMeetingDeletion, writeMeetingDeletion, clearMeetingDeletion, type MeetingDeletionIntent } from '@/lib/meetingDeletionJournal';
+import { withMeetingDeletionLock } from '@/lib/meetingDeletionLock';
+import { hideDeletedMeetingTasks } from '@/lib/deletedMeetingTasks';
 import {
   listPendingMeetings,
   updatePendingMeeting,
+  deleteLocalRecording,
+  getPendingMeeting,
+  getRecordedAudio,
   type PendingMeeting,
 } from "../lib/audioStorage";
 import {
@@ -91,6 +99,30 @@ export function Meetings() {
   const meetingView: MeetingArchiveView = params.get('view') === 'pending' ? 'pending' : 'meetings';
   const userId = useAuthStore((state) => state.user?.id);
   const [pending, setPending] = useState<PendingMeeting[]>([]);
+  const [deletionIntent, setDeletionIntent] = useState<MeetingDeletionIntent | null>(null);
+  const [deletionRecoveryError, setDeletionRecoveryError] = useState('');
+  const [verifiedTasks, setVerifiedTasks] = useState<Record<string, string>>({});
+  const identityEpoch = useRef(0);
+  useEffect(() => useAuthStore.subscribe?.((next, previous) => { if (next.user?.id !== previous.user?.id) identityEpoch.current++; }), []);
+  useEffect(() => {
+    setDeletionIntent(null); setDeletionRecoveryError(''); setVerifiedTasks({});
+    if (!userId) return;
+    try { setDeletionIntent(readMeetingDeletion(userId)); } catch { setDeletionRecoveryError('待完成的会议删除记录无法读取，请检查本地资料。'); }
+    let active = true;
+    void apiJson<{ items: { id: string; task_id?: string; canonical_task_id?: string }[] }>('/api/files').then(result => {
+      if (!active || useAuthStore.getState().user?.id !== userId || !Array.isArray(result.items)) return;
+      const values: Record<string, string> = {};
+      for (const item of result.items) {
+        const canonical = item.canonical_task_id;
+        if (canonical && /^[A-Za-z0-9_-]{1,160}$/.test(canonical)) {
+          if (item.task_id) values[item.task_id] = canonical;
+          if (item.id === `task:${canonical}`) values[canonical] = canonical;
+        }
+      }
+      setVerifiedTasks(values);
+    }).catch(() => undefined);
+    return () => { active = false; };
+  }, [userId]);
   useEffect(() => {
     const reload = () => { if (userId) void listPendingMeetings(userId).then(items => { if (useAuthStore.getState().user?.id === userId) setPending(items); }); };
     window.addEventListener(MEETING_DISPLAY_CHANGED, reload);
@@ -166,6 +198,79 @@ export function Meetings() {
   );
 
   const meetingTaskStates = useMeetingTaskStates(meetingNotes, JSON.stringify([location.key, location.pathname, location.search, currentWorkspace]), workspacePending.flatMap(recording => recording.taskId ? [recording.taskId] : []));
+
+  const canonicalFor = (row: MeetingRow) => {
+    const ids = [...new Set([...row.notes.flatMap(note => note.meetingSource && note.meetingSource.ownerId === userId ? [note.meetingSource.canonicalTaskId] : []), ...row.recordings.flatMap(recording => recording.taskId && verifiedTasks[recording.taskId] ? [verifiedTasks[recording.taskId]] : [])])];
+    return ids.length === 1 ? ids[0] : undefined;
+  };
+  const canDeleteMeeting = (row: MeetingRow) => currentWorkspace.scope === 'personal' && !!userId &&
+    (row.recordings.every(recording => !isMeetingProcessing(recording.id) && ['idle', 'completed', 'failed'].includes(recording.processingStatus))) &&
+    (!!canonicalFor(row) || !row.notes.length && row.recordings.length > 0 && row.recordings.every(recording => !recording.taskId && !recording.generationOperation));
+  const deleteMeeting = (row: MeetingRow, sourceCanonical?: string, recovery?: MeetingDeletionIntent) => {
+    if (!userId) return Promise.reject(new Error('请先登录后删除会议。'));
+    return withMeetingDeletionLock(userId, () => deleteMeetingLocked(row, sourceCanonical, recovery));
+  };
+  const deleteMeetingLocked = async (row: MeetingRow, sourceCanonical?: string, recovery?: MeetingDeletionIntent) => {
+    if (!userId || useAuthStore.getState().user?.id !== userId || currentWorkspace.scope !== 'personal' || !sourceCanonical && !canDeleteMeeting(row)) throw new Error('会议状态已变化，请重新读取后操作。');
+    const owner = userId, identity = identityEpoch.current, canonical = sourceCanonical || canonicalFor(row), cache = useWorkspaceStore.getState();
+    const keys = new Set(row.notes.flatMap(note => [note.workspaceKey, ...[note.id, note.localId, ...(note.sourceIds || [])].flatMap(id => id ? [cache.mappings[id]?.key, `desktop-${id}`] : [])].filter((key): key is string => !!key)));
+    const cacheItems = cache.items.map(item => ({ key: item.key, revision: item.revision }));
+    if (canonical && (!cache.ready || cache.owner !== owner || cache.busy)) throw new Error('会议缓存尚未准备好，请重新读取。');
+    const current = () => identityEpoch.current === identity && useAuthStore.getState().user?.id === owner;
+    let resultTaskIds = new Set<string>(), resultNoteIds = new Set<string>();
+    const previousIntent = canonical ? readMeetingDeletion(owner) : null;
+    const intent: MeetingDeletionIntent | undefined = canonical ? recovery || previousIntent && { ...previousIntent, recordings: [...new Set([...previousIntent.recordings, ...row.recordings.map(recording => recording.id)])] } || { canonical, recordings: row.recordings.map(recording => recording.id), entries: cacheItems.filter(item => keys.has(item.key)) } : undefined;
+    if (intent && intent.canonical !== canonical) throw new Error('请先完成上一场会议的删除。');
+    if (intent) { writeMeetingDeletion(owner, intent); setDeletionIntent(intent); }
+    try {
+      if (canonical) {
+        let result: { deleted: boolean; note_ids: string[]; task_ids: string[] };
+        try {
+          result = await apiJson(`/api/files/${encodeURIComponent(`task:${canonical}`)}/meeting`, { method: 'DELETE' });
+        } catch (error) {
+          if (current() && error instanceof ApiError && [404, 409].includes(error.status) &&
+              error.detail && typeof error.detail === 'object' && 'code' in error.detail && error.detail.code === 'deletion_not_started') {
+            // Do not remove a changed intent written by another actor.
+            try {
+              if (JSON.stringify(readMeetingDeletion(owner)) === JSON.stringify(intent)) {
+                clearMeetingDeletion(owner); setDeletionIntent(null);
+              }
+            } catch { /* Corrupt state remains available for inspection. */ }
+          }
+          throw error;
+        }
+        if (!current()) throw new Error('账号已变化，请重新读取会议。');
+        if (result?.deleted !== true || !Array.isArray(result.note_ids) || !Array.isArray(result.task_ids) || !result.task_ids.includes(canonical)) throw new Error('删除结果未确认，请重新读取会议。');
+        if (!result.task_ids.every(id => typeof id === 'string')) throw new Error('删除结果未确认，请重新读取会议。');
+        resultTaskIds = new Set(result.task_ids); resultNoteIds = new Set(result.note_ids);
+        hideDeletedMeetingTasks(owner, result.task_ids);
+        if (row.notes.some(note => !note.workspaceKey && note.meetingSource && !result.note_ids.includes(note.id))) throw new Error('部分关联纪要的删除未确认，请重新读取会议。');
+        for (const id of result.note_ids) { if (typeof id !== 'string') throw new Error('删除结果未确认，请重新读取会议。'); keys.add(cache.mappings[id]?.key || `desktop-${id}`); }
+        const entries = cacheItems.filter(item => keys.has(item.key));
+        for (const entry of intent!.entries) {
+          if (cacheItems.some(item => item.key === entry.key)) {
+            if (!keys.has(entry.key)) throw new Error('会议缓存关联已变化，请重新读取。');
+            const existing = entries.find(item => item.key === entry.key);
+            if (existing && existing.revision !== entry.revision) throw new Error('会议缓存已变化，请重新读取。');
+          }
+        }
+        intent!.entries = entries; writeMeetingDeletion(owner, intent!); setDeletionIntent({ ...intent! });
+        if (entries.length) await useWorkspaceStore.getState().clearDeletedMeetingCache(owner, entries);
+      }
+      const recordingIds = intent?.recordings || row.recordings.map(recording => recording.id);
+      for (const id of recordingIds) {
+        if (!current() || isMeetingProcessing(id)) throw new Error('会议状态已变化，请重新读取。');
+        const recording = await getPendingMeeting(id) || await getRecordedAudio(`cleanup:${id}`) as unknown as PendingMeeting | null;
+        if (!recording) continue;
+        if (recording.ownerId !== owner || canonical && !((recording.taskId && resultTaskIds.has(recording.taskId)) || (recording.noteId && resultNoteIds.has(recording.noteId)) || (recording.draftNoteId && resultNoteIds.has(recording.draftNoteId)))) throw new Error('录制关联已变化，请重新读取。');
+        await deleteLocalRecording(id, owner);
+        if (current()) setPending(items => items.filter(item => item.id !== id));
+      }
+      if (intent) { clearMeetingDeletion(owner); setDeletionIntent(null); }
+    } finally {
+      if (current()) { await loadNotes(currentWorkspace); window.dispatchEvent(new Event(MEETING_DISPLAY_CHANGED)); }
+    }
+  };
 
   useEffect(() => {
     let active = true;
@@ -476,6 +581,13 @@ export function Meetings() {
           </AlertDescription>
         </Alert>
       )}
+      {!isCapturing && (deletionIntent || deletionRecoveryError) && <Alert variant="destructive"><AlertDescription className="flex flex-wrap items-center gap-3">
+        <span>{deletionRecoveryError || '上次会议删除尚未完成，请继续清理关联内容和原录制。'}</span>
+        {deletionIntent && <Button variant="outline" onClick={() => {
+          setDeletionRecoveryError('');
+          void deleteMeeting({ kind: 'meeting', key: '', title: '', date: '', dateKind: 'unknown', state: '', notes: [], recordings: [] }, deletionIntent.canonical, deletionIntent).catch(error => setDeletionRecoveryError(error instanceof Error ? error.message : '删除尚未完成，请重试。'));
+        }}>继续删除会议</Button>}
+      </AlertDescription></Alert>}
       {!isCapturing && hasTrashedMeeting && currentWorkspace.scope === "personal" && meetingView === "meetings" && (
         <p className="text-sm text-muted-foreground">
           {hasTrashedMeeting && (zh ? "有会议内容在回收站。" : "Meeting content is in the trash. ")}
@@ -488,7 +600,7 @@ export function Meetings() {
           key={userId + JSON.stringify(currentWorkspace)}
           recordings={workspacePending}
           importedSourceCount={importedSourceCount}
-          importedSources={(query, filter, date) => <ImportedMeetingSources owner={userId} query={query} filter={filter} date={date} onSourceCount={setImportedSourceCount} coveredTasks={[
+          importedSources={(query, filter, date) => <ImportedMeetingSources owner={userId} query={query} filter={filter} date={date} onSourceCount={setImportedSourceCount} onDeleteTask={canonical => deleteMeeting({ kind: 'meeting', key: '', title: '', date: '', dateKind: 'unknown', state: '', notes: [], recordings: [] }, canonical)} coveredTasks={[
         ...notes.flatMap(note => [note.taskId, note.meetingSource && note.meetingSource.ownerId === userId ? note.meetingSource.canonicalTaskId : undefined]),
         ...pending.map(record => record.taskId),
       ].filter((id): id is string => !!id)} returnTo={location.pathname + location.search + location.hash} />}
@@ -519,6 +631,8 @@ export function Meetings() {
           onDeleted={(id) =>
             setPending((items) => items.filter((item) => item.id !== id))
           }
+          onDeleteMeeting={deleteMeeting}
+          canDeleteMeeting={canDeleteMeeting}
           actions={<Button variant="outline" onClick={() => setSetupOpen(true)} disabled={busy}>录制第一场会议</Button>}
 
         />

@@ -11,9 +11,13 @@ from sqlalchemy.orm import Session
 
 from app.db import Base
 from app.db_models import NoteDB
+from app.models.feishu_auto_delivery import FeishuAutoOutboxDB  # register tables before fixture create_all
+from app.models.feishu_destination import FeishuDeliveryDestinationDB  # register tables before fixture create_all
+from app.models.feishu_native_images import FeishuNativeImagePlanDB  # register tables before fixture create_all
 from app.models.meeting_source_link import ConfirmMeetingSourceLink, MeetingSourceLinkDB
 from app.services.meeting_source_link import MeetingSourceLinkService
 from app.services.task_artifact_service import TaskArtifactService
+from app.services import meeting_deletion
 
 
 @pytest.fixture
@@ -27,6 +31,9 @@ def case(tmp_path, monkeypatch):
     def sessions():
         with Session(engine, expire_on_commit=False) as db, db.begin():
             yield db
+
+    from app import db as database
+    monkeypatch.setattr(database, 'session_scope', sessions)
 
     artifacts = TaskArtifactService(tmp_path / 'output')
     service = MeetingSourceLinkService(sessions, artifacts)
@@ -68,6 +75,355 @@ def test_explicit_link_only_persists_display_relation_and_is_idempotent(case):
         assert note.title == 'Unrelated old title'
         assert len(db.scalars(select(MeetingSourceLinkDB)).all()) == 1
     assert before == {p: p.read_bytes() for p in c.artifacts.output_dir.rglob('*') if p.is_file()}
+
+
+def test_meeting_delete_removes_linked_notes_and_recovers_cleanup(case, monkeypatch):
+    c = case
+    from app import db as database
+    monkeypatch.setattr(database, 'session_scope', c.sessions)
+    c.service.confirm('alice', c.note_id, c.body)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    monkeypatch.setattr(meeting_deletion.settings, 'data_dir', c.tmp_path)
+    original_rmtree = meeting_deletion.shutil.rmtree
+    monkeypatch.setattr(meeting_deletion.shutil, 'rmtree', lambda path: (_ for _ in ()).throw(OSError('busy')))
+    with pytest.raises(HTTPException) as failed:
+        meeting_deletion.delete_meeting('alice', c.original.task)
+    assert failed.value.status_code == 409
+    assert not isinstance(failed.value.detail, dict) or failed.value.detail.get('code') != 'deletion_not_started'
+    with c.sessions() as db:
+        assert db.get(NoteDB, c.note_id) is None
+        assert meeting_deletion.deleted_task(db, c.original.task)
+    from app.services import local_file_service
+    monkeypatch.setattr(local_file_service, 'session_scope', c.sessions)
+    pending = local_file_service.LocalFileService().list('alice')['items']
+    assert any(item['task_id'] == c.original.task and item.get('deletion_pending') for item in pending)
+    monkeypatch.setattr(meeting_deletion.shutil, 'rmtree', original_rmtree)
+    result = meeting_deletion.delete_meeting('alice', c.original.task)
+    assert result == {'deleted': True, 'note_ids': [c.note_id], 'task_ids': [c.original.task]}
+    assert not c.original.folder.exists()
+    assert meeting_deletion.delete_meeting('alice', c.original.task) == result
+
+
+def test_meeting_delete_rejects_another_owners_note(case, monkeypatch):
+    c = case
+    from app import db as database
+    monkeypatch.setattr(database, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    monkeypatch.setattr(meeting_deletion.settings, 'data_dir', c.tmp_path)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    with c.sessions() as db:
+        db.add(NoteDB(id=str(uuid4()), created_by='bob', title='other', content='keep',
+                      source_type='meeting_video', task_id=c.original.task, scope='personal'))
+    with pytest.raises(HTTPException) as denied:
+        meeting_deletion.delete_meeting('alice', c.original.task)
+    assert denied.value.status_code == 409
+    assert c.original.source.exists()
+
+
+def test_meeting_delete_includes_child_and_retained_copy(case, monkeypatch):
+    c = case
+    from app.services import local_file_service
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(local_file_service, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    monkeypatch.setattr(meeting_deletion.settings, 'data_dir', c.tmp_path)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    child_id = str(uuid4())
+    child = c.artifacts.create_task_dir(child_id)
+    c.artifacts.write_text(child / '.task_id', child_id)
+    c.artifacts.write_text(child / 'recording_owner', 'alice')
+    c.artifacts.write_json(child / 'status.json', {'status': 'failed'})
+    c.artifacts.write_json(child / 'source_reference.json', {'version': 1, 'owner': 'alice',
+        'parent_task_id': c.original.task, 'source_version': c.original.sha})
+    child_note = str(uuid4())
+    with c.sessions() as db:
+        db.add(NoteDB(id=child_note, created_by='alice', title='child', content='child',
+                      source_type='meeting_video', task_id=child_id, scope='personal'))
+    files = local_file_service.LocalFileService()
+    file_id, name, path = files.new_target('alice', 'recording.wav')
+    path.write_bytes(b'original copy')
+    files.register('alice', file_id, name, path, 'meeting')
+    files.attach_task('alice', file_id, c.original.task)
+    projected = next(item for item in files.list('alice')['items'] if item['id'] == file_id)
+    assert projected['canonical_task_id'] == c.original.task
+    result = meeting_deletion.delete_meeting('alice', c.original.task)
+    assert set(result['task_ids']) == {c.original.task, child_id}
+    assert result['note_ids'] == [child_note]
+    assert not path.exists() and not child.exists() and not c.original.folder.exists()
+    with c.sessions() as db:
+        assert db.get(NoteDB, child_note) is None
+    from app.services import note_repository
+    from app.models.note_library import NoteCreateRequest
+    monkeypatch.setattr(note_repository, 'session_scope', c.sessions)
+    with pytest.raises(ValueError, match='会议已删除'):
+        note_repository.NoteRepository().create_note('alice', NoteCreateRequest(
+            title='stale', task_id=child_id, source_type='meeting_video'))
+
+
+def test_meeting_delete_rejects_running_task(case, monkeypatch):
+    c = case
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'processing'})
+    with pytest.raises(HTTPException) as denied:
+        meeting_deletion.delete_meeting('alice', c.original.task)
+    assert denied.value.status_code == 409 and c.original.source.exists()
+
+
+@pytest.mark.parametrize('state', ['queued', 'waiting_participants', 'failed', 'cancelled', 'unknown', 'accepted'])
+@pytest.mark.parametrize('prefix', ['', 'publish:', 'desktop-', 'publish:desktop-'])
+def test_delete_scrubs_related_feishu_bodies_and_keeps_receipt_state(case, monkeypatch, state, prefix):
+    from app.models.feishu_auto_delivery import FeishuAutoOutboxDB
+    from app.db_models import FeishuDeliveryDB
+    from app.models.feishu_destination import FeishuDeliveryDestinationDB
+    c = case
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    monkeypatch.setattr(meeting_deletion.settings, 'data_dir', c.tmp_path)
+    c.service.confirm('alice', c.note_id, c.body)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    op, job, unrelated = str(uuid4()), str(uuid4()), str(uuid4())
+    with c.sessions() as db:
+        db.add(FeishuAutoOutboxDB(id=op, user_id='alice', note_id=c.note_id, policy_id='policy',
+            integration_origin='cli://device', cloud_owner='alice', payload='{"content":"secret minutes"}',
+            status=state, job_id=job if state == 'accepted' else '', lease_until=0))
+        db.add(FeishuDeliveryDB(id=job, owner='alice', note_key=prefix + c.note_id, revision='rev',
+            title='private title', content='secret minutes', status='completed', lease_until='0'))
+        db.add(FeishuDeliveryDB(id=unrelated, owner='bob', note_key=prefix + c.note_id, revision='rev',
+            title='other title', content='other body', status='completed', lease_until='0'))
+        db.add(FeishuDeliveryDestinationDB(delivery_id=job, snapshot='{"format_segments":["secret minutes"]}'))
+        db.add(FeishuNativeImagePlanDB(owner='alice', job_id=job, fingerprint='fingerprint',
+            manifest='{"events":[{"body":"secret minutes"}]}'))
+    meeting_deletion.delete_meeting('alice', c.original.task)
+    with c.sessions() as db:
+        row, delivery = db.get(FeishuAutoOutboxDB, op), db.get(FeishuDeliveryDB, job)
+        assert row.payload == '{}'
+        assert row.status == ('cancelled' if state in {'queued', 'waiting_participants'} else state)
+        assert delivery.content == '' and delivery.title == ''
+        assert 'secret minutes' not in db.get(FeishuDeliveryDestinationDB, job).snapshot
+        assert 'secret minutes' not in db.get(FeishuNativeImagePlanDB, job).manifest
+        assert db.get(FeishuDeliveryDB, unrelated).content == 'other body'
+
+
+@pytest.mark.parametrize('state', ['submitting', 'delivery_queued', 'delivery_processing'])
+@pytest.mark.parametrize('prefix', ['', 'publish:desktop-'])
+def test_delete_refuses_while_feishu_delivery_is_active(case, monkeypatch, state, prefix):
+    from app.models.feishu_auto_delivery import FeishuAutoOutboxDB
+    from app.db_models import FeishuDeliveryDB
+    c = case
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    c.service.confirm('alice', c.note_id, c.body)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    with c.sessions() as db:
+        db.add(FeishuAutoOutboxDB(id=str(uuid4()), user_id='alice', note_id=c.note_id,
+            policy_id='policy', integration_origin='cli://device', cloud_owner='alice', payload='{"content":"keep"}',
+            status='submitting' if state == 'submitting' else 'accepted', lease_until=0))
+        if state != 'submitting':
+            db.add(FeishuDeliveryDB(id=str(uuid4()), owner='alice', note_key=prefix + c.note_id, revision='rev',
+                title='private', content='keep', status=state.removeprefix('delivery_'), lease_until='0'))
+    with pytest.raises(HTTPException) as denied:
+        meeting_deletion.delete_meeting('alice', c.original.task)
+    assert denied.value.status_code == 409
+    assert denied.value.detail['code'] == 'deletion_not_started'
+    with c.sessions() as db:
+        assert db.get(NoteDB, c.note_id) is not None
+    assert c.original.source.exists()
+
+
+def test_deleted_meeting_cannot_replay_feishu_delivery(case, monkeypatch):
+    from app.db_models import FeishuDeliveryDB
+    from app.services import feishu_service
+    c = case
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(feishu_service, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    c.service.confirm('alice', c.note_id, c.body)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    job = str(uuid4())
+    with c.sessions() as db:
+        db.add(FeishuDeliveryDB(id=job, owner='alice', note_key='publish:desktop-' + c.note_id, revision='rev',
+            title='private', content='private body', status='failed', lease_until='0'))
+    meeting_deletion.delete_meeting('alice', c.original.task)
+    with pytest.raises(feishu_service.FeishuError) as denied:
+        feishu_service.FeishuService().process('alice', job)
+    assert denied.value.code == 'meeting_deleted'
+    with pytest.raises(feishu_service.FeishuError) as enqueue_denied:
+        feishu_service.FeishuService()._enqueue_locked(
+            'alice', 'publish:desktop-' + c.note_id, 'stale', 'stale body', False, False, {}, 'private',
+            False, [], [], None, None, 'content-hash', 'revision', {})
+    assert enqueue_denied.value.code == 'meeting_deleted'
+    with c.sessions() as db:
+        assert db.get(FeishuDeliveryDB, job).content == ''
+
+
+def test_delete_refuses_during_real_feishu_job_claim(case, monkeypatch):
+    import threading
+    from app.db_models import FeishuDeliveryDB
+    from app.services import feishu_service
+    c = case
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(feishu_service, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    c.service.confirm('alice', c.note_id, c.body)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    job = str(uuid4())
+    with c.sessions() as db:
+        db.add(FeishuDeliveryDB(id=job, owner='alice', note_key=c.note_id, revision='rev',
+            title='private', content='private body', status='failed', lease_until='0'))
+    started, finish = threading.Event(), threading.Event()
+    def stop_before_network(*args):
+        started.set()
+        finish.wait(5)
+        raise feishu_service.FeishuError('synthetic test stop', 409)
+    monkeypatch.setattr(feishu_service.FeishuService, 'assert_delivery_connection', stop_before_network)
+    worker = threading.Thread(target=lambda: feishu_service.FeishuService().process('alice', job))
+    worker.start()
+    try:
+        assert started.wait(5)
+        with pytest.raises(HTTPException) as denied:
+            meeting_deletion.delete_meeting('alice', c.original.task)
+        assert denied.value.detail['code'] == 'deletion_not_started'
+        assert c.original.source.exists()
+    finally:
+        finish.set()
+        worker.join(5)
+    assert not worker.is_alive()
+
+
+def test_delete_blocks_active_unmapped_workspace_delivery_for_same_owner(case, monkeypatch):
+    from app.db_models import FeishuDeliveryDB
+    c = case
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    c.service.confirm('alice', c.note_id, c.body)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    with c.sessions() as db:
+        db.add(FeishuDeliveryDB(id=str(uuid4()), owner='alice', note_key='publish:arbitrary-workspace-key',
+            revision='rev', title='possibly related', content='preserve', status='processing', lease_until='0'))
+    with pytest.raises(HTTPException) as denied:
+        meeting_deletion.delete_meeting('alice', c.original.task)
+    assert denied.value.detail['code'] == 'deletion_not_started'
+    assert c.original.source.exists()
+
+
+def test_meeting_delete_http_replays_authoritative_ids(case, monkeypatch):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.routers import files as file_api
+    from app.models.auth import AuthenticatedUser
+    c = case
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    monkeypatch.setattr(meeting_deletion.settings, 'data_dir', c.tmp_path)
+    monkeypatch.setattr(meeting_deletion.settings, 'workspace_cloud_runtime', False)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    app = FastAPI()
+    app.include_router(file_api.router, prefix='/api')
+    app.dependency_overrides[file_api.get_current_user] = lambda: AuthenticatedUser(user_id='alice')
+    with TestClient(app) as client:
+        url = '/api/files/task:' + c.original.task + '/meeting'
+        first, replay = client.delete(url), client.delete(url)
+    assert first.status_code == replay.status_code == 200
+    assert first.json() == replay.json() == {'deleted': True, 'note_ids': [], 'task_ids': [c.original.task]}
+
+
+@pytest.mark.parametrize('missing', ['source', 'deleted_marker', 'text_without_manifest'])
+def test_meeting_delete_accepts_proven_missing_original(case, monkeypatch, missing):
+    c = case
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    monkeypatch.setattr(meeting_deletion.settings, 'data_dir', c.tmp_path)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    with c.sessions() as db:
+        note = db.get(NoteDB, c.note_id)
+        note.task_id = c.original.task
+    if missing == 'deleted_marker':
+        (c.original.folder / 'recording_deleted').write_text('deleted', encoding='utf-8')
+    c.original.source.unlink()
+    if missing == 'text_without_manifest':
+        (c.original.folder / 'source_media.json').unlink()
+        c.artifacts.write_json(c.original.folder / 'transcript.json', {'full_text': 'meeting'})
+    result = meeting_deletion.delete_meeting('alice', c.original.task)
+    assert result['note_ids'] == [c.note_id]
+    assert not c.original.folder.exists()
+
+
+def test_missing_manifest_direct_owned_note_projects_deletable_identity(case, monkeypatch):
+    from datetime import datetime, timezone
+    from app.models.note_library import NoteRecordResponse
+    from app.routers import note_library
+    from app.services import note_original_projection
+    c = case
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    (c.original.folder / 'source_media.json').unlink()
+    with c.sessions() as db:
+        db.get(NoteDB, c.note_id).task_id = c.original.task
+    monkeypatch.setattr(note_library, '_artifact_service', c.artifacts)
+    monkeypatch.setattr(note_library.settings, 'desktop_runtime', True)
+    monkeypatch.setattr(note_original_projection, 'original_source', lambda *args: None)
+    monkeypatch.setattr(MeetingSourceLinkService, 'project', lambda *args: None)
+    now = datetime.now(timezone.utc)
+    note = NoteRecordResponse(id=c.note_id, title='meeting', content='', task_id=c.original.task,
+        source_type='meeting_video', status='done', scope='personal', created_at=now, updated_at=now)
+    result = note_library._with_meeting_display_source(note, 'alice')
+    assert result.meeting_source.canonical_task_id == c.original.task
+
+
+def test_text_note_with_explicit_meeting_workflow_can_be_deleted(case, monkeypatch):
+    c = case
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    monkeypatch.setattr(meeting_deletion.settings, 'data_dir', c.tmp_path)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    (c.original.folder / 'source_media.json').unlink()
+    with c.sessions() as db:
+        note = db.get(NoteDB, c.note_id)
+        note.task_id, note.source_type = c.original.task, 'transcript'
+    assert meeting_deletion.delete_meeting('alice', c.original.task)['note_ids'] == [c.note_id]
+
+
+@pytest.mark.parametrize('damage', ['unproven_workflow', 'changed_original'])
+def test_meeting_delete_rejects_unproven_or_changed_source(case, monkeypatch, damage):
+    c = case
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'success'})
+    if damage == 'unproven_workflow':
+        (c.original.folder / 'request.json').unlink()
+        (c.original.folder / 'source_media.json').unlink()
+        with c.sessions() as db:
+            note = db.get(NoteDB, c.note_id)
+            note.task_id, note.source_type = c.original.task, 'transcript'
+    else:
+        c.original.source.write_bytes(b'x' * c.original.source.stat().st_size)
+    with pytest.raises(HTTPException) as denied:
+        meeting_deletion.delete_meeting('alice', c.original.task)
+    assert denied.value.status_code == 409 and c.original.folder.exists()
+
+
+def test_missing_metadata_linked_meeting_file_projects_and_deletes(case, monkeypatch):
+    from app.services import local_file_service
+    c = case
+    monkeypatch.setattr(meeting_deletion, 'session_scope', c.sessions)
+    monkeypatch.setattr(local_file_service, 'session_scope', c.sessions)
+    monkeypatch.setattr(meeting_deletion.settings, 'output_dir', c.artifacts.output_dir)
+    monkeypatch.setattr(meeting_deletion.settings, 'data_dir', c.tmp_path)
+    c.artifacts.write_json(c.original.folder / 'status.json', {'status': 'failed'})
+    (c.original.folder / 'request.json').unlink()
+    (c.original.folder / 'source_media.json').unlink()
+    files = local_file_service.LocalFileService()
+    identifier, name, path = files.new_target('alice', 'meeting.txt')
+    path.write_bytes(b'meeting text')
+    files.register('alice', identifier, name, path, 'meeting')
+    files.attach_task('alice', identifier, c.original.task)
+    item = next(item for item in files.list('alice')['items'] if item['id'] == identifier)
+    assert item['canonical_task_id'] == c.original.task
+    assert meeting_deletion.delete_meeting('alice', c.original.task)['task_ids'] == [c.original.task]
+    assert not path.exists()
 
 
 def assert_rejected(c, owner='alice', note_id=None, body=None, status=409):
