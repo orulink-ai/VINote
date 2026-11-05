@@ -218,6 +218,27 @@ def test_incomplete_bundle_cannot_use_inherited_credentials(monkeypatch):
         configure_langfuse({"LANGFUSE_BASE_URL": "http://localhost:3000", "LANGFUSE_PUBLIC_KEY": "pk-test"})
 
 
+def test_desktop_private_tracing_bypasses_proxy_preserving_exclusions(monkeypatch):
+    import os
+    from scripts.desktop_backend import configure_langfuse
+    monkeypatch.setenv('NO_PROXY', 'localhost,existing.internal')
+    monkeypatch.setenv('no_proxy', 'localhost,existing.internal')
+    configure_langfuse({'LANGFUSE_BASE_URL': 'http://192.168.1.118:3000',
+                       'LANGFUSE_PUBLIC_KEY': 'pk-test', 'LANGFUSE_SECRET_KEY': 'sk-test'})
+    assert set(os.environ['no_proxy'].split(',')) >= {'localhost', 'existing.internal', '192.168.1.118'}
+    assert os.environ['NO_PROXY'] == os.environ['no_proxy']
+
+
+def test_desktop_public_tracing_keeps_proxy_policy(monkeypatch):
+    import os
+    from scripts.desktop_backend import configure_langfuse
+    monkeypatch.setenv('NO_PROXY', 'localhost')
+    monkeypatch.setenv('no_proxy', 'localhost')
+    configure_langfuse({'LANGFUSE_BASE_URL': 'https://cloud.langfuse.com',
+                       'LANGFUSE_PUBLIC_KEY': 'pk-test', 'LANGFUSE_SECRET_KEY': 'sk-test'})
+    assert os.environ['NO_PROXY'] == 'localhost'
+
+
 def test_source_tracing_cannot_be_disabled_by_legacy_switch(monkeypatch):
     from app.config import Settings
 

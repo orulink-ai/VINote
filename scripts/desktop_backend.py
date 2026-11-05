@@ -54,6 +54,21 @@ def configure_langfuse(config):
     os.environ['LANGFUSE_ENABLED'] = 'true'
     os.environ['LANGFUSE_CAPTURE_CONTENT'] = 'true'
     os.environ['LANGFUSE_TRACING_ENVIRONMENT'] = config.get('LANGFUSE_TRACING_ENVIRONMENT') or 'production'
+    # Windows registry proxies can otherwise route the private telemetry host
+    # outside the LAN. Scope the exception to this process and this host only.
+    from ipaddress import ip_address
+    from urllib.parse import urlsplit
+    host = urlsplit(os.environ['LANGFUSE_BASE_URL']).hostname
+    try:
+        private_host = ip_address(host).is_private
+    except ValueError:
+        private_host = host == 'localhost'
+    if private_host:
+        exclusions = list(dict.fromkeys(item.strip() for key in ('NO_PROXY', 'no_proxy')
+                                        for item in os.environ.get(key, '').split(',') if item.strip()))
+        if host not in exclusions:
+            exclusions.append(host)
+        os.environ['NO_PROXY'] = os.environ['no_proxy'] = ','.join(exclusions)
 
 
 def watch_parent(parent_pid):

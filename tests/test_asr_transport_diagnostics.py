@@ -57,7 +57,9 @@ def test_real_sender_records_local_observations_not_ack(tmp_path, monkeypatch, c
         def send(self, value):
             if isinstance(value, bytes):
                 calls.append(value)
-                clock[0] = 2
+                # A send error may be observed before recv runs again. Set its
+                # final timestamp in the sender, not in a racing receiver.
+                clock[0] = 3 if fault == 'send' else 2
                 attempted.set()
                 if fault == 'send':
                     raise OSError(SECRET)
@@ -67,7 +69,6 @@ def test_real_sender_records_local_observations_not_ack(tmp_path, monkeypatch, c
                 return json.dumps({'type': 'session.started'})
             assert attempted.wait(1)
             if fault == 'send':
-                clock[0] = 3
                 raise TimeoutError
             assert confirmed.wait(1)
             clock[0] = 100 if fault == 'deadline' else 3
