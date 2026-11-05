@@ -1,4 +1,4 @@
-import type { MeetingTaskStates } from '@/hooks/useMeetingTaskStates';
+import { meetingTaskState, type MeetingTaskStates } from '@/hooks/useMeetingTaskStates';
 import { libraryNoteIdentities, type LibraryNote as NoteRecord } from '@/hooks/useLibraryNotes';
 import type { PendingMeeting } from './audioStorage';
 import { serverTimestamp } from './serverTimestamp';
@@ -38,7 +38,7 @@ export function meetingRecordingTitle(value: string | undefined) {
 }
 
 export function meetingNoteState(note: NoteRecord, taskStates: MeetingTaskStates = {}) {
-  const state = taskStates[note.taskId || ''];
+  const state = meetingTaskState(taskStates[note.taskId || '']);
   if (state === 'failed') return '需处理';
   if (state === 'processing') return '处理中';
   if (state === 'checking') return '状态核验中';
@@ -119,7 +119,7 @@ export function buildMeetingRows(recordings: PendingMeeting[], notes: NoteRecord
     const originals = group.flatMap(node => node.recording ? [node.recording] : []);
     const recording = originals.find(row => row.processingStatus !== 'completed') || originals[0];
     const note = content.find(row => row.status === 'done' && row.content.trim() &&
-      (!row.taskId || !taskStates[row.taskId] || taskStates[row.taskId] === 'complete')) ||
+      (!row.taskId || !taskStates[row.taskId] || meetingTaskState(taskStates[row.taskId]) === 'complete')) ||
       content.find(row => row.status === 'done' && row.content.trim()) || content[0];
     const sourceNote = content.find(row => row.meetingSource);
     const proven = sourceNote?.meetingSource;
@@ -139,7 +139,7 @@ export function buildMeetingRows(recordings: PendingMeeting[], notes: NoteRecord
       : recording.processingStatus === 'idle' ? hasSavedMinutes ? '已完成' : '未生成'
         : recording.processingStatus === 'completed' ? hasSavedMinutes ? '已完成' : '纪要待保存'
           : '处理中' : meetingNoteState(note, taskStates);
-    const taskState = taskStates[recording?.taskId || note?.taskId || ''];
+    const taskState = meetingTaskState(taskStates[recording?.taskId || note?.taskId || '']);
     if (taskState === 'failed') state = '需处理';
     else if (taskState === 'processing') state = '处理中';
     else if (taskState === 'checking') state = '状态核验中';

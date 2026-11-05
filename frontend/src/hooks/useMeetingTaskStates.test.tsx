@@ -10,6 +10,25 @@ const mock = vi.mocked(apiJson)
 const note = (taskId: string) => ({ id: taskId, taskId, status: 'done', updatedAt: 'one' }) as LibraryNote
 beforeEach(() => { vi.resetAllMocks(); useAuthStore.setState({ user: { id: 'owner' } as never }); useAppModeStore.setState({ config: null }) })
 afterEach(cleanup)
+it('polls recording-only tasks with real stage and measurements until completion', async () => {
+  vi.useFakeTimers()
+  try {
+    mock.mockResolvedValueOnce({ task_id: 'recording-task', status: 'transcribing', stage: 'diarizing', processed_seconds: 12, total_seconds: 60, updated_at: '2026-11-05T08:00:00Z' })
+      .mockResolvedValueOnce({ task_id: 'recording-task', status: 'summarizing', progress: 85 })
+      .mockResolvedValue({ task_id: 'recording-task', status: 'success', result: { title: 'Minutes', markdown: 'Content' } })
+    const { result, unmount } = renderHook(() => useMeetingTaskStates([], 'route', ['recording-task']))
+    await act(async () => {})
+    expect(result.current['recording-task']).toMatchObject({ state: 'processing', status: 'transcribing', stage: 'diarizing', processedSeconds: 12, totalSeconds: 60, updatedAt: '2026-11-05T08:00:00Z' })
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(result.current['recording-task']).toMatchObject({ state: 'processing', status: 'summarizing' })
+    expect(result.current['recording-task']).not.toHaveProperty('processedSeconds')
+    await act(async () => { await vi.advanceTimersByTimeAsync(4000) })
+    expect(result.current['recording-task']).toBe('complete')
+    await act(async () => { await vi.advanceTimersByTimeAsync(12000) })
+    expect(mock).toHaveBeenCalledTimes(3)
+    unmount()
+  } finally { vi.useRealTimers() }
+})
 it('deduplicates exact task reads and uses actual failed status despite saved note done', async () => {
   mock.mockResolvedValue({ task_id: 'task', status: 'failed', failed_stage: 'transcribing', retryable: false })
   const { result } = renderHook(() => useMeetingTaskStates([note('task'), { ...note('task'), id: 'second' }], 'route'))
@@ -40,5 +59,5 @@ it('ignores delayed task reads after owner ABA and route changes', async () => {
   await act(async () => reads[0]({ status: 'failed' }))
   expect(result.current.task).toBe('checking')
   await act(async () => reads.at(-1)!({ status: 'transcribing' }))
-  expect(result.current.task).toBe('processing')
+  expect(result.current.task).toMatchObject({ state: 'processing', status: 'transcribing' })
 })

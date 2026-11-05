@@ -52,6 +52,26 @@ def test_actual_remux_packet_and_seek_proof(video, tmp_path):
     service._check_index(preview, original)
 
 
+def test_variable_frame_rate_screen_capture_keeps_full_preview(tmp_path):
+    """Screen capture timestamps can be closer than the nominal frame period."""
+    source = tmp_path / 'screen.webm'
+    subprocess.run([
+        'ffmpeg', '-nostdin', '-y', '-v', 'error', '-f', 'lavfi', '-i',
+        'testsrc2=size=64x64:rate=30:duration=4',
+        '-vf', r'settb=1/1000,setpts=floor(N/3)*100+mod(N\,3)*10',
+        '-c:v', 'libvpx', '-deadline', 'realtime', '-threads', '1',
+        '-enc_time_base', '1:1000', '-fps_mode', 'passthrough',
+        '-f', 'webm', '-live', '1', str(source),
+    ], check=True, capture_output=True, timeout=30)
+    before = digest(source)
+    preview = service.playback_file(source)
+    manifest = service._packet_manifest(source)
+    assert manifest['end'] > 3.9
+    assert service._packet_manifest(preview)['streams'] == manifest['streams']
+    service._check_index(preview, manifest)
+    assert digest(source) == before
+
+
 def digest(path):
     with path.open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()

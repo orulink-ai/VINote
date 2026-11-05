@@ -1,4 +1,5 @@
-import { useTaskCenter, type TaskWorkspace } from '@/hooks/useTaskCenter';
+import { useTaskCenter, type CenterTask, type TaskWorkspace } from '@/hooks/useTaskCenter';
+import { AlertDialog, AlertDialogContent, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel, AlertDialogAction } from '@/components/ui/alert-dialog';
 import { TaskProgress } from '@/components/Feedback/TaskProgress';
 import { taskDisplayTitle, taskDisplayMessage } from '@/lib/taskDisplay';
 import { Input } from '@/components/ui/input';
@@ -25,6 +26,11 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 
+const unknownFailureCodes = new Set(['summary_result_unconfirmed', 'unknown_result', 'unknown_error', 'asr_incomplete_result']);
+const confirmedFailure = (task?: CenterTask) => !!task?.failed && task.terminal && !task.unavailable && !unknownFailureCodes.has(task.errorCode || '');
+type HistoryRemoval = { identity: string; fingerprint: string; receiptKey?: string; receiptRaw?: string; recordingId?: string };
+const removalKey = (owner: string, identity: string) => `vinote:task-history-dismissed:${encodeURIComponent(owner)}:${encodeURIComponent(identity)}`;
+
 export function Tasks() {
   const owner = useAuthStore((s) => s.user?.id);
   return <TasksPage key={owner || 'signed-out'} owner={owner} />;
@@ -41,7 +47,7 @@ function TasksPage({ owner }: { owner?: string }) {
   const notes = useLibraryNotes();
   const legacySync = params.get('tab') === 'sync';
   const [recordings, setRecordings] = useState<PendingMeeting[]>([]);
-  type SourceImport = { workspace?: TaskWorkspace; sourceTitle?: string; sourceUrl?: string; id?: string; operationId?: string; meeting: boolean; mode?: string; submissionState?: string };
+  type SourceImport = { workspace?: TaskWorkspace; sourceTitle?: string; sourceUrl?: string; id?: string; operationId?: string; meeting: boolean; mode?: string; submissionState?: string; historyReceiptKey?: string; historyReceiptRaw?: string };
   const [imports, setImports] = useState<SourceImport[]>([]);
   const [versionStates, setVersionStates] = useState<Record<string, VersionHistory>>({});
   const [deliveries, setDeliveries] = useState<
@@ -51,6 +57,8 @@ function TasksPage({ owner }: { owner?: string }) {
   const [loading, setLoading] = useState(false);
   const [attempt, setAttempt] = useState(0);
   const [query, setQuery] = useState("");
+  const [removal, setRemoval] = useState<HistoryRemoval | null>(null);
+  const [, setDismissalRevision] = useState(0);
   useEffect(() => {
     if (legacySync) return;
     let active = true;
@@ -76,7 +84,7 @@ function TasksPage({ owner }: { owner?: string }) {
             if (!saved) continue;
             if ((typeof saved.id === 'string' && saved.id || typeof saved.operationId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(saved.operationId)) && typeof saved.meeting === 'boolean') {
               const identity = saved.operationId || saved.id;
-              accepted.set(identity, saved);
+              accepted.set(identity, { ...saved, historyReceiptKey: key, historyReceiptRaw: raw });
               snapshots.set(identity, { key, raw });
             }
           }
@@ -139,11 +147,44 @@ function TasksPage({ owner }: { owner?: string }) {
     ] : []),
     ...recordings.filter(item => item.taskId && item.workspace).map(item => [item.taskId!, item.workspace] as const),
   ]));
+  const importRemoval = (item: SourceImport): HistoryRemoval | null => {
+    const version = meetingVersionDetails(item, owner);
+    const live = (item.id ? taskStates[item.id] : undefined) || (item.operationId ? taskStates[`operation:${item.operationId}`] : undefined);
+    const failed = isRejectedVersionReceipt(item, owner) || (version ? versionStates[item.operationId || item.id || '']?.failed : confirmedFailure(live));
+    return failed && item.historyReceiptKey && item.historyReceiptRaw ? {
+      identity: `import:${item.operationId || item.id}`, fingerprint: item.historyReceiptRaw,
+      receiptKey: item.historyReceiptKey, receiptRaw: item.historyReceiptRaw,
+    } : null;
+  };
+  const recordingRemoval = (item: PendingMeeting): HistoryRemoval | null => item.ownerId === owner && item.taskId && !item.noteId && confirmedFailure(taskStates[item.taskId])
+    ? { identity: `recording:${item.id}`, recordingId: item.id, fingerprint: JSON.stringify(item) } : null;
+  // Display preference only: never remove execution receipts, task artifacts or recordings.
+  // Re-read status even for dismissed rows, so running/unknown/recovered tasks remain visible.
+  const hidden = (candidate: HistoryRemoval | null) => {
+    try { return !!owner && !!candidate && localStorage.getItem(removalKey(owner, candidate.identity)) === candidate.fingerprint; }
+    catch { return false; }
+  };
+  const visibleImports = imports.filter(item => !hidden(importRemoval(item)));
+  const visibleRecordings = recordings.filter(item => !hidden(recordingRemoval(item)));
+  const deleteHistory = async () => {
+    if (!owner || !removal || useAuthStore.getState().user?.id !== owner) return;
+    const selected = removal;
+    try {
+      const candidate = selected.recordingId
+        ? (await listPendingMeetings(owner)).filter(item => item.id === selected.recordingId).map(recordingRemoval)[0]
+        : imports.map(importRemoval).find(item => item?.identity === selected.identity);
+      if (useAuthStore.getState().user?.id !== owner || !candidate || candidate.fingerprint !== selected.fingerprint
+          || selected.receiptKey && localStorage.getItem(selected.receiptKey) !== selected.receiptRaw) return;
+      localStorage.setItem(removalKey(owner, selected.identity), selected.fingerprint);
+      setDismissalRevision(value => value + 1);
+    } catch { setError('未能删除处理记录，请重试。'); }
+    finally { setRemoval(null); }
+  };
   const matches = (...values: (string | undefined)[]) => values.join(' ').toLowerCase().includes(query.trim().toLowerCase());
-  const shownImports = imports.filter(item => matches(item.sourceTitle, item.sourceUrl, meetingVersionDetails(item, owner)?.title, item.meeting ? '会议导入任务' : '资料整理任务'));
-  const shownRecordings = recordings.filter(item => matches(item.options.title));
+  const shownImports = visibleImports.filter(item => matches(item.sourceTitle, item.sourceUrl, meetingVersionDetails(item, owner)?.title, item.meeting ? '会议导入任务' : '资料整理任务'));
+  const shownRecordings = visibleRecordings.filter(item => matches(item.options.title));
   const shownDeliveries = deliveries.filter(item => matches(item.title));
-  const hasRows = tab === 'generation' ? imports.length + recordings.length > 0 : deliveries.length > 0;
+  const hasRows = tab === 'generation' ? visibleImports.length + visibleRecordings.length > 0 : deliveries.length > 0;
   const hasMatches = tab === 'generation' ? shownImports.length + shownRecordings.length > 0 : shownDeliveries.length > 0;
   if (legacySync) return <Navigate replace to={'/settings/storage?' + new URLSearchParams({ returnTo: resolvePageParent(params.get('returnTo')) })} />;
   return (
@@ -195,9 +236,9 @@ function TasksPage({ owner }: { owner?: string }) {
               : status?.taskId && !status.saveable && !status.failed ? `/generate?mode=file&meeting=1&task=${encodeURIComponent(status.taskId)}` : operationUrl;
             const originalTitle = version ? version.title : item.sourceTitle || item.sourceUrl;
             const displayTitle = taskDisplayTitle(originalTitle, item.meeting, version ? status?.title : live?.title);
-            return <article key={item.operationId || item.id} className="task-row relative grid min-w-0 gap-2 border-b py-4 sm:pr-64">
+            return <article key={item.operationId || item.id} className="task-row relative grid min-w-0 gap-2 border-b py-4 lg:pr-64">
             <div className="flex flex-wrap items-center justify-between gap-2">
-              <h2 className="break-words text-sm font-medium">{versionHistoryTitle(displayTitle)}{version ? ' · 新版本' : ''}</h2>
+              <h2 className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">{versionHistoryTitle(displayTitle)}{version ? ' · 新版本' : ''}</h2>
             </div>
             {version && <details className="task-details"><summary>处理详情</summary><dl className="mt-3 grid gap-2 text-xs sm:grid-cols-2">
               {status?.title && <div><dt className="text-muted-foreground">录制来源</dt><dd>{versionHistoryTitle(version.title)}</dd></div>}
@@ -206,17 +247,18 @@ function TasksPage({ owner }: { owner?: string }) {
               <div><dt className="text-muted-foreground">语音识别</dt><dd>{version.reuse ? '复用已有转写' : '重新识别（已确认）'}</dd></div>
               <div><dt className="text-muted-foreground">提交时间</dt><dd><time className="tabular-nums" dateTime={version.createdAt}>{new Date(version.createdAt).toLocaleString('zh-CN', { hour12: false })}</time></dd></div>
             </dl></details>}
-            <p className="task-description text-pretty text-sm text-muted-foreground">{live ? taskDisplayMessage(live, item.meeting) : rejected ? '本次未受理，未创建任务。失败记录已保留，重新生成需要返回来源再次核验确认。' : status ? status.detail : item.operationId && item.submissionState !== 'accepted' ? item.submissionState === 'reserved' ? '已收到提交，排队状态待确认；请查询原任务。' : '提交状态待确认，原来源已保留，请查询原任务。' : '任务已接收，请查询原结果，避免重复生成。'}</p>
+            <p className="task-description min-w-0 text-pretty text-sm text-muted-foreground [overflow-wrap:anywhere]">{live ? taskDisplayMessage(live, item.meeting) : rejected ? '本次未受理，未创建任务。失败记录已保留，重新生成需要返回来源再次核验确认。' : status ? status.detail : item.operationId && item.submissionState !== 'accepted' ? item.submissionState === 'reserved' ? '已收到提交，排队状态待确认；请查询原任务。' : '提交状态待确认，原来源已保留，请查询原任务。' : '任务已接收，请查询原结果，避免重复生成。'}</p>
             {status && <span className={`text-xs ${status.failed ? 'text-destructive' : 'text-muted-foreground'}`}>{status.label}</span>}
             {!version && originalTitle && displayTitle !== originalTitle && <details className="task-details"><summary>原文件与来源</summary><p className="mt-2 break-all text-xs">{originalTitle}</p></details>}
 
             {live && <TaskProgress task={live} />}
-            <Button variant="outline" className="w-fit max-w-full whitespace-normal sm:absolute sm:right-0 sm:top-4" asChild><Link to={target} state={{ returnTo: historyReturn }}>{live?.noteId ? '打开已保存内容' : live?.complete ? item.operationId ? '打开结果并保存' : '查看处理结果' : live?.failed ? '查看失败原因与恢复' : rejected ? '查看未受理记录' : status?.action || sourceHistoryAction(item)}</Link></Button>
+            {importRemoval(item) && <Button variant="ghost" size="sm" className="w-fit lg:absolute lg:right-0 lg:top-16" onClick={() => setRemoval(importRemoval(item))}>删除失败记录</Button>}
+            <Button variant="outline" className="w-fit max-w-full whitespace-normal lg:absolute lg:right-0 lg:top-4" asChild><Link to={target} state={{ returnTo: historyReturn }}>{live?.noteId ? '打开已保存内容' : live?.complete ? item.operationId ? '打开结果并保存' : '查看处理结果' : live?.failed ? '查看失败原因与恢复' : rejected ? '查看未受理记录' : status?.action || sourceHistoryAction(item)}</Link></Button>
           </article>})}
           {shownRecordings.map((r) => { const live = r.taskId ? taskStates[r.taskId] : undefined; const savedId = live?.noteId || r.noteId; return (
-            <article key={r.id} className="task-row relative flex min-w-0 flex-col gap-2 border-b py-4 sm:pr-64">
+            <article key={r.id} className="task-row relative flex min-w-0 flex-col gap-2 border-b py-4 lg:pr-64">
               <div className="flex justify-between gap-3">
-                <h2 className="break-words text-sm font-medium">{versionHistoryTitle(r.options.title)}</h2>
+                <h2 className="min-w-0 flex-1 text-sm font-medium [overflow-wrap:anywhere]">{versionHistoryTitle(r.options.title)}</h2>
                 {!live && <Badge
                   variant={
                     r.processingStatus === "failed"
@@ -245,10 +287,11 @@ function TasksPage({ owner }: { owner?: string }) {
                 原录音已保留 · {savedId ? '纪要已保存' : live ? live.complete ? '生成已完成' : live.failed ? '处理未完成' : '进度自动更新' : r.processingStatus === 'completed' ? '生成已完成' : r.processingStatus === 'failed' ? '处理未完成' : r.taskId ? '查看处理记录' : '尚未生成纪要'}
               </p>
               {(live || r.processingError) && (
-                <p className="text-sm text-muted-foreground">{live ? taskDisplayMessage(live, true) : r.processingError}</p>
+                <p className="text-sm text-muted-foreground [overflow-wrap:anywhere]">{live ? taskDisplayMessage(live, true) : r.processingError}</p>
               )}
               {live && <TaskProgress task={live} />}
-              <Button variant="outline" className="w-fit max-w-full whitespace-normal sm:absolute sm:right-0 sm:top-4" asChild>
+              {recordingRemoval(r) && <Button variant="ghost" size="sm" className="w-fit lg:absolute lg:right-0 lg:top-16" onClick={() => setRemoval(recordingRemoval(r))}>删除失败记录</Button>}
+              <Button variant="outline" className="w-fit max-w-full whitespace-normal lg:absolute lg:right-0 lg:top-4" asChild>
                 <Link to={savedId ? `/note/${encodeURIComponent(savedId)}` : live?.complete && r.taskId ? `/generate?meeting=1&task=${encodeURIComponent(r.taskId)}` : `/files?${new URLSearchParams({ type: 'all', q: '', file: `recording:${r.id}`, returnTo: historyReturn })}`} state={{ returnTo: historyReturn }}>
                   {(live ? live.failed : r.processingStatus === "failed") && !savedId
                     ? "查看原录音与恢复选项"
@@ -257,7 +300,7 @@ function TasksPage({ owner }: { owner?: string }) {
               </Button>
             </article>
           )})}
-          {!loading && !error && !recordings.length && !imports.length && (
+          {!loading && !error && !visibleRecordings.length && !visibleImports.length && (
             <EmptyState
               title="暂无生成任务"
               description="录制或导入资料，保存后可开始生成。"
@@ -274,9 +317,9 @@ function TasksPage({ owner }: { owner?: string }) {
           {shownDeliveries.map((item) => (
             <div
               key={item.noteId}
-              className="relative flex min-w-0 flex-col gap-2 border-b py-4 sm:pr-64"
+              className="relative flex min-w-0 flex-col gap-2 border-b py-4 lg:pr-64"
             >
-              <h2>{item.title}</h2>
+              <h2 className="min-w-0 [overflow-wrap:anywhere]">{item.title}</h2>
               <p className="text-sm">
                 {item.job.status === "completed"
                   ? "已完成交付"
@@ -286,9 +329,9 @@ function TasksPage({ owner }: { owner?: string }) {
                 · 飞书集成服务
               </p>
               {item.job.error && (
-                <p className="text-sm text-destructive">{item.job.error}</p>
+                <p className="text-sm text-destructive [overflow-wrap:anywhere]">{item.job.error}</p>
               )}
-              <Button variant="outline" className="w-fit max-w-full whitespace-normal sm:absolute sm:right-0 sm:top-4" asChild>
+              <Button variant="outline" className="w-fit max-w-full whitespace-normal lg:absolute lg:right-0 lg:top-4" asChild>
                 <Link to={item.url}>打开交付记录并恢复失败步骤</Link>
               </Button>
             </div>
@@ -306,6 +349,13 @@ function TasksPage({ owner }: { owner?: string }) {
         </>
       )}
 
+      <AlertDialog open={!!removal} onOpenChange={open => { if (!open) setRemoval(null); }}>
+        <AlertDialogContent>
+          <AlertDialogTitle>删除这条失败记录？</AlertDialogTitle>
+          <AlertDialogDescription>仅从任务列表移除此失败记录。原文件、已保存内容和提交凭据都会保留，不会重新发起处理。任务状态变化后会重新显示。</AlertDialogDescription>
+          <AlertDialogFooter><AlertDialogCancel>取消</AlertDialogCancel><AlertDialogAction onClick={() => void deleteHistory()}>删除记录</AlertDialogAction></AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }

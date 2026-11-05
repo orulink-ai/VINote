@@ -83,6 +83,20 @@ it('blocks confirmation when concrete model choices are missing', async () => {
 })
 afterEach(() => { cleanup(); vi.unstubAllGlobals() })
 
+it('previews indexed task media even when the saved note no longer exists', async () => {
+  render(<LocalRecordingPreview recording={{ ...recording, options: { ...recording.options, screen: true }, taskId: 'task' }} onDeleted={vi.fn()} />)
+  await userEvent.click(screen.getByRole('button', { name: '预览' }))
+  expect(await screen.findByLabelText('录屏回放')).toHaveAttribute('src', '/api/task/task/media?playback=true')
+  expect(storage.read).not.toHaveBeenCalled()
+})
+
+it('keeps unsubmitted recordings previewable from their original blob', async () => {
+  storage.read.mockResolvedValue(new Blob(['original'], { type: 'audio/webm' }))
+  render(<LocalRecordingPreview recording={recording} onDeleted={vi.fn()} />)
+  await userEvent.click(screen.getByRole('button', { name: '预览' }))
+  expect(await screen.findByLabelText('录音回放')).toHaveAttribute('src', 'blob:recording')
+})
+
 it('invalidates an IndexedDB save immediately on account changes without relying on new recording props', async () => {
   let finish!: (result: 'saved') => void, valid!: () => boolean
   let progress!: DownloadProgressCallback

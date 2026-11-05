@@ -19,6 +19,7 @@ import { downloadRecording, downloadProgressMessage, downloadResultMessage } fro
 import { useI18n } from '../../lib/i18n'
 import { OriginalLocationButton } from '@/components/OriginalLocationButton'
 import { useAuthStore } from '@/stores/authStore'
+import { readRuntimeConfig } from '@/lib/runtimeConfig'
 
 interface LocalRecordingPreviewProps { recording: PendingMeeting; onDeleted: () => void; onOpenNote?: (noteId: string) => void; confirmOnOpen?: boolean; onRecordingUpdated?: (recording: PendingMeeting) => void }
 const stageCopy: Record<PendingMeeting['processingStatus'], string> = { idle: '尚未生成纪要', queued: '等待处理', preparing_media: '准备和校验媒体', transcribing: '云端转写完整音频', diarizing: '区分说话人', parallel_analysis: '转写与说话人分析同时进行', aligning: '对齐逐字稿', analyzing_video: '整理共享画面与发言资料', generating: '生成并校验纪要', saving_result: '保存结果', completed: '纪要已完成', failed: '处理失败' }
@@ -62,7 +63,7 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
   const title = (displayInfo ? displayInfo.title : renamedTitle || recording.displayTitle || recording.options.title) || formatMeetingTitle(recording.startedAt, '', locale)
   const isVideo = recording.options.meetingType === 'video' || recording.options.screen
   const processing = generating || !['idle', 'completed', 'failed'].includes(recording.processingStatus)
-  useEffect(() => () => { if (url) URL.revokeObjectURL(url) }, [url])
+  useEffect(() => () => { if (url.startsWith('blob:')) URL.revokeObjectURL(url) }, [url])
   const load = async (download: boolean) => {
     if (mediaLock.current) return
     if (useAuthStore.getState().user?.id !== recording.ownerId) { setError(zh ? '账号已变化，请重新打开当前账号的录制文件。' : 'Account changed. Open a recording from the current account.'); return }
@@ -84,8 +85,14 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
         })
         if (active()) setDownloadStatus(downloadResultMessage(result, zh))
       } else {
-        const blob = await read()
-        if (valid()) { setUrl(URL.createObjectURL(blob)); setExpanded(true) }
+        if (recording.taskId) {
+          // Accepted media has a server-owned indexed derivative. Raw
+          // MediaRecorder blobs omit WebM duration/Cues and can appear short.
+          if (valid()) { setUrl(`${readRuntimeConfig('VITE_API_BASE_URL')}/api/task/${encodeURIComponent(recording.taskId)}/media?playback=true`); setExpanded(true) }
+        } else {
+          const blob = await read()
+          if (valid()) { setUrl(URL.createObjectURL(blob)); setExpanded(true) }
+        }
       }
     } catch (cause) {
       if (active()) { if (controller.signal.aborted) setDownloadStatus(downloadResultMessage('cancelled', zh)); else { setDownloadStatus(''); setError(cause instanceof Error ? cause.message : String(cause)) } }
@@ -128,10 +135,10 @@ export function LocalRecordingPreview({ recording, onDeleted, onOpenNote, confir
 
   return <article className="flex min-w-0 flex-col gap-3">
     {expanded ? <div className="border-y bg-muted/20 py-3">{url ? isVideo ? <video src={url} controls preload="metadata" onError={playbackFailed} aria-label={zh ? '录屏回放' : 'Recording playback'} className="max-h-72 w-full rounded-md bg-black" /> : <audio src={url} controls preload="metadata" onError={playbackFailed} aria-label={zh ? '录音回放' : 'Recording playback'} className="w-full" /> : <button type="button" disabled={loading} onClick={() => void load(false)} className="flex min-h-32 w-full flex-col items-center justify-center rounded-md border border-dashed bg-background text-sm text-muted-foreground"><Play className="mb-2 size-5" />{loading ? (zh ? '正在读取文件…' : 'Loading file…') : (zh ? '重新加载并回放' : 'Reload and play')}</button>}</div> : null}
-    <div className="flex flex-col gap-3"><div className="py-2"><div className="flex items-start gap-3">{recording.processingStatus === 'completed' ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : <FileText className="mt-0.5 size-5 text-muted-foreground" />}<div className="min-w-0 flex-1"><p className="text-sm font-medium">{statusText}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{recording.processingStatus === 'failed' ? recording.processingError || (zh ? '原始媒体已保留，可重试。' : 'Original media is preserved and retryable.') : processing ? (zh ? '后台处理中，录制控制已经退出。' : 'Processing in the background; capture controls are closed.') : recording.processingStatus === 'completed' ? (zh ? isVideo ? '在详情中查看逐字稿、画面证据和纪要。' : '在详情中查看逐字稿和纪要。' : isVideo ? 'Open transcript, visual evidence and notes.' : 'Open transcript and notes.') : (zh ? '原始媒体已保存在本机，可播放、下载或生成纪要。' : 'Original media is saved locally.')}</p></div></div></div>
+    <div className="flex flex-col gap-3"><div className="py-2"><div className="flex items-start gap-3">{recording.processingStatus === 'completed' ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : <FileText className="mt-0.5 size-5 text-muted-foreground" />}<div className="min-w-0 flex-1"><p className="text-sm font-medium">{statusText}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{recording.processingStatus === 'failed' ? (zh ? '原录制与已有处理结果已保留。' : 'Original recording and existing results are preserved.') : processing ? (zh ? '后台处理中，录制控制已经退出。' : 'Processing in the background; capture controls are closed.') : recording.processingStatus === 'completed' ? (zh ? isVideo ? '在详情中查看逐字稿、画面证据和纪要。' : '在详情中查看逐字稿和纪要。' : isVideo ? 'Open transcript, visual evidence and notes.' : 'Open transcript and notes.') : (zh ? '原始媒体已保存在本机，可播放、下载或生成纪要。' : 'Original media is saved locally.')}</p></div></div></div>
       {recording.processingStatus === 'transcribing' ? <TranscriptionProgress processedSeconds={recording.processedSeconds} totalSeconds={recording.totalSeconds} etaSeconds={recording.etaSeconds} zh={zh} /> : null}
       <MeetingDisplayEditor sourceKey={displayKey} recording={recording} title={(displayInfo ? displayInfo.title : recording.displayTitle || (recording.titleEdited ? recording.options.title : '')) || ''} date={(displayInfo ? displayInfo.meeting_date : recording.displayDate) || calendarDay(recording.startedAt)} onSaved={() => { void getPendingMeeting(recording.id).then(updated => { if (updated && updated.ownerId === useAuthStore.getState().user?.id) { setRenamedTitle(updated.displayTitle || ''); onRecordingUpdated?.(updated); } }); }} />
-      {recording.generationOperation && <p className="text-xs leading-5 text-muted-foreground">本次语音转写：{recording.generationOperation.selection.asrLabel}；总结：{recording.generationOperation.selection.llmLabel}。恢复原任务沿用原选择。</p>}
+      {recording.generationOperation && <details className="text-xs leading-5 text-muted-foreground"><summary className="cursor-pointer py-1">{zh ? '本次处理模型' : 'Processing models'}</summary><p className="mt-1 [overflow-wrap:anywhere]">{zh ? '语音转写：' : 'Transcription: '}{recording.generationOperation.selection.asrLabel}<br />{zh ? '总结：' : 'Summary: '}{recording.generationOperation.selection.llmLabel}</p></details>}
       {recording.generationConfirmationRequired && recording.processingStatus !== 'failed' && recording.processingError && <p role="status" className="text-sm text-muted-foreground">{recording.processingError}</p>}
       <Dialog open={confirmGeneration} onOpenChange={setConfirmGeneration}><DialogContent closeLabel="关闭模型确认" className="max-h-[85dvh] overflow-y-auto">
         <DialogTitle>{recording.taskId || recording.generationOperation ? '确认另建生成操作' : '确认本次生成'}</DialogTitle>

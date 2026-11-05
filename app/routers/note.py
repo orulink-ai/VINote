@@ -737,6 +737,17 @@ def retry_media_task(task_id: str, background_tasks: BackgroundTasks, user=Depen
         return {"task_id": task_id, "status": "uploaded"}
 
 
+@router.get("/task/{task_id}/media", include_in_schema=False)
+def get_task_media(task_id: str, user: AuthenticatedUser | None = Depends(get_optional_current_user), playback: bool = False):
+    """Read the retained canonical recording independently of its saved note."""
+    _require_recording_access(task_id, user)
+    task_dir = _note_service.artifact_service.find_task_dir(task_id)
+    source = _note_service.artifact_service.resolve_source_media(task_dir) if task_dir else None
+    if not source:
+        raise HTTPException(status_code=404, detail="Recording not found")
+    return get_task_artifact(task_id, "media/" + source.name, user, playback)
+
+
 @router.get("/task/{task_id}/artifacts/{asset_path:path}", include_in_schema=False)
 def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | None = Depends(get_optional_current_user), playback: bool = False):
     _require_recording_access(task_id, user)

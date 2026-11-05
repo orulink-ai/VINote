@@ -37,6 +37,56 @@ async function expand(count: number) {
 beforeEach(() => { displayState.values = {}; account.owner = 'owner-a'; sessionStorage.clear() })
 afterEach(() => { cleanup(); sessionStorage.clear() })
 
+it('shows measured coverage while collapsed and clears it when generation begins', () => {
+  const recording = { id: 'progress-recording', ownerId: account.owner, workspace: { scope: 'personal' }, options: { title: '' }, startedAt: savedAt, elapsedSeconds: 60, recordingStatus: 'saved', processingStatus: 'transcribing', processedSeconds: 12, totalSeconds: 60, progress: 85 } as PendingMeeting
+  const props = { recordings: [recording], notes: [], loading: false, onOpenNote: vi.fn(), onDeleted: vi.fn() }
+  const view = render(<MeetingWorkbench {...props} />)
+  expect(screen.getByText('转写中')).toBeVisible()
+  expect(screen.getByRole('progressbar', { name: '音频转写进度' })).toHaveAttribute('aria-valuenow', '20')
+  expect(screen.getByText('已转写 12 / 60 秒')).toBeVisible()
+  view.rerender(<MeetingWorkbench {...props} recordings={[{ ...recording, processingStatus: 'generating' }]} />)
+  expect(screen.getByText('生成会议纪要')).toBeVisible()
+  expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+  expect(screen.queryByText(/85%|已转写/)).not.toBeInTheDocument()
+})
+
+it('names unnamed recordings by capture time while preserving explicit names and unknown dates', () => {
+  const recordings = [
+    { id: 'dated', startedAt: '2026-11-05T08:09:10Z', options: { title: '自动占位' } },
+    { id: 'renamed', startedAt: '2026-11-05T08:10:10Z', titleEdited: true, options: { title: '客户复盘' } },
+    { id: 'unknown', startedAt: '', options: { title: '' } },
+  ].map(recording => ({ ownerId: account.owner, workspace: { scope: 'personal' }, elapsedSeconds: 60, recordingStatus: 'saved', processingStatus: 'idle', ...recording })) as PendingMeeting[]
+  render(<MeetingWorkbench recordings={recordings} notes={[]} loading={false} onOpenNote={vi.fn()} onDeleted={vi.fn()} />)
+  const local = new Date('2026-11-05T08:09:10Z')
+  const expected = `2026-11-05 ${String(local.getHours()).padStart(2, '0')}:09:10`
+  expect(screen.getByRole('button', { name: `${expected} · 未生成` })).toBeVisible()
+  expect(screen.getByRole('button', { name: '客户复盘 · 未生成' })).toBeVisible()
+  expect(screen.getByRole('button', { name: '录制时间未记录 · 未生成' })).toBeVisible()
+})
+
+it('does not let a saved unnamed placeholder hide the canonical capture timestamp or override a rename', () => {
+  const placeholder = note('placeholder', { title: '未命名会议', meetingSource: { ownerId: account.owner, canonicalTaskId: 'one-meeting', recordingStartedAt: '2026-11-05T08:09:10Z' } })
+  const view = mount([placeholder])
+  expect(screen.queryByRole('button', { name: '未命名会议 · 已完成' })).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /^2026-11-05 .*:09:10 · 已完成$/ })).toBeVisible()
+  displayState.values['task:one-meeting'] = { source_key: 'task:one-meeting', title: '未命名会议', meeting_date: null }
+  view.rerender(<MeetingWorkbench notes={[placeholder]} recordings={[]} loading={false} onOpenNote={vi.fn()} onDeleted={vi.fn()} />)
+  expect(screen.getByRole('button', { name: '未命名会议 · 已完成' })).toBeVisible()
+})
+
+it('prefers verified live stage over stale recording progress and hides progress after read failure', () => {
+  const recording = { id: 'live', taskId: 'live-task', ownerId: account.owner, workspace: { scope: 'personal' }, options: { title: '' }, startedAt: savedAt, elapsedSeconds: 60, recordingStatus: 'saved', processingStatus: 'transcribing', processedSeconds: 60, totalSeconds: 60 } as PendingMeeting
+  const props = { recordings: [recording], notes: [], loading: false, onOpenNote: vi.fn(), onDeleted: vi.fn() }
+  const view = render(<MeetingWorkbench {...props} taskStates={{ 'live-task': { state: 'processing', status: 'summarizing', updatedAt: '2026-11-05T08:00:00Z' } }} />)
+  expect(screen.getByText('生成会议纪要')).toBeVisible()
+  expect(screen.getByText(/进度更新于/)).toBeVisible()
+  expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+  view.rerender(<MeetingWorkbench {...props} taskStates={{ 'live-task': 'unverified' }} />)
+  expect(screen.queryByText('生成会议纪要')).not.toBeInTheDocument()
+  expect(screen.getByText('状态未核验')).toBeVisible()
+  expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+})
+
 it('opens the actual meeting content in edit mode from a visible action without a sync status', async () => {
   const open = vi.fn(); mount([note('exact-object')], open);
   expect(screen.queryByText('已同步')).not.toBeInTheDocument();
@@ -256,7 +306,7 @@ it('opens an unnamed recording as a meeting with its original and no invented su
     options: { title: '' }, startedAt: savedAt, elapsedSeconds: 20, recordingStatus: 'saved', processingStatus: 'idle' } as PendingMeeting
   const open = vi.fn()
   render(<MeetingWorkbench recordings={[original]} notes={[]} loading={false} onOpenNote={open} onDeleted={vi.fn()} />)
-  await userEvent.click(screen.getByRole('button', { name: '未命名会议 · 未生成' }))
+  await userEvent.click(screen.getByRole('button', { name: /^2026-10-1[01] \d{2}:47:34 · 未生成$/ }))
   expect(screen.queryByRole('button', { name: /查看纪要/ })).not.toBeInTheDocument()
   expect(open).not.toHaveBeenCalled()
   await userEvent.click(screen.getByRole('button', { name: /查看原录制 · 未命名录制/ }))
@@ -307,7 +357,7 @@ it('never promotes a note placeholder, saved time or workspace recording hint to
   const record = note('clock-unknown', { title: '2026-10-19 15:41｜待生成纪要',
     recordingStartedAt: '2099-01-01T12:00:00Z', meetingSource: { ownerId: account.owner, canonicalTaskId: 'source' } })
   mount([record])
-  const header = screen.getByRole('button', { name: '未命名会议 · 已完成' })
+  const header = screen.getByRole('button', { name: '录制时间未记录 · 已完成' })
   expect(header).not.toHaveTextContent('待生成纪要')
   expect(header).not.toHaveTextContent('2026')
   expect(header).not.toHaveTextContent('2099')

@@ -139,11 +139,10 @@ describe("NoteEditor transcript evidence", () => {
     expect(screen.getAllByRole("heading", { name: "Meeting note", level: 1 })).toHaveLength(1);
     expect(screen.queryByRole("textbox", { name: "Meeting title" })).not.toBeInTheDocument();
     const primary = screen.getByRole("group", { name: "Primary content actions" });
-    expect(within(primary).getAllByRole("button")).toHaveLength(3);
+    expect(within(primary).getAllByRole("button")).toHaveLength(2);
     expect(within(primary).queryByRole("button", { name: "Share" })).not.toBeInTheDocument();
     expect(within(primary).queryByRole("button", { name: "Delete" })).not.toBeInTheDocument();
-    expect(within(primary).getByRole("button", { name: "生成新版本" })).toBeVisible();
-    expect(within(primary).getByRole("button", { name: "生成新版本" }).closest('details')).toBeNull();
+    expect(within(primary).queryByRole("button", { name: "生成新版本" })).not.toBeInTheDocument();
     expect(within(primary).getByRole("button", { name: "Edit" })).toBeInTheDocument();
     expect(within(primary).getByRole("button", { name: "发布到飞书" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "历史版本" })).not.toBeVisible();
@@ -153,6 +152,35 @@ describe("NoteEditor transcript evidence", () => {
     expect(screen.getByRole("button", { name: "Share" })).toBeVisible();
     expect(screen.getByRole("button", { name: "Delete" })).toBeVisible();
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("keeps pending meeting placeholders out of completed-content actions", async () => {
+    const note = await noteStoreMock.loadNoteById();
+    noteStoreMock.loadNoteById.mockResolvedValue({ ...note, status: 'pending' });
+    renderEditor();
+    await screen.findByRole('heading', { name: 'Meeting note' });
+    expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '发布到飞书' })).not.toBeInTheDocument();
+    openContentActions();
+    expect(screen.queryByRole('button', { name: '生成新版本' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Share' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '导出 Markdown' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'View original file' })).toBeVisible();
+    expect(noteStoreMock.updateNote).not.toHaveBeenCalled();
+  });
+
+  it("preserves an existing pending-meeting draft without overwriting generated content", async () => {
+    const note = { ...await noteStoreMock.loadNoteById(), status: 'pending' };
+    noteStoreMock.loadNoteById.mockResolvedValue(note);
+    useAuthStore.setState({ user: { id: 'owner' } as never });
+    localStorage.setItem('vinote:draft:owner:local:note-1', JSON.stringify({ title: 'My draft', content: 'Draft text' }));
+    noteStoreMock.updateNote.mockResolvedValue({ ...note, title: 'My draft', content: 'Draft text' });
+    renderEditor();
+    expect(await screen.findByLabelText('Markdown content')).toHaveValue('Draft text');
+    expect(screen.queryByRole('button', { name: 'Save' })).not.toBeInTheDocument();
+    expect(noteStoreMock.updateNote).not.toHaveBeenCalled();
+    expect(localStorage.getItem('vinote:draft:owner:local:note-1')).toContain('Draft text');
+    expect(screen.queryByRole('button', { name: '发布到飞书' })).not.toBeInTheDocument();
   });
 
   it("merges an exactly matching body title only in reading and exports unchanged saved Markdown", async () => {
@@ -194,8 +222,8 @@ describe("NoteEditor transcript evidence", () => {
     renderEditor("/note/note-1?view=summary");
     await screen.findByText("Minutes only.");
     openContentActions();
-    expect(screen.getByText("Version history")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "View saved versions" })).toHaveAttribute("href", "/workspace/real-shared-key");
+    expect(screen.getByRole("button", { name: "历史版本" })).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "View saved versions" })).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "Full-text translation · MCP" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Delete" })).toBeVisible();
     fireEvent.click(screen.getByRole("button", { name: "Edit" }));
@@ -205,7 +233,7 @@ describe("NoteEditor transcript evidence", () => {
     expect(noteStoreMock.updateNote).not.toHaveBeenCalled();
   });
 
-  it.each(["View original file", "View saved versions"])("preserves file filters, selected original and ancestor on a %s round trip", async action => {
+  it.each(["View original file"])("preserves file filters, selected original and ancestor on a %s round trip", async action => {
     const parent = "/files?type=file&q=test&file=file-1&returnTo=%2Fprojects%3Fproject%3Dp1%26archive%3D1";
     useWorkspaceStore.setState({ mappings: { "note-1": { key: "real-shared-key", revision: 3, fingerprint: "saved" } } });
     renderEditor({ pathname: "/note/note-1", search: "?view=summary", hash: "#decision", state: { returnTo: parent } });

@@ -64,6 +64,35 @@ function recordingDuration(seconds: number | undefined) {
     : undefined;
 }
 
+const processingLabels: Record<string, string> = {
+  pending: '等待处理', queued: '等待处理', uploaded: '准备会议文件', preparing: '准备会议文件', preparing_media: '准备会议文件',
+  transcribing: '转写中', diarizing: '分析说话人', parallel_analysis: '转写与说话人分析', aligning: '对齐逐字稿',
+  analyzing_video: '整理共享画面与发言资料', generating: '生成会议纪要', summarizing: '生成会议纪要',
+  screenshots: '整理画面', saving: '保存会议纪要', saving_result: '保存会议纪要',
+};
+
+function MeetingProcessingStatus({ row, taskStates }: { row: MeetingRow; taskStates: MeetingTaskStates }) {
+  if (row.state !== '处理中') return null;
+  const task = taskStates[row.recording?.taskId || row.note?.taskId || ''];
+  const live = typeof task === 'object' ? task : undefined;
+  const status = live?.status || row.recording?.processingStatus;
+  const stage = live?.stage && processingLabels[live.stage] ? live.stage : status;
+  const processed = live ? live.processedSeconds : row.recording?.processedSeconds;
+  const total = live ? live.totalSeconds : row.recording?.totalSeconds;
+  const measured = status === 'transcribing' && typeof processed === 'number' && Number.isFinite(processed) && processed >= 0 &&
+    typeof total === 'number' && Number.isFinite(total) && total > 0 && processed <= total;
+  const updated = live ? live.updatedAt : row.recording?.processingUpdatedAt;
+  const percent = measured ? Math.floor(processed / total * 100) : undefined;
+  return <span className="mt-2 block space-y-1 text-xs text-muted-foreground">
+    <span className="block">{stage && processingLabels[stage] || '正在读取处理阶段'}</span>
+    {measured && <><span className="block tabular-nums">已转写 {Math.round(processed)} / {Math.round(total)} 秒</span>
+      <span role="progressbar" aria-label="音频转写进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent} className="block h-1.5 max-w-sm overflow-hidden rounded-full bg-muted">
+        <span className="block h-full bg-primary" style={{ width: `${percent}%` }} />
+      </span></>}
+    {updated && <span className="block tabular-nums">进度更新于 {meetingTime(updated, true).full}</span>}
+  </span>;
+}
+
 function noteSource(note: NoteRecord) {
   const device = note.sourceDevice || note.generationClient;
   return device === "desktop" ? "桌面端" : device === "mobile" ? "手机" : undefined;
@@ -217,9 +246,9 @@ export function MeetingWorkbench({
       const displayKey = canonical ? `task:${canonical}` : undefined;
       const metadata = displayKey ? display[displayKey] : undefined;
       const topic = (row.note?.title || '').replace(/^\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}(?::\d{2})?\s*[|｜]\s*/, '').trim();
-      const readableTopic = /^(待生成纪要|录制时间未记录)$/.test(topic) || /\.(?:wav|mp3|m4a|webm|mp4|ogg|flac)$/i.test(topic) ? '' : topic;
+      const readableTopic = /^(待生成纪要|录制时间未记录|未命名会议|未命名录制)$/.test(topic) || /\.(?:wav|mp3|m4a|webm|mp4|ogg|flac)$/i.test(topic) ? '' : topic;
       return { ...row, displayKey,
-        title: (metadata ? metadata.title : row.recording?.displayTitle || (row.recording?.titleEdited ? row.recording.options.title : '')) || readableTopic || '未命名会议',
+        title: (metadata ? metadata.title : row.recording?.displayTitle || (row.recording?.titleEdited ? row.recording.options.title : '')) || readableTopic || row.title,
         displayDate: (metadata ? metadata.meeting_date : row.recording?.displayDate) || calendarDay(row.date),
       };
     }).sort((a, b) => b.displayDate.localeCompare(a.displayDate) || a.key.localeCompare(b.key));
@@ -420,6 +449,7 @@ export function MeetingWorkbench({
                       {row.state === "已完成" ? "纪要已完成" : row.state}
                     </span>
                   </span>
+                  <MeetingProcessingStatus row={row} taskStates={taskStates} />
                   {row.recording?.processingError && (
                     <span className="mt-2 block break-words text-xs text-destructive">
                       {row.recording.processingError} · 原录音已保留
