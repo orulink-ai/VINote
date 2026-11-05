@@ -10,7 +10,7 @@ import { listMCPRuns } from '@/lib/mcpConnections'
 import { useLibraryNotes } from '@/hooks/useLibraryNotes'
 const api = vi.hoisted(() => ({ json: vi.fn(async (_path: string) => []) }))
 vi.mock('@/lib/api', () => ({ apiJson: api.json }))
-vi.mock('@/stores/authStore', () => ({ useAuthStore: (select: (state: unknown) => unknown) => select({ user: { id: 'owner' } }) }))
+vi.mock('@/stores/authStore', () => ({ useAuthStore: Object.assign((select: (state: unknown) => unknown) => select({ user: { id: 'owner' } }), { getState: () => ({ user: { id: 'owner' } }) }) }))
 vi.mock('@/stores/workspaceStore', () => ({ useWorkspaceStore: () => ({ details: {}, pending: [], items: [], lastSync: '' }) }))
 vi.mock('@/hooks/useLibraryNotes', () => ({ useLibraryNotes: vi.fn(() => []), libraryNoteUrl: () => '/notes' }))
 vi.mock('@/lib/audioStorage', () => ({ listPendingMeetings: vi.fn(async () => []) }))
