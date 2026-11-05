@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import json
+from contextlib import contextmanager
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -15,6 +16,20 @@ from app.services.task_artifact_service import TaskArtifactService
 class GenerateFromUploadRouterTest(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        from sqlalchemy import create_engine
+        from sqlalchemy.orm import Session
+        from app.db_models import MeetingDeletionDB
+        engine = create_engine(f"sqlite:///{Path(self.temp_dir.name) / 'deletions.sqlite'}", connect_args={"check_same_thread": False})
+        MeetingDeletionDB.__table__.create(engine)
+        @contextmanager
+        def sessions():
+            with Session(engine) as db:
+                yield db
+        self.addCleanup(engine.dispose)
+        self.db_patch = patch("app.db.session_scope", sessions)
+        self.db_patch.start()
+        self.addCleanup(self.db_patch.stop)
         self.output_dir = Path(self.temp_dir.name) / "outputs"
         self.artifact_service = TaskArtifactService(output_dir=self.output_dir)
         self.app = FastAPI()
@@ -27,7 +42,6 @@ class GenerateFromUploadRouterTest(unittest.TestCase):
 
     def tearDown(self):
         note._ACTIVE_FILE_TASKS.clear()
-        self.temp_dir.cleanup()
 
     def test_recording_artifacts_require_owner_or_accessible_note(self):
         task = self.artifact_service.create_task_dir("private-recording")

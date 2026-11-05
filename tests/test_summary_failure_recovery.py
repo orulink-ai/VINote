@@ -17,7 +17,18 @@ from app.services.task_failure import failure_details, recovery_status
 
 
 @pytest.fixture(autouse=True)
-def offline(monkeypatch):
+def offline(monkeypatch, tmp_path):
+    from contextlib import contextmanager
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.db_models import MeetingDeletionDB
+    engine = create_engine(f"sqlite:///{tmp_path / 'deletions.sqlite'}", connect_args={"check_same_thread": False})
+    MeetingDeletionDB.__table__.create(engine)
+    @contextmanager
+    def sessions():
+        with Session(engine) as db:
+            yield db
+    monkeypatch.setattr('app.db.session_scope', sessions)
     def denied(*args, **kwargs):
         pytest.fail('No provider calls are allowed')
     # TestClient's Windows event loop needs a loopback socketpair; forbid the

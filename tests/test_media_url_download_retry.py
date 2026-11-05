@@ -11,6 +11,19 @@ from test_media_url_submission import isolated_router, URL
 
 @pytest.fixture
 def retry_case(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.db_models import MeetingDeletionDB
+    engine = create_engine(f"sqlite:///{tmp_path / 'deletions.sqlite'}")
+    MeetingDeletionDB.__table__.create(engine)
+
+    @contextmanager
+    def sessions():
+        with Session(engine) as db:
+            yield db
+
+    monkeypatch.setattr('app.db.session_scope', sessions)
     note = isolated_router(); artifacts = TaskArtifactService(tmp_path / 'output')
     task = str(uuid.uuid4()); folder = artifacts.create_task_dir(task)
     (folder / 'recording_owner').write_text('owner')

@@ -45,6 +45,19 @@ def test_omitted_workflow_retains_legacy_default_without_private_data():
 
 @pytest.fixture
 def environment(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.db_models import MeetingDeletionDB
+    engine = create_engine(f"sqlite:///{tmp_path / 'deletions.sqlite'}", connect_args={"check_same_thread": False})
+    MeetingDeletionDB.__table__.create(engine)
+
+    @contextmanager
+    def sessions():
+        with Session(engine) as db:
+            yield db
+
+    monkeypatch.setattr("app.db.session_scope", sessions)
     note = isolated_router(ROOT / "app/routers/note.py")
     artifacts = TaskArtifactService(output_dir=tmp_path / "output")
     result = SimpleNamespace(audio_meta=SimpleNamespace(title="synthetic", duration=1, platform="local", video_id="synthetic"),
