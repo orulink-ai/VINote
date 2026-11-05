@@ -279,8 +279,10 @@ class NoteServiceTest(unittest.TestCase):
             }), patch("app.services.vilab_cloud_service.VILabCloudService.defaults", return_value={
                 "asr_model": "", "llm_model": ""
             }):
-                with self.assertRaises(ValueError):
+                from app.services.task_model_source import MissingCloudModel
+                with self.assertRaises(MissingCloudModel) as raised:
                     service.generate("https://example.com/video", "task-cloud", user_id="user")
+                self.assertEqual(raised.exception.status_code, 409)
             self.assertEqual(downloader.download_calls, [])
             self.assertEqual(artifacts.get_status("task-cloud")["status"], "failed")
 

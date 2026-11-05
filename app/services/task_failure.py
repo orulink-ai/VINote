@@ -124,6 +124,10 @@ def recovery_status(status):
             result["retryable"] = False
         if code in {"unknown_result", "unknown_error", "asr_incomplete_result"}:
             result["message"] = UNKNOWN_COPY
+        elif code == "auth_failed":
+            result["message"] = "转写服务未接受当前账号凭证。请检查登录状态；已提交的音频可能仍在云端处理。"
+        elif code == "asr_provider_task_timeout":
+            result["message"] = "火山引擎转写超时，原任务已结束（55001010）。音频已保留。"
         elif code in {"asr_empty_result", "empty_result_unverified"}:
             result["message"] = EMPTY_RESULT_COPY
     return result

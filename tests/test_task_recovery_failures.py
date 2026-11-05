@@ -10,6 +10,14 @@ from app.services.task_failure import failure_details, recovery_status, UNKNOWN_
 from app.services.task_artifact_service import TaskArtifactService
 from app.transcribers.vilab_transcriber import VILabTranscriber
 
+def test_provider_timeout_remains_terminal_in_recovery():
+    error = ASRServiceError("asr_provider_task_timeout")
+    status = recovery_status({"status": "failed", "message": str(error), **failure_details(error)})
+    assert status["error_code"] == "asr_provider_task_timeout"
+    assert status["retryable"] is False
+    assert "55001010" in status["message"]
+    assert status["message"] != UNKNOWN_MESSAGE
+
 @pytest.mark.parametrize('code,sent_all', [('unknown_result', False), ('asr_timeout', True), ('unknown_error', False), ('asr_incomplete_result', False), ('asr_empty_result', False), ('empty_result_unverified', True)])
 def test_typed_unsafe_failure_cannot_auto_retry(code, sent_all, tmp_path):
     service = VILabTranscriber('https://example.invalid', 'not-a-real-key', model='frozen-selected-model')

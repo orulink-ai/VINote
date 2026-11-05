@@ -265,3 +265,15 @@ def test_explicit_pair_participates_in_media_operation_identity(env):
         submit(env, "paired-media", **{**pair, "asr_model": "different-asr"})
     assert exc.value.status_code == 409
     env.forbidden.assert_not_called()
+
+def test_missing_summary_model_records_terminal_document_receipt(env):
+    from app.services.task_model_source import MissingCloudModel
+    env.note.ensure_source = Mock(side_effect=MissingCloudModel(summary=True, speech=False))
+    options = dict(video_url="https://x.com/ersadwork/status/2117637153526263893", workflow="note_organization")
+    result, tasks = submit(env, "document-no-model", **options)
+    assert result["status"] == "failed" and result["state"] == "accepted"
+    assert not tasks.tasks
+    assert "内容总结" in env.artifacts.get_status(result["task_id"])["message"]
+    replay, tasks = submit(env, "document-no-model", **options)
+    assert replay["task_id"] == result["task_id"] and not tasks.tasks
+    env.note.ensure_source.assert_called_once()
