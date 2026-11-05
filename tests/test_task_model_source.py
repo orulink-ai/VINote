@@ -23,6 +23,22 @@ from app.services.note_service import NoteService
 
 
 @pytest.fixture
+def deletion_db(tmp_path, monkeypatch):
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.db_models import MeetingDeletionDB
+    engine = create_engine(f"sqlite:///{tmp_path / 'deletions.sqlite'}", connect_args={"check_same_thread": False})
+    MeetingDeletionDB.__table__.create(engine)
+    @contextmanager
+    def sessions():
+        with Session(engine) as db:
+            yield db
+    monkeypatch.setattr('app.db.session_scope', sessions)
+    yield
+    engine.dispose()
+
+
+@pytest.fixture
 def cloud(monkeypatch):
     monkeypatch.setattr(settings, 'vilab_server_url', 'https://source.test')
     row = SimpleNamespace(mode='cloud', asr_model='original-asr', llm_model='original-llm')
@@ -148,7 +164,7 @@ def test_local_profile_change_fails_but_credentials_are_not_persisted(cloud):
         with pytest.raises(HTTPException):sources.verify_local_config('owner','llm',config)
 
 
-def test_retry_without_snapshot_does_not_schedule_or_mutate_source(tmp_path,cloud,monkeypatch):
+def test_retry_without_snapshot_does_not_schedule_or_mutate_source(tmp_path,cloud,monkeypatch,deletion_db):
     artifacts=TaskArtifactService(tmp_path/'output')
     folder=artifacts.create_task_dir('old')
     artifacts.update_status(folder,'failed','network')
@@ -263,7 +279,7 @@ def test_confirmation_route_is_owner_scoped_read_only(tmp_path, cloud, monkeypat
         assert response.json()['requires_confirmation'] is False
     assert before == {p.name:p.read_bytes() for p in folder.iterdir() if p.is_file()}
 
-def test_http_retry_confirmation_freezes_displayed_models_and_preserves_task(tmp_path, cloud, monkeypatch):
+def test_http_retry_confirmation_freezes_displayed_models_and_preserves_task(tmp_path, cloud, monkeypatch, deletion_db):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     artifacts = TaskArtifactService(tmp_path/'output')
