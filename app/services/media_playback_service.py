@@ -95,10 +95,16 @@ def _check_index(path, manifest):
     # Tracks may end at different times. Exercise each one's actual tail, so
     # neither an audio-only tail nor a video-only tail is mistaken for truncation.
     for kind, end in manifest['tails'].items():
+        # Screen captures have variable frame intervals. The null output's
+        # default encoder time base rounds them to nominal FPS, creating false
+        # duplicate-DTS errors even when every source packet is intact. Keep
+        # WebM's millisecond timestamps for this decode-only seek check.
+        video_clock = ['-fps_mode', 'passthrough', '-enc_time_base', '1:1000'] if kind == 'video' else []
         tail = subprocess.run([
             'ffmpeg', '-nostdin', '-v', 'error', '-threads', '1',
             '-ss', str(max(0, end - 3)), *_LOCAL_WEBM_INPUT, '-i', str(path), '-t', '3',
             '-map', '0:v:0' if kind == 'video' else '0:a:0',
+            *video_clock,
             '-progress', 'pipe:1', '-f', 'null', '-',
         ], check=True, capture_output=True, timeout=_TIMEOUT)
         progress = dict(line.split('=', 1) for line in tail.stdout.decode('ascii').splitlines() if '=' in line)

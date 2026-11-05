@@ -55,7 +55,7 @@ interface NoteLibraryState {
   loading: boolean
   error: string
   loadNotes: (workspace?: WorkspaceSelection) => Promise<void>
-  loadNoteById: (id: string) => Promise<NoteRecord | null>
+  loadNoteById: (id: string, options?: { fresh?: boolean }) => Promise<NoteRecord | null>
   saveNote: (
     title: string,
     content: string,
@@ -150,12 +150,12 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
       })
     }
   },
-  loadNoteById: async (id) => {
+  loadNoteById: async (id, options) => {
     const epoch = accountEpoch;
     const existing = get().notes.find((note) => note.id === id)
     const needsMediaDetail = existing?.taskId && existing.mediaKind === undefined &&
       ['video', 'audio', 'meeting_video', 'meeting_recording'].includes(existing.sourceType || '')
-    if (existing && !needsMediaDetail) {
+    if (existing && !needsMediaDetail && !options?.fresh) {
       return existing
     }
 
@@ -175,7 +175,7 @@ export const useNoteLibraryStore = create<NoteLibraryState>((set, get) => ({
         error: error instanceof Error ? error.message : 'Failed to load note',
       })
       const status = error && typeof error === 'object' && 'status' in error ? Number(error.status) : 0
-      return existing && (!status || status >= 500) ? existing : null
+      return !options?.fresh && existing && (!status || status >= 500) ? existing : null
     }
   },
   saveNote: async (title, content, videoUrl, taskId, workspace, sourceType, status = 'done') => {

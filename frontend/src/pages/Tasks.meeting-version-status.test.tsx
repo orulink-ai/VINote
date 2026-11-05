@@ -42,6 +42,22 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); localStorage.clear() })
 
+it('dismisses a verified failed version while preserving its operation receipt and recovery pointer', async () => {
+  keep('A'); const original = localStorage.getItem('vinote:source-receipt:owner:A');
+  const fallback = api.json.getMockImplementation()!;
+  api.json.mockImplementation(async (path, init) => path === '/api/task/A-child'
+    ? { task_id: 'A-child', status: 'failed' } : fallback(path, init));
+  const view = show();
+  fireEvent.click(await screen.findByRole('button', { name: '删除失败记录' }));
+  fireEvent.click(screen.getByRole('button', { name: '删除记录' }));
+  expect(screen.queryByRole('heading', { name: /新版本/ })).toBeNull();
+  expect(localStorage.getItem('vinote:source-receipt:owner:A')).toBe(original);
+  expect(localStorage.getItem(pointer)).toBe('A');
+  view.unmount(); show();
+  await waitFor(() => expect(screen.getByText('暂无生成任务')).toBeVisible());
+  expect(api.json.mock.calls.every(([, init]) => !init?.method || init.method === 'GET')).toBe(true);
+})
+
 it('reads both original tasks and distinguishes generated-unsaved from failed without changing receipts or pointers', async () => {
   keep('A'); keep('B')
   const before = snapshot(); const fallback = api.json.getMockImplementation()!

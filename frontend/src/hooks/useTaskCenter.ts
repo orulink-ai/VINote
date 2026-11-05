@@ -3,7 +3,7 @@ import { apiJson } from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useAppModeStore } from '@/stores/appModeStore';
 export type TaskWorkspace = { scope: 'personal' | 'team'; teamId?: string };
-export type CenterTask = { label: string; status?: string; message?: string; measure?: string; progress?: number; title?: string; noteId?: string; complete: boolean; failed: boolean; terminal: boolean; unavailable?: boolean };
+export type CenterTask = { label: string; status?: string; errorCode?: string; message?: string; measure?: string; progress?: number; title?: string; noteId?: string; complete: boolean; failed: boolean; terminal: boolean; unavailable?: boolean };
 const labels: Record<string,string> = {pending:'等待处理',queued:'排队中',preparing:'准备来源',preparing_media:'准备资料',downloading:'下载中',transcribing:'转写中',diarizing:'分析说话人',parallel_analysis:'转写与说话人分析',aligning:'对齐转写',analyzing_video:'分析共享画面',summarizing:'生成内容中',screenshots:'整理画面',saving:'保存中',saving_result:'保存中'};
 const initial = ():CenterTask => ({label:'正在读取状态',complete:false,failed:false,terminal:false});
 /** Read-only task projection. No estimated percentages, retries or submission here. */
@@ -29,7 +29,7 @@ export function useTaskCenter(owner:string|undefined, taskIds:string[], enabled:
   const schedule=()=>{clear();if(active()&&enabled&&(pendingOperations.size>0||[...tasks].some(id=>!states[id].terminal||states[id].complete&&!states[id].noteId)))timer=setTimeout(()=>void cycle(),document.hidden?30000:4000)};
   const read=async(id:string)=>{
    try{
-    const data=await apiJson<{task_id?:string;status:string;stage?:string;message?:string;processed_seconds?:number;total_seconds?:number;result?:{task_id?:string;title?:string;markdown?:string}}>(`/api/task/${encodeURIComponent(id)}`,{signal:readSignal()});
+    const data=await apiJson<{task_id?:string;status:string;error_code?:string;stage?:string;message?:string;processed_seconds?:number;total_seconds?:number;result?:{task_id?:string;title?:string;markdown?:string}}>(`/api/task/${encodeURIComponent(id)}`,{signal:readSignal()});
     if(!active())return;
     if(!data||data.task_id!==id||typeof data.status!=='string'||data.result?.task_id&&data.result.task_id!==id)throw new Error('unverified');
     const failed=['failed','error'].includes(data.status);
@@ -39,7 +39,7 @@ export function useTaskCenter(owner:string|undefined, taskIds:string[], enabled:
     const seconds=data.processed_seconds,total=data.total_seconds;
     const measure=data.status==='transcribing'&&typeof seconds==='number'&&Number.isFinite(seconds)&&seconds>=0&&typeof total==='number'&&Number.isFinite(total)&&total>0&&seconds<=total?`已转写 ${Math.round(seconds)} / ${Math.round(total)} 秒`:undefined;
     const progress=measure!==undefined ? Math.round(seconds! / total! * 100) : undefined;
-    states[id]={status:data.status,label:failed?'处理失败':complete?'生成完成，待保存':data.status==='success'?'结果待核验':activeLabel,message:typeof data.message==='string'?data.message:undefined,measure,progress,title:data.result?.title,failed,complete,terminal:failed||complete};publish();
+    states[id]={status:data.status,errorCode:data.error_code,label:failed?'处理失败':complete?'生成完成，待保存':data.status==='success'?'结果待核验':activeLabel,message:typeof data.message==='string'?data.message:undefined,measure,progress,title:data.result?.title,failed,complete,terminal:failed||complete};publish();
    }catch{if(active()){states[id]={...states[id],unavailable:true};publish()}}
   };
   const cycle=async()=>{

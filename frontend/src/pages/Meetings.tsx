@@ -165,7 +165,7 @@ export function Meetings() {
       !!note.meetingSource && note.meetingSource.ownerId === userId || ["meeting_recording", "meeting_video"].includes(note.sourceType || ""),
   );
 
-  const meetingTaskStates = useMeetingTaskStates(meetingNotes, JSON.stringify([location.key, location.pathname, location.search, currentWorkspace]));
+  const meetingTaskStates = useMeetingTaskStates(meetingNotes, JSON.stringify([location.key, location.pathname, location.search, currentWorkspace]), workspacePending.flatMap(recording => recording.taskId ? [recording.taskId] : []));
 
   useEffect(() => {
     let active = true;

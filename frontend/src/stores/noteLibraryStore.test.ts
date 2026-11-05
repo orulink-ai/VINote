@@ -10,6 +10,15 @@ describe('library response ownership', () => {
     const note = await useNoteLibraryStore.getState().loadNoteById(row.id)
     expect(note).toMatchObject({ sourceType: 'video', mediaKind: 'audio', taskId: 'task-a' })
   })
+  it('fresh read bypasses a fully cached pending media placeholder', async () => {
+    const cached = { id: row.id, title: row.title, content: 'Placeholder', status: 'pending', scope: 'personal' as const,
+      createdAt: row.created_at, updatedAt: row.updated_at, sourceType: 'meeting_recording', mediaKind: 'audio' as const, taskId: 'task-a' }
+    useNoteLibraryStore.setState({ notes: [cached] })
+    api.json.mockResolvedValueOnce({ ...row, source_type: 'meeting_recording', media_kind: 'audio', task_id: 'task-a' })
+    const note = await useNoteLibraryStore.getState().loadNoteById(row.id, { fresh: true })
+    expect(api.json).toHaveBeenCalledWith(`/api/notes/${row.id}`)
+    expect(note).toMatchObject({ status: 'done', content: row.content })
+  })
   it('refreshes media detail omitted by the list before reopening a cached video-link note', async () => {
     const cached = { id: row.id, title: row.title, content: row.content, status: 'done', scope: 'personal' as const,
       createdAt: row.created_at, updatedAt: row.updated_at, sourceType: 'video', taskId: 'task-a' }

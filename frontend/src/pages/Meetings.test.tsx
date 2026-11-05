@@ -91,7 +91,7 @@ it('offers the trash when a personal meeting is deleted without restoring it aut
 
 it('shows every linked meeting dossier including historical personal archived content', async () => {
   mount()
-  await screen.findByRole('button', { name: '未命名会议 · 未生成' })
+  await screen.findByRole('button', { name: /^2026-10-1[01] \d{2}:00:00 · 未生成$/ })
   expect(screen.getByRole('tab', { name: '按日期浏览' })).toHaveAttribute('aria-selected', 'true')
   expect(screen.getByRole('button', { name: heading('正在使用') })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: heading('已归档纪要') })).toBeInTheDocument()
@@ -104,7 +104,7 @@ it('keeps legacy archived deep links reachable without applying the old personal
   expect(screen.getByRole('button', { name: heading('录屏纪要') })).toBeInTheDocument()
   expect(screen.queryByRole('button', { name: /普通文档|名称不是类型/ })).not.toBeInTheDocument()
   expect(screen.getByRole('button', { name: heading('正在使用') })).toBeInTheDocument()
-  expect(screen.getByRole('button', { name: '未命名会议 · 未生成' })).toBeInTheDocument()
+  expect(screen.getByRole('button', { name: /^2026-10-1[01] \d{2}:00:00 · 未生成$/ })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: '录制会议' })).toBeInTheDocument()
   expect(screen.getByRole('button', { name: '导入会议' })).toBeInTheDocument()
   expect(screen.getByRole('tab', { name: '按日期浏览' })).toHaveAttribute('aria-selected', 'true')
