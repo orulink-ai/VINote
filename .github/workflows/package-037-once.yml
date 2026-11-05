@@ -16,7 +16,7 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           Set-Location 'D:/Project/Vi/VINote'
-          if ((git rev-parse HEAD).Trim() -ne '497e8d466d3594350565185d27b98d03dc7723ae') { throw 'Unexpected build commit' }
+          if ((git rev-parse HEAD).Trim() -ne '2e454ff74a757604c668bd4e66a71e9aa93b020e') { throw 'Unexpected build commit' }
           git diff --quiet
           if ($LASTEXITCODE -ne 0) { throw 'Build checkout has unstaged changes' }
           git diff --cached --quiet
