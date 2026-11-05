@@ -1,0 +1,27 @@
+name: Package VINote 0.3.7 on the authorized desktop
+on:
+  push:
+    branches: [codex/package-v0.3.7]
+permissions: {}
+jobs:
+  package:
+    runs-on: vinote-037-build-once
+    timeout-minutes: 90
+    steps:
+      - name: Build and sign the reviewed commit
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Set-Location 'D:/Project/Vi/VINote'
+          if ((git rev-parse HEAD).Trim() -ne '497e8d466d3594350565185d27b98d03dc7723ae') { throw 'Unexpected build commit' }
+          git diff --quiet
+          if ($LASTEXITCODE -ne 0) { throw 'Build checkout has unstaged changes' }
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0 -or (git ls-files --others --exclude-standard)) { throw 'Build checkout is not clean' }
+          if (!$env:TAURI_SIGNING_PRIVATE_KEY) { throw 'Signing credential unavailable' }
+          $env:PATH = 'C:/Program Files (x86)/Microsoft Visual Studio/18/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin;C:/Users/18063/.cache/codex-runtimes/codex-primary-runtime/dependencies/node/bin;' + $env:PATH
+          node scripts/build-desktop.mjs --channel release --build-id '20261105-meeting-delete'
+          if ($LASTEXITCODE -ne 0) { throw 'Build failed' }
