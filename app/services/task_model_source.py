@@ -17,6 +17,12 @@ _SNAPSHOT_LOCK = threading.RLock()
 SNAPSHOT_FILE = "model_source_snapshot.json"
 
 
+class MissingCloudModel(HTTPException):
+    def __init__(self, *, summary, speech):
+        names = "、".join(name for name, missing in (("内容总结", summary), ("语音转写", speech)) if missing)
+        super().__init__(409, f"请在「设置 → 转写与总结」选择{names}模型，然后重新提交来源。")
+
+
 def config_fingerprint(config):
     value = config.model_dump(exclude={"api_key", "cloud_user_id", "cloud_connection_id", "cloud_connection_auth_mode"})
     return hashlib.sha256(json.dumps(value, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
@@ -111,7 +117,7 @@ def capture_source(user_id, options, confirmation=None, *, validate_meeting=True
             if is_meeting(options) and value["needs_stt"] and not value["asr_model"]:
                 from app.services.meeting_model_boundary import MEETING_MODEL_ERROR
                 raise HTTPException(409, MEETING_MODEL_ERROR)
-            raise ValueError("云端当前模型未配置，请联系服务管理员")
+            raise MissingCloudModel(summary=not value["llm_model"], speech=value["needs_stt"] and not value["asr_model"])
     else:
         from app.services.llm_service import LLMService
         from app.services.stt_profile_service import STTProfileService

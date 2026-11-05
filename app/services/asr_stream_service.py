@@ -30,7 +30,7 @@ _KNOWN_CODES = _TRANSIENT_CODES | {"asr_failed", "asr_incomplete_result",
     "asr_request_failed", "asr_connection_failed", "asr_provider_missing",
     "asr_deployment_unhealthy", "asr_model_load_failed",
     "audio_duration_exceeded", "empty_result_unverified", "asr_empty_result",
-    "unknown_result", "unknown_error"}
+    "asr_provider_task_timeout", "unknown_result", "unknown_error"}
 
 
 def validated_empty_terminal_evidence(proof):
@@ -182,7 +182,10 @@ class ASRServiceError(RuntimeError):
         self.sent_all = bool(sent_all)
         self._transport_diagnostic = safe_transport_diagnostic(transport)
         self.retry_reason = self.code if self.code in _TRANSIENT_CODES and not self.sent_all else None
-        super().__init__("转写服务未能确认最终识别结果，请检查原任务后重试当前模型")
+        if self.code == "asr_provider_task_timeout":
+            super().__init__("火山引擎转写超时，原任务已结束（55001010）。音频已保留。")
+        else:
+            super().__init__("转写服务未能确认最终识别结果，请检查原任务后重试当前模型")
 
     @property
     def diagnostic(self):

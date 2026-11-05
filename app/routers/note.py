@@ -27,7 +27,7 @@ from app.services.generation_auth_service import (
 )
 from app.services.audio_normalizer import normalize_audio_for_transcription
 from app.services.note_service import NoteService
-from app.services.task_model_source import ensure_source
+from app.services.task_model_source import MissingCloudModel, ensure_source
 from app.services.document_source_service import document_text, is_document_url, MAX_BYTES
 from app.services.source_note_job import run_source_job
 from app.models.source_request import SourceInput, SourceSubmission, SourceRequestReceipt
@@ -1320,7 +1320,8 @@ def _run_task(task_id: str, req: NoteRequest, user_id: str | None,
             owned = (marker and not marker.is_symlink() and marker.is_file()
                      and marker.read_text(encoding="utf-8") == user_id)
             if folder and (owned or not user_id and not marker.exists()) and artifacts.get_status(task_id).get("status") != "failed":
-                artifacts.update_status(folder, "failed", "来源准备未完成，原提交和已有资料已保留，请核验原任务",
+                message = exc.detail if isinstance(exc, MissingCloudModel) else "来源准备未完成，原提交和已有资料已保留，请核验原任务"
+                artifacts.update_status(folder, "failed", message,
                                         retryable=False)
         except Exception:
             logger.warning("[Background] cannot persist URL preparation failure task_id=%s", task_id)
@@ -1399,8 +1400,14 @@ def _queue_source_job(task_id, job, background_tasks, user, request, source=None
     folder = _note_service.artifact_service.create_task_dir(task_id)
     if user:
         (folder / "recording_owner").write_text(user.user_id, encoding="utf-8")
-    ensure_source(folder, user.user_id if user else None, dict(job.get("options", {}), needs_stt=False),
-                  allow_capture=not (folder / "source_job.json").exists())
+    try:
+        ensure_source(folder, user.user_id if user else None, dict(job.get("options", {}), needs_stt=False),
+                      allow_capture=not (folder / "source_job.json").exists())
+    except MissingCloudModel as exc:
+        if not job.get("url") or not request.headers.get("X-VINote-Operation-Id"):
+            raise
+        _note_service.artifact_service.update_status(folder, "failed", exc.detail, retryable=False)
+        return {"task_id": task_id, "status": "failed", "source_type": "file"}
     record_origin(folder, request.headers.get("X-VINote-Client", ""))
     trace = _desktop_trace_context(request, workflow="note_organization", source="local_file" if source else "url",
         media_type="document", title=source.get("title") if source else None,

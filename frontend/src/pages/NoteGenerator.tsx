@@ -148,7 +148,12 @@ export function NoteGenerator() {
   } = useNoteGenerationStore()
   const { saveNote } = useNoteLibraryStore()
   const { currentWorkspace, teams, loadTeams } = useTeamStore()
-  const cloudMode = useAppModeStore(state => state.config?.mode === "cloud")
+  const modelConfig = useAppModeStore(state => state.config)
+  const cloudMode = modelConfig?.mode === 'cloud'
+  const missingNoteModels = !isMeeting && cloudMode ? [
+    !modelConfig.llm_model && '内容总结',
+    (uploadMode === 'file' || uploadMode === 'url' && isBilibiliSourceUrl(videoUrl)) && !modelConfig.asr_model && '语音转写',
+  ].filter(Boolean).join('、') : ''
   const { profiles, selectedProfileId, selectProfile, loadProfiles } = useModelProfileStore()
   const {
     profiles: sttProfiles,
@@ -405,7 +410,7 @@ export function NoteGenerator() {
   }
 
   const handleGenerate = async () => {
-    if (submissionLock.current || recoveryUnavailable) return
+    if (submissionLock.current || recoveryUnavailable || (!receipt && missingNoteModels)) return
     if (receipt) { if (receipt.operationId && receipt.submissionState !== 'accepted') void recoverSubmission(receipt); else setError('原任务仍需核验，请先查询原结果，不重复提交。'); return }
     if ((uploadMode === 'url' && !videoUrl) || (uploadMode !== 'url' && !selectedFile)) {
       return
@@ -770,7 +775,7 @@ export function NoteGenerator() {
       {import.meta.env.DEV && (receipt || error) && <details className="text-xs text-muted-foreground" aria-label="开发诊断"><summary>开发诊断</summary><div className="mt-2 grid gap-2">{receipt?.operationId && <p>提交编号：{receipt.operationId}</p>}{(receipt?.id || taskId) && <p>任务编号：{receipt?.id || taskId}</p>}<p>网页和 PDF/DOCX 支持提交去重；媒体、逐字稿与首次原件注册尚未覆盖。</p>{error && (readOnlyTask && recordFailure?.outcome !== sourceRecoveryCopy(error) || error !== sourceRecoveryCopy(error)) && <p className="whitespace-pre-wrap">{error}</p>}</div></details>}
       {status === 'failed' ? <Alert variant="destructive"><AlertDescription><p>{recordFailure?.outcome ?? sourceRecoveryCopy(error)}</p><p className="mt-2">{recordFailure?.next ?? (receipt ? recoveryView.explanation : copy.generator.failedRecoveryHint)}</p></AlertDescription><div className="mt-4 flex flex-wrap gap-3"><Button onClick={() => void resumeOriginal()} disabled={recoveryUnavailable || !!recoveryLock.current || (!receipt && !sourceReady)}>{receipt ? recoveryView.action : copy.generator.retryGeneration}</Button><details className="w-full text-foreground"><summary className="cursor-pointer text-sm focus-visible:outline focus-visible:outline-ring">其他处理方式</summary><div className="mt-3 flex flex-wrap gap-2">{!readOnlyTask && !rejectedVersion && <Button variant="outline" disabled={readOnlyTask || recoveryUnavailable || !!receipt && (!taskRetryable || receipt.submissionState !== 'accepted')} onClick={handleEditInput}>{receipt ? '更换来源，开始新任务' : copy.generator.editInput}</Button>}{isMeeting && !unknownTaskWorkflow && !recoveryUnavailable && !!receipt?.id && verifiedTask?.taskId === receipt.id && ['failed', 'error'].includes(verifiedTask.status) && <RegenerateMeetingSummary taskId={receipt.id} workspace={readOnlyTask ? currentWorkspace : receipt.workspace} returnTo={parent} disabled={readingTask} />}{!summaryFailure && !unknownTaskWorkflow && !receipt?.independentGeneration && verifiedTask?.taskId === receipt?.id && ['failed', 'error'].includes(verifiedTask?.status || '') && <Button variant="outline" disabled={newBusy} onClick={() => void openNewGeneration()}>确认原模型，开始新的处理</Button>}{(!readOnlyTask || originalNeedsAttention) && <Button variant="ghost" asChild><Link to={materialsPath} state={{ returnTo: parent }}>返回资料与原文件</Link></Button>}<Button variant="ghost" asChild><Link to={historyPath}>查看处理历史与恢复</Link></Button></div></details></div></Alert> : null}
 
-      {status !== 'failed' && !restoringSource && <div className="flex flex-col items-start justify-between gap-4 border-t bg-background py-4 sm:flex-row sm:items-center" style={{ animationDelay: '170ms' }}><div><p className="font-medium">{visibleSourceError ? '请修正来源链接' : sourceReady ? (isMeeting ? '会议文件已准备好' : '来源已准备好') : (isMeeting ? '先选择一个会议文件' : '先提供链接或文件')}</p><p className="mt-1 text-sm text-muted-foreground">{visibleSourceError ? '当前输入已保留，修改链接后再开始整理。' : sourceReady ? '开始后会显示真实处理阶段和失败恢复入口。' : '选好来源后即可开始，模型设置可在上方调整。'}</p></div><Button onClick={() => void handleGenerate()} disabled={status !== 'idle' || !sourceReady} className="h-9 w-full sm:w-auto sm:min-w-36"><Wand2 />{language === 'zh-CN' ? (isMeeting ? '生成会议纪要' : '开始整理') : (isMeeting ? 'Generate meeting minutes' : 'Organize notes')}</Button></div>}
+      {status !== 'failed' && !restoringSource && <div className="flex flex-col items-start justify-between gap-4 border-t bg-background py-4 sm:flex-row sm:items-center" style={{ animationDelay: '170ms' }}><div><p className="font-medium">{visibleSourceError ? '请修正来源链接' : missingNoteModels && sourceReady ? `请在处理设置中选择${missingNoteModels}模型` : sourceReady ? (isMeeting ? '会议文件已准备好' : '来源已准备好') : (isMeeting ? '先选择一个会议文件' : '先提供链接或文件')}</p><p className="mt-1 text-sm text-muted-foreground">{visibleSourceError ? '当前输入已保留，修改链接后再开始整理。' : sourceReady ? '开始后会显示真实处理阶段和失败恢复入口。' : '选好来源后即可开始，模型设置可在上方调整。'}</p></div><Button onClick={() => void handleGenerate()} disabled={status !== 'idle' || !sourceReady || Boolean(missingNoteModels)} className="h-9 w-full sm:w-auto sm:min-w-36"><Wand2 />{language === 'zh-CN' ? (isMeeting ? '生成会议纪要' : '开始整理') : (isMeeting ? 'Generate meeting minutes' : 'Organize notes')}</Button></div>}
     </>}
   </div>
 }

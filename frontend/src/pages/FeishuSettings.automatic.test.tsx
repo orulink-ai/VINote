@@ -10,6 +10,7 @@ vi.mock('@/lib/feishu', async original => ({ ...await original<typeof import('@/
 vi.mock('@/lib/api', () => ({ apiJson: vi.fn() }));
 vi.mock('@/components/Settings/FeishuApplicationSetup', () => ({ FeishuApplicationSetup: () => null }));
 const base: FeishuStatus = { configured: true, connected: true, expired: false, name: '测试连接', notify_self: false, groups: [], contacts: [], auto_publish: false, destination: 'personal', destination_config: { kind: 'personal' }, permission_policy: 'private', capabilities: { background_delivery: true }, automatic_delivery_protocol: 1, automatic_delivery: { policy_id: null, enabled: false }, contact_selection_protocol: 1 };
+const wiki: FeishuStatus = { ...base, destination_config: { kind: 'wiki', space_id: 'space', node_token: 'node' }, permission_policy: 'inherit' };
 const proof = { open_id: 'ou_new', name: '服务端联系人', selection_token: 'short-lived-proof', expiresAt: Date.now() + 900000 };
 const page = (items = [proof], more = false): FeishuContactPage => ({ items, has_more: more, page_token: more ? 'next-page' : '', selection_expires_in: 900 });
 const puts = () => vi.mocked(apiJson).mock.calls.filter(([path, options]) => path === '/api/feishu/preferences' && options?.method === 'PUT');
@@ -22,7 +23,7 @@ beforeEach(() => {
   vi.resetAllMocks(); sessionStorage.clear(); localStorage.clear();
   useAuthStore.setState({ user: { id: 'auto-owner', email: 'test@example.invalid' } });
   vi.mocked(feishuStatus).mockResolvedValue(base); vi.mocked(feishuContacts).mockResolvedValue(page());
-  vi.mocked(apiJson).mockImplementation(async path => path === '/api/feishu/preferences' ? base : { kind: 'personal', path: ['个人云文档'], can_attempt_create: true });
+  vi.mocked(apiJson).mockImplementation(async (path, options) => path === '/api/feishu/destinations/check' ? { ...JSON.parse(String(options?.body)), path: ['已选位置'], can_attempt_create: true } : base);
 });
 afterEach(() => { cleanup(); sessionStorage.clear(); localStorage.clear(); vi.restoreAllMocks() });
 
@@ -52,6 +53,7 @@ it('turning automatic delivery off retains participant notification preference a
 });
 
 it('defaults participant notification/version grouping off and freezes both beside self notification in explicit consent', async () => {
+  vi.mocked(feishuStatus).mockResolvedValue(wiki);
   mount(); await ready();
   const participants = screen.getByRole('checkbox', { name: '发给会议参会人' });
   fireEvent.click(screen.getByRole('button', { name: '高级设置' }));
@@ -76,7 +78,7 @@ it('defaults participant notification/version grouping off and freezes both besi
 });
 
 it.each(['发给会议参会人', '按会议归组历史版本'])('changing %s on enabled automatic delivery requires another explicit consent', async label => {
-  vi.mocked(feishuStatus).mockResolvedValue({ ...base, auto_publish: true });
+  vi.mocked(feishuStatus).mockResolvedValue({ ...wiki, auto_publish: true });
   mount(); await ready(); if (label === '按会议归组历史版本') fireEvent.click(screen.getByRole('button', { name: '高级设置' })); fireEvent.click(screen.getByRole('checkbox', { name: label })); await verify();
   fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
   expect(await screen.findByRole('alertdialog')).toBeVisible(); expect(puts()).toHaveLength(0);
@@ -84,6 +86,7 @@ it.each(['发给会议参会人', '按会议归组历史版本'])('changing %s o
 });
 
 it('participant and version drafts never migrate to another owner', async () => {
+  vi.mocked(feishuStatus).mockResolvedValueOnce(wiki);
   mount(); await ready(); fireEvent.click(screen.getByRole('checkbox', { name: '发给会议参会人' })); fireEvent.click(screen.getByRole('button', { name: '高级设置' })); fireEvent.click(screen.getByRole('checkbox', { name: '按会议归组历史版本' }));
   act(() => useAuthStore.setState({ user: { id: 'other', email: 'other@example.invalid' } }));
   await waitFor(() => expect(feishuStatus).toHaveBeenCalledTimes(2)); await ready();
@@ -314,4 +317,29 @@ it('starts with summaries and opens only the requested editor without losing dra
   fireEvent.click(screen.getByRole('button', { name: '编辑通知对象' }));
   expect(screen.getByRole('checkbox', { name: '发给我本人' })).toBeChecked();
   expect(puts()).toHaveLength(0);
+});
+
+it('saves a restored personal document draft with wiki-only grouping cleared', async () => {
+  sessionStorage.setItem('vinote:feishu-preferences:auto-owner', JSON.stringify({ ...base, group_meeting_versions: true }));
+  mount(); await ready();
+  fireEvent.click(screen.getByRole('button', { name: '高级设置' }));
+  const grouping = screen.getByRole('checkbox', { name: '按会议归组历史版本' });
+  expect(grouping).toBeDisabled();
+  expect(grouping).not.toBeChecked();
+  await verify();
+  fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
+  await waitFor(() => expect(puts()).toHaveLength(1));
+  expect(JSON.parse(puts()[0][1]!.body as string)).toMatchObject({ destination_config: { kind: 'personal' }, group_meeting_versions: false });
+});
+
+it('clears wiki grouping when the user confirms a switch to personal documents', async () => {
+  vi.mocked(feishuStatus).mockResolvedValue({ ...wiki, group_meeting_versions: true });
+  mount(); await ready();
+  fireEvent.click(screen.getByRole('button', { name: '选择文档位置' }));
+  fireEvent.change(screen.getByLabelText('文档位置类型'), { target: { value: 'personal' } });
+  fireEvent.click(screen.getByRole('button', { name: '确认位置并核验' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: '保存设置' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: '保存设置' }));
+  await waitFor(() => expect(puts()).toHaveLength(1));
+  expect(JSON.parse(puts()[0][1]!.body as string)).toMatchObject({ destination_config: { kind: 'personal' }, permission_policy: 'private', group_meeting_versions: false });
 });

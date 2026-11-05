@@ -369,10 +369,18 @@ class VILabTranscriber(Transcriber):
         raise ASRServiceError(code if isinstance(code, str) and code else "asr_provider_error")
 
     def _recording_job_get(self, path, bearer):
-        headers = {"Authorization": "Bearer " + bearer} if bearer else {}
-        return httpx.get(self.base_url + path, headers=headers,
-                         timeout=httpx.Timeout(30, connect=15, pool=30),
-                         trust_env=False, follow_redirects=False)
+        def get(token):
+            headers = {"Authorization": "Bearer " + token} if token else {}
+            return httpx.get(self.base_url + path, headers=headers,
+                             timeout=httpx.Timeout(30, connect=15, pool=30),
+                             trust_env=False, follow_redirects=False)
+
+        response = get(bearer)
+        if response.status_code in (401, 403) and self.cloud_user_id:
+            current = self._recognition_bearer()
+            if current and current != bearer:
+                response = get(current)
+        return response
 
     def _transcribe_recording(self, file_path: str, bearer, policy) -> TranscriptResult:
         from app.config import settings
@@ -430,7 +438,9 @@ class VILabTranscriber(Transcriber):
                 if saved.get("model") != self.model:
                     raise ValueError("已保存的会议转写任务与当前模型不一致，未重新提交音频")
                 if status == "completed":
-                    return self._restore_recording_result(saved.get("result"))
+                    if "result" not in saved:
+                        return self._finish_recording_job(job_id, saved, checkpoint_file, file_path, bearer)
+                    return self._restore_recording_result(saved["result"])
                 if status == "outcome_unknown":
                     raise ASRServiceError("unknown_result")
                 if status == "failed":
@@ -569,6 +579,8 @@ class VILabTranscriber(Transcriber):
                 if attempt == 2:
                     raise ASRServiceError("unknown_result") from None
                 time.sleep(attempt + 1)
+        if response.status_code in (401, 403):
+            raise ASRServiceError("auth_failed")
         if response.status_code == 409:
             try:
                 error = response.json().get("error")

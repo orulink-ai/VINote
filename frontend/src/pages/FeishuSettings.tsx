@@ -65,6 +65,12 @@ import { FeishuApplicationSetup } from '@/components/Settings/FeishuApplicationS
 
 const pluginStore = createConnectorPluginStore({ getItem: key => localStorage.getItem(key), setItem: (key, value) => localStorage.setItem(key, value) });
 
+function alignMeetingGrouping(settings: FeishuStatus): FeishuStatus {
+  return settings.group_meeting_versions && settings.destination_config?.kind !== 'wiki'
+    ? { ...settings, group_meeting_versions: false }
+    : settings;
+}
+
 export function FeishuSettings() {
   const location = useLocation();
   const parent = contextualPageParent(location.pathname, location.search, location.state?.returnTo);
@@ -180,7 +186,7 @@ export function FeishuSettings() {
       valueOwner.current = owner;
       savedValue.current = next;
       if (draft?.contacts) draft.contacts = draft.contacts.map(contact => (next.contacts || []).find(saved => saved.open_id === contact.open_id) || { open_id: contact.open_id, name: '待重新选择联系人' });
-      setValue({ ...next, ...draft });
+      setValue(alignMeetingGrouping({ ...next, ...draft }));
       const connected = next.connected && !next.expired && !feishuVerificationUnavailable(next);
       if (!authorizationRef.current?.flow_id && connected) {
         setAuthUrl(''); setAuthorization(null); setAuthExpired(false);
@@ -291,7 +297,7 @@ export function FeishuSettings() {
     ++editRevision.current;
     setConsent(null);
     if (currentValue.current) {
-      const next = { ...currentValue.current, ...patch };
+      const next = alignMeetingGrouping({ ...currentValue.current, ...patch });
       currentValue.current = next;
       setValue(next);
       try {
@@ -733,9 +739,9 @@ export function FeishuSettings() {
                 <Field orientation="horizontal" className="border-t px-0 py-3">
                   <FieldContent>
                     <FieldLabel htmlFor="feishu-group-versions">按会议归组历史版本</FieldLabel>
-                    <FieldDescription>同一会议的纪要集中存放，保留每份历史版本。</FieldDescription>
+                    <FieldDescription>{value.destination_config?.kind === "wiki" ? "同一会议的纪要集中存放，保留每份历史版本。" : "选择知识库节点后可开启归组。"}</FieldDescription>
                   </FieldContent>
-                  <Checkbox id="feishu-group-versions" checked={value.group_meeting_versions === true} disabled={!canEnableAutomatic && !value.group_meeting_versions} onCheckedChange={checked => change({ group_meeting_versions: checked === true })} />
+                  <Checkbox id="feishu-group-versions" checked={value.group_meeting_versions === true} disabled={value.destination_config?.kind !== "wiki" || (!canEnableAutomatic && !value.group_meeting_versions)} onCheckedChange={checked => change({ group_meeting_versions: checked === true })} />
                 </Field>
 
               </FieldSet>

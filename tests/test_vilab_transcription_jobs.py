@@ -188,3 +188,34 @@ def test_audio_delivery_unavailable_clears_marker(monkeypatch, audio):
     assert error.value.status_code == 503
     assert not list((settings.data_dir / "asr-recording-checkpoints").glob("*/meeting.json"))
 
+
+@pytest.mark.parametrize("suffix", ["", "/result"])
+def test_expired_account_token_refreshes_only_the_original_job_get(monkeypatch, suffix):
+    transcriber = adapter()
+    monkeypatch.setattr(transcriber, "_recognition_bearer", lambda: "renewed")
+    calls = []
+    def get(url, *, headers, **kwargs):
+        calls.append((url, headers["Authorization"]))
+        return httpx.Response(401 if len(calls) == 1 else 200)
+    monkeypatch.setattr(httpx, "get", get)
+    path = "/v1/asr/transcription-jobs/original" + suffix
+    assert transcriber._recording_job_get(path, "expired").status_code == 200
+    assert calls == [(transcriber.base_url + path, "Bearer " + token) for token in ("expired", "renewed")]
+
+
+def test_result_access_restored_after_status_completed(monkeypatch, audio):
+    posts = []
+    def post(url, **kwargs):
+        posts.append(url)
+        return httpx.Response(202, json={"id": kwargs["headers"]["Idempotency-Key"], "status": "completed"})
+
+    monkeypatch.setattr(httpx, "post", post)
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(403))
+    first = adapter()
+    monkeypatch.setattr(first, "_recognition_bearer", lambda: "test-key")
+    with pytest.raises(ASRServiceError) as error:
+        first._transcribe_recording(str(audio), "test-key", policy())
+    assert error.value.code == "auth_failed"
+    monkeypatch.setattr(httpx, "get", lambda *a, **k: httpx.Response(200, json=RESULT))
+    assert adapter()._transcribe_recording(str(audio), "renewed", policy()).full_text == RESULT["text"]
+    assert len(posts) == 1

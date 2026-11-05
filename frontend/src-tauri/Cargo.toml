@@ -1,6 +1,6 @@
 [package]
 name = "vinote"
-version = "0.3.4"
+version = "0.3.5"
 description = "VINote desktop app"
 authors = ["VINote"]
 license = ""
