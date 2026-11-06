@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import test from 'node:test'
+import { execFileSync } from 'node:child_process'
 import { root } from './runtime.mjs'
 import { assertProjectVersion } from './project-version.mjs'
 
@@ -29,6 +30,10 @@ test('root scripts expose one canonical runtime and package command set', () => 
   assert.equal(scripts['client:test'], 'node scripts/legacy-command.mjs client:test package:test')
   assert.equal(scripts['client:production'], 'node scripts/legacy-command.mjs client:production package:release')
   assert.equal(scripts['dev:api'], 'node scripts/dev-api.mjs')
+  assert.equal(scripts.start, 'node scripts/dev.mjs --target desktop --environment public')
+  assert.equal(scripts['start:web'], 'node scripts/dev.mjs --target web --environment public')
+  assert.equal(scripts['release:plan'], 'node scripts/publish-desktop-release.mjs --plan')
+  assert.equal(scripts['release:publish'], 'node scripts/publish-desktop-release.mjs --publish')
   assert.equal(scripts['package:test'], 'node scripts/build-desktop.mjs --channel test')
   assert.equal(scripts['package:release'], 'node scripts/build-desktop.mjs --channel release')
   assert.equal(scripts['package:test:plan'], 'node scripts/build-desktop.mjs --channel test --plan')
@@ -48,4 +53,14 @@ test('compatibility launchers delegate without owning ports or processes', () =>
 test('obsolete shell implementations are removed', () => {
   assert.equal(existsSync(join(root, 'scripts/dev-desktop.sh')), false)
   assert.equal(existsSync(join(root, 'scripts/ensure-web-dev.sh')), false)
+})
+
+test('test and release package plans report the actual configured service', () => {
+  for (const channel of ['test', 'release']) {
+    const result = JSON.parse(execFileSync(process.execPath, ['scripts/build-desktop.mjs', '--channel', channel, '--plan'], {
+      cwd: root, encoding: 'utf8', env: { ...process.env, LANGFUSE_PUBLIC_KEY: 'pk-test', LANGFUSE_SECRET_KEY: 'sk-test' },
+    }))
+    assert.equal(result.service, 'https://api-hk.orulink.ai')
+    assert.equal(result.channel, channel)
+  }
 })

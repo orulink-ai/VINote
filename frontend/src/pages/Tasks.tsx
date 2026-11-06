@@ -16,6 +16,8 @@ import { listPendingMeetings, type PendingMeeting } from "@/lib/audioStorage";
 import { useAuthStore } from "@/stores/authStore";
 import { deliveryStatus, type Delivery } from "@/lib/feishu";
 import { useLibraryNotes, libraryNoteUrl } from "@/hooks/useLibraryNotes";
+import { useNoteLibraryStore } from "@/stores/noteLibraryStore";
+import { useTeamStore } from "@/stores/teamStore";
 import { pageParentLabel, resolvePageParent } from '@/lib/navigation';
 import { PageReturn } from '@/components/Layout/PageReturn';
 import { PageHeading } from "@/components/Layout/PageHeading";
@@ -47,6 +49,10 @@ function TasksPage({ owner }: { owner?: string }) {
     ? params.get("tab")!
     : "generation";
   const notes = useLibraryNotes();
+  const currentWorkspace = useTeamStore(state => state.currentWorkspace);
+  const loadNotes = useNoteLibraryStore(state => state.loadNotes);
+  const notesError = useNoteLibraryStore(state => state.error);
+  useEffect(() => { if (owner) void loadNotes(currentWorkspace); }, [owner, currentWorkspace, loadNotes]);
   const legacySync = params.get('tab') === 'sync';
   const [recordings, setRecordings] = useState<PendingMeeting[]>([]);
   type SourceImport = { workspace?: TaskWorkspace; sourceTitle?: string; sourceUrl?: string; id?: string; operationId?: string; parentTaskId?: string; meeting: boolean; mode?: string; submissionState?: string; historyReceiptKey?: string; historyReceiptRaw?: string };
@@ -81,20 +87,31 @@ function TasksPage({ owner }: { owner?: string }) {
         const keys = owner ? ['note', 'meeting'].map(kind => `vinote:import-receipt:${owner}:${kind}`) : [];
         if (owner) for (let index = 0; index < localStorage.length; index++) {
           const key = localStorage.key(index);
-          if (key?.startsWith(`vinote:source-receipt:${owner}:`) || key?.startsWith(`vinote:source-task-receipt:${owner}:`)) keys.push(key);
+          if (key?.startsWith(`vinote:source-receipt:${owner}:`) || key?.startsWith(`vinote:source-task-receipt:${owner}:`) || key?.startsWith(`vinote:import-draft:${owner}:`)) keys.push(key);
         }
         for (const key of keys) {
           const raw = localStorage.getItem(key);
           if (raw) {
-            const saved = owner && key.startsWith(`vinote:source-receipt:${owner}:`)
-              ? readVersionReceipt(localStorage, owner, key.slice(`vinote:source-receipt:${owner}:`.length)) as SourceImport
-              : JSON.parse(raw);
+            let saved: SourceImport | null;
+            try {
+              saved = owner && key.startsWith(`vinote:source-receipt:${owner}:`)
+                ? readVersionReceipt(localStorage, owner, key.slice(`vinote:source-receipt:${owner}:`.length)) as SourceImport
+                : JSON.parse(raw);
+            } catch {
+              if (active) setError('部分任务记录无法读取，其他记录仍可查看。');
+              continue;
+            }
             if (!saved) continue;
             if (saved.id && deletedTasks.has(saved.id)) continue;
             if (owner && saved.operationId && deletedMeetingOperation(owner, saved.operationId)) continue;
             if (owner && isMeetingVersionReceipt(saved, owner) && typeof saved.parentTaskId === 'string' && deletedTasks.has(saved.parentTaskId)) continue;
             if ((typeof saved.id === 'string' && saved.id || typeof saved.operationId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(saved.operationId)) && typeof saved.meeting === 'boolean') {
               const identity = saved.operationId || saved.id;
+              if (!identity) continue;
+              const rank = (item: SourceImport) => item.submissionState === 'accepted' || !item.submissionState && !!item.id ? 3 : item.submissionState === 'unknown' ? 2 : 1;
+              const prior = accepted.get(identity);
+              if (prior && (rank(prior) > rank(saved) || rank(prior) === rank(saved)
+                && prior.historyReceiptKey?.startsWith(`vinote:source-receipt:${owner}:`))) continue;
               accepted.set(identity, { ...saved, historyReceiptKey: key, historyReceiptRaw: raw });
               snapshots.set(identity, { key, raw });
             }
@@ -195,8 +212,18 @@ function TasksPage({ owner }: { owner?: string }) {
   const shownImports = visibleImports.filter(item => matches(item.sourceTitle, item.sourceUrl, meetingVersionDetails(item, owner)?.title, item.meeting ? '会议导入任务' : '资料整理任务'));
   const shownRecordings = visibleRecordings.filter(item => matches(item.options.title));
   const shownDeliveries = deliveries.filter(item => matches(item.title));
-  const hasRows = tab === 'generation' ? visibleImports.length + visibleRecordings.length > 0 : deliveries.length > 0;
-  const hasMatches = tab === 'generation' ? shownImports.length + shownRecordings.length > 0 : shownDeliveries.length > 0;
+  // Completed notes outlive transient import receipts. Show only records with a
+  // real task identity, and never infer a task from a title or a handwritten note.
+  const coveredTaskIds = new Set([
+    ...visibleImports.flatMap(item => item.id ? [item.id] : []),
+    ...visibleRecordings.flatMap(item => item.taskId ? [item.taskId] : []),
+  ]);
+  const deletedTasks = owner ? deletedMeetingTasks(owner) : new Set<string>();
+  const savedTasks = owner ? notes.filter(note => note.status === 'done' && note.taskId
+    && !coveredTaskIds.has(note.taskId) && !deletedTasks.has(note.taskId)) : [];
+  const shownSavedTasks = savedTasks.filter(note => matches(note.title));
+  const hasRows = tab === 'generation' ? visibleImports.length + visibleRecordings.length + savedTasks.length > 0 : deliveries.length > 0;
+  const hasMatches = tab === 'generation' ? shownImports.length + shownRecordings.length + shownSavedTasks.length > 0 : shownDeliveries.length > 0;
   if (legacySync) return <Navigate replace to={'/settings/storage?' + new URLSearchParams({ returnTo: resolvePageParent(params.get('returnTo')) })} />;
   return (
     <div className="workspace-page tasks-page">
@@ -208,7 +235,7 @@ function TasksPage({ owner }: { owner?: string }) {
           <Button
             variant="outline"
             disabled={loading}
-            onClick={() => setAttempt((n) => n + 1)}
+            onClick={() => { void loadNotes(currentWorkspace); setAttempt((n) => n + 1); }}
           >
             <RefreshCw data-icon="inline-start" />
             刷新状态
@@ -227,6 +254,7 @@ function TasksPage({ owner }: { owner?: string }) {
       </Tabs>
       {hasRows && <Input aria-label="搜索处理记录" placeholder="搜索任务或原文件" value={query} onChange={event => setQuery(event.target.value)} className="h-9 max-w-sm" />}</div>
       {hasRows && !hasMatches && <EmptyState title="没有匹配的处理记录" description="换个来源标题，或清除搜索。"><Button variant="outline" onClick={() => setQuery('')}>清除搜索</Button></EmptyState>}
+      {notesError && <ErrorState error="已保存的任务记录读取失败，请重试。" onRetry={() => void loadNotes(currentWorkspace)} />}
       {error && (
         <ErrorState
           error={error}
@@ -311,7 +339,13 @@ function TasksPage({ owner }: { owner?: string }) {
               </Button>
             </article>
           )})}
-          {!loading && !error && !visibleRecordings.length && !visibleImports.length && (
+          {shownSavedTasks.map(note => <article key={`saved:${note.id}`} className="task-row relative grid min-w-0 gap-2 border-b py-4 lg:pr-64">
+            <h2 className="min-w-0 text-sm font-medium [overflow-wrap:anywhere]">{note.title}</h2>
+            <p className="task-description text-sm text-muted-foreground">笔记已保存，可直接打开。</p>
+            <TaskProgress task={{ label: '已完成', complete: true, failed: false, terminal: true, noteId: note.id }} />
+            <Button variant="outline" className="w-fit max-w-full whitespace-normal lg:absolute lg:right-0 lg:top-4" asChild><Link to={note.workspaceKey ? libraryNoteUrl(note) : `/note/${encodeURIComponent(note.id)}`} state={{ returnTo: historyReturn }}>打开已保存内容</Link></Button>
+          </article>)}
+          {!loading && !error && !visibleRecordings.length && !visibleImports.length && !savedTasks.length && (
             <EmptyState
               title="暂无生成任务"
               description="录制或导入资料，保存后可开始生成。"

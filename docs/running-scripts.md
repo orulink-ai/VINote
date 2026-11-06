@@ -2,7 +2,20 @@
 
 所有日常命令从 VINote 仓库根目录执行。源码选择桌面或网页，安装包分正式版与测试版；所有入口均使用固定公网模型服务。旧 lan 名称仅保留独立开发身份，不切换服务。
 
-## 六个主入口
+## 常用入口
+
+| 用途 | 命令 |
+| --- | --- |
+| 启动桌面开发版 | `yarn start` |
+| 启动网页开发版 | `yarn start:web` |
+| 构建测试安装包 | `yarn package:test` |
+| 构建正式安装包 | `yarn package:release` |
+| 查看正式发布计划 | `yarn release:plan <产物目录>` |
+| 发布已验证的正式包 | `yarn release:publish <产物目录>` |
+
+发版入口读取已构建产物，验证版本、已合并的源码提交、签名与哈希，然后上传至 VINote 源仓库和公开下载仓库。正式版使用 `v<版本号>` 标签；测试包独立安装，不写入正式 OTA 源。多平台产物可依次传入多个目录；详见[桌面 OTA 发版](desktop-ota-release.md)。
+
+## 底层入口与兼容身份
 
 | 用途 | 命令 | 固定 VILab Server |
 | --- | --- | --- |
@@ -69,11 +82,3 @@ yarn package:test:plan
 旧开发和打包入口会打印替代命令；已有预览别名继续支持。`scripts/dev-desktop.mjs` 保留直接调用兼容，旧 `--channel test` 和 `--channel development` 保留各自开发身份，两者均使用固定公网服务。
 
 实现由 `dev.mjs` 共用启动与清理，`desktop-dev-profile.mjs` 解析源码身份，`service-environments.mjs` 提供固定地址，`bootstrap-dev.mjs` 准备依赖。`build-desktop.mjs` / `desktop-build-profile.mjs` 负责打包；`windows-backend-dev.py` 保留 Windows 信号隔离。
-
-VILab 转写使用按音频时间节流的 VLA2 PCM WebSocket 小帧，不再按模型名称设置 12/60 秒请求 cap。小帧大小、传输节流与接收超时不是模型时长能力；只有服务明确返回 `audio_duration_exceeded` 及有效限制，才调整未完成区间。失败不自动换模型，只有已保存的 final 区间可作恢复检查点。公网阿里云 120/340 秒和火山 120 秒已有实际 final 证据；不代表任意模型、完整长录音或安装包均已验收。
-
-说话人完整检测与 refinement 在单个隔离子进程运行，父进程校验结果后保存 speaker evidence；有效缓存可在 ASR 重试时复用。20 秒真实模型诊断测得父心跳最大间隔 0.051 秒，子进程结束且无残留；这是原生模型 CLI 证据，不是完整产品验收。新任务先持久保存账号绑定的模型快照再写请求，旧无快照云任务须在确认 Sheet 核对具体服务、ASR/LLM 后恢复同一 task。2026-10-14 约 00:00，主线程已在 native 确认原 50 分钟任务的 Aliyun/Luna 并恢复；目前正在 ASR、speaker 已缓存，尚未完成。见[隔离验证](reviews/2026-10-13-speaker-worker-gil.md)与[模型确认](reviews/2026-10-13-task-model-confirmation.md)。
-
-开发进度面板只跟踪本次界面会话观察到的运行中任务；历史失败/成功任务不会重新挂在顶部，本次终态结果可关闭，关闭不删除媒体或任务产物。
-
-视频画面分析不固定模型名称：优先使用桌面选择的内容模型；若服务端明确标记不支持图片或模型不可用，则选择服务端标记支持视觉的可用模型。旧服务未提供能力标记时，实际提交图片给所选模型，调用失败会显示实际模型与错误，不将纯文本输出冒充视觉理解。分析缓存按服务地址和实际模型隔离。

@@ -1,3 +1,5 @@
+vi.mock('@/stores/noteLibraryStore', () => ({ useNoteLibraryStore: (select: (state: unknown) => unknown) => select({ loadNotes: taskHistoryLoad }) }));
+const taskHistoryLoad = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('@/hooks/useTaskCenter', () => ({ useTaskCenter: () => ({}) }));
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
