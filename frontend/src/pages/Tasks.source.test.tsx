@@ -228,3 +228,10 @@ it('keeps other task records visible when one local receipt is malformed', async
   expect(await screen.findByRole('heading', { name: '可用任务' })).toBeVisible()
   expect(screen.getByText(/部分任务记录无法读取/)).toBeVisible()
 })
+it('prefers the accepted operation receipt over a stale draft for the same task', async () => {
+  localStorage.setItem('vinote:source-receipt:owner:op-1', JSON.stringify({ id: 'task-1', operationId: 'op-1', meeting: false, sourceTitle: '已受理的任务', submissionState: 'accepted' }))
+  localStorage.setItem('vinote:import-draft:owner:draft-1', JSON.stringify({ operationId: 'op-1', meeting: false, sourceTitle: '旧草稿', submissionState: 'reserved' }))
+  render(<MemoryRouter><Tasks /></MemoryRouter>)
+  expect(await screen.findByRole('heading', { name: '已受理的任务' })).toBeVisible()
+  expect(screen.queryByText('旧草稿')).toBeNull()
+})

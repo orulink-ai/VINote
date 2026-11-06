@@ -108,6 +108,10 @@ function TasksPage({ owner }: { owner?: string }) {
             if ((typeof saved.id === 'string' && saved.id || typeof saved.operationId === 'string' && /^[A-Za-z0-9_-]{1,160}$/.test(saved.operationId)) && typeof saved.meeting === 'boolean') {
               const identity = saved.operationId || saved.id;
               if (!identity) continue;
+              const rank = (item: SourceImport) => item.submissionState === 'accepted' || !item.submissionState && !!item.id ? 3 : item.submissionState === 'unknown' ? 2 : 1;
+              const prior = accepted.get(identity);
+              if (prior && (rank(prior) > rank(saved) || rank(prior) === rank(saved)
+                && prior.historyReceiptKey?.startsWith(`vinote:source-receipt:${owner}:`))) continue;
               accepted.set(identity, { ...saved, historyReceiptKey: key, historyReceiptRaw: raw });
               snapshots.set(identity, { key, raw });
             }
