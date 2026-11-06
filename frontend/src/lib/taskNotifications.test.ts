@@ -41,3 +41,16 @@ it('opens the retained recording workbench when no saved result exists', () => {
   expect(notificationTarget(task)).toBe('/meetings?locate_recording=recording-1&locate_focus=meeting')
   expect(notificationTarget(task, 'saved')).toBe('/note/saved')
 })
+it('never polls or notifies deleted task IDs while preserving their receipts', async () => {
+  const { hideDeletedMeetingTasks } = await import('./deletedMeetingTasks')
+  const { sourceNotificationTasks } = await import('./taskNotifications')
+  const deleted = { taskId: 'removed', operationId: 'removed-op', meeting: true }
+  trackGenerationNotification('a', deleted)
+  localStorage.setItem('vinote:source-receipt:a:removed-op', JSON.stringify({ id: 'removed', operationId: 'removed-op', meeting: true }))
+  localStorage.setItem('vinote:source-receipt:a:kept-op', JSON.stringify({ id: 'kept', operationId: 'kept-op', meeting: true }))
+  hideDeletedMeetingTasks('a', ['removed'])
+  expect(sourceNotificationTasks('a').map(task => task.taskId)).toEqual(['kept'])
+  expect(readTrackedGenerations('a')).toEqual([])
+  expect(observeGeneration('a', deleted, 'success')).toBe(false)
+  expect(localStorage.getItem('vinote:source-receipt:a:removed-op')).not.toBeNull()
+})

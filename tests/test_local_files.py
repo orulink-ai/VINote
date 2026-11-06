@@ -39,6 +39,8 @@ def files(tmp_path, monkeypatch):
             yield db
 
     monkeypatch.setattr(module, "session_scope", sessions)
+    from app import db as database
+    monkeypatch.setattr(database, 'session_scope', sessions)
     monkeypatch.setattr(module.settings, "data_dir", tmp_path)
     monkeypatch.setattr(module.settings, "output_dir", tmp_path / 'output')
     yield module.LocalFileService()
@@ -105,6 +107,57 @@ def test_deletion_can_recover_after_file_was_removed_before_index_commit(files):
     files.get('alice', item['id'])[1].unlink()
     files.delete('alice', item['id'])
     assert files.list('alice')['items'] == []
+
+
+def test_orphan_meeting_delete_checks_owner_purpose_and_submission(files):
+    identifier, name, target = files.new_target('alice', 'meeting.wav')
+    target.write_bytes(b'audio')
+    files.register('alice', identifier, name, target, 'meeting')
+    with pytest.raises(HTTPException) as denied:
+        files.delete_orphan_meeting('bob', identifier)
+    assert denied.value.status_code == 404
+    with files.generation_lease('alice', identifier):
+        with pytest.raises(HTTPException) as busy:
+            files.delete_orphan_meeting('alice', identifier)
+        assert busy.value.status_code == 409
+    files.attach_task('alice', identifier, 'task-id')
+    with pytest.raises(HTTPException) as linked:
+        files.delete_orphan_meeting('alice', identifier)
+    assert linked.value.status_code == 409 and target.exists()
+
+
+def test_orphan_meeting_delete_recovers_missing_file(files):
+    identifier, name, target = files.new_target('alice', 'meeting.wav')
+    target.write_bytes(b'audio')
+    files.register('alice', identifier, name, target, 'meeting')
+    target.unlink()  # Simulate a previous unlink followed by a failed DB commit.
+    files.delete_orphan_meeting('alice', identifier)
+    assert files.list('alice')['items'] == []
+
+
+def test_orphan_meeting_delete_removes_file_and_stays_absent_on_reload(files):
+    identifier, name, target = files.new_target('alice', 'meeting.wav')
+    target.write_bytes(b'audio')
+    files.register('alice', identifier, name, target, 'meeting')
+    assert any(item['id'] == identifier for item in files.list('alice')['items'])
+    files.delete_orphan_meeting('alice', identifier)
+    assert not target.exists()
+    assert all(item['id'] != identifier for item in module.LocalFileService().list('alice')['items'])
+
+
+def test_orphan_meeting_delete_rejects_another_indexed_path(files):
+    from app.models.local_file import LocalFileDB
+    first, name, target = files.new_target('alice', 'meeting.wav')
+    target.write_bytes(b'audio')
+    files.register('alice', first, name, target, 'meeting')
+    second = saved(files)
+    second_path = files.get('alice', second['id'])[1]
+    with module.session_scope() as db:
+        db.get(LocalFileDB, first).path = str(second_path)
+    with pytest.raises(HTTPException) as denied:
+        files.delete_orphan_meeting('alice', first)
+    assert denied.value.status_code == 409
+    assert second_path.exists()
 
 
 def test_owned_index_cannot_delete_another_accounts_path(files):

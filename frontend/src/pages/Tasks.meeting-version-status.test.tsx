@@ -42,6 +42,54 @@ beforeEach(() => {
 })
 afterEach(() => { cleanup(); localStorage.clear() })
 
+it('hides an operation-only version after the server confirms it belongs to a deleted task, including after remount', async () => {
+  keep('A', { id: undefined, submissionState: 'unknown' });
+  localStorage.setItem('vinote:deleted-meeting-tasks:v1:owner', JSON.stringify(['A-child']));
+  const original = localStorage.getItem('vinote:source-receipt:owner:A');
+  const view = show();
+  await waitFor(() => expect(screen.getByText('暂无生成任务')).toBeVisible());
+  expect(api.json.mock.calls.some(([path]) => path === '/api/task/A-child')).toBe(false);
+  expect(localStorage.getItem('vinote:source-receipt:owner:A')).toBe(original);
+  expect(JSON.parse(localStorage.getItem('vinote:deleted-meeting-operations:v1:owner')!).A).toBe('A-child');
+  view.unmount(); api.json.mockClear(); show();
+  await waitFor(() => expect(screen.getByText('暂无生成任务')).toBeVisible());
+  expect(api.json.mock.calls.some(([path]) => path === '/api/source-requests/A')).toBe(false);
+});
+
+it('hides a verified preflight-rejected version of a deleted parent without hiding another meeting', async () => {
+  keep('A', { id: undefined, submissionState: 'unknown' });
+  const key = 'vinote:source-receipt:owner:A';
+  localStorage.setItem('vinote:version-rejection:owner:A', JSON.stringify({ pending: localStorage.getItem(key), rejection: { protocol: 1, status: 409, code: 'meeting_version_context_changed', message: '会议已变化' } }));
+  localStorage.setItem('vinote:deleted-meeting-tasks:v1:owner', JSON.stringify(['parent']));
+  show();
+  await waitFor(() => expect(screen.getByText('暂无生成任务')).toBeVisible());
+  expect(localStorage.getItem(key)).not.toBeNull();
+  expect(api.json.mock.calls.some(([path]) => path === '/api/source-requests/A')).toBe(false);
+});
+
+it('never records a deleted operation after the owning account changes during receipt lookup', async () => {
+  keep('A', { id: undefined, submissionState: 'unknown' });
+  localStorage.setItem('vinote:deleted-meeting-tasks:v1:owner', JSON.stringify(['A-child']));
+  const pending = deferred<unknown>();
+  api.json.mockImplementation((path: string) => path === '/api/source-requests/A' ? pending.promise : Promise.reject(new Error('unexpected')));
+  show();
+  await waitFor(() => expect(api.json).toHaveBeenCalledWith('/api/source-requests/A', expect.anything()));
+  act(() => useAuthStore.setState({ user: { id: 'other' } as never }));
+  await act(async () => pending.resolve({ operation_id: 'A', task_id: 'A-child', state: 'accepted' }));
+  expect(localStorage.getItem('vinote:deleted-meeting-operations:v1:owner')).toBeNull();
+});
+
+it.each(['unknown', 'reserved'])('hides a verified %s version receipt of a deleted parent without hiding another meeting', async submissionState => {
+  keep('A', { id: undefined, submissionState });
+  keep('B', { parentTaskId: 'other-parent', meetingVersionContext: { protocol: 1, parent_task_id: 'other-parent', context_revision: 'a'.repeat(64), source: { version: 'b'.repeat(64), type: 'video', title: '另一场会议' } } });
+  localStorage.setItem('vinote:deleted-meeting-tasks:v1:owner', JSON.stringify(['parent']));
+  show();
+  expect(await screen.findByRole('heading', { name: /另一场会议 · 新版本/ })).toBeVisible();
+  expect(screen.queryByRole('heading', { name: /2026-10-19 18:02 录制 · 新版本/ })).toBeNull();
+  expect(api.json.mock.calls.some(([path]) => path === '/api/source-requests/A')).toBe(false);
+  expect(localStorage.getItem('vinote:source-receipt:owner:A')).not.toBeNull();
+});
+
 it('dismisses a verified failed version while preserving its operation receipt and recovery pointer', async () => {
   keep('A'); const original = localStorage.getItem('vinote:source-receipt:owner:A');
   const fallback = api.json.getMockImplementation()!;

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 from app.config import settings
-from app.db_models import SourceRequestDB
+from app.db_models import SourceRequestDB, MeetingDeletionDB
 from app.services.source_request_service import SourceRequestService
 from app.services.task_artifact_service import TaskArtifactService
 from app.services.task_generation_context import frozen_generation_context
@@ -26,10 +26,13 @@ def case(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, 'vilab_server_url', 'https://original.invalid')
     engine = create_engine('sqlite:///' + str(tmp_path / 'receipt.db'), connect_args={'check_same_thread': False})
     SourceRequestDB.__table__.create(engine)
+    MeetingDeletionDB.__table__.create(engine)
     @contextmanager
     def sessions():
         with Session(engine, expire_on_commit=False) as db, db.begin():
             yield db
+    from app import db as database
+    monkeypatch.setattr(database, 'session_scope', sessions)
     receipts = SourceRequestService(sessions)
     service = NewGenerationService(receipts)
     artifacts = service.artifacts
@@ -236,7 +239,7 @@ def test_saved_child_deduplicates_canonical_original_in_library(case):
         calls = 0
         def scalars(self, statement):
             self.calls += 1
-            return [] if self.calls == 1 else [saved]
+            return [saved] if self.calls == 2 else []
     @contextmanager
     def sessions(): yield Database()
     c.monkeypatch.setattr(local_file_service, 'session_scope', sessions)

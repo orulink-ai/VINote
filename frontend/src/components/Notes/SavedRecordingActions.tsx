@@ -1,7 +1,7 @@
+import { Link, useLocation } from 'react-router-dom'
 import { useEffect, useRef, useState } from 'react'
 import { Download, Trash2 } from 'lucide-react'
 import { Alert, AlertDescription } from '@/components/ui/alert'
-import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { apiJson } from '../../lib/api'
 import { downloadOriginalFile, downloadProgressMessage, downloadResultMessage } from '../../lib/recordingDownload'
@@ -11,15 +11,17 @@ import { OriginalLocationButton } from '@/components/OriginalLocationButton'
 import { isTauriRuntime } from '@/lib/desktopMicrophonePermission'
 
 type RecordingInfo = { available: boolean; deleted: boolean; can_delete: boolean; filename: string; size_bytes: number }
-export function SavedRecordingActions({ noteId, title, onDeleted, compact = false, mediaKind = 'audio' }: {
+export function SavedRecordingActions({ noteId, title, compact = false, mediaKind = 'audio' }: {
   noteId: string; title: string; onDeleted: () => void; compact?: boolean; mediaKind?: 'audio' | 'video'
 }) {
+  const location = useLocation()
+  const meetingPath = '/meetings?' + new URLSearchParams({ locate_note: noteId, locate_focus: 'meeting', returnTo: location.pathname + location.search + location.hash }).toString()
   const { locale } = useI18n()
   const zh = locale.startsWith('zh')
   const owner = useAuthStore(state => state.user?.id)
   const [info, setInfo] = useState<RecordingInfo | null>(null)
   const [error, setError] = useState('')
-  const [errorAction, setErrorAction] = useState<'load' | 'download' | 'delete'>('load')
+  const [errorAction, setErrorAction] = useState<'load' | 'download'>('load')
   const [busy, setBusy] = useState(false)
   const [downloadStatus, setDownloadStatus] = useState('')
   const downloadLock = useRef(false)
@@ -70,22 +72,6 @@ export function SavedRecordingActions({ noteId, title, onDeleted, compact = fals
     finally { if (downloadEpoch === epoch.current) { downloadLock.current = false; setBusy(false) } }
   }
 
-  const remove = async () => {
-    const current = guard()
-    setBusy(true); setError(''); setErrorAction('delete'); setDownloadStatus('')
-    try {
-      await apiJson(`/api/notes/${noteId}/recording`, { method: 'DELETE' })
-      if (!current()) return
-      document.querySelectorAll<HTMLMediaElement>('audio, video').forEach(media => {
-        if (media.currentSrc.includes(`/api/notes/${noteId}/media`) || media.src.includes(`/api/notes/${noteId}/media`)) {
-          media.pause(); media.removeAttribute('src'); media.load()
-        }
-      })
-      setInfo(info ? { ...info, available: false, deleted: true } : null)
-      onDeleted()
-    } catch (cause) { if (current()) setError(cause instanceof Error ? cause.message : String(cause)) }
-    finally { if (current()) setBusy(false) }
-  }
   const label = mediaKind === 'video' ? zh ? '导出原视频' : 'Export original video' : zh ? '导出原音频' : 'Export original audio'
   const status = info?.available
     ? (zh ? '原文件已保留' : 'Original retained') + (Number.isFinite(info.size_bytes) ? ` · ${(info.size_bytes / 1024 / 1024).toFixed(1)} MB` : '')
@@ -95,14 +81,14 @@ export function SavedRecordingActions({ noteId, title, onDeleted, compact = fals
     : zh ? '正在读取原文件状态…' : 'Loading original…'
   return <div className={compact ? 'grid gap-3' : 'grid min-w-0 gap-3 border-b pb-4'}>
     <OriginalLocationButton url={`/api/notes/${noteId}/media`} disabled={busy || !info?.available} zh={zh} />
-    <Button ref={saveButton} className={compact ? 'w-full' : undefined} variant="outline" disabled={busy || !info?.available} aria-busy={busy} onClick={() => void download()}><Download />{busy ? errorAction === 'delete' ? zh ? '正在处理…' : 'Processing…' : zh ? '正在保存…' : 'Saving…' : isTauriRuntime() ? zh ? '另存为…' : 'Save as…' : label}</Button>
+    <Button ref={saveButton} className={compact ? 'w-full' : undefined} variant="outline" disabled={busy || !info?.available} aria-busy={busy} onClick={() => void download()}><Download />{busy ? zh ? '正在保存…' : 'Saving…' : isTauriRuntime() ? zh ? '另存为…' : 'Save as…' : label}</Button>
     {busy && downloadStatus && <Button variant="ghost" onClick={() => abort.current?.abort()}>{zh ? '取消导出' : 'Cancel export'}</Button>}
     <p role="status" aria-live="polite" className="text-xs leading-5 text-muted-foreground [overflow-wrap:anywhere]">{downloadStatus || status}</p>
-    {!compact && info?.available && info.can_delete && <details className="text-xs text-muted-foreground">
+    {!compact && <details className="text-xs text-muted-foreground">
       <summary className="cursor-pointer py-2">{zh ? mediaKind === 'video' ? '管理原视频' : '管理原录音' : 'Manage original'}</summary>
-      <AlertDialog><AlertDialogTrigger asChild><Button variant="ghost" size="sm" disabled={busy} className="text-destructive hover:text-destructive"><Trash2 />{zh ? '删除录制' : 'Delete recording'}</Button></AlertDialogTrigger><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>{zh ? '删除录制文件？' : 'Delete recording?'}</AlertDialogTitle><AlertDialogDescription>{zh ? '录制及音频副本会永久删除，文字纪要、转写和截图会保留。' : 'The recording is permanently deleted. Notes, transcript and screenshots are retained.'}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>{zh ? '取消' : 'Cancel'}</AlertDialogCancel><AlertDialogAction onClick={() => void remove()}>{zh ? '确认删除' : 'Delete'}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+      <p className="mb-2">{zh ? '会议原文件与相关纪要一起删除，请前往会议档案选择“删除整场会议”。' : 'Delete the original and related notes together using Delete entire meeting in the meeting dossier.'}</p>
+      <Button variant="ghost" size="sm" className="h-auto whitespace-normal text-destructive" asChild><Link to={meetingPath}><Trash2 />{zh ? '前往会议档案 · 删除整场会议' : 'Meeting dossier · Delete entire meeting'}</Link></Button>
     </details>}
-    {!compact && info?.available && !info.can_delete && <p className="text-xs text-muted-foreground">{zh ? '共用或无法验证归属的文件仅支持导出。' : 'Shared or unverified originals can only be exported.'}</p>}
-    {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription><Button variant="outline" size="sm" disabled={busy} onClick={() => errorAction === 'download' ? void download() : setLoadAttempt(value => value + 1)}>{errorAction === 'download' ? isTauriRuntime() ? zh ? '重试另存为…' : 'Retry save as…' : zh ? '重试导出' : 'Retry export' : errorAction === 'delete' ? zh ? '重新核验原文件' : 'Check original status' : zh ? '重新加载录制' : 'Reload recording'}</Button></Alert>}
+    {error && <Alert variant="destructive"><AlertDescription>{error}</AlertDescription><Button variant="outline" size="sm" disabled={busy} onClick={() => errorAction === 'download' ? void download() : setLoadAttempt(value => value + 1)}>{errorAction === 'download' ? isTauriRuntime() ? zh ? '重试另存为…' : 'Retry save as…' : zh ? '重试导出' : 'Retry export' : zh ? '重新加载录制' : 'Reload recording'}</Button></Alert>}
   </div>
 }

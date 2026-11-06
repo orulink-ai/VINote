@@ -9,6 +9,12 @@ from app.services.task_artifact_service import TaskArtifactService
 from app.services.task_failure import recovery_status
 
 class TaskOriginalService:
+    def __init__(self, sessions=None):
+        if sessions is None:
+            from app.db import session_scope
+            sessions = session_scope
+        self.sessions = sessions
+
     def _folder(self, folder):
         root = settings.output_dir.resolve()
         return not folder.is_symlink() and folder.resolve().parent == root
@@ -28,6 +34,10 @@ class TaskOriginalService:
             task_id = mapping.read_text(encoding="utf-8").strip() if mapping.exists() else folder.name
             if str(uuid.UUID(task_id)) != task_id:
                 return None
+            from app.services.meeting_deletion import deleted_task
+            with self.sessions() as db:
+                if deleted_task(db, task_id):
+                    return None
             request = json.loads((folder / "request.json").read_text(encoding="utf-8"))["request"]
             if not isinstance(request, dict):
                 return None

@@ -39,7 +39,9 @@ export async function saveRecordedAudio(id: string, blob: Blob): Promise<void> {
   const db = await openDatabase()
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite')
-    tx.objectStore(STORE_NAME).put(blob, id)
+    const store = tx.objectStore(STORE_NAME)
+    const guard = store.get(`deleted:${id}`)
+    guard.onsuccess = () => { if (guard.result) tx.abort(); else store.put(blob, id) }
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('indexeddb_write_failed'))
     tx.onabort = () => reject(tx.error ?? new Error('indexeddb_write_aborted'))
@@ -127,10 +129,26 @@ export async function savePendingMeeting(meeting: PendingMeeting) {
   const db = await openDatabase()
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite')
-    tx.objectStore(STORE_NAME).put(meeting, `pending:${meeting.id}`)
+    const store = tx.objectStore(STORE_NAME)
+    const guard = store.get(`deleted:${meeting.id}`)
+    guard.onsuccess = () => {
+      if (guard.result) { tx.abort(); return }
+      save()
+    }
+    const save = () => {
+      if (!meeting.fileName) { store.put(meeting, `pending:${meeting.id}`); return }
+      const cursor = store.openCursor()
+      cursor.onsuccess = () => {
+        const row = cursor.result
+        if (!row) { store.put(meeting, `pending:${meeting.id}`); return }
+        const key = String(row.key)
+        if ((key.startsWith('deleted:') || key.startsWith('cleanup:')) && row.value?.fileName === meeting.fileName) { tx.abort(); return }
+        row.continue()
+      }
+    }
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error)
-    tx.onabort = () => reject(tx.error)
+    tx.onabort = () => reject(tx.error ?? new Error('录制正在删除或已删除'))
   })
 }
 
@@ -157,6 +175,8 @@ export async function updatePendingMeeting(
     request.onsuccess = () => {
       const current = request.result as PendingMeeting | undefined
       if (!current) { tx.abort(); return }
+      // File ownership is fixed when the recording is first saved.
+      if ('fileName' in update && update.fileName !== current.fileName) { tx.abort(); return }
       next = { ...current, ...update, id: current.id, ownerId: current.ownerId }
       store.put(next, `pending:${id}`)
     }
@@ -214,7 +234,7 @@ export async function deleteLocalRecording(id: string, ownerId: string) {
   const metadata = await new Promise<PendingMeeting>((resolve, reject) => {
     const store = db.transaction(STORE_NAME, 'readonly').objectStore(STORE_NAME)
     const request = store.get(`pending:${id}`)
-    const accept = (value: PendingMeeting | undefined) => value?.ownerId === ownerId ? resolve(value) : reject(new Error('录制不存在或无权删除'))
+    const accept = (value: PendingMeeting | undefined) => value?.ownerId === ownerId && value.id === id ? resolve(value) : reject(new Error('录制不存在或无权删除'))
     request.onsuccess = () => {
       if (request.result) { accept(request.result); return }
       const cleanup = store.get(`cleanup:${id}`)
@@ -226,15 +246,35 @@ export async function deleteLocalRecording(id: string, ownerId: string) {
   await new Promise<void>((resolve, reject) => {
     const tx = db.transaction(STORE_NAME, 'readwrite')
     const store = tx.objectStore(STORE_NAME)
+    const removeVerified = (recording: PendingMeeting | undefined) => {
+      if (!recording || recording.id !== id || recording.ownerId !== ownerId || JSON.stringify(recording) !== JSON.stringify(metadata)) { tx.abort(); return }
+      const cursor = store.openCursor()
+      cursor.onsuccess = () => {
+        const row = cursor.result
+        if (row) {
+          const key = String(row.key)
+          if (recording.fileName && key !== `pending:${id}` && key !== `cleanup:${id}` &&
+              (key.startsWith('pending:') || key.startsWith('cleanup:')) && row.value?.fileName === recording.fileName) {
+            tx.abort(); return
+          }
+          row.continue(); return
+        }
+        store.put({ id, ownerId, fileName: recording.fileName }, `deleted:${id}`)
+        store.delete(id)
+        store.delete(`pending:${id}`)
+        if (recording.fileName) store.put(recording, `cleanup:${id}`)
+      }
+    }
     const request = store.get(`pending:${id}`)
     request.onsuccess = () => {
       const recording = request.result as PendingMeeting | undefined
-      if (!recording) return // A previous attempt already committed IDB deletion.
-      if (recording.ownerId !== ownerId) { tx.abort(); return }
-      store.delete(id)
-      store.delete(`pending:${id}`)
-      // Keep a cleanup receipt if OPFS removal fails or the app exits.
-      if (recording.fileName) store.put(recording, `cleanup:${id}`)
+      if (!recording) {
+        const cleanup = store.get(`cleanup:${id}`)
+        cleanup.onsuccess = () => removeVerified(cleanup.result)
+        cleanup.onerror = () => tx.abort()
+        return
+      }
+      removeVerified(recording)
     }
     tx.oncomplete = () => resolve()
     tx.onerror = () => reject(tx.error ?? new Error('无法删除录制文件'))

@@ -1,10 +1,19 @@
 """Narrow owner-bound source references. No client paths, media copies or cycles."""
 import threading
 import uuid
+from functools import wraps
 from fastapi import HTTPException
 from app.services.task_generation_context import _read_json
 
 SOURCE_LOCK = threading.RLock()
+
+
+def source_locked(function):
+    @wraps(function)
+    def wrapped(*args, **kwargs):
+        with SOURCE_LOCK:
+            return function(*args, **kwargs)
+    return wrapped
 
 
 def resolve_reference(artifacts, folder):

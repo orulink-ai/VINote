@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { apiJson } from '@/lib/api';
 import { useAuthStore } from '@/stores/authStore';
 import { useAppModeStore } from '@/stores/appModeStore';
+import { deletedMeetingOperation, deletedMeetingTasks, rememberDeletedMeetingOperation } from '@/lib/deletedMeetingTasks';
 export type TaskWorkspace = { scope: 'personal' | 'team'; teamId?: string };
 export type CenterTask = { label: string; status?: string; errorCode?: string; message?: string; measure?: string; progress?: number; title?: string; noteId?: string; complete: boolean; failed: boolean; terminal: boolean; unavailable?: boolean };
 const labels: Record<string,string> = {pending:'等待处理',queued:'排队中',preparing:'准备来源',preparing_media:'准备资料',downloading:'下载中',transcribing:'转写中',diarizing:'分析说话人',parallel_analysis:'转写与说话人分析',aligning:'对齐转写',analyzing_video:'分析共享画面',summarizing:'生成内容中',screenshots:'整理画面',saving:'保存中',saving_result:'保存中'};
@@ -10,7 +11,7 @@ const initial = ():CenterTask => ({label:'正在读取状态',complete:false,fai
 export function useTaskCenter(owner:string|undefined, taskIds:string[], enabled:boolean, refresh=0, operationIds:string[]=[], workspaces:Record<string,TaskWorkspace>={}):Record<string,CenterTask> {
  const origin=useAppModeStore(s=>s.config?.server_url);
  const ids=[...new Set(taskIds.filter(id=>/^[A-Za-z0-9_-]{1,160}$/.test(id)))].sort();
- const operations=[...new Set(operationIds.filter(id=>/^[A-Za-z0-9_-]{1,160}$/.test(id)))].sort();
+ const operations=[...new Set(operationIds.filter(id=>/^[A-Za-z0-9_-]{1,160}$/.test(id)&&(!owner||!deletedMeetingOperation(owner,id))))].sort();
  const destinations=Object.fromEntries(Object.entries(workspaces).sort(([a],[b])=>a.localeCompare(b)));
  const [visit,setVisit]=useState(0);
  const binding=JSON.stringify([owner,origin,enabled,ids,operations,destinations,refresh,visit]);
@@ -51,7 +52,9 @@ export function useTaskCenter(owner:string|undefined, taskIds:string[], enabled:
       const receipt=await apiJson<{operation_id:string;task_id?:string;state?:string}>(`/api/source-requests/${encodeURIComponent(operation)}`,{signal:readSignal()});
       if(!active())return;
       if(receipt.operation_id!==operation||!['reserved','accepted'].includes(receipt.state||''))throw new Error('unverified');
-      if(receipt.state==='accepted'&&receipt.task_id&&/^[A-Za-z0-9_-]{1,160}$/.test(receipt.task_id)){tasks.add(receipt.task_id);states[receipt.task_id]??=initial();resolved.set(operation,receipt.task_id);pendingOperations.delete(operation)}
+      if(receipt.state==='accepted'&&receipt.task_id&&/^[A-Za-z0-9_-]{1,160}$/.test(receipt.task_id)){
+       if(deletedMeetingTasks(owner).has(receipt.task_id)){rememberDeletedMeetingOperation(owner,operation,receipt.task_id);pendingOperations.delete(operation);delete states[`operation:${operation}`];continue}
+       tasks.add(receipt.task_id);states[receipt.task_id]??=initial();resolved.set(operation,receipt.task_id);pendingOperations.delete(operation)}
       else states[`operation:${operation}`]={...initial(),label:'已登记，等待受理'};
       publish();
     }catch{if(active()){states[`operation:${operation}`]={...states[`operation:${operation}`],unavailable:true};publish()}}}}));

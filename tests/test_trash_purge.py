@@ -33,6 +33,8 @@ def trash(tmp_path, monkeypatch):
 
     monkeypatch.setattr(note_repository, 'session_scope', scope)
     monkeypatch.setattr(local_file_service, 'session_scope', scope)
+    from app import db as database
+    monkeypatch.setattr(database, 'session_scope', scope)
     monkeypatch.setattr(settings, 'output_dir', tmp_path / 'output')
     monkeypatch.setattr(settings, 'data_dir', tmp_path / 'data')
     artifacts = TaskArtifactService(settings.output_dir)

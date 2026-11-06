@@ -12,7 +12,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from app.config import settings
-from app.db_models import SourceRequestDB
+from app.db_models import MeetingDeletionDB, SourceRequestDB
 from app.services.source_request_service import SourceRequestService
 from app.services.task_model_source import SNAPSHOT_FILE
 from app.services.vilab_cloud_service import VILabCloudService, _task_source
@@ -25,12 +25,16 @@ def case(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, 'vilab_server_url', 'https://summary.invalid')
     engine = create_engine('sqlite:///' + str(tmp_path / 'receipts.db'), connect_args={'check_same_thread': False})
     SourceRequestDB.__table__.create(engine)
+    MeetingDeletionDB.__table__.create(engine)
 
     @contextmanager
     def sessions():
         with Session(engine, expire_on_commit=False) as db, db.begin():
             yield db
 
+    # Retained-source lookups consult deletion receipts via the application
+    # session factory; keep that lookup in this fixture's temporary database.
+    monkeypatch.setattr('app.db.session_scope', sessions)
     receipts = SourceRequestService(sessions)
     service = SummaryRegenerationService(receipts)
     artifacts = service.artifacts

@@ -115,6 +115,9 @@ class NoteRepository:
             if (connection.dialect.name == "sqlite"
                     and not connection.connection.driver_connection.in_transaction):
                 connection.exec_driver_sql("BEGIN IMMEDIATE")
+            from app.services.meeting_deletion import deleted_task
+            if deleted_task(db, payload.task_id):
+                raise ValueError('会议已删除，不能保存其任务结果')
             scope = payload.scope or "personal"
             team_id = None
             if scope == "team":
@@ -239,6 +242,9 @@ class NoteRepository:
             return {}
         return value if isinstance(value, dict) else {}
 
+    from app.services.retained_task_source import source_locked as _source_locked
+
+    @_source_locked
     def delete_note(self, user_id: str, note_id: str, *, personal_only: bool = False) -> bool:
         with session_scope() as db:
             source = self._get_accessible_record(db, user_id=user_id, note_id=note_id)

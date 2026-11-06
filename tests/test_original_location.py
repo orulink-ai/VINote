@@ -26,6 +26,7 @@ from app.services.task_artifact_service import TaskArtifactService
 
 @pytest.fixture
 def location(tmp_path, monkeypatch):
+    from app.db_models import MeetingDeletionDB  # register the deletion journal
     def forbidden(*a, **kw):
         raise AssertionError("Location reads must not run subprocesses or call providers")
     monkeypatch.setattr(subprocess, "run", forbidden)
@@ -34,7 +35,7 @@ def location(tmp_path, monkeypatch):
     for key, value in dict(desktop_runtime=True, workspace_cloud_runtime=False, content_cloud_runtime=False,
                            cloud_auth_url="", data_dir=tmp_path / "data", output_dir=tmp_path / "output").items():
         monkeypatch.setattr(settings, key, value)
-    engine = create_engine("sqlite:///" + str(tmp_path / "state.db"))
+    engine = create_engine("sqlite:///" + str(tmp_path / "state.db"), connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
 
     @contextmanager
@@ -43,6 +44,7 @@ def location(tmp_path, monkeypatch):
             yield db
 
     monkeypatch.setattr(local_file_service, "session_scope", scope)
+    monkeypatch.setattr("app.db.session_scope", scope)
     monkeypatch.setattr(note_repository, "session_scope", scope)
     monkeypatch.setattr(original_location, "session_scope", scope)
     files = local_file_service.LocalFileService()

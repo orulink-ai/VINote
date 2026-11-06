@@ -408,3 +408,15 @@ it('puts date and status in a filter dialog while search remains on the list', a
   expect(screen.getByRole('dialog', { name: '筛选会议' })).toBeVisible();
   expect(screen.getByLabelText('按会议日期筛选')).toBeVisible();
 });
+
+it('confirms deletion of an entire meeting and leaves it visible when deletion fails', async () => {
+  const remove = vi.fn().mockRejectedValue(new Error('删除失败'))
+  render(<MeetingWorkbench notes={[note('object')]} recordings={[]} loading={false} onOpenNote={vi.fn()} onDeleted={vi.fn()} onDeleteMeeting={remove} />)
+  await userEvent.click(screen.getByRole('button', { name: heading('one-meeting') }))
+  await userEvent.click(screen.getByRole('button', { name: '删除整场会议' }))
+  expect(remove).not.toHaveBeenCalled()
+  await userEvent.click(screen.getByRole('button', { name: '确认删除会议' }))
+  expect(await screen.findByRole('alert')).toHaveTextContent('删除失败')
+  await userEvent.click(screen.getByRole('button', { name: '取消' }))
+  expect(screen.getByRole('button', { name: heading('one-meeting') })).toBeVisible()
+})

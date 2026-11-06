@@ -1,7 +1,7 @@
 {
   "name": "vinote-frontend",
   "private": true,
-  "version": "0.3.6",
+  "version": "0.3.7",
   "description": "VINote desktop and web frontend",
   "type": "module",
   "author": "VINote",
@@ -66,6 +66,7 @@
     "@vitejs/plugin-react": "^4.2.1",
     "autoprefixer": "^10.4.17",
     "cross-env": "^7.0.3",
+    "fake-indexeddb": "^6.2.7",
     "jsdom": "^27.0.1",
     "playwright": "^1.58.2",
     "postcss": "^8.4.35",

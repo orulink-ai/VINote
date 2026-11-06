@@ -28,6 +28,7 @@ import { RelatedSummaryTasks } from '@/components/Notes/RelatedSummaryTasks'
 
 type StoredFile = { id: string; filename: string; purpose?: FilePurposeView; source_type?: string; processing_status?: string; error_code?: string; retryable?: boolean; title?: string; category: string; size_bytes: number; created_at: string; available: boolean; note_id?: string; task_id?: string; content_url: string; location: string; media_type: string; can_delete: boolean; can_generate: boolean }
 type FileRow = { id: string; title: string; category: string; purpose: FilePurposeView; date: string; recording?: PendingMeeting; file?: StoredFile }
+const isMeetingOriginal = (file: StoredFile) => originalPurpose(file) === 'meeting' || file.source_type?.startsWith('meeting_')
 const categories = [{ id: 'all', label: '全部' }, { id: 'audio', label: '音频' }, { id: 'video', label: '视频' }, { id: 'document', label: '文档' }]
 const formatLabel = (category: string) => categories.find(item => item.id === originalFormat(category))!.label
 const sourceBadge = (row: FileRow) => row.category === 'screen' ? '录屏' : row.category === 'video' && row.file ? '导入视频' : row.recording ? '录音' : ''
@@ -116,7 +117,7 @@ export function FileLibrary({ scope }: { scope?: 'meeting' | 'note' }) {
   const closeDetails = () => { setSelected(null); setParams(current => { const next = new URLSearchParams(current); next.delete('file'); return next }, { replace: true, state: location.state }) }
   const openDetails = (row: FileRow) => { setSelected(row); setParams(current => { const next = new URLSearchParams(current); next.set('type', category); next.set('q', query); if (!sourceNote) next.set('purpose', row.purpose); next.set('file', row.id); return next }, { replace: true, state: location.state }) }
   const beginDeletion = (file: StoredFile) => {
-    if (!owner || useAuthStore.getState().user?.id !== owner) return
+    if (!owner || useAuthStore.getState().user?.id !== owner || isMeetingOriginal(file)) return
     deletionContext.current = { owner, route: location.pathname + location.search + location.hash }
     // Keep the selection in the URL; the confirmation temporarily replaces its Sheet.
     setError(''); setDeletion(file)
@@ -222,7 +223,7 @@ export function FileLibrary({ scope }: { scope?: 'meeting' | 'note' }) {
     finally { setBusy(false) }
   }
   const remove = async () => {
-    if (!deletion) return
+    if (!deletion || isMeetingOriginal(deletion)) return
     const context = deletionContext.current
     const sameContext = () => !!context && context.owner === useAuthStore.getState().user?.id
       && context.route === location.pathname + location.search + location.hash
@@ -237,6 +238,11 @@ export function FileLibrary({ scope }: { scope?: 'meeting' | 'note' }) {
   const sourceRows = sourceNote ? scopedRows.filter(row => row.file?.note_id === sourceNote || row.recording?.noteId === sourceNote) : scopedRows
   const purposeRows = sourceRows.filter(row => row.purpose === purpose)
   const visible = sourceNote ? sourceRows : purposeRows.filter(r => (category === 'all' || originalFormat(r.category) === category) && `${r.title} ${r.file?.filename || ''} ${r.file?.title || r.recording?.options.title || ''}`.toLowerCase().includes(query.trim().toLowerCase()))
+  const meetingDeletionPath = selected?.file ? '/meetings?' + new URLSearchParams({
+    ...(selected.file.note_id ? { locate_note: selected.file.note_id } : {}),
+    ...(selected.file.task_id ? { locate_task: selected.file.task_id } : {}),
+    locate_focus: 'meeting', returnTo,
+  }).toString() : '/meetings'
   const contentTarget = (noteId: string, row = selected, focus?: 'meeting') => {
     if (row?.purpose === 'meeting') {
       const target = new URL(parent.split(/[?#]/)[0] === '/meetings' ? parent : '/meetings', 'https://vinote.invalid')
@@ -271,9 +277,15 @@ export function FileLibrary({ scope }: { scope?: 'meeting' | 'note' }) {
         </section>
         <section aria-labelledby="file-management-heading" className="grid gap-3 border-t pt-4"><h2 id="file-management-heading" className="text-sm font-medium">原件管理</h2>
           {selected.file.available ? <OriginalDownloadButton key={`${owner}:${selected.file.id}`} url={selected.file.content_url + (selected.file.id.startsWith('note:') || selected.file.id.startsWith('task:') ? '' : '?download=true')} filename={selected.file.filename} /> : <Button variant="outline" disabled>原件不可用，暂不能导出</Button>}
+          {isMeetingOriginal(selected.file) ? <>
+            <p className="text-xs leading-5 text-muted-foreground">会议原文件与相关纪要一起删除，请前往会议档案选择“删除整场会议”。</p>
+            {!selected.file.task_id && !selected.file.note_id && <p className="text-xs text-muted-foreground">此原件尚未关联会议档案，请到会议页查找并确认对应会议。</p>}
+            <Button variant="ghost" className="h-auto whitespace-normal text-destructive" asChild><Link to={meetingDeletionPath} state={{ returnTo }}>前往会议档案 · 删除整场会议</Link></Button>
+          </> : <>
           <Button ref={deleteButton} variant="ghost" className="text-destructive" disabled={busy || !selected.file.can_delete} onClick={() => beginDeletion(selected.file!)}>删除原始文件</Button>
           {!selected.file.can_delete && <p className="text-xs text-muted-foreground">{selected.file.id.startsWith('task:') ? '此原件作为处理记录的来源保留，当前不支持删除。' : '此原件当前不允许删除；已有正文与版本继续保留。'}</p>}
-          <p className="text-xs leading-5 text-muted-foreground">{selected.file.can_delete ? "删除原文件后，已保存的纪要、笔记、版本与飞书文档仍保留。" : "已保存的纪要、笔记与版本可在对应页面管理。"}</p>
+          <p className="text-xs leading-5 text-muted-foreground">{selected.file.can_delete ? "删除原文件后，已保存的笔记、版本与飞书文档仍保留。" : "已保存的纪要、笔记与版本可在对应页面管理。"}</p>
+          </>}
         </section>
         {error && <p role="alert" className="text-sm">{error}</p>}
       </div>}
@@ -290,7 +302,7 @@ export function FileLibrary({ scope }: { scope?: 'meeting' | 'note' }) {
     </> : <>
     <PageHeading title={sourceNote ? '来源原文件' : scope === 'meeting' ? '会议原文件' : scope === 'note' ? '笔记原文件' : '文件库'} description={sourceNote ? '查看这份内容关联的原文件。正文与版本保留在内容详情中。' : scope ? '查看和管理此类内容的原文件。正文与版本保留在对应内容中。' : '按会议与笔记用途管理原件，正文与版本在会议与笔记中查看。'} actions={<><Button variant="outline" disabled={loading || busy} onClick={() => void load()} aria-label="重新读取文件库"><RefreshCw aria-hidden="true" /></Button>{!sourceNote && scope !== 'meeting' && <Button disabled={busy} onClick={() => scope ? chooseImport(scope) : setImportOpen(true)}><Upload aria-hidden="true" />{busy ? '正在处理…' : '导入资料'}</Button>}</>} />
     {!sourceNote && scope !== 'meeting' && <><input ref={input} className="sr-only" type="file" aria-label="选择保存到文件库的原文件" aria-describedby={!scope ? 'file-import-help' : undefined} disabled={busy} onChange={e => { const file = e.target.files?.[0]; if (file) void upload(file) }} />
-    {!scope && <p id="file-import-help" className="sr-only">导入后保留原文件，删除文件不影响已保存正文。</p>}</>}
+    {!scope && <p id="file-import-help" className="sr-only">导入后保留原文件。会议原件与相关纪要一起管理。</p>}</>}
     {savedMessage && <p role="status" className="text-sm">{savedMessage}</p>}
     {sourceNote && <p role="status" className="text-sm text-muted-foreground">仅显示与此内容关联的本设备原件。</p>}
     {!sourceNote && !scope && <div role="group" aria-label="资料用途" className="flex flex-wrap gap-1 border-b pb-2">{(['meeting', 'note', ...(rows.some(row => row.purpose === 'unknown') || purpose === 'unknown' ? ['unknown'] : [])] as FilePurposeView[]).map(value => <Button key={value} variant={purpose === value ? 'secondary' : 'ghost'} aria-pressed={purpose === value} className="h-9" onClick={() => setPurpose(value)}>{purposeLabel(value)} · {rows.filter(row => row.purpose === value).length}</Button>)}</div>}

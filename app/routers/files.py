@@ -62,6 +62,20 @@ def delete(identifier: str, user=Depends(get_current_user)):
     return {"deleted": True, "notes_preserved": True}
 
 
+@router.delete("/{identifier}/orphan-meeting")
+def delete_orphan_meeting(identifier: str, user=Depends(get_current_user)):
+    service.delete_orphan_meeting(user.user_id, identifier)
+    return {"deleted": True}
+
+
+@router.delete("/{identifier}/meeting")
+def delete_meeting(identifier: str, user=Depends(get_current_user)):
+    if not identifier.startswith('task:'):
+        raise HTTPException(404, '找不到此会议')
+    from app.services.meeting_deletion import delete_meeting as remove
+    return remove(user.user_id, identifier[5:])
+
+
 class FilePurpose(BaseModel):
     purpose: str
 

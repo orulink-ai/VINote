@@ -680,6 +680,11 @@ def retry_media_task(task_id: str, background_tasks: BackgroundTasks, user=Depen
         model_confirmation = None
     artifacts = _note_service.artifact_service
     with _FILE_TASK_LOCK:
+        from app.db import session_scope
+        from app.services.meeting_deletion import deleted_task
+        with session_scope() as db:
+            if deleted_task(db, task_id):
+                raise HTTPException(409, '会议已删除，不能恢复任务')
         folder = artifacts.find_task_dir(task_id)
         if not folder or not (folder / "recording_owner").exists() or (folder / "recording_owner").read_text(encoding="utf-8") != user.user_id:
             raise HTTPException(404, "Task not found")

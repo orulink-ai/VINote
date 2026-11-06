@@ -123,6 +123,7 @@ def test_wrapper_uses_original_text_and_rejects_inconsistent_wrapper():
 
 @pytest.fixture
 def saved(tmp_path, monkeypatch):
+    from app.db_models import MeetingDeletionDB  # register the deletion journal in the isolated database
     engine = create_engine(f"sqlite:///{tmp_path / 'participants.sqlite'}", connect_args={"check_same_thread": False})
     Base.metadata.create_all(engine)
 
@@ -132,6 +133,7 @@ def saved(tmp_path, monkeypatch):
             yield db
 
     monkeypatch.setattr(module, "session_scope", sessions)
+    monkeypatch.setattr("app.db.session_scope", sessions)
     owner, task, note_key = "synthetic-owner", str(uuid.uuid4()), str(uuid.uuid4())
     with sessions() as db:
         db.add(NoteDB(id=note_key, title="合成会议", content="冻结正文，测试乙。", created_by=owner,

@@ -10,6 +10,22 @@ from app.services.task_failure import failure_details, recovery_status, UNKNOWN_
 from app.services.task_artifact_service import TaskArtifactService
 from app.transcribers.vilab_transcriber import VILabTranscriber
 
+@pytest.fixture(autouse=True)
+def deletion_db(tmp_path, monkeypatch):
+    from contextlib import contextmanager
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.db_models import MeetingDeletionDB
+    engine = create_engine(f"sqlite:///{tmp_path / 'deletions.sqlite'}", connect_args={"check_same_thread": False})
+    MeetingDeletionDB.__table__.create(engine)
+    @contextmanager
+    def sessions():
+        with Session(engine) as db:
+            yield db
+    monkeypatch.setattr('app.db.session_scope', sessions)
+    yield
+    engine.dispose()
+
 def test_provider_timeout_remains_terminal_in_recovery():
     error = ASRServiceError("asr_provider_task_timeout")
     status = recovery_status({"status": "failed", "message": str(error), **failure_details(error)})

@@ -119,7 +119,19 @@ def _with_meeting_display_source(note: NoteRecordResponse, owner: str) -> NoteRe
     from app.services.meeting_source_link import MeetingSourceLinkService
     projected = MeetingSourceLinkService().project(owner, note.id)
     if projected is None:
-        return note
+        # A directly owned meeting task can outlive its original media or
+        # source manifest. This fallback is display/deletion identity only.
+        if not note.task_id:
+            return note
+        from app.db import session_scope
+        from app.services.meeting_deletion import verified_meeting
+        try:
+            with session_scope() as db:
+                verified_meeting(db, owner, note.task_id, _artifact_service)
+            projected = {'owner_id': owner, 'canonical_task_id': note.task_id,
+                         'recording_started_at': None}
+        except HTTPException:
+            return note
     return note.model_copy(update={'meeting_source': MeetingSourceResponse(**projected)})
 
 

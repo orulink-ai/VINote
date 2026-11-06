@@ -4,12 +4,13 @@ import { useAuthStore } from '@/stores/authStore'
 import { apiJson } from '@/lib/api'
 import { backgroundNotificationsEnabled, notificationTarget, observeGeneration, sourceNotificationTasks, readTrackedGenerations, TASK_NOTIFICATION_EVENT } from '@/lib/taskNotifications'
 import { backgroundSaveCompletedTask } from '@/lib/backgroundTaskSave'
+import { deletedMeetingTasks, rememberDeletedMeetingOperation, MEETING_TASKS_DELETED } from '@/lib/deletedMeetingTasks'
 import { useNoteLibraryStore } from '@/stores/noteLibraryStore'
 import { useTeamStore } from '@/stores/teamStore'
 import { deliverNativeNotification, focusNotificationWindow, listenNativeNotification } from '@/lib/nativeTaskNotification'
 import { Button } from '@/components/ui/button'
 import { CheckCircle2, AlertCircle, X } from 'lucide-react'
-type Notice = { id: number; title: string; target: string; success?: boolean; action: string }
+type Notice = { id: number; title: string; target: string; success?: boolean; action: string; taskId?: string }
 let sequence = Date.now() % 1000000000
 export function TaskNotifications() {
   const owner = useAuthStore(state => state.user?.id)
@@ -44,13 +45,19 @@ export function TaskNotifications() {
           if (!current()) return
           try {
             if (!task.taskId && task.operationId) {
-              const receipt = await apiJson<{ task_id?: string }>(`/api/source-requests/${encodeURIComponent(task.operationId)}`)
+              const receipt = await apiJson<{ operation_id?: string; state?: string; task_id?: string }>(`/api/source-requests/${encodeURIComponent(task.operationId)}`)
               if (!current()) return
+              if (receipt.task_id && deletedMeetingTasks(owner).has(receipt.task_id)) {
+                if (receipt.operation_id === task.operationId && receipt.state === 'accepted') rememberDeletedMeetingOperation(owner, task.operationId, receipt.task_id)
+                continue
+              }
               task.taskId = receipt.task_id
             }
             if (!task.taskId) continue
+            if (deletedMeetingTasks(owner).has(task.taskId)) continue
             const status = await apiJson<{ task_id: string; status: string; result?: { task_id?: string; title?: string } }>(`/api/task/${encodeURIComponent(task.taskId)}`)
             if (!current()) return
+            if (deletedMeetingTasks(owner).has(task.taskId)) continue
             if (status.task_id !== task.taskId || (status.result?.task_id && status.result.task_id !== task.taskId)) continue
             let noteId: string | undefined
             if (status.status === 'success') {
@@ -62,6 +69,7 @@ export function TaskNotifications() {
                 try {
                   noteId = await backgroundSaveCompletedTask(owner, task.taskId) || undefined
                   if (!current()) return
+                  if (deletedMeetingTasks(owner).has(task.taskId)) continue
                   if (noteId) {
                     const warning = saveWarnings.get(task.taskId)
                     if (warning) setNotices(previous => previous.filter(item => item.id !== warning))
@@ -69,8 +77,8 @@ export function TaskNotifications() {
                     void useNoteLibraryStore.getState().loadNotes(useTeamStore.getState().currentWorkspace)
                   }
                 } catch {
-                  if (current() && !saveWarnings.has(task.taskId)) {
-                    const warning = { id: ++sequence, title: '内容已生成，保存暂未完成', target: notificationTarget(task), action: '继续保存' }
+                  if (current() && !deletedMeetingTasks(owner).has(task.taskId) && !saveWarnings.has(task.taskId)) {
+                    const warning = { id: ++sequence, title: '内容已生成，保存暂未完成', target: notificationTarget(task), action: '继续保存', taskId: task.taskId }
                     saveWarnings.set(task.taskId, warning.id)
                     setNotices(previous => [...previous, warning])
                   }
@@ -82,11 +90,11 @@ export function TaskNotifications() {
             if (!current()) return
             if (!observeGeneration(owner, task, status.status)) continue
             const label = (status.result?.title || task.title || '').slice(0, 48)
-            const notice = { id: ++sequence, title: `${task.meeting ? '会议纪要' : '笔记整理'}${status.status === 'success' ? '已完成' : '未完成'}${label ? ` · ${label}` : ''}`, target: notificationTarget(task, noteId), success: status.status === 'success', action: status.status !== 'success' ? '查看原因' : noteId ? task.meeting ? '打开纪要' : '打开笔记' : '查看结果' }
+            const notice = { id: ++sequence, title: `${task.meeting ? '会议纪要' : '笔记整理'}${status.status === 'success' ? '已完成' : '未完成'}${label ? ` · ${label}` : ''}`, target: notificationTarget(task, noteId), success: status.status === 'success', action: status.status !== 'success' ? '查看原因' : noteId ? task.meeting ? '打开纪要' : '打开笔记' : '查看结果', taskId: task.taskId }
             destinations.set(notice.id, notice.target)
             setNotices(previous => [...previous, notice])
             if ((document.visibilityState !== 'visible' || !document.hasFocus()) && backgroundNotificationsEnabled(owner)) {
-              try { await listenerReady; if (current()) await deliverNativeNotification(notice.id, notice.title, () => current() && (document.visibilityState !== 'visible' || !document.hasFocus())) } catch { /* In-app fallback remains available. */ }
+              try { await listenerReady; if (current() && !deletedMeetingTasks(owner).has(task.taskId)) await deliverNativeNotification(notice.id, notice.title, () => current() && !deletedMeetingTasks(owner).has(task.taskId!) && (document.visibilityState !== 'visible' || !document.hasFocus())) } catch { /* In-app fallback remains available. */ }
             }
           } catch { /* Transport failure is not task failure. Never resubmit. */ }
         }
@@ -95,8 +103,10 @@ export function TaskNotifications() {
     void poll()
     const timer = setInterval(() => { void poll() }, 3000)
     const wake = () => { void poll() }
+    const removeDeleted = () => { const ids = deletedMeetingTasks(owner); setNotices(previous => previous.filter(item => !item.taskId || !ids.has(item.taskId))) }
     window.addEventListener(TASK_NOTIFICATION_EVENT, wake)
-    return () => { alive = false; clearInterval(timer); unregister(); window.removeEventListener(TASK_NOTIFICATION_EVENT, wake) }
+    window.addEventListener(MEETING_TASKS_DELETED, removeDeleted)
+    return () => { alive = false; clearInterval(timer); unregister(); window.removeEventListener(TASK_NOTIFICATION_EVENT, wake); window.removeEventListener(MEETING_TASKS_DELETED, removeDeleted) }
   }, [owner, navigate, epoch])
   if (!owner || !notices.length) return null
   return <section aria-label="任务结果通知" className="task-result-notices">

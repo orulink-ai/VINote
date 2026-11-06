@@ -10,11 +10,11 @@ import { START_MEETING_EVENT } from '@/lib/meetingCapture'
 
 const state = vi.hoisted(() => ({
   notes: [] as LibraryNote[], recordings: [] as PendingMeeting[],
-  loadNotes: vi.fn(), list: vi.fn(), api: vi.fn(), update: vi.fn(),
+  loadNotes: vi.fn(), list: vi.fn(), api: vi.fn(), update: vi.fn(), removeRecording: vi.fn(), getRecording: vi.fn(), getCleanup: vi.fn(),
   workspace: { scope: 'personal' as const },
 }))
-vi.mock('@/lib/api', () => ({ apiJson: state.api }))
-vi.mock('@/lib/audioStorage', () => ({ listPendingMeetings: state.list, updatePendingMeeting: state.update }))
+vi.mock('@/lib/api', async () => ({ ...(await vi.importActual<typeof import('@/lib/api')>('@/lib/api')), apiJson: state.api }))
+vi.mock('@/lib/audioStorage', () => ({ listPendingMeetings: state.list, updatePendingMeeting: state.update, deleteLocalRecording: state.removeRecording, getPendingMeeting: state.getRecording, getRecordedAudio: state.getCleanup }))
 vi.mock('@/lib/i18n', () => ({ useI18n: () => ({ locale: 'zh' }) }))
 vi.mock('@/stores/authStore', () => ({ useAuthStore: Object.assign((select: (s: { user: { id: string } }) => unknown) => select({ user: { id: 'owner' } }), { getState: () => ({ user: { id: 'owner' } }) }) }))
 vi.mock('@/stores/teamStore', () => ({ useTeamStore: () => ({ currentWorkspace: state.workspace, teams: [] }), getWorkspaceLabel: () => '个人空间' }))
@@ -26,6 +26,7 @@ vi.mock('@/components/MeetingRecorder/SavedRecordingChoice', () => ({ SavedRecor
 vi.mock('@/components/MeetingRecorder/MicrophoneCheck', () => ({ MicrophoneCheck: () => null }))
 vi.mock('@/components/MeetingRecorder/LocalRecordingPreview', () => ({ LocalRecordingPreview: () => <p>本机原件操作</p> }))
 import { Meetings } from './Meetings'
+import { ApiError } from '@/lib/api'
 import { useWorkspaceStore } from '@/stores/workspaceStore'
 const captureTime = (task: string) => new Date(Date.UTC(2026, 9, 10, 7, [...task].reduce((sum, c) => sum + c.charCodeAt(0), 0) % 60)).toISOString()
 const heading = (id: string, state = '已完成', _task = 'task-' + id) => `${id} · ${state}`
@@ -52,6 +53,10 @@ function mount(path = '/meetings') {
   </Routes></MemoryRouter>)
 }
 beforeEach(() => {
+  const localValues = new Map<string, string>();
+  Object.defineProperty(window, 'localStorage', { configurable: true, value: { getItem: (key: string) => localValues.get(key) ?? null, setItem: (key: string, value: string) => localValues.set(key, value), removeItem: (key: string) => localValues.delete(key) } });
+  Object.defineProperty(navigator, 'locks', { configurable: true, value: { request: async (_name: string, _options: unknown, callback: (lock: object) => Promise<unknown>) => callback({}) } });
+  state.getRecording.mockImplementation(async (id: string) => state.recordings.find(item => item.id === id));
   vi.clearAllMocks(); sessionStorage.clear()
   useWorkspaceStore.setState({ owner: 'owner', ready: true, items: [] })
   state.notes = [note('正在使用'), note('已归档纪要', true), note('录屏纪要', true, 'meeting_video'), note('普通文档', true, 'document'), note('名称不是类型', true, 'meeting_unknown')]
@@ -268,4 +273,131 @@ it('keeps one recording and one import entry without a competing originals entry
   expect(await screen.findByRole('button', { name: '录制会议' })).toBeVisible();
   expect(screen.getByRole('button', { name: '导入会议' })).toBeVisible();
   expect(screen.queryByRole('button', { name: '会议原文件' })).toBeNull();
+});
+
+it('deletes a confirmed meeting and its device recording after the server confirms the whole meeting', async () => {
+  const saved = note('联合会议', false, 'meeting_recording', 'canonical');
+  state.notes = [saved];
+  state.recordings = [{ ...recording('local-a'), taskId: 'canonical', noteId: saved.id }];
+  state.api.mockImplementation(async (path: string, options?: RequestInit) => options?.method === 'DELETE'
+    ? { deleted: true, note_ids: [saved.id], task_ids: ['canonical'] } : path === '/api/files' ? { items: [] } : { status: 'success' });
+  state.removeRecording.mockImplementation(async () => { state.recordings = []; });
+  state.loadNotes.mockImplementation(async () => { if (state.removeRecording.mock.calls.length) state.notes = []; });
+  mount();
+  await userEvent.click(await screen.findByRole('button', { name: /^联合会议 ·/ }));
+  await userEvent.click(screen.getByRole('button', { name: '删除整场会议' }));
+  expect(screen.getByRole('dialog')).toHaveTextContent('已发布的飞书文档不会删除');
+  await userEvent.click(screen.getByRole('button', { name: '确认删除会议' }));
+  await waitFor(() => expect(state.removeRecording).toHaveBeenCalledWith('local-a', 'owner'));
+  expect(state.api).toHaveBeenCalledWith('/api/files/task%3Acanonical/meeting', { method: 'DELETE' });
+  expect(JSON.parse(window.localStorage.getItem('vinote:deleted-meeting-tasks:v1:owner')!)).toContain('canonical');
+  await waitFor(() => expect(screen.queryByRole('button', { name: /^联合会议 ·/ })).not.toBeInTheDocument());
+});
+
+it('keeps the local recording when the server rejects meeting deletion', async () => {
+  const saved = note('冲突会议', false, 'meeting_recording', 'canonical');
+  state.notes = [saved]; state.recordings = [{ ...recording('local-conflict'), taskId: 'canonical', noteId: saved.id }];
+  state.api.mockImplementation(async (path: string, options?: RequestInit) => {
+    if (options?.method === 'DELETE') throw new Error('会议正在处理');
+    return path === '/api/files' ? { items: [] } : { status: 'success' };
+  });
+  mount();
+  await userEvent.click(await screen.findByRole('button', { name: /^冲突会议 ·/ }));
+  await userEvent.click(screen.getByRole('button', { name: '删除整场会议' }));
+  await userEvent.click(screen.getByRole('button', { name: '确认删除会议' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('会议正在处理');
+  expect(state.removeRecording).not.toHaveBeenCalled();
+  expect(window.localStorage.getItem('vinote:meeting-deletion:owner')).not.toBeNull();
+});
+
+it('clears a new deletion intent only when the server proves deletion never started', async () => {
+  const saved = note('未开始会议', false, 'meeting_recording', 'canonical');
+  state.notes = [saved]; state.recordings = [];
+  state.api.mockImplementation(async (path: string, options?: RequestInit) => {
+    if (options?.method === 'DELETE') throw new ApiError('会议正在处理', 409, { code: 'deletion_not_started', message: '会议正在处理' });
+    return path === '/api/files' ? { items: [] } : { status: 'success' };
+  });
+  mount();
+  await userEvent.click(await screen.findByRole('button', { name: /^未开始会议 ·/ }));
+  await userEvent.click(screen.getByRole('button', { name: '删除整场会议' }));
+  await userEvent.click(screen.getByRole('button', { name: '确认删除会议' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('会议正在处理');
+  expect(window.localStorage.getItem('vinote:meeting-deletion:owner')).toBeNull();
+  expect(screen.queryByRole('button', { name: '继续删除会议' })).toBeNull();
+});
+
+it.each([404, 409])('releases a recovered deletion intent when the server confirms it never started (%s)', async status => {
+  state.notes = []; state.recordings = [];
+  window.localStorage.setItem('vinote:meeting-deletion:owner', JSON.stringify({ canonical: 'canonical', recordings: [], entries: [] }));
+  state.api.mockImplementation(async (path: string, options?: RequestInit) => {
+    if (options?.method === 'DELETE') throw new ApiError('会议未开始删除', status, { code: 'deletion_not_started', message: '会议未开始删除' });
+    return path === '/api/files' ? { items: [] } : { status: 'success' };
+  });
+  mount();
+  await userEvent.click(await screen.findByRole('button', { name: '继续删除会议' }));
+  await waitFor(() => expect(window.localStorage.getItem('vinote:meeting-deletion:owner')).toBeNull());
+  expect(screen.queryByRole('button', { name: '继续删除会议' })).toBeNull();
+});
+
+it('offers deletion for a recording without minutes only after its canonical identity is verified by the server', async () => {
+  state.notes = []; state.recordings = [{ ...recording('unprocessed'), taskId: 'child-task' }];
+  state.api.mockImplementation(async (path: string, options?: RequestInit) => {
+    if (options?.method === 'DELETE') return { deleted: true, note_ids: [], task_ids: ['canonical', 'child-task'] };
+    return path === '/api/files' ? { items: [{ id: 'task:canonical', task_id: 'child-task', canonical_task_id: 'canonical' }] } : { status: 'success' };
+  });
+  state.removeRecording.mockImplementation(async () => { state.recordings = []; });
+  mount();
+  await waitFor(() => expect(document.querySelector('[data-meeting-row-key] button')).toBeInTheDocument());
+  const record = document.querySelector('[data-meeting-row-key] button') as HTMLElement;
+  await userEvent.click(record);
+  await userEvent.click(await screen.findByRole('button', { name: '删除整场会议' }));
+  await userEvent.click(screen.getByRole('button', { name: '确认删除会议' }));
+  await waitFor(() => expect(state.removeRecording).toHaveBeenCalledWith('unprocessed', 'owner'));
+  expect(state.api).toHaveBeenCalledWith('/api/files/task%3Acanonical/meeting', { method: 'DELETE' });
+});
+
+it('resumes a persisted deletion after reopening the meeting page', async () => {
+  state.notes = []; state.recordings = [{ ...recording('recover-recording'), taskId: 'canonical' }];
+  window.localStorage.setItem('vinote:meeting-deletion:owner', JSON.stringify({ canonical: 'canonical', recordings: ['recover-recording'], entries: [] }));
+  state.api.mockImplementation(async (path: string, options?: RequestInit) => options?.method === 'DELETE' ? { deleted: true, note_ids: [], task_ids: ['canonical'] } : path === '/api/files' ? { items: [] } : { status: 'success' });
+  state.removeRecording.mockImplementation(async () => { state.recordings = []; });
+  mount();
+  await userEvent.click(await screen.findByRole('button', { name: '继续删除会议' }));
+  await waitFor(() => expect(state.removeRecording).toHaveBeenCalledWith('recover-recording', 'owner'));
+  await waitFor(() => expect(window.localStorage.getItem('vinote:meeting-deletion:owner')).toBeNull());
+});
+
+it('retries physical cleanup when a recording is already tombstoned', async () => {
+  state.notes = []; state.recordings = [];
+  const tombstoned = { ...recording('cleanup-id'), taskId: 'canonical' };
+  state.getCleanup.mockResolvedValue(tombstoned);
+  window.localStorage.setItem('vinote:meeting-deletion:owner', JSON.stringify({ canonical: 'canonical', recordings: ['cleanup-id'], entries: [] }));
+  state.api.mockImplementation(async (path: string, options?: RequestInit) => options?.method === 'DELETE' ? { deleted: true, note_ids: [], task_ids: ['canonical'] } : path === '/api/files' ? { items: [] } : { status: 'success' });
+  state.removeRecording.mockResolvedValue(undefined);
+  mount();
+  await userEvent.click(await screen.findByRole('button', { name: '继续删除会议' }));
+  await waitFor(() => expect(state.removeRecording).toHaveBeenCalledWith('cleanup-id', 'owner'));
+  expect(state.getCleanup).toHaveBeenCalledWith('cleanup:cleanup-id');
+});
+
+it('resumes recording cleanup after the workspace cache was already cleared', async () => {
+  state.notes = []; state.recordings = [{ ...recording('remaining-recording'), taskId: 'canonical' }];
+  window.localStorage.setItem('vinote:meeting-deletion:owner', JSON.stringify({ canonical: 'canonical', recordings: ['remaining-recording'], entries: [{ key: 'workspace-cleared', revision: 2 }] }));
+  state.api.mockImplementation(async (path: string, options?: RequestInit) => options?.method === 'DELETE' ? { deleted: true, note_ids: ['saved-note'], task_ids: ['canonical'] } : path === '/api/files' ? { items: [] } : { status: 'success' });
+  state.removeRecording.mockResolvedValue(undefined);
+  mount();
+  await userEvent.click(await screen.findByRole('button', { name: '继续删除会议' }));
+  await waitFor(() => expect(state.removeRecording).toHaveBeenCalledWith('remaining-recording', 'owner'));
+  expect(window.localStorage.getItem('vinote:meeting-deletion:owner')).toBeNull();
+});
+
+it('offers whole-meeting deletion when the server verifies the meeting but the original is missing', async () => {
+  const saved = note('缺失原件会议', false, 'meeting_recording', 'canonical');
+  state.notes = [saved]; state.recordings = [];
+  state.api.mockImplementation(async (path: string, options?: RequestInit) => options?.method === 'DELETE' ? { deleted: true, note_ids: [saved.id], task_ids: ['canonical'] } : path === '/api/files' ? { items: [] } : { status: 'success' });
+  mount();
+  await userEvent.click(await screen.findByRole('button', { name: /^缺失原件会议 ·/ }));
+  await userEvent.click(screen.getByRole('button', { name: '删除整场会议' }));
+  await userEvent.click(screen.getByRole('button', { name: '确认删除会议' }));
+  await waitFor(() => expect(state.api).toHaveBeenCalledWith('/api/files/task%3Acanonical/meeting', { method: 'DELETE' }));
 });
