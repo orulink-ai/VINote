@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { generateKeyPairSync, sign, createHash } from 'node:crypto'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { updaterBuildConfig, verifyUpdaterSignature, readRelease, releasePlan, sha256, UPDATE_ENDPOINT } from './ota-release.mjs'
@@ -22,6 +22,12 @@ function signed(bytes, prehash = true) {
     signature: Buffer.from(`untrusted comment: signature\n${packet.toString('base64')}\ntrusted comment: ${comment}\n${global.toString('base64')}\n`).toString('base64'),
   }
 }
+
+test('packaged updater and release publisher use the new public repository', () => {
+  const config = JSON.parse(readFileSync(new URL('../config/desktop-updater-public.json', import.meta.url), 'utf8'))
+  assert.equal(UPDATE_ENDPOINT, 'https://github.com/vilab-orulink/Vinote-public/releases/latest/download/latest.json')
+  assert.deepEqual(config.endpoints, [UPDATE_ENDPOINT])
+})
 
 test('stable builds fail closed; test builds have no stable updater endpoint', () => {
   assert.throws(() => updaterBuildConfig('release', {}), /PRIVATE_KEY/)
@@ -60,7 +66,7 @@ test('release receipt validates hashes, signatures, channel, clean commit and cr
     const save = () => writeFileSync(join(dir, 'manifest.json'), JSON.stringify(manifest))
     writeFileSync(join(dir, 'VINote.exe'), bytes); writeFileSync(join(dir, 'VINote.exe.sig'), fixture.signature); save()
     const build = readRelease(dir, fixture.publicKey), plan = releasePlan([build])
-    assert.match(plan.latest.platforms['windows-x86_64'].url, /Ro-In-AI\/Vinote-public\/releases\/download\/v1.2.3\/VINote.exe$/)
+    assert.match(plan.latest.platforms['windows-x86_64'].url, /vilab-orulink\/Vinote-public\/releases\/download\/v1.2.3\/VINote.exe$/)
     assert.throws(() => releasePlan([build, build]), /Duplicate release platform/)
     manifest.dirty = true; save(); assert.throws(() => readRelease(dir, fixture.publicKey), /clean committed/)
     manifest.dirty = false; manifest.channel = 'test'; save(); assert.throws(() => readRelease(dir, fixture.publicKey), /stable release/)
@@ -88,10 +94,10 @@ test('publishing waits for both verified uploads and writes latest metadata last
   const fake = fakeGitHub(); await publishRelease(plan, fake, { publish: true })
   const patches = fake.events.filter(event => event.method === 'PATCH')
   assert.equal(patches.length, 2)
-  assert.match(patches[1].path, /Ro-In-AI/)
+  assert.match(patches[1].path, /vilab-orulink/)
   const firstPatch = fake.events.findIndex(event => event.method === 'PATCH')
   assert.equal(fake.events.slice(firstPatch).some(event => event.upload), false)
-  for (const repo of ['orulink-ai/VINote', 'Ro-In-AI/Vinote-public']) assert.equal(fake.events.filter(event => event.repo === repo).at(-1).upload, 'latest.json')
+  for (const repo of ['orulink-ai/VINote', 'vilab-orulink/Vinote-public']) assert.equal(fake.events.filter(event => event.repo === repo).at(-1).upload, 'latest.json')
 })
 
 test('drafts default, corrupt remote uploads and existing public versions never publish', async () => {

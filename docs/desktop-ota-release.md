@@ -6,7 +6,7 @@ package. Windows uses the NSIS `.exe` and `.exe.sig`; macOS uses `.app.tar.gz`
 and `.app.tar.gz.sig` for OTA and retains the `.dmg` for manual installation.
 
 The stable endpoint is
-`https://github.com/Ro-In-AI/Vinote-public/releases/latest/download/latest.json`.
+`https://github.com/vilab-orulink/Vinote-public/releases/latest/download/latest.json`.
 Test packages explicitly disable updater artifact creation and have no stable
 endpoint. Stable packaging refuses to proceed without a signing private key and
 configured public key. The private key/password never belong in source control,
@@ -28,7 +28,7 @@ it prevents existing installations from verifying future updates.
    commit, already merged into the source repository's `dev` branch. A Windows-only release advertises only Windows, never an unavailable
    macOS update. The uploader rejects dirty source receipts and altered files.
 4. Authenticate `gh` for both `orulink-ai/VINote` and
-   `Ro-In-AI/Vinote-public`, with release-write permission. The public repository
+   `vilab-orulink/Vinote-public`, with release-write permission. The public repository
    needs an initialized default branch. Run the same command without `--plan`
    to create drafts and upload identical packages to both repositories. The
    public repo receives assets and release notes only, not the private source.
@@ -54,3 +54,7 @@ Validation: `node --test scripts/ota-release.test.mjs`. These tests cover channe
 isolation, signature interoperability/tampering, checksum/clean-source gates,
 manifest URLs and dual-repository publish ordering. They do not establish an
 actual installer launch or an end-to-end update on a user's device.
+
+## Migration from the former public repository
+
+Versions through 0.3.8 check `Ro-In-AI/Vinote-public`. Publish a signed 0.3.9 bridge release there with `latest.json` pointing to the verified installer in `vilab-orulink/Vinote-public`. Keep that bridge available so older installations can reach 0.3.9; once upgraded, they check the new endpoint for subsequent releases. Do not change the updater signing key.
