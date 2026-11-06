@@ -66,6 +66,8 @@ it('downloads with progress, then requires a separate guarded install and explic
   fireEvent.click(await screen.findByRole('button', { name: '检查更新' }));
   fireEvent.click(await screen.findByRole('button', { name: '下载更新' }));
   expect(await screen.findByText('正在下载：25%')).toBeInTheDocument();
+  const downloadOptions = (update.download.mock.calls[0] as unknown as [unknown, { timeout: number }])[1];
+  expect(downloadOptions.timeout).toBeGreaterThanOrEqual(20 * 60 * 1000);
   expect(update.install).not.toHaveBeenCalled();
   finish();
   const install = await screen.findByRole('button', { name: '确认安装更新' });
@@ -80,6 +82,15 @@ it('downloads with progress, then requires a separate guarded install and explic
   expect(relaunch).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole('button', { name: '立即重启' }));
   expect(relaunch).toHaveBeenCalledTimes(1);
+});
+it('explains a timed out download without claiming signature failure', async () => {
+  const update = available(); update.download.mockRejectedValue(new Error('request timed out'));
+  render(<DesktopUpdatePanel />);
+  fireEvent.click(await screen.findByRole('button', { name: '检查更新' }));
+  fireEvent.click(await screen.findByRole('button', { name: '下载更新' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('下载超时');
+  expect(screen.getByRole('alert')).not.toHaveTextContent('签名校验失败');
+  expect(screen.queryByRole('button', { name: '确认安装更新' })).not.toBeInTheDocument();
 });
 it('failed download/signature verification never enables installation', async () => {
   const update = available(); update.download.mockRejectedValue(new Error('signature'));

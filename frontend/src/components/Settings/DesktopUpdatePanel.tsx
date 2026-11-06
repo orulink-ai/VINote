@@ -58,10 +58,12 @@ export function DesktopUpdatePanel() {
         if (!mounted.current) return;
         if (event.event === 'Started') setTotal(event.data.contentLength);
         if (event.event === 'Progress') setDownloaded(value => value + event.data.chunkLength);
-      }, { timeout: 300000 });
+      }, { timeout: 60 * 60 * 1000 });
       if (mounted.current) setPhase('ready');
-    } catch {
-      if (mounted.current) { setError('下载或签名校验失败，更新未安装。请重新下载。'); setPhase('available'); }
+    } catch (reason) {
+      const message = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : '';
+      const timedOut = /timed?\s*out|timeout|deadline exceeded/i.test(message);
+      if (mounted.current) { setError(timedOut ? '下载超时，更新未安装。请检查网络后重新下载。' : '下载或签名校验失败，更新未安装。请重新下载。'); setPhase('available'); }
     } finally { releaseAfterUnmount(); }
   }
   async function install() {
