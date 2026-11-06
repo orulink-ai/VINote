@@ -1,3 +1,5 @@
+vi.mock('@/stores/noteLibraryStore', () => ({ useNoteLibraryStore: (select: (state: unknown) => unknown) => select({ loadNotes: taskHistoryLoad }) }));
+const taskHistoryLoad = vi.hoisted(() => vi.fn(async () => {}));
 import {cleanup,render,screen,within,waitFor} from '@testing-library/react';
 import {MemoryRouter} from 'react-router-dom';
 import {beforeEach,afterEach,it,expect,vi} from 'vitest';

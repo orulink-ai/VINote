@@ -117,3 +117,11 @@ test('unmerged release commits fail before any GitHub mutation', async () => {
   await assert.rejects(publishRelease(plan, fake, { publish: true }), /merged into origin\/dev/)
   assert.equal(fake.events.length, 0)
 })
+test('multiple drafts for the same tag stop publishing before uploads or additional drafts', async () => {
+  const fake = fakeGitHub(), original = fake.api
+  fake.api = async (method, path, body) => path.endsWith('releases?per_page=100')
+    ? [{ tag_name: 'v1.2.3', draft: true }, { tag_name: 'v1.2.3', draft: true }]
+    : original(method, path, body)
+  await assert.rejects(publishRelease(plan, fake, { publish: true }), /Multiple releases/)
+  assert.equal(fake.events.some(event => event.method === 'POST' || event.upload), false)
+})

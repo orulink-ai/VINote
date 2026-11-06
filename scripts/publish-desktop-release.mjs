@@ -25,7 +25,9 @@ export async function publishRelease(plan, { api, upload, writeMetadata }, { pub
   // Preflight all repositories before creating or uploading anything.
   for (const repo of RELEASE_REPOSITORIES) {
     const existing = await api('GET', `repos/${repo}/releases?per_page=100`)
-    const release = existing.find(item => item.tag_name === plan.tag)
+    const matching = existing.filter(item => item.tag_name === plan.tag)
+    if (matching.length > 1) throw new Error(`Multiple releases for ${repo} ${plan.tag}; inspect drafts before retrying`)
+    const release = matching[0]
     if (release && !release.draft) throw new Error(`Refusing to overwrite published ${repo} ${plan.tag}`)
     releases.push({ repo, release })
   }

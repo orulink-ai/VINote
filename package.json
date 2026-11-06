@@ -42,6 +42,10 @@
     "dev:web:lan": "node scripts/dev.mjs --target web --environment lan",
     "dev:web:lan:plan": "node scripts/dev.mjs --target web --environment lan --plan",
     "dev:web:public": "node scripts/dev.mjs --target web --environment public",
-    "dev:web:public:plan": "node scripts/dev.mjs --target web --environment public --plan"
+    "dev:web:public:plan": "node scripts/dev.mjs --target web --environment public --plan",
+    "start": "node scripts/dev.mjs --target desktop --environment public",
+    "start:web": "node scripts/dev.mjs --target web --environment public",
+    "release:plan": "node scripts/publish-desktop-release.mjs --plan",
+    "release:publish": "node scripts/publish-desktop-release.mjs --publish"
   }
 }

@@ -1,3 +1,5 @@
+vi.mock('@/stores/noteLibraryStore', () => ({ useNoteLibraryStore: (select: (state: unknown) => unknown) => select({ loadNotes: taskHistoryLoad }) }));
+const taskHistoryLoad = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('@/hooks/useTaskCenter', () => ({ useTaskCenter: () => ({}) }));
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { afterEach, beforeEach, expect, it, vi } from 'vitest'
@@ -201,3 +203,28 @@ it('hides only confirmed deleted meeting tasks after the task center reloads and
   expect(screen.queryByText('已删会议')).not.toBeInTheDocument();
   expect(localStorage.getItem('vinote:source-receipt:owner:deleted-op')).toBe(deleted);
 });
+it('shows saved generated notes when their transient import receipts were cleared, without duplicating retained tasks or manual notes', async () => {
+  vi.mocked(useLibraryNotes).mockReturnValue([
+    { id: 'saved-a', title: '已保存的资料笔记', taskId: 'task-a', status: 'done', scope: 'personal' },
+    { id: 'saved-b', title: '已有任务记录', taskId: 'task-b', status: 'done', scope: 'personal' },
+    { id: 'manual', title: '手写笔记', status: 'done', scope: 'personal' },
+  ] as never)
+  localStorage.setItem('vinote:source-receipt:owner:task-b', JSON.stringify({ id: 'task-b', operationId: 'task-b', meeting: false, sourceTitle: '已有任务记录', submissionState: 'accepted' }))
+  render(<MemoryRouter><Tasks /></MemoryRouter>)
+  expect(await screen.findByRole('link', { name: '打开已保存内容' })).toHaveAttribute('href', '/note/saved-a')
+  expect(screen.getAllByRole('heading', { name: '已有任务记录' })).toHaveLength(1)
+  expect(screen.queryByText('手写笔记')).toBeNull()
+})
+
+it('shows a submitted import draft even when its operation receipt is not available', async () => {
+  localStorage.setItem('vinote:import-draft:owner:draft-1', JSON.stringify({ id: 'task-draft', meeting: false, sourceTitle: '新导入资料', submissionState: 'accepted' }))
+  render(<MemoryRouter><Tasks /></MemoryRouter>)
+  expect(await screen.findByRole('heading', { name: '新导入资料' })).toBeVisible()
+})
+it('keeps other task records visible when one local receipt is malformed', async () => {
+  localStorage.setItem('vinote:import-draft:owner:broken', '{bad')
+  localStorage.setItem('vinote:source-receipt:owner:good', JSON.stringify({ id: 'good-task', operationId: 'good', meeting: false, sourceTitle: '可用任务', submissionState: 'accepted' }))
+  render(<MemoryRouter><Tasks /></MemoryRouter>)
+  expect(await screen.findByRole('heading', { name: '可用任务' })).toBeVisible()
+  expect(screen.getByText(/部分任务记录无法读取/)).toBeVisible()
+})

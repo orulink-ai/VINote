@@ -21,7 +21,7 @@ const profile = resolveDesktopProfile({ channel: values.channel, version: baseCo
 })
 if (values.plan) {
   console.log(JSON.stringify({ channel: profile.channel, productName: profile.productName, version: profile.version,
-    identifier: profile.identifier, service: profile.channel === 'release' ? 'official-cloud' : 'lan', buildId: profile.buildId }, null, 2))
+    identifier: profile.identifier, service: profile.config.VILAB_SERVER_URL, buildId: profile.buildId }, null, 2))
   process.exit(0)
 }
 const updaterPublicConfig = JSON.parse(readFileSync(join(root, 'config/desktop-updater-public.json'), 'utf8'))
