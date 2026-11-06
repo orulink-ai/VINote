@@ -219,8 +219,16 @@ function TasksPage({ owner }: { owner?: string }) {
     ...visibleRecordings.flatMap(item => item.taskId ? [item.taskId] : []),
   ]);
   const deletedTasks = owner ? deletedMeetingTasks(owner) : new Set<string>();
+  // A legacy receipt can resolve to the same saved note through an older task.
+  // Compare verified note identities, never titles, so distinct versions remain visible.
+  const coveredNoteIds = new Set([
+    ...Object.values(taskStates).flatMap(task => task.noteId ? [task.noteId] : []),
+    ...Object.values(versionStates).flatMap(state => state.noteId ? [state.noteId] : []),
+    ...visibleRecordings.flatMap(recording => recording.noteId ? [recording.noteId] : []),
+  ]);
   const savedTasks = owner ? notes.filter(note => note.status === 'done' && note.taskId
-    && !coveredTaskIds.has(note.taskId) && !deletedTasks.has(note.taskId)) : [];
+    && !coveredTaskIds.has(note.taskId) && !deletedTasks.has(note.taskId)
+    && ![note.id, note.localId, ...(note.sourceIds || [])].some(id => !!id && coveredNoteIds.has(id))) : [];
   const shownSavedTasks = savedTasks.filter(note => matches(note.title));
   const hasRows = tab === 'generation' ? visibleImports.length + visibleRecordings.length + savedTasks.length > 0 : deliveries.length > 0;
   const hasMatches = tab === 'generation' ? shownImports.length + shownRecordings.length + shownSavedTasks.length > 0 : shownDeliveries.length > 0;
