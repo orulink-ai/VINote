@@ -57,4 +57,4 @@ actual installer launch or an end-to-end update on a user's device.
 
 ## Migration from the former public repository
 
-Versions through 0.3.8 check `Ro-In-AI/Vinote-public`. Publish a signed 0.3.9 bridge release there with `latest.json` pointing to the verified installer in `vilab-orulink/Vinote-public`. Keep that bridge available so older installations can reach 0.3.9; once upgraded, they check the new endpoint for subsequent releases. Do not change the updater signing key.
+Versions through 0.3.8 check `Ro-In-AI/Vinote-public`. This migration does not publish a bridge there: install 0.3.9 from the new public repository to switch existing installations to the new endpoint. Starting with 0.3.9, subsequent stable updates use `vilab-orulink/Vinote-public`. Keep the existing updater signing key.
