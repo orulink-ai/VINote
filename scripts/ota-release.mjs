@@ -2,7 +2,7 @@ import { createHash, createPublicKey, verify } from 'node:crypto'
 import { readFileSync, statSync } from 'node:fs'
 import { join, basename } from 'node:path'
 
-export const PUBLIC_REPOSITORY = 'Ro-In-AI/Vinote-public'
+export const PUBLIC_REPOSITORY = 'vilab-orulink/Vinote-public'
 export const RELEASE_REPOSITORIES = ['orulink-ai/VINote', PUBLIC_REPOSITORY]
 export const UPDATE_ENDPOINT = `https://github.com/${PUBLIC_REPOSITORY}/releases/latest/download/latest.json`
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')

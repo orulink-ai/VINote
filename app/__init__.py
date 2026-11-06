@@ -16,7 +16,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title="VINote",
         description="Video-to-markdown note generation API.",
-        version="0.3.8",
+        version="0.3.9",
     )
 
     app.add_middleware(
