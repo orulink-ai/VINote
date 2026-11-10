@@ -175,6 +175,62 @@ def test_public_automatic_endpoint_is_absent_desktop_owns_dispatch(contact_servi
     process.assert_not_called()
 
 
+def test_device_bound_route_deduplicates_and_rejects_a_changed_connection(contact_service, http_client, monkeypatch):
+    client, _ = http_client
+    binding = contact_service._connection_status('a')['connection_binding_hash']
+    monkeypatch.setattr(contact_service, 'check_destination', lambda *args: {'kind': 'personal', 'can_attempt_create': True})
+    process = Mock()
+    monkeypatch.setattr(contact_service, 'process', process)
+    body = dict(note_key='device-http', title='标题', content='正文', operation_id=str(uuid.uuid4()),
+                expected_connection_binding=binding, source_mode='local_snapshot',
+                destination_config={'kind': 'personal'}, notify_self=False, groups=[])
+    first = client.post('/api/feishu/deliveries/device-bound', json=body)
+    assert first.status_code == 200, first.text
+    second = client.post('/api/feishu/deliveries/device-bound', json=body)
+    assert second.status_code == 200, second.text
+    assert first.json()['id'] == second.json()['id']
+    process.assert_called_once()
+    rejected_id = str(uuid.uuid4())
+    bad = client.post('/api/feishu/deliveries/device-bound', json={**body, 'operation_id': rejected_id, 'expected_connection_binding': '0' * 64})
+    assert bad.status_code == 409
+    assert client.get('/api/feishu/deliveries/device-bound/by-operation/' + rejected_id).json() == {'state': 'rejected', 'operation_id': rejected_id}
+
+
+def test_device_bound_route_creates_document_and_notifies_once(contact_service, http_client, monkeypatch):
+    client, _ = http_client
+    binding = contact_service._connection_status('a')['connection_binding_hash']
+    monkeypatch.setattr(contact_service, 'check_destination', lambda *args: {'kind': 'personal', 'can_attempt_create': True})
+    creates, messages = [], []
+    monkeypatch.setattr(contact_service, 'create_document', lambda *args: (creates.append('created') or 'doc1', 'https://company.feishu.cn/docx/doc1'))
+    monkeypatch.setattr(contact_service, 'write_document', lambda *args: None)
+    monkeypatch.setattr(contact_service, 'ensure_permission', lambda *args: {'status': 'verified'})
+    monkeypatch.setattr(contact_service, 'send_message', lambda owner, target, job: messages.append(target) or 'message-id')
+    body = dict(note_key='device-complete', title='标题', content='正文', operation_id=str(uuid.uuid4()),
+                expected_connection_binding=binding, source_mode='local_snapshot',
+                destination_config={'kind': 'personal'}, notify_self=True, groups=[])
+    first = client.post('/api/feishu/deliveries/device-bound', json=body)
+    assert first.status_code == 200, first.text
+    second = client.post('/api/feishu/deliveries/device-bound', json=body)
+    assert second.status_code == 200, second.text
+    assert first.json()['id'] == second.json()['id']
+    assert len(creates) == 1
+    assert len(messages) == 1
+
+
+def test_device_rejection_is_durable_when_connection_was_removed(contact_service, http_client):
+    from app.db_models import FeishuConnectionDB
+    client, _ = http_client
+    binding = contact_service._connection_status('a')['connection_binding_hash']
+    with module.session_scope() as db:
+        db.delete(db.get(FeishuConnectionDB, 'a'))
+    operation = str(uuid.uuid4())
+    body = dict(note_key='device-disconnected', title='标题', content='正文', operation_id=operation,
+                expected_connection_binding=binding, source_mode='local_snapshot')
+    rejected = client.post('/api/feishu/deliveries/device-bound', json=body)
+    assert rejected.status_code == 409
+    assert client.get('/api/feishu/deliveries/device-bound/by-operation/' + operation).json()['state'] == 'rejected'
+
+
 def test_local_disable_stops_queue_before_failed_remote_preferences(http_client, monkeypatch):
     client, runtime = http_client
     def fail(*args, **kwargs):

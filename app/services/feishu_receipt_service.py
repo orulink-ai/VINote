@@ -7,6 +7,22 @@ from app.db_models import FeishuDeliveryDB
 from app.models.feishu_destination import FeishuPublishReceiptDB, FeishuPublishRejectionDB, FeishuWriteBatchDB
 
 
+def lock_device_owner(db, owner):
+    """Serialize device acceptance/rejection even when the connection row is absent."""
+    from sqlalchemy import select
+    dialect = db.get_bind().dialect.name
+    if dialect == 'sqlite':
+        from sqlalchemy.dialects.sqlite import insert
+    elif dialect == 'postgresql':
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        raise HTTPException(503, '此数据库不支持设备发布锁')
+    marker = '__device_owner_guard_v1__'
+    db.execute(insert(FeishuPublishRejectionDB).values(owner=owner, operation_id=marker, fingerprint='device-owner-guard').on_conflict_do_nothing(index_elements=['owner', 'operation_id']))
+    db.scalar(select(FeishuPublishRejectionDB).where(FeishuPublishRejectionDB.owner == owner,
+              FeishuPublishRejectionDB.operation_id == marker).with_for_update())
+
+
 def fingerprint(payload):
     return hashlib.sha256(json.dumps(payload, sort_keys=True, ensure_ascii=False,
                                      separators=(",", ":")).encode()).hexdigest()
