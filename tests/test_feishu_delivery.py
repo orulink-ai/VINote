@@ -8,6 +8,69 @@ from app.db import Base
 from app.services import feishu_service as module
 
 
+def test_device_bound_publish_rejects_changed_connection(service):
+    with pytest.raises(module.FeishuError, match='连接已变化'):
+        service.enqueue('a', 'device-bound', '纪要', '正文', operation_id='device-operation',
+                        source_mode='local_snapshot', expected_connection_binding='0' * 64)
+    assert service.delivery('a', 'device-bound') is None
+
+
+def test_device_bound_publish_rechecks_binding_after_destination_lookup(service, monkeypatch):
+    from app.db_models import FeishuConnectionDB
+    binding = service._connection_status('a')['connection_binding_hash']
+    def change_connection(*args):
+        with module.session_scope() as db:
+            db.get(FeishuConnectionDB, 'a').open_id = 'ou_other'
+        return {'kind': 'personal', 'can_attempt_create': True}
+    monkeypatch.setattr(service, 'check_destination', change_connection)
+    with pytest.raises(module.FeishuError, match='连接已变化'):
+        service.enqueue('a', 'device-race', '纪要', '正文', operation_id='device-race-op',
+                        source_mode='local_snapshot', destination_config={'kind': 'personal'},
+                        notify_self=False, groups=[], expected_connection_binding=binding)
+    assert service.delivery('a', 'device-race') is None
+
+
+def test_device_bound_publish_deduplicates_original_operation(service, monkeypatch):
+    binding = service._connection_status('a')['connection_binding_hash']
+    monkeypatch.setattr(service, 'check_destination', lambda *args: {'kind': 'personal', 'can_attempt_create': True})
+    payload = dict(operation_id='device-original-op', source_mode='local_snapshot',
+                   destination_config={'kind': 'personal'}, notify_self=False, groups=[], expected_connection_binding=binding)
+    first = service.enqueue('a', 'device-duplicate', '纪要', '正文', **payload)
+    again = service.enqueue('a', 'device-duplicate', '纪要', '正文', **payload)
+    assert first['id'] == again['id']
+    assert again['_dispatch_required'] is False
+
+
+def test_exact_recovery_does_not_schedule_other_jobs(service):
+    first = service.enqueue('a', 'recovery-one', '纪要一', '正文一')
+    second = service.enqueue('a', 'recovery-two', '纪要二', '正文二')
+    result = service.pending_recovery('a', 1, job_id=second['id'])
+    assert first['id'] not in result['scheduled']
+    assert second['id'] in result['scheduled']
+
+
+def test_cancelled_delivery_cannot_be_recovered_or_sent(service, monkeypatch):
+    sent = []
+    job = service.enqueue('a', 'cancel-before-delete', '纪要', '正文')
+    assert service.cancel_device_delivery('a', job['id'])['cancelled'] is True
+    monkeypatch.setattr(service, 'create_document', lambda *args: sent.append('create'))
+    service.process('a', job['id'])
+    assert sent == []
+    assert job['id'] not in service.pending_recovery('a', 1, job_id=job['id'])['scheduled']
+
+
+def test_interrupted_receipt_reports_persisted_status_for_safe_recovery(service):
+    from datetime import datetime, timedelta, timezone
+    from app.db_models import FeishuDeliveryDB
+    job = service.enqueue('a', 'stale-device', '纪要', '正文')
+    with module.session_scope() as db:
+        db.get(FeishuDeliveryDB, job['id']).created_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+    result = service.delivery_by_id('a', job['id'])
+    assert result['status'] == 'failed'
+    assert result['storage_status'] == 'queued'
+    assert job['id'] in service.pending_recovery('a', 1, job_id=job['id'])['scheduled']
+
+
 @pytest.mark.parametrize('mode', ['confirmed', 'grant_denied', 'readback_denied', 'membership_changed', 'message_unknown'])
 def test_enhanced_group_contract_freezes_target_and_orders_permission_before_send(scoped_service, monkeypatch, mode):
     events = []

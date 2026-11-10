@@ -6,7 +6,7 @@ from urllib.parse import urlencode
 
 import httpx
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.config import settings
@@ -14,7 +14,7 @@ from app.db import session_scope
 from app.db_models import CloudAccountDB
 from app.services.auth_service import get_current_user
 from app.services.cloud_account_service import CloudAccountService, _request
-from app.services.feishu_service import FeishuService
+from app.services.feishu_service import FeishuService, FeishuError
 from app.services.feishu_application_service import application_status, save_application, clear_application
 
 router = APIRouter(prefix="/feishu", tags=["feishu"])
@@ -113,6 +113,7 @@ class ContactSelection(BaseModel):
 
 class Publish(BaseModel):
     operation_id: str | None = Field(default=None, min_length=1, max_length=160)
+    expected_connection_binding: str | None = Field(default=None, pattern=r'^[0-9a-f]{64}$')
     note_key: str = Field(min_length=1, max_length=160)
     title: str | None = Field(default=None, min_length=1, max_length=500)
     content: str | None = Field(default=None, min_length=1, max_length=300000)
@@ -337,6 +338,45 @@ def publish(payload: Publish, background: BackgroundTasks, identity=Depends(prin
     return result
 
 
+@router.post('/deliveries/device-bound')
+def publish_device_bound(payload: Publish, background: BackgroundTasks, identity=Depends(principal)):
+    if not payload.expected_connection_binding or not payload.operation_id or payload.automatic or payload.source_mode != 'local_snapshot':
+        raise HTTPException(422, '设备自动发布需要已确认的连接和操作标识')
+    import uuid
+    try:
+        if str(uuid.UUID(payload.operation_id)) != payload.operation_id:
+            raise ValueError()
+    except (ValueError, AttributeError):
+        raise HTTPException(422, '设备自动发布操作标识无效') from None
+    # A distinct route guarantees older servers cannot silently ignore the binding.
+    remote, result = proxy(identity, 'POST', '/deliveries/device-bound', payload.model_dump(exclude_none=True))
+    if remote:
+        return result
+    body = payload.model_dump(exclude_none=True)
+    instance = service.for_owner(identity[0])
+    try:
+        result = instance.enqueue(identity[0], **body)
+    except FeishuError as exc:
+        if exc.uncertain or not 400 <= exc.status_code < 500:
+            raise
+        receipt = instance.record_device_rejection(identity[0], payload.operation_id, body)
+        if receipt['state'] == 'accepted':
+            return {**receipt['delivery'], 'operation_id': payload.operation_id}
+        return JSONResponse(status_code=409, content={'detail': {'code': 'DEVICE_PUBLISH_REJECTED', 'message': '原发布已确认未接收，请核对设置后重新发布', 'operation_id': payload.operation_id}})
+    dispatch = result.pop('_dispatch_required', True) if result else False
+    if result and dispatch:
+        background.add_task(service.for_owner(identity[0]).process, identity[0], result['id'])
+    return result
+
+
+@router.get('/deliveries/device-bound/by-operation/{operation_id}')
+def device_publish_receipt(operation_id: str, response: Response, identity=Depends(principal)):
+    from urllib.parse import quote
+    response.headers['Cache-Control'] = 'no-store'
+    remote, result = proxy(identity, 'GET', '/deliveries/device-bound/by-operation/' + quote(operation_id, safe=''))
+    return result if remote else service.for_owner(identity[0]).device_operation_result(identity[0], operation_id)
+
+
 @router.post("/deliveries/{job_id}/retry")
 def retry(job_id: str, background: BackgroundTasks, payload: RetryRecipients | None = None,
           identity=Depends(principal)):
@@ -354,6 +394,8 @@ def retry(job_id: str, background: BackgroundTasks, payload: RetryRecipients | N
         if selected is not None:
             service.validate_retry_recipients(job, selected)
         result = service.serialize(job, db=db)
+        if job.status == 'cancelled':
+            raise HTTPException(409, '交付已取消，不能重试')
         if result["phase"] in ("unknown", "permission_unknown"):
             raise HTTPException(409, "原交付结果尚未核验，不能重放未知步骤；请查询原回执")
     background.add_task(service.for_owner(identity[0]).process, identity[0], job_id, selected)
@@ -381,6 +423,27 @@ def resume_pending(background: BackgroundTasks, payload: ResumePending | None = 
     for job_id in result["scheduled"]:
         background.add_task(service.for_owner(identity[0]).process, identity[0], job_id)
     return result
+
+
+@router.post('/deliveries/{job_id}/resume-device')
+def resume_device_delivery(job_id: str, background: BackgroundTasks, identity=Depends(principal)):
+    from urllib.parse import quote
+    remote, result = proxy(identity, 'POST', '/deliveries/' + quote(job_id, safe='') + '/resume-device', {})
+    if remote:
+        return result
+    # Ownership is checked before examining recoverability; no other job is scheduled.
+    service.for_owner(identity[0]).delivery_by_id(identity[0], job_id)
+    result = service.for_owner(identity[0]).pending_recovery(identity[0], 1, job_id=job_id)
+    if job_id in result['scheduled']:
+        background.add_task(service.for_owner(identity[0]).process, identity[0], job_id)
+    return result
+
+
+@router.post('/deliveries/{job_id}/cancel-device')
+def cancel_device_delivery(job_id: str, identity=Depends(principal)):
+    from urllib.parse import quote
+    remote, result = proxy(identity, 'POST', '/deliveries/' + quote(job_id, safe='') + '/cancel-device', {})
+    return result if remote else service.for_owner(identity[0]).cancel_device_delivery(identity[0], job_id)
 
 
 @router.post("/deliveries/{job_id}/document")

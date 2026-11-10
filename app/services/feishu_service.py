@@ -54,6 +54,16 @@ def _lock(owner):
     return _locks[int(hashlib.sha256(owner.encode()).hexdigest(), 16) % len(_locks)]
 
 
+def _manual_request_hash(payload):
+    keys = ('note_key', 'title', 'content', 'destination_config', 'permission_policy', 'notify_self', 'groups', 'version_id', 'revision_id', 'source_mode')
+    value = {key: payload.get(key) for key in keys}
+    value['automatic'] = payload.get('automatic', False)
+    for key in ('contacts', 'recipient_access_policy', 'expected_connection_binding'):
+        if payload.get(key) is not None:
+            value[key] = payload[key]
+    return receipts.fingerprint(value)
+
+
 class FeishuService:
     def __init__(self, owner=None):
         self.owner = owner
@@ -177,6 +187,7 @@ class FeishuService:
                         "enabled": enabled, "enabled_at": saved_policy['enabled_at'] if saved_policy else None},
                     "contacts": [{"open_id": c['open_id'], "name": c['name']} for c in saved_policy['contacts']] if saved_policy else [],
                     "publish_receipt_protocol": 1,
+                    "device_bound_publish_protocol": 1,
                     "contact_selection_protocol": 1,
                     "recipient_access_protocol": recipient_access.PROTOCOL,
                     "formatting_protocol": 2,
@@ -686,7 +697,7 @@ class FeishuService:
             phase = "permission_unknown"
         elif interrupted:
             phase = "unknown" if any(item.get("status") == "sending" for item in recipients.values()) else "failed"
-        return {"id": row.id, "status": "failed" if interrupted else row.status, "document_url": row.document_url,
+        return {"id": row.id, "status": "failed" if interrupted else row.status, "storage_status": row.status, "document_url": row.document_url,
                 "needs_document_recovery": row.document_id == "__creating__",
                 "recipients": recipients, "error": "交付被中断，请重试" if interrupted else row.error, "revision": row.revision,
                 "phase": phase, "destination": snapshot.get("destination", {"kind": "personal"}),
@@ -790,6 +801,36 @@ class FeishuService:
             if not job:
                 raise FeishuError("未找到原发布回执，请保留未确认请求；不会自动重新发布", 404, code="receipt_not_found")
             return {**self.serialize(job, db=db), "operation_id": operation_id}
+
+    def device_operation_result(self, owner, operation_id):
+        with session_scope() as db:
+            if db.get(FeishuPublishRejectionDB, (owner, operation_id)):
+                return {'state': 'rejected', 'operation_id': operation_id}
+            job = receipts.operation_job(db, owner, operation_id)
+            if not job:
+                raise FeishuError('原操作尚无可核验回执', 404, code='receipt_not_found')
+            return {'state': 'accepted', 'operation_id': operation_id, 'delivery': self.serialize(job, db=db)}
+
+    def record_device_rejection(self, owner, operation_id, payload):
+        """Commit rejection under the same connection lock used by acceptance."""
+        with _lock(owner), session_scope() as db:
+            receipts.lock_device_owner(db, owner)
+            if db.get_bind().dialect.name == 'sqlite':
+                db.execute(update(FeishuConnectionDB).where(FeishuConnectionDB.owner == owner)
+                           .values(preferences=FeishuConnectionDB.preferences))
+            account = db.scalar(select(FeishuConnectionDB).where(FeishuConnectionDB.owner == owner).with_for_update())
+            old = db.get(FeishuPublishRejectionDB, (owner, operation_id))
+            fingerprint = _manual_request_hash(payload)
+            if old:
+                if old.fingerprint != fingerprint:
+                    raise FeishuError('原操作输入已变化', 409, code='operation_reused')
+                return {'state': 'rejected', 'operation_id': operation_id}
+            job = receipts.operation_job(db, owner, operation_id, fingerprint)
+            if job:
+                return {'state': 'accepted', 'operation_id': operation_id, 'delivery': self.serialize(job, db=db)}
+            db.add(FeishuPublishRejectionDB(owner=owner, operation_id=operation_id, fingerprint=fingerprint))
+            db.flush()
+            return {'state': 'rejected', 'operation_id': operation_id}
 
     @staticmethod
     def resolve_content(db, owner, note_key, title, content, version_id, revision_id, source_mode=None):
@@ -1105,7 +1146,8 @@ class FeishuService:
 
     def enqueue(self, owner, note_key, title=None, content=None, automatic=False, *, destination_config=None,
                 permission_policy=None, notify_self=None, groups=None, version_id=None, revision_id=None,
-                operation_id=None, source_mode=None, contacts=None, recipient_access_policy=None):
+                operation_id=None, source_mode=None, contacts=None, recipient_access_policy=None,
+                expected_connection_binding=None):
         if recipient_access_policy is not None and (
                 recipient_access_policy != recipient_access.POLICY or automatic or not operation_id):
             raise FeishuError("阅读授权与通知需要明确的新发布操作", 422, code="explicit_publish_required")
@@ -1122,7 +1164,9 @@ class FeishuService:
             request_payload["contacts"] = contacts
         if recipient_access_policy is not None:
             request_payload["recipient_access_policy"] = recipient_access_policy
-        request_hash = receipts.fingerprint(request_payload)
+        if expected_connection_binding is not None:
+            request_payload["expected_connection_binding"] = expected_connection_binding
+        request_hash = _manual_request_hash(request_payload)
         if operation_id:
             with session_scope() as db:
                 prior = receipts.operation_job(db, owner, operation_id, request_hash)
@@ -1133,6 +1177,11 @@ class FeishuService:
             self._assert_no_pending_automatic(db, owner, note_key)
             account = db.get(FeishuConnectionDB, owner)
             preferences = json.loads(account.preferences) if account else {}
+            if expected_connection_binding is not None:
+                binding = auto_policy.binding(owner, account, preferences, self.config)
+                digest = auto_policy.fingerprint({"purpose": "feishu-destination-cache/v1", "binding": binding}) if binding else None
+                if digest != expected_connection_binding:
+                    raise FeishuError('飞书连接已变化，请重新确认自动发布设置', 409, code='connection_changed')
             title, content, source = self.resolve_content(db, owner, note_key, title, content, version_id, revision_id, source_mode)
         if automatic and not preferences.get("auto_publish"):
             return None
@@ -1174,7 +1223,8 @@ class FeishuService:
             return self._enqueue(owner, note_key, title, content, automatic, enhanced, destination, policy,
                                  notify, selected_groups, available_groups, version_id, revision_id, content_revision, revision, source,
                                  operation_id, request_hash, selected_contacts, recipient_access_policy,
-                                 manual_group_meeting_versions=group_meeting_versions)
+                                 manual_group_meeting_versions=group_meeting_versions,
+                                 expected_connection_binding=expected_connection_binding)
         except IntegrityError:
             # Cross-process duplicate requests converge on the DB unique constraint.
             with session_scope() as db:
@@ -1195,8 +1245,11 @@ class FeishuService:
     def _enqueue_locked(self, owner, note_key, title, content, automatic, enhanced, destination, policy,
                  notify_self, groups, available_groups, version_id, revision_id, content_revision, revision, source,
                  operation_id=None, request_hash=None, contacts=None, recipient_access_policy=None,
-                 automatic_policy_id=None, attendance=None, manual_group_meeting_versions=None):
+                 automatic_policy_id=None, attendance=None, manual_group_meeting_versions=None,
+                 expected_connection_binding=None):
         with _lock(owner), session_scope() as db:
+            if expected_connection_binding is not None:
+                receipts.lock_device_owner(db, owner)
             if db.get_bind().dialect.name == 'sqlite':
                 # SQLite ignores FOR UPDATE; take its writer lock before the final
                 # policy/pending-job reads, including across server processes.
@@ -1217,6 +1270,11 @@ class FeishuService:
                     return None
                 raise FeishuError("请先连接飞书", 401)
             preferences = json.loads(account.preferences)
+            if expected_connection_binding is not None:
+                binding = auto_policy.binding(owner, account, preferences, self.config)
+                digest = auto_policy.fingerprint({"purpose": "feishu-destination-cache/v1", "binding": binding}) if binding else None
+                if digest != expected_connection_binding:
+                    raise FeishuError('飞书连接已变化，请重新确认自动发布设置', 409, code='connection_changed')
             if not automatic:
                 self._assert_no_pending_automatic(db, owner, note_key)
             if automatic_policy_id is not None:
@@ -1333,7 +1391,7 @@ class FeishuService:
             receipts.bind_operation(db, owner, operation_id, request_hash, row)
             return {**self.serialize(row, db=db), **({"operation_id": operation_id, "_dispatch_required": True} if operation_id else {})}
 
-    def pending_recovery(self, owner, limit=3):
+    def pending_recovery(self, owner, limit=3, job_id=None):
         """Bounded, explicitly triggered recovery; no daemon or infinite retry loop."""
         if not isinstance(limit, int) or not 1 <= limit <= 5:
             raise FeishuError("一次最多恢复 5 个任务", 422)
@@ -1343,9 +1401,12 @@ class FeishuService:
         with session_scope() as db:
             account = db.get(FeishuConnectionDB, owner)
             connection_id = json.loads(account.preferences).get("connection_id")
-            jobs = db.scalars(select(FeishuDeliveryDB).where(
+            query = select(FeishuDeliveryDB).where(
                 FeishuDeliveryDB.owner == owner, FeishuDeliveryDB.status.in_(["queued", "processing"])
-            ).order_by(FeishuDeliveryDB.created_at).limit(100)).all()
+            )
+            if job_id is not None:
+                query = query.where(FeishuDeliveryDB.id == job_id)
+            jobs = db.scalars(query.order_by(FeishuDeliveryDB.created_at).limit(100)).all()
             for job in jobs:
                 if float(job.lease_until) > time.time():
                     continue
@@ -1365,6 +1426,27 @@ class FeishuService:
                     scheduled.append(job.id)
         return {"scheduled": scheduled, "needs_attention": attention, "background_delivery": False,
                 "scan_limit": 100}
+
+    def cancel_device_delivery(self, owner, job_id):
+        """Prevent future retries before the device removes its source."""
+        with _lock(owner), session_scope() as db:
+            if db.get_bind().dialect.name == 'sqlite':
+                db.execute(update(FeishuDeliveryDB).where(FeishuDeliveryDB.id == job_id).values(status=FeishuDeliveryDB.status))
+            job = db.scalar(select(FeishuDeliveryDB).where(FeishuDeliveryDB.id == job_id,
+                            FeishuDeliveryDB.owner == owner).with_for_update())
+            if not job:
+                raise FeishuError('交付记录不存在', 404)
+            if job.status in ('completed', 'cancelled'):
+                return {'cancelled': True, 'status': job.status}
+            metadata = db.get(FeishuDeliveryDestinationDB, job_id)
+            recipients = json.loads(job.recipients)
+            if (job.status == 'processing' or float(job.lease_until) > time.time() or
+                    job.document_id == '__creating__' or not metadata or metadata.phase in ('unknown', 'permission_unknown', 'writing') or
+                    any(item.get('status') in ('unknown', 'sending') for item in recipients.values()) or
+                    receipts.has_unknown_batch(db, job_id) or recipient_access.has_permission_unknown(recipients)):
+                raise FeishuError('发布正在处理或结果未确认，请先核验原任务', 409, code='delivery_not_cancellable')
+            job.status, job.lease_until = 'cancelled', '9999999999'
+            return {'cancelled': True, 'status': 'cancelled'}
 
     def checkpoint(self, owner, job_id, **patch):
         patch.setdefault("lease_until", str(time.time() + 300))
@@ -1847,7 +1929,7 @@ class FeishuService:
                     raise FeishuError('会议已删除，不能继续此交付', 409, code='meeting_deleted')
                 if selected_recipients is not None:
                     self.validate_retry_recipients(job, selected_recipients)
-                if job.status == "completed" or float(job.lease_until) > time.time():
+                if job.status in ("completed", "cancelled") or float(job.lease_until) > time.time():
                     return
                 metadata = db.get(FeishuDeliveryDestinationDB, job_id)
                 if receipts.has_unknown_batch(db, job_id) or (metadata and (
