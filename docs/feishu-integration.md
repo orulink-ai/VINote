@@ -59,4 +59,4 @@
 
 未来源码默认更新只需 `app/config.py`；格式转换功能部署另需当前 `app/services/feishu_service.py` 和新增 `app/services/feishu_markdown.py`，不能只复制 service 而遗漏 helper。本次源码和离线测试不代表已部署、已授权、已转换或收件人可读。
 
-分开运行的本机开发后端也可在回环地址上为桌面 WebView 提供手动飞书连接。自动交付仍由完整桌面运行时启动和调度。
+通过 `yarn dev:api` 启动的本机开发后端也可在回环地址上为桌面 WebView 提供手动飞书连接。该入口设置 `VINOTE_FEISHU_SPLIT_DEV=true`，普通服务部署默认关闭。自动交付仍由完整桌面运行时启动和调度。

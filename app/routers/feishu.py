@@ -23,7 +23,8 @@ async def select_local_desktop_transport(request: Request):
     # The development WebView can use a separately started loopback API.
     # Remote and bearer-authenticated calls must never select the device CLI.
     loopback = {"127.0.0.1", "::1", "localhost"}
-    if (request.headers.get("x-vinote-client") == "desktop"
+    if (settings.allow_split_desktop_feishu
+            and request.headers.get("x-vinote-client") == "desktop"
             and request.client is not None
             and request.client.host in loopback
             and request.url.hostname in loopback

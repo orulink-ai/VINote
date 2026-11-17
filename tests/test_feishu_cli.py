@@ -54,18 +54,20 @@ def test_desktop_request_does_not_fall_back_to_shared_authorization(monkeypatch)
     assert error.value.status_code == 503
 
 
-@pytest.mark.parametrize(("client", "base_url", "expected"), [
-    (("127.0.0.1", 12345), "http://127.0.0.1:8900", 200),
-    (("192.0.2.1", 12345), "http://127.0.0.1:8900", 503),
-    (("127.0.0.1", 12345), "https://example.invalid", 503),
+@pytest.mark.parametrize(("enabled", "client", "base_url", "expected"), [
+    (True, ("127.0.0.1", 12345), "http://127.0.0.1:8900", 200),
+    (False, ("127.0.0.1", 12345), "http://127.0.0.1:8900", 503),
+    (True, ("192.0.2.1", 12345), "http://127.0.0.1:8900", 503),
+    (True, ("127.0.0.1", 12345), "https://example.invalid", 503),
 ])
-def test_split_desktop_feishu_is_local_only(monkeypatch, client, base_url, expected):
+def test_split_desktop_feishu_is_local_only(monkeypatch, enabled, client, base_url, expected):
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
     from app.routers import feishu
     from app.services import feishu_auto_runtime
 
     monkeypatch.setattr(settings, "desktop_runtime", False)
+    monkeypatch.setattr(settings, "allow_split_desktop_feishu", enabled)
     monkeypatch.setattr(feishu, "get_current_user", lambda *_: SimpleNamespace(user_id="local-owner"))
     monkeypatch.setattr(feishu_auto_runtime, "decorate_status", lambda _, result: result)
     app = FastAPI()

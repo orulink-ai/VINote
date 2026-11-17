@@ -4,6 +4,7 @@ import { resolveDesktopDevProfile } from './desktop-dev-profile.mjs'
 import { serviceOrigin } from './service-environments.mjs'
 const { values } = parseArgs({ options: { desktop: { type: 'boolean' } } })
 loadEnv()
+process.env.VINOTE_FEISHU_SPLIT_DEV = 'true'
 if (values.desktop) {
   const profile = resolveDesktopDevProfile({ environment: 'public' })
   process.env.VINOTE_DESKTOP_RUNTIME = 'true'
