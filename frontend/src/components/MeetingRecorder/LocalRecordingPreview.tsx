@@ -108,6 +108,13 @@ export function LocalRecordingPreview({ recording, onOpenNote, confirmOnOpen = f
     : config?.mode === 'local' && selectedASR && selectedLLM ? { mode: 'local', asr: selectedASR.id, llm: selectedLLM.id, asrLabel: `${selectedASR.name} · ${selectedASR.modelName || selectedASR.provider}`, llmLabel: `${selectedLLM.name} · ${selectedLLM.modelName}` } : null
   const displaySelection = generating ? frozenSelection : selection
   const modelError = modeError || (config?.mode === 'local' ? models.error || speech.error : '')
+  const reloadModelConfiguration = () => {
+    void loadMode()
+    if (config?.mode === 'local') {
+      void models.loadProfiles()
+      void speech.loadProfiles()
+    }
+  }
   const needsConfirmation = recording.generationConfirmationRequired || (!recording.taskId && !recording.generationOperation)
   const generate = async (confirm = false) => {
     if (generationLock.current || isMeetingProcessing(recording.id)) return
@@ -135,7 +142,7 @@ export function LocalRecordingPreview({ recording, onOpenNote, confirmOnOpen = f
 
   return <article className="flex min-w-0 flex-col gap-3">
     {expanded ? <div className="border-y bg-muted/20 py-3">{url ? isVideo ? <video src={url} controls preload="metadata" onError={playbackFailed} aria-label={zh ? '录屏回放' : 'Recording playback'} className="max-h-72 w-full rounded-md bg-black" /> : <audio src={url} controls preload="metadata" onError={playbackFailed} aria-label={zh ? '录音回放' : 'Recording playback'} className="w-full" /> : <button type="button" disabled={loading} onClick={() => void load(false)} className="flex min-h-32 w-full flex-col items-center justify-center rounded-md border border-dashed bg-background text-sm text-muted-foreground"><Play className="mb-2 size-5" />{loading ? (zh ? '正在读取文件…' : 'Loading file…') : (zh ? '重新加载并回放' : 'Reload and play')}</button>}</div> : null}
-    <div className="flex flex-col gap-3"><div className="py-2"><div className="flex items-start gap-3">{recording.processingStatus === 'completed' ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : <FileText className="mt-0.5 size-5 text-muted-foreground" />}<div className="min-w-0 flex-1"><p className="text-sm font-medium">{statusText}</p><p className="mt-1 text-xs leading-5 text-muted-foreground">{recording.processingStatus === 'failed' ? (zh ? '原录制与已有处理结果已保留。' : 'Original recording and existing results are preserved.') : processing ? (zh ? '后台处理中，录制控制已经退出。' : 'Processing in the background; capture controls are closed.') : recording.processingStatus === 'completed' ? (zh ? isVideo ? '在详情中查看逐字稿、画面证据和纪要。' : '在详情中查看逐字稿和纪要。' : isVideo ? 'Open transcript, visual evidence and notes.' : 'Open transcript and notes.') : (zh ? '原始媒体已保存在本机，可播放、下载或生成纪要。' : 'Original media is saved locally.')}</p></div></div></div>
+    <div className="flex flex-col gap-3"><div className="py-2"><div className="flex items-start gap-3">{recording.processingStatus === 'completed' ? <CheckCircle2 className="mt-0.5 size-5 text-emerald-600" /> : <FileText className="mt-0.5 size-5 text-muted-foreground" />}<div className="min-w-0 flex-1"><p className="text-sm font-medium">{statusText}</p>{(processing || recording.processingStatus !== 'idle') && <p className="mt-1 text-xs leading-5 text-muted-foreground">{recording.processingStatus === 'failed' ? (zh ? '原录制与已有处理结果已保留。' : 'Original recording and existing results are preserved.') : processing ? (zh ? '后台处理中，录制控制已经退出。' : 'Processing in the background; capture controls are closed.') : recording.processingStatus === 'completed' ? (zh ? isVideo ? '在详情中查看逐字稿、画面证据和纪要。' : '在详情中查看逐字稿和纪要。' : isVideo ? 'Open transcript, visual evidence and notes.' : 'Open transcript and notes.') : null}</p>}</div></div></div>
       {recording.processingStatus === 'transcribing' ? <TranscriptionProgress processedSeconds={recording.processedSeconds} totalSeconds={recording.totalSeconds} etaSeconds={recording.etaSeconds} zh={zh} /> : null}
       <MeetingDisplayEditor sourceKey={displayKey} recording={recording} title={(displayInfo ? displayInfo.title : recording.displayTitle || (recording.titleEdited ? recording.options.title : '')) || ''} date={(displayInfo ? displayInfo.meeting_date : recording.displayDate) || calendarDay(recording.startedAt)} onSaved={() => { void getPendingMeeting(recording.id).then(updated => { if (updated && updated.ownerId === useAuthStore.getState().user?.id) { setRenamedTitle(updated.displayTitle || ''); onRecordingUpdated?.(updated); } }); }} />
       {recording.generationOperation && <details className="text-xs leading-5 text-muted-foreground"><summary className="cursor-pointer py-1">{zh ? '本次处理模型' : 'Processing models'}</summary><p className="mt-1 [overflow-wrap:anywhere]">{zh ? '语音转写：' : 'Transcription: '}{recording.generationOperation.selection.asrLabel}<br />{zh ? '总结：' : 'Summary: '}{recording.generationOperation.selection.llmLabel}</p></details>}
@@ -146,8 +153,16 @@ export function LocalRecordingPreview({ recording, onOpenNote, confirmOnOpen = f
         {generating ? <p role="status">正在处理，原录制保留…</p> : <ModelSourcePanel compact />}
         {displaySelection && <p className="text-sm">语音转写：{displaySelection.asrLabel}；内容总结：{displaySelection.llmLabel}</p>}
         {!selection && <p role="status" className="text-sm text-muted-foreground">请明确选择可用的转写和总结模型，不使用尚未核验的默认配置。</p>}
-        {modelError && <p role="alert" className="text-sm text-destructive">{modelError}</p>}
-        <div className="flex flex-wrap gap-2"><Button disabled={generating || !selection || modelSaving || !!modelError || models.loading || speech.loading} onClick={() => void generate(true)}>{generating ? '正在处理…' : '确认模型并开始生成'}</Button><Button variant="outline" onClick={() => setConfirmGeneration(false)}>{generating ? '收起处理进度' : '暂不生成'}</Button><Button variant="ghost" disabled={generating || modelSaving} onClick={() => { void loadMode(); if (config?.mode === 'local') { void models.loadProfiles(); void speech.loadProfiles() } }}>重新读取模型配置</Button></div>
+        {modelError && !generating && <Alert variant="destructive">
+          <AlertDescription>
+            <p>{modelError}</p>
+            <Button variant="outline" size="sm" className="mt-2" disabled={modelSaving} onClick={reloadModelConfiguration}>重新读取模型配置</Button>
+          </AlertDescription>
+        </Alert>}
+        <div className="flex flex-wrap gap-2">
+          <Button disabled={generating || !selection || modelSaving || !!modelError || models.loading || speech.loading} onClick={() => void generate(true)}>{generating ? '正在处理…' : '确认模型并开始生成'}</Button>
+          <Button variant="outline" onClick={() => setConfirmGeneration(false)}>{generating ? '收起处理进度' : '暂不生成'}</Button>
+        </div>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
       </DialogContent></Dialog>
       <div className="mt-auto grid gap-2">{recording.processingStatus === 'failed' ? <Alert variant="destructive"><AlertDescription>{recording.failedStage ? (zh ? '失败阶段：' : 'Failed stage: ') + (stageCopy[recording.failedStage as keyof typeof stageCopy] || recording.failedStage) + '。' : ''}{recording.processingError}</AlertDescription></Alert> : null}{recording.processingStatus === 'completed' && recording.noteId ? <Button onClick={() => onOpenNote?.(recording.noteId!)}><FileText />{zh ? '查看会议纪要' : 'Open meeting notes'}</Button> : <Button disabled={processing} onClick={restore}>{recording.processingStatus === 'failed' ? <RotateCcw /> : <Sparkles />}{processing ? statusText : recording.processingStatus === 'failed' ? (zh ? '重试会后处理' : 'Retry processing') : (zh ? '生成会议纪要' : 'Generate meeting notes')}</Button>}
@@ -157,9 +172,14 @@ export function LocalRecordingPreview({ recording, onOpenNote, confirmOnOpen = f
           {recording.taskId && <OriginalLocationButton taskId={recording.taskId} disabled={loading} zh={zh} />}
           <Button variant="outline" size="sm" disabled={loading} aria-busy={loading && !!downloadStatus} onClick={() => void load(true)}><Download />{loading && downloadStatus ? (zh ? '正在保存…' : 'Saving…') : (zh ? '另存为…' : 'Save as…')}</Button>
           {loading && downloadStatus && <Button variant="ghost" size="sm" onClick={() => downloadAbort.current?.abort()}>{zh ? '取消导出' : 'Cancel export'}</Button>}
-          <Button variant="ghost" size="sm" className="h-auto whitespace-normal text-destructive" asChild><Link to={meetingPath}><Trash2 />{zh ? '前往会议档案 · 删除整场会议' : 'Meeting dossier · Delete entire meeting'}</Link></Button>
-          <p className="w-full text-xs text-muted-foreground">{zh ? '原录制与相关纪要一起删除，请到会议档案确认。' : 'Delete the original and related notes together from the meeting dossier.'}</p>
         </div>
+        <details className="text-xs text-muted-foreground">
+          <summary className="cursor-pointer py-2">{zh ? '录制管理' : 'Manage recording'}</summary>
+          <Button variant="ghost" size="sm" className="h-auto whitespace-normal text-destructive" asChild>
+            <Link to={meetingPath}><Trash2 />{zh ? '前往会议档案 · 删除整场会议' : 'Meeting dossier · Delete entire meeting'}</Link>
+          </Button>
+          <p>{zh ? '原录制与相关纪要一起删除，请到会议档案确认。' : 'Delete the original and related notes together from the meeting dossier.'}</p>
+        </details>
         {generationStatus && !confirmGeneration && <p role="status" className="text-sm text-muted-foreground">{generationStatus}</p>}
         {downloadStatus && <p role="status" aria-live="polite" className="text-sm text-muted-foreground">{downloadStatus}</p>}
         {error && !confirmGeneration ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}

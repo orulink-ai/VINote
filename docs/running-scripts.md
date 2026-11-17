@@ -42,6 +42,8 @@
 
 首次运行需要 Node.js 22+、Python、FFmpeg/FFprobe；桌面额外需要 Rust 和平台编译工具。`yarn setup` 只准备桌面开发依赖、配置和说话人模型，不打开窗口。已有 `.env` 保留。
 
+macOS 若系统默认 Python 3.14 无法构建当前锁定的 `pydantic-core`，可准备 Python 3.13 虚拟环境，并用 `VINOTE_PYTHON=/path/to/venv/bin/python yarn dev:desktop:public` 启动。完整桌面开发后端还需要 [Langfuse 项目配置](langfuse.md)。
+
 ## 配置预览与验证
 
 六个入口均可追加 `:plan`，例如：
@@ -66,6 +68,8 @@ yarn package:test:plan
 接口脚本发起的本地测试可在被 Git 忽略的 `data/dev-tasks.json` 登记 `[{"taskId":"任务 UUID","label":"音频测试"}]`。源码界面显示“会议处理进度”，有活动任务或读取错误时每两秒通过当前登录会话读取真实任务状态，全部结束后放缓至每三十秒，包括错误、转写时长和服务端提供的预计剩余时间。任务注册接口仅存在于 Vite 开发服务，不包含媒体、凭证或转写内容，安装包不加载此面板。删除登记文件即可隐藏面板。
 
 正式与测试包保留独立安装身份和应用数据目录，可同时安装。两个渠道按顺序构建；产物位于 `.desktop-build/artifacts/<channel>/<version>/<buildId>/`，不自动上传或发布。Windows/macOS 须在对应系统构建，详见[桌面打包](desktop-packaging.md)。
+
+拆分运行桌面时，用 `yarn dev:api --desktop` 让后端启用本机飞书连接和桌面运行配置，仍需桌面 Langfuse 配置。
 
 `yarn dev:api` 仅启动后端，同样忽略 `VILAB_SERVER_URL`，固定使用上述公网服务。`cd frontend && npm run web:dev` 仅启动 Vite；`yarn build` 只构建前端。它们不是上述六个完整入口。
 

@@ -34,6 +34,12 @@ yarn client:test
 
 这两个命令生成可分发安装包，不自动上传 GitHub、对象存储或应用商店。请依次执行构建命令，不同时启动两个渠道构建；前端构建输出仍共用 `frontend/dist`。macOS 产物必须在 macOS 构建，签名、公证仍需相应凭证。
 
+## 应用图标
+
+桌面端沿用移动端蓝底纸张与声波标识，母版的圆角外侧保留透明区域。更新图标时，从已初始化的 App 子模块运行 `python VINote-app/scripts/generate-icons.py --desktop-source <母版 PNG 路径>`（需要 Pillow），再从 `frontend` 运行 `npm run tauri -- icon <母版 PNG 路径> --output <临时输出目录>`。将输出目录顶层对应图标复制到 `frontend/src-tauri/icons/`，包括 macOS 的 `icon.icns`、Windows 的 `icon.ico` 和现有 PNG。移动端图标由 App 子模块单独打包。
+
+将移动端生成的 `assets/branding/vinote-app-icon.png` 和 `vinote-app-icon.svg` 同步到 `frontend/public/app-icon.png` 和 `frontend/public/favicon.svg`，供桌面和网页的侧栏、登录页及浏览器标签使用。桌面 Rust 构建跟踪 `src-tauri/icons/`。macOS 源码调试会在编译时嵌入 Dock 图标，资源更新后需要完成重新编译并运行新进程。
+
 ## 源码与安装包的说话人功能
 
 源码首次启动会检查 sherpa-onnx / NumPy 以及模型，缺失时运行 `scripts/setup_diarization.py` 准备。可用 `yarn setup` 初始化而不打开桌面窗口。首次模型下载需要网络；后续复用本地文件。

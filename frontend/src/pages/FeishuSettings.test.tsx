@@ -54,6 +54,38 @@ afterEach(() => {
   sessionStorage.clear();
 });
 
+it('rejects a shared authorization response in the desktop app and can recheck the local connection', async () => {
+  vi.stubGlobal('__TAURI_INTERNALS__', {});
+  try {
+    vi.mocked(feishuStatus)
+      .mockResolvedValueOnce(status)
+      .mockResolvedValueOnce({ ...status, connected: false, transport: 'cli', setup: { ready: true, cli_available: true } });
+    render(<MemoryRouter><FeishuSettings /></MemoryRouter>);
+    await screen.findByText(/本机飞书服务未启用/);
+    expect(screen.queryByText('测试账号')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: '管理连接' })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: '重新加载' }));
+    expect(await screen.findByRole('button', { name: '连接飞书' })).toBeEnabled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
+it('shows one recovery action until the authorization service is ready', async () => {
+  const disconnected = { ...status, connected: false, name: undefined };
+  vi.mocked(feishuStatus)
+    .mockResolvedValueOnce({ ...disconnected, configured: false, setup: { ready: false, missing: ['application', 'callback', 'organization', 'documents'] } })
+    .mockResolvedValueOnce(disconnected);
+  render(<MemoryRouter><FeishuSettings /></MemoryRouter>);
+
+  const retry = await screen.findByRole('button', { name: '重新检查接入' });
+  expect(screen.queryByRole('button', { name: '连接飞书' })).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: '高级设置' })).not.toBeInTheDocument();
+  fireEvent.click(retry);
+  expect(await screen.findByRole('button', { name: '连接飞书' })).toBeEnabled();
+  expect(screen.queryByRole('button', { name: '重新检查接入' })).not.toBeInTheDocument();
+});
+
 it('has no invented parent from main navigation and preserves an explicit settings parent', async () => {
   const view = render(<MemoryRouter initialEntries={['/settings/feishu']}><FeishuSettings /></MemoryRouter>);
   await screen.findByRole('heading', { name: '飞书', exact: true });

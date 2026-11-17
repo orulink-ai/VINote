@@ -1,7 +1,5 @@
 import { createHash } from 'node:crypto'
-import { serviceOrigin } from './service-environments.mjs'
-
-const desktopIntegrationUrl = 'https://supabase-vinote.orulink.ai/vinote-api'
+import { desktopIntegrationUrl, serviceOrigin } from './service-environments.mjs'
 
 export function validateDesktopIntegrationUrl(value) {
   const url = new URL(value)
@@ -24,6 +22,7 @@ export function resolveDesktopProfile({ channel = 'release', version, env = {}, 
   }
   const config = {
     VILAB_SERVER_URL: url.origin,
+    VINOTE_FEISHU_TRANSPORT: 'cli',
     VINOTE_INTEGRATION_URL: validateDesktopIntegrationUrl(desktopIntegrationUrl),
     VINOTE_SUPABASE_URL: env.VINOTE_SUPABASE_URL || publicConfig.VINOTE_SUPABASE_URL,
     VINOTE_SUPABASE_PUBLISHABLE_KEY: env.VINOTE_SUPABASE_PUBLISHABLE_KEY || publicConfig.VINOTE_SUPABASE_PUBLISHABLE_KEY,

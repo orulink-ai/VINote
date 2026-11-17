@@ -34,6 +34,7 @@ for (const channel of ['test', 'release']) test(`${channel} bundles the fixed sh
     VINOTE_STORAGE_SERVICE_KEY: 'fixture-private',
   }, publicConfig: { ...input.publicConfig, VINOTE_INTEGRATION_URL: 'https://untrusted.invalid' } })
   assert.equal(profile.config.VINOTE_INTEGRATION_URL, 'https://supabase-vinote.orulink.ai/vinote-api')
+  assert.equal(profile.config.VINOTE_FEISHU_TRANSPORT, 'cli')
   for (const key of ['FEISHU_APP_ID', 'FEISHU_APP_SECRET', 'FEISHU_TENANT_KEY', 'VINOTE_WORKSPACE_URL', 'VINOTE_STORAGE_SERVICE_KEY']) {
     assert.equal(Object.hasOwn(profile.config, key), false)
   }

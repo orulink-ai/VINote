@@ -6,6 +6,7 @@ publication journals, rather than CLI retry behavior, own write recovery.
 """
 import base64
 from contextlib import contextmanager
+from contextvars import ContextVar
 import hashlib
 import json
 import os
@@ -21,6 +22,7 @@ from urllib.parse import urlparse
 from app.config import settings
 from app.services.feishu_service import FeishuError
 
+_local_desktop_request = ContextVar("feishu_local_desktop_request", default=False)
 _flows = {}
 _flow_lock = threading.RLock()
 _owner_generations = {}
@@ -31,8 +33,17 @@ SCOPES = ("offline_access docx:document docx:document.block:convert "
           "contact:user:search im:chat:read im:message.send_as_user")
 
 
+@contextmanager
+def local_desktop_request():
+    token = _local_desktop_request.set(True)
+    try:
+        yield
+    finally:
+        _local_desktop_request.reset(token)
+
+
 def enabled():
-    return (settings.desktop_runtime and settings.feishu_transport == "cli"
+    return ((settings.desktop_runtime or _local_desktop_request.get()) and settings.feishu_transport == "cli"
             and not settings.workspace_cloud_runtime and not settings.content_cloud_runtime)
 
 

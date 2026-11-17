@@ -15,6 +15,8 @@ Current acceptance is API testing and optimization, without desktop input or act
 
 ## Meeting dossiers and explicit delivery (2026-10-20)
 
+- Desktop recording generation requires explicit model confirmation. Keep model-configuration reload beside the load error that requires it; healthy confirmation exposes the generate and postpone actions.
+
 - Desktop original media actions use “在文件夹中显示” for a verified existing OS file and “另存为…” for a copy. The Cookie/loopback-only `/api/files/{id}/local-path`, `/api/notes/{id}/media/local-path`, and `/api/task/{id}/original/local-path` return owned original paths with no-store headers. Tauri reveals/selects the file without launching it. IndexedDB-only recordings have no OS path until saved; never invent a folder or reveal a playback derivative. Browser and cloud clients do not receive OS-location controls.
 
 - Desktop Meetings shows one dossier per owner-scoped canonical recording, with all its summary objects/forms/versions below it. A summary title, save time or status never creates a meeting identity. Dossier labels use the explicit capture start time; unknown capture time stays unknown. The original request's verified desktop capture fields are projected as `meeting_source.recording_started_at`; file mtimes and generated titles are never date fallbacks.

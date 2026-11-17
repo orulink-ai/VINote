@@ -34,6 +34,51 @@ def test_only_desktop_selects_cli(monkeypatch):
     assert not cli.enabled()
 
 
+def test_desktop_connection_ignores_shared_integration_url(monkeypatch):
+    from app.routers import feishu
+
+    monkeypatch.setattr(settings, "feishu_service_url", "https://integration.example.invalid")
+    monkeypatch.setattr(feishu.CloudAccountService, "access_token",
+                        lambda *args: pytest.fail("Local Feishu must not read a cloud token"))
+    assert feishu.proxy(("local-owner", "local-owner"), "GET", "/status") == (False, None)
+
+
+def test_desktop_request_does_not_fall_back_to_shared_authorization(monkeypatch):
+    from fastapi import HTTPException, Request
+    from app.routers import feishu
+
+    monkeypatch.setattr(settings, "desktop_runtime", False)
+    request = Request({"type": "http", "headers": [(b"x-vinote-client", b"desktop")]})
+    with pytest.raises(HTTPException, match="本机飞书服务未启用") as error:
+        feishu.principal(request)
+    assert error.value.status_code == 503
+
+
+@pytest.mark.parametrize(("client", "base_url", "expected"), [
+    (("127.0.0.1", 12345), "http://127.0.0.1:8900", 200),
+    (("192.0.2.1", 12345), "http://127.0.0.1:8900", 503),
+    (("127.0.0.1", 12345), "https://example.invalid", 503),
+])
+def test_split_desktop_feishu_is_local_only(monkeypatch, client, base_url, expected):
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+    from app.routers import feishu
+    from app.services import feishu_auto_runtime
+
+    monkeypatch.setattr(settings, "desktop_runtime", False)
+    monkeypatch.setattr(feishu, "get_current_user", lambda *_: SimpleNamespace(user_id="local-owner"))
+    monkeypatch.setattr(feishu_auto_runtime, "decorate_status", lambda _, result: result)
+    app = FastAPI()
+    app.include_router(feishu.router)
+    response = TestClient(app, client=client, base_url=base_url).get(
+        "/feishu/status", headers={"X-VINote-Client": "desktop"},
+    )
+    assert response.status_code == expected
+    if expected == 200:
+        assert response.json()["transport"] == "cli"
+    assert not cli.enabled()
+
+
 def test_uses_private_owner_config_and_never_global_profile(monkeypatch):
     monkeypatch.setenv("LARKSUITE_CLI_CONFIG_DIR", "C:/some-other-agent")
     monkeypatch.setenv("OPENCLAW_HOME", "C:/some-agent")

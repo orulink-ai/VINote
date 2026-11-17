@@ -20,9 +20,9 @@ assertProjectVersion()
 const baseConfig = JSON.parse(readFileSync(join(root, 'frontend/src-tauri/tauri.conf.json'), 'utf8'))
 const profile = resolveDesktopDevProfile({ environment: values.environment, version: baseConfig.version })
 if (values.plan) {
-  const { server: _server, ...publicProfile } = profile
+  const { server: _server, integrationUrl: _integrationUrl, ...publicProfile } = profile
   console.log(JSON.stringify({ ...publicProfile,
-    ...(!desktop ? { productName: 'VINote Web Dev', identifier: undefined, tracingEnvironment: null } : {}),
+    ...(!desktop ? { productName: 'VINote Web Dev', identifier: undefined, tracingEnvironment: null, feishuTransport: undefined } : {}),
     target: values.target, backend: 'http://127.0.0.1:8900', frontend: 'http://127.0.0.1:3100' }, null, 2))
   process.exit(0)
 }
@@ -47,6 +47,10 @@ process.on('exit', () => {
   try { if (readFileSync(lock, 'utf8') === String(process.pid)) unlinkSync(lock) } catch {}
 })
 process.env.VILAB_SERVER_URL = profile.server
+if (desktop) {
+  process.env.VINOTE_INTEGRATION_URL ||= profile.integrationUrl
+  process.env.VINOTE_FEISHU_TRANSPORT = profile.feishuTransport
+}
 process.env.LANGFUSE_TRACING_ENVIRONMENT = profile.tracingEnvironment
 process.env.LANGFUSE_RELEASE = profile.release
 process.env.VINOTE_DESKTOP_RUNTIME = String(desktop)
