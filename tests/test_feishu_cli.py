@@ -1,4 +1,5 @@
 """Desktop CLI contracts. No real authorizations, documents or messages."""
+import asyncio
 import json
 from pathlib import Path
 import subprocess
@@ -61,8 +62,8 @@ def test_desktop_request_does_not_fall_back_to_shared_authorization(monkeypatch)
     (True, ("127.0.0.1", 12345), "https://example.invalid", 503),
 ])
 def test_split_desktop_feishu_is_local_only(monkeypatch, enabled, client, base_url, expected):
+    import httpx
     from fastapi import FastAPI
-    from fastapi.testclient import TestClient
     from app.routers import feishu
     from app.services import feishu_auto_runtime
 
@@ -72,9 +73,12 @@ def test_split_desktop_feishu_is_local_only(monkeypatch, enabled, client, base_u
     monkeypatch.setattr(feishu_auto_runtime, "decorate_status", lambda _, result: result)
     app = FastAPI()
     app.include_router(feishu.router)
-    response = TestClient(app, client=client, base_url=base_url).get(
-        "/feishu/status", headers={"X-VINote-Client": "desktop"},
-    )
+    async def request_status():
+        transport = httpx.ASGITransport(app=app, client=client)
+        async with httpx.AsyncClient(transport=transport, base_url=base_url) as http:
+            return await http.get("/feishu/status", headers={"X-VINote-Client": "desktop"})
+
+    response = asyncio.run(request_status())
     assert response.status_code == expected
     if expected == 200:
         assert response.json()["transport"] == "cli"
