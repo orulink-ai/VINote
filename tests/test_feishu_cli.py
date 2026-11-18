@@ -1,5 +1,6 @@
 """Desktop CLI contracts. No real authorizations, documents or messages."""
 import asyncio
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import subprocess
@@ -61,12 +62,25 @@ def test_desktop_request_does_not_fall_back_to_shared_authorization(monkeypatch)
     (True, ("192.0.2.1", 12345), "http://127.0.0.1:8900", 503),
     (True, ("127.0.0.1", 12345), "https://example.invalid", 503),
 ])
-def test_split_desktop_feishu_is_local_only(monkeypatch, enabled, client, base_url, expected):
+def test_split_desktop_feishu_is_local_only(monkeypatch, tmp_path, enabled, client, base_url, expected):
     import httpx
     from fastapi import FastAPI
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from app.db_models import FeishuConnectionDB
     from app.routers import feishu
-    from app.services import feishu_auto_runtime
+    from app.services import feishu_auto_runtime, feishu_cli_service, feishu_service
 
+    engine = create_engine(f"sqlite:///{tmp_path / 'feishu-route.db'}")
+    FeishuConnectionDB.__table__.create(engine)
+
+    @contextmanager
+    def sessions():
+        with Session(engine) as db, db.begin():
+            yield db
+
+    monkeypatch.setattr(feishu_cli_service, "session_scope", sessions)
+    monkeypatch.setattr(feishu_service, "session_scope", sessions)
     monkeypatch.setattr(settings, "desktop_runtime", False)
     monkeypatch.setattr(settings, "allow_split_desktop_feishu", enabled)
     monkeypatch.setattr(feishu, "get_current_user", lambda *_: SimpleNamespace(user_id="local-owner"))
