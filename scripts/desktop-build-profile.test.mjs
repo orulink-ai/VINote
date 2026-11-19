@@ -86,11 +86,16 @@ test('invalid channel, file identifiers and bundled secret keys fail early', () 
 })
 
 for (const channel of ['test', 'release']) {
-  test(`${channel} always enables tracing and requires complete project credentials`, () => {
-    const profile = resolveDesktopProfile({ ...input, channel, env: { ...tracing, LANGFUSE_ENABLED: 'false' } })
+  test(`${channel} defaults to tracing and supports an explicitly disabled package`, () => {
+    const profile = resolveDesktopProfile({ ...input, channel, env: tracing })
     assert.equal(profile.config.LANGFUSE_ENABLED, 'true')
     assert.equal(profile.config.LANGFUSE_TRACING_ENVIRONMENT, channel === 'test' ? 'test' : 'production')
     assert.equal(profile.config.LANGFUSE_SECRET_KEY, tracing.LANGFUSE_SECRET_KEY)
+    const disabled = resolveDesktopProfile({ ...input, channel, env: { ...tracing, LANGFUSE_ENABLED: 'false' } })
+    assert.equal(disabled.config.LANGFUSE_ENABLED, 'false')
+    assert.equal(disabled.config.LANGFUSE_SECRET_KEY, undefined)
+    assert.equal(disabled.config.LANGFUSE_PUBLIC_KEY, undefined)
+    assert.doesNotThrow(() => resolveDesktopProfile({ ...input, channel, env: { LANGFUSE_ENABLED: 'false' } }))
     assert.throws(() => resolveDesktopProfile({ ...input, channel, env: {} }), /Langfuse/)
     assert.throws(() => resolveDesktopProfile({ ...input, channel, env: { ...tracing, LANGFUSE_SECRET_KEY: ' ' } }), /Langfuse/)
     assert.throws(() => resolveDesktopProfile({ ...input, channel, env: { ...tracing, LANGFUSE_BASE_URL: 'https://user:password@example.com' } }), /Langfuse/)

@@ -92,11 +92,15 @@ exec(join(backendDir, profile.backendName + (process.platform === 'win32' ? '.ex
     VINOTE_DESKTOP_DATA: join(staging, 'smoke-data'), PORT: '0' },
 })
 const tauriConfig = join(staging, 'tauri-package.json')
-// Require actual ingestion and API readback from the frozen runtime, not just SDK imports.
-exec(join(backendDir, profile.backendName + (process.platform === 'win32' ? '.exe' : '')), ['--langfuse-smoke-test'], {
-  cwd: staging, env: { ...process.env, PATH: smokePath, PYTHONHOME: '', PYTHONPATH: '',
-    VINOTE_DESKTOP_DATA: join(staging, 'smoke-data'), PORT: '0' },
-})
+let tracingReceipt = { enabled: false }
+if (profile.config.LANGFUSE_ENABLED === 'true') {
+  // Verify the enabled tracing configuration through the frozen runtime.
+  exec(join(backendDir, profile.backendName + (process.platform === 'win32' ? '.exe' : '')), ['--langfuse-smoke-test'], {
+    cwd: staging, env: { ...process.env, PATH: smokePath, PYTHONHOME: '', PYTHONPATH: '',
+      VINOTE_DESKTOP_DATA: join(staging, 'smoke-data'), PORT: '0' },
+  })
+  tracingReceipt = publicTracingReceipt(JSON.parse(readFileSync(join(staging, 'smoke-data/langfuse-smoke.json'), 'utf8')))
+}
 const hooks = join(staging, 'installer-hooks.nsh')
 writeFileSync(hooks, `!define VINOTE_MAIN_EXE "${profile.binaryName}.exe"\n!define VINOTE_BACKEND_EXE "${profile.backendName}.exe"\n!define VINOTE_APP_NAME "${profile.productName}"\n!include "${join(root, 'frontend/src-tauri/installer-hooks.nsh')}"\n`)
 writeFileSync(tauriConfig, JSON.stringify({
@@ -154,5 +158,5 @@ writeFileSync(join(artifacts, 'manifest.json'), JSON.stringify({ channel: profil
   buildId: profile.buildId, identifier: profile.identifier,
   platform: process.platform, arch: process.arch, commit: git('rev-parse', 'HEAD'),
   dirty, feishuCli: { version: cliVersion, sha256: checksum(readFileSync(cliBinary)) },
-  langfuse: publicTracingReceipt(JSON.parse(readFileSync(join(staging, 'smoke-data/langfuse-smoke.json'), 'utf8'))), files }, null, 2))
+  langfuse: tracingReceipt, files }, null, 2))
 console.log(`Desktop ${profile.channel} artifacts: ${artifacts}`)

@@ -73,3 +73,14 @@ def test_packaged_config_keeps_user_secrets_and_data_outside_bundle(tmp_path, mo
     assert os.environ['DATABASE_URL'] == f'sqlite:///{(state / "vinote.db").as_posix()}'
     assert (state / 'desktop-secrets.json').exists()
     assert not (bundle / 'desktop-secrets.json').exists()
+
+
+def test_packaged_tracing_can_be_explicitly_disabled(monkeypatch):
+    from scripts.desktop_backend import configure_langfuse
+
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "stale-key")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "stale-secret")
+    configure_langfuse({"LANGFUSE_ENABLED": "false"})
+    assert os.environ["LANGFUSE_ENABLED"] == "false"
+    assert "LANGFUSE_SECRET_KEY" not in os.environ
+    assert "LANGFUSE_PUBLIC_KEY" not in os.environ

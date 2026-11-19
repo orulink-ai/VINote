@@ -14,6 +14,7 @@ export function resolveDesktopProfile({ channel = 'release', version, env = {}, 
   if (!['release', 'test'].includes(channel)) throw new Error('Channel must be release or test')
   if (!/^\d+\.\d+\.\d+$/.test(version)) throw new Error('Base version must be major.minor.patch')
   if (!/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/.test(buildId)) throw new Error('Invalid build ID')
+  const tracingEnabled = env.LANGFUSE_ENABLED !== 'false'
   const test = channel === 'test'
   const origin = serviceOrigin(test ? 'lan' : 'public')
   const url = new URL(origin)
@@ -27,10 +28,10 @@ export function resolveDesktopProfile({ channel = 'release', version, env = {}, 
     VINOTE_SUPABASE_URL: env.VINOTE_SUPABASE_URL || publicConfig.VINOTE_SUPABASE_URL,
     VINOTE_SUPABASE_PUBLISHABLE_KEY: env.VINOTE_SUPABASE_PUBLISHABLE_KEY || publicConfig.VINOTE_SUPABASE_PUBLISHABLE_KEY,
     LANGFUSE_RELEASE: test ? `${version}-test` : version,
-    LANGFUSE_ENABLED: 'true',
+    LANGFUSE_ENABLED: String(tracingEnabled),
     LANGFUSE_BASE_URL: env.LANGFUSE_BASE_URL || 'http://192.168.1.118:3000',
-    LANGFUSE_PUBLIC_KEY: env.LANGFUSE_PUBLIC_KEY?.trim(),
-    LANGFUSE_SECRET_KEY: env.LANGFUSE_SECRET_KEY?.trim(),
+    LANGFUSE_PUBLIC_KEY: tracingEnabled ? env.LANGFUSE_PUBLIC_KEY?.trim() : undefined,
+    LANGFUSE_SECRET_KEY: tracingEnabled ? env.LANGFUSE_SECRET_KEY?.trim() : undefined,
     LANGFUSE_CAPTURE_CONTENT: 'true',
     LANGFUSE_TRACING_ENVIRONMENT: test ? 'test' : 'production',
     MEETING_REVIEW_MODEL: env.MEETING_REVIEW_MODEL ?? publicConfig.MEETING_REVIEW_MODEL ?? 'gpt-6-astra',
@@ -38,7 +39,7 @@ export function resolveDesktopProfile({ channel = 'release', version, env = {}, 
   if (!config.VINOTE_SUPABASE_URL || !config.VINOTE_SUPABASE_PUBLISHABLE_KEY?.startsWith('sb_publishable_')) {
     throw new Error('Email accounts require a Supabase URL and publishable key; secret keys cannot be bundled')
   }
-  if (!config.LANGFUSE_PUBLIC_KEY || !config.LANGFUSE_SECRET_KEY) {
+  if (tracingEnabled && (!config.LANGFUSE_PUBLIC_KEY || !config.LANGFUSE_SECRET_KEY)) {
     throw new Error('Langfuse project credentials are required for both desktop channels')
   }
   const tracingUrl = new URL(config.LANGFUSE_BASE_URL)

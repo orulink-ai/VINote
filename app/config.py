@@ -32,7 +32,7 @@ class Settings:
     meeting_review_model: str = os.getenv("MEETING_REVIEW_MODEL", "gpt-6-astra").strip()
     diarization_cluster_threshold: float = float(os.getenv("DIARIZATION_CLUSTER_THRESHOLD", "0.5"))
     # Tracing is required for desktop source/test/release runtimes only.
-    langfuse_enabled: bool = True
+    langfuse_enabled: bool = os.getenv("LANGFUSE_ENABLED", "true").lower() != "false"
     desktop_runtime: bool = os.getenv("VINOTE_DESKTOP_RUNTIME", "false").lower() == "true"
     allow_split_desktop_feishu: bool = os.getenv("VINOTE_FEISHU_SPLIT_DEV", "false").lower() == "true"
     feishu_transport: str = os.getenv("VINOTE_FEISHU_TRANSPORT", "cli").strip()

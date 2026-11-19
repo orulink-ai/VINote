@@ -54,7 +54,7 @@ yarn client:test
 
 2026-10-17 的 0.3.3 首轮构建缺少该配置，已生成的旧安装包不会因源码修复而变化，发布前须从修复提交重新打包。profile 与冻结后端配置的离线回归不等于正式包飞书授权、发布或通知实际成功；本次修复未重跑构建或任何 ASR/LLM。
 
-两种渠道必须提供 `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`，地址默认 `http://192.168.1.118:3000`。构建时使用冻结后端发送合成链路并从 Langfuse API 读回，失败即阻止打包；manifest 保存 `langfuse` 回执。两种包分别标记 `test`/`production`，均无需额外 `langfuse.env`，详见 [Langfuse 接入说明](langfuse.md)。
+两种渠道默认启用 Langfuse，需提供 `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`。本次发布支持在构建时显式设置 `LANGFUSE_ENABLED=false`，此时不打包追踪凭证、不执行追踪读回，manifest 记录 `langfuse.enabled=false`，运行时也关闭追踪。启用时地址默认 `http://192.168.1.118:3000`。构建时使用冻结后端发送合成链路并从 Langfuse API 读回，失败即阻止打包；manifest 保存 `langfuse` 回执。两种包分别标记 `test`/`production`，均无需额外 `langfuse.env`，详见 [Langfuse 接入说明](langfuse.md)。
 
 会议事实复核的模型偏好 `MEETING_REVIEW_MODEL` 也会写入公开配置，默认 `gpt-6-astra`；两种包一致。构建环境可显式覆盖（空字符串表示沿用当前模型）。只在云端目录确认模型可用后使用，不会切换用户的全局模型。复核会增加真实 LLM 调用，当前模型仍负责初稿；本地/自定义模型复核复用当前提供方。
 
