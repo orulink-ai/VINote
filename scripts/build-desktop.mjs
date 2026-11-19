@@ -55,6 +55,7 @@ function clearBuildOutput(directory) {
   if (!target.startsWith(buildRoot + pathSeparator)) throw new Error('Build cleanup must stay inside .desktop-build')
   rmSync(target, { recursive: true, force: true })
 }
+clearBuildOutput(join(staging, 'bin'))
 mkdirSync(join(staging, 'bin'), { recursive: true })
 exec(py, [join(root, 'scripts/setup_diarization.py'), '--models-dir', join(staging, 'models/diarization')])
 writeFileSync(join(staging, 'desktop-config.json'), JSON.stringify(profile.config, null, 2))
