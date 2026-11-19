@@ -26,7 +26,7 @@ yarn client:test
 
 `--plan` 仅显示渠道、版本、安装身份及默认服务，不安装依赖或启动应用。`--build-id <标识>` 可覆盖构建标识，默认使用 UTC 时间。
 
-构建过程准备前端、Python 后端、FFmpeg/FFprobe、说话人模型和本地运行库，先运行冻结后端的烟雾检查，再构建 Windows NSIS 或 macOS app/dmg。烟雾检查实际初始化说话人模型、执行短音频推理和降噪过滤，避免只检查模型文件名。
+构建过程准备前端、Python 后端、FFmpeg/FFprobe、说话人模型和本地运行库，先运行冻结后端的烟雾检查，再构建 Windows NSIS 或 macOS app/dmg。烟雾检查实际初始化说话人模型、执行短音频推理、降噪过滤及合成 WebM/Opus 的完整包校验与尾部 seek，避免只检查模型文件名和 FFmpeg 版本横幅。
 
 - 中间目录：`.desktop-build/release/` 或 `.desktop-build/test/`。
 - 发布候选产物：`.desktop-build/artifacts/<渠道>/<版本>/<构建标识>/`。
@@ -85,3 +85,14 @@ manifest 的 `dirty` 仍保守检查构建结束时的已暂存、未暂存和�
 ## macOS 本机构建与已有密钥签名
 
 本机没有 OTA 私钥时，`node scripts/build-desktop.mjs --channel release --defer-updater-signing` 生成待签名安装包与更新归档。待签名状态不能通过正式发布验证。将更新归档上传源码仓库草稿 Release 后，可运行 `sign-macos-updater.yml`，传入版本标签、精确文件名和 SHA-256。工作流只在 GitHub 内使用已有 Secret 签名，并以当前发布公钥验证，只回传签名文件。回收签名、补齐 manifest 文件校验值后，仍需通过既有发布校验再发布。
+
+
+### macOS FFmpeg 与公证验收
+
+FFmpeg 8.0 的 Opus 解析器在 EOF 空缓冲区上可能误报坏包（上游修复 `618fc15e65f57c9ce25d4562f4b516129815608c`），严格播放证明会正确拒绝带有错误输出的检查。macOS 当前采用已修复的 FFmpeg/FFprobe 8.1.3；可通过 `VINOTE_FFMPEG_PATH`、`VINOTE_FFPROBE_PATH` 显式选择二进制，二者必须来自同一已验证工具链。禁止忽略 stderr 或关闭解析来伪造兼容。
+
+本地后端检查从父仓库运行 `python -m pytest -q --ignore=VINote-app`，以避免扫描已安装的第三方 iOS Pods；本地选择已验证工具链时将其 bin 加到该命令 PATH 前部。
+
+macOS 公开交付须完成 App 公证 Accepted、staple/validate，再以该 App 重建并签名 DMG，取得独立 DMG 公证票据，并通过 `spctl --assess --type execute`（App）和 `spctl --assess --type open --context context:primary-signature`（DMG）。staple 后重新生成 OTA 归档、签名和校验值，公开更新元数据最后上传。密钥只从本机凭证路径或既有 Secret 引用，不进入仓库。
+
+正式 macOS 构建在冻结后端冒烟检查前，使用 `APPLE_SIGNING_IDENTITY` 指定的 Developer ID Application 重签包内全部 Mach-O，随后按由内到外顺序签名嵌套 framework/app。签名命令包含 hardened runtime 与安全时间戳；只针对明确的时间戳服务暂时不可用做最多三次有限重试。`codesign --verify` 通过不能证明身份正确，ad-hoc 二进制不满足公证要求。仅恢复打包签名时可运行 `node scripts/macos-sign.mjs <已准备的包目录>`，不重新编译 Runtime。

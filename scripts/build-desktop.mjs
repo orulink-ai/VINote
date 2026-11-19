@@ -4,6 +4,7 @@ import { join, resolve, sep as pathSeparator } from 'node:path'
 import { parseArgs } from 'node:util'
 import { resolveDesktopProfile, checksum, publicTracingReceipt } from './desktop-build-profile.mjs'
 import { root, python, loadEnv } from './runtime.mjs'
+import { signMacBinaries } from './macos-sign.mjs'
 import { bootstrap } from './bootstrap-dev.mjs'
 import { assertProjectVersion } from './project-version.mjs'
 import { resolveLarkCli } from './lark-cli-bundle.mjs'
@@ -90,6 +91,9 @@ exec(py, ['-m', 'PyInstaller', '--noconfirm', '--onedir', '--name', profile.back
   '--add-data', `${join(root, 'frontend/dist')}${sep}frontend`, '--add-binary', `${join(staging, 'bin/*')}${sep}bin`,
   join(root, 'scripts/desktop_backend.py')])
 const backendDir = join(staging, 'dist', profile.backendName)
+if (process.platform === 'darwin' && profile.channel === 'release') {
+  await signMacBinaries(backendDir, process.env.APPLE_SIGNING_IDENTITY)
+}
 const smokePath = process.platform === 'win32'
   ? [join(backendDir, '_internal/bin'), join(process.env.SystemRoot || 'C:/Windows', 'System32'), process.env.SystemRoot || 'C:/Windows'].join(';')
   : '/usr/bin:/bin'
