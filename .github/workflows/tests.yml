@@ -55,4 +55,4 @@ jobs:
       - run: npm ci --prefix frontend
       - run: npm --prefix frontend test -- --maxWorkers=2 --minWorkers=1
       - run: npm --prefix frontend run build
-      - run: node --test scripts/ota-release.test.mjs scripts/desktop-build-profile.test.mjs scripts/project-scripts.test.mjs
+      - run: node --test scripts/ota-release.test.mjs scripts/desktop-build-profile.test.mjs scripts/project-scripts.test.mjs scripts/macos-sign.test.mjs scripts/macos-updater-archive.test.mjs
