@@ -1,4 +1,4 @@
-import { serviceOrigin } from './service-environments.mjs'
+import { desktopIntegrationUrl, serviceOrigin } from './service-environments.mjs'
 
 export function resolveDesktopDevProfile({ environment = 'lan', version } = {}) {
   const server = serviceOrigin(environment)
@@ -6,6 +6,8 @@ export function resolveDesktopDevProfile({ environment = 'lan', version } = {}) 
   return {
     environment,
     server,
+    integrationUrl: desktopIntegrationUrl,
+    feishuTransport: "cli",
     productName: lan ? 'VINote Test Dev' : 'VINote Public Dev',
     identifier: lan ? 'app.vinote.desktop.test.dev' : 'app.vinote.desktop.dev',
     tracingEnvironment: 'development',

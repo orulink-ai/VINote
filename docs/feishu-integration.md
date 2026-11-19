@@ -26,13 +26,15 @@
 | `FEISHU_DOC_BASE_URL` | 本公司飞书 Origin，例如 `https://公司域名.feishu.cn` |
 | `MODEL_PROFILE_ENCRYPTION_KEY` | 加密持久保存的用户飞书 access/refresh token；保持稳定并备份 |
 | `FEISHU_SCOPES` | 默认 `offline_access docx:document docs:permission.member:create docs:permission.member:auth docs:permission.setting:read docs:permission.setting:write_only drive:drive.metadata:readonly wiki:space:read wiki:node:read wiki:node:create im:chat:read docx:document.block:convert contact:user:search`；显式环境值完整覆盖默认值 |
-| `VINOTE_INTEGRATION_URL` | 桌面本地 API 转发到共享集成服务的 Origin；集成服务本身留空以免转发循环 |
+| `VINOTE_INTEGRATION_URL` | 桌面本地 API 转发到共享集成服务的基础地址；集成服务本身留空以免转发循环 |
 
 企业应用开启机器人能力、用户文档创建/编辑、文档权限成员管理、用户/机器人群列表读取，以及机器人 `im:message:send_as_bot` 权限，并发布至公司允许使用的人员范围。应用权限与用户 OAuth 授权都需完成。反向代理必须隐藏 `/api/feishu/callback` 查询串，避免记录授权码；应用已为 Uvicorn access 日志过滤该查询串。
 
 手机 `config/deployment.{test,public}.json` 的 `integrationBaseUrl` 指向共享集成服务；公网配置要求 HTTPS Origin。2026-10-12 当前开发两端已使用 `https://supabase-vinote.orulink.ai/vinote-api`。用户选择既有「阳晓冰的智能助手」，新增公网回调后完成真实 OAuth，两端均读取“阳晓冰／已连接”。企业应用密钥由 `/api/feishu/application` 验证后按 VINote 账号加密保存，客户端不持久保存；应用管理在页面底部折叠，日常账号连接在顶部。桌面与手机按经验证的同一个 Supabase subject 关联飞书，不根据客户端声称的用户 ID 授权。公司默认应用仍需管理员统一配置，不能将某个用户的飞书 OAuth token 复制给其他用户。
 
-不要将企业应用 Secret 写入手机配置、Tauri 包或 Git。桌面安装包需通过运行环境配置共享服务 URL；当前打包默认值未包含企业配置。所有飞书调用均由受控服务持有凭证完成。
+桌面源码与安装包使用本机飞书 CLI，连接和交付设置保存在各自桌面设备上。手机的现有授权不会显示为桌面的绑定，桌面首次使用需单独扫码。共享集成服务地址仍供其他共享工作区功能使用。独立拆开运行桌面前后端时，用 `yarn dev:api --desktop` 启动后端，使飞书页加载本机授权。 桌面检测到后端未启用本机授权时，会提示重启或更新客户端，停止显示服务端连接设置。企业应用 Secret 仅保存在处理手机 OAuth 的集成服务。
+
+未连接且授权服务未就绪时，飞书页显示原因和“重新检查接入”，服务恢复后显示“连接飞书”。服务端 OAuth 的自定义应用仍可通过折叠的“应用管理”配置。
 
 ## API 与持久化
 
@@ -56,3 +58,5 @@
 已部署旧代码的服务可先在其 `deploy/workspace/cloud.env` 增加完整 `FEISHU_SCOPES` 非密钥列表（见上表），仅重新创建 workspace 服务使环境生效。父任务确认的公网目录为 `/home/ubuntu/vinote-workspace/releases/feishu-contacts-20261013/deploy/workspace`，使用 `compose.yml` 与 `existing-networks.yml`。该环境修正不需要传输源码、修改数据库或应用凭证；之后从 VINote 重新连接，必须使用新生成的 URL。应用后台权限发布、OAuth 请求包含 scope、用户实际授权及接口成功是不同证据；旧 token 刷新不等于补齐用户授权。
 
 未来源码默认更新只需 `app/config.py`；格式转换功能部署另需当前 `app/services/feishu_service.py` 和新增 `app/services/feishu_markdown.py`，不能只复制 service 而遗漏 helper。本次源码和离线测试不代表已部署、已授权、已转换或收件人可读。
+
+通过 `yarn dev:api` 启动的本机开发后端也可在回环地址上为桌面 WebView 提供手动飞书连接。该入口设置 `VINOTE_FEISHU_SPLIT_DEV=true`，普通服务部署默认关闭。自动交付仍由完整桌面运行时启动和调度。

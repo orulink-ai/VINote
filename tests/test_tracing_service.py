@@ -239,11 +239,16 @@ def test_desktop_public_tracing_keeps_proxy_policy(monkeypatch):
     assert os.environ['NO_PROXY'] == 'localhost'
 
 
-def test_source_tracing_cannot_be_disabled_by_legacy_switch(monkeypatch):
-    from app.config import Settings
+def test_process_tracing_respects_explicit_disabled_configuration(monkeypatch):
+    import subprocess
+    import sys
 
     monkeypatch.setenv("LANGFUSE_ENABLED", "false")
-    assert Settings().langfuse_enabled is True
+    result = subprocess.run(
+        [sys.executable, "-c", "from app.config import Settings; assert not Settings().langfuse_enabled"],
+        check=False, capture_output=True, text=True,
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_missing_project_credentials_fail_startup_without_printing_keys(monkeypatch):

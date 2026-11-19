@@ -34,6 +34,12 @@ yarn client:test
 
 这两个命令生成可分发安装包，不自动上传 GitHub、对象存储或应用商店。请依次执行构建命令，不同时启动两个渠道构建；前端构建输出仍共用 `frontend/dist`。macOS 产物必须在 macOS 构建，签名、公证仍需相应凭证。
 
+## 应用图标
+
+桌面端沿用移动端蓝底纸张与声波标识，母版的圆角外侧保留透明区域。更新图标时，从已初始化的 App 子模块运行 `python VINote-app/scripts/generate-icons.py --desktop-source <母版 PNG 路径>`（需要 Pillow），再从 `frontend` 运行 `npm run tauri -- icon <母版 PNG 路径> --output <临时输出目录>`。将输出目录顶层对应图标复制到 `frontend/src-tauri/icons/`，包括 macOS 的 `icon.icns`、Windows 的 `icon.ico` 和现有 PNG。移动端图标由 App 子模块单独打包。
+
+将移动端生成的 `assets/branding/vinote-app-icon.png` 和 `vinote-app-icon.svg` 同步到 `frontend/public/app-icon.png` 和 `frontend/public/favicon.svg`，供桌面和网页的侧栏、登录页及浏览器标签使用。桌面 Rust 构建跟踪 `src-tauri/icons/`。macOS 源码调试会在编译时嵌入 Dock 图标，资源更新后需要完成重新编译并运行新进程。
+
 ## 源码与安装包的说话人功能
 
 源码首次启动会检查 sherpa-onnx / NumPy 以及模型，缺失时运行 `scripts/setup_diarization.py` 准备。可用 `yarn setup` 初始化而不打开桌面窗口。首次模型下载需要网络；后续复用本地文件。
@@ -48,7 +54,7 @@ yarn client:test
 
 2026-10-17 的 0.3.3 首轮构建缺少该配置，已生成的旧安装包不会因源码修复而变化，发布前须从修复提交重新打包。profile 与冻结后端配置的离线回归不等于正式包飞书授权、发布或通知实际成功；本次修复未重跑构建或任何 ASR/LLM。
 
-两种渠道必须提供 `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`，地址默认 `http://192.168.1.118:3000`。构建时使用冻结后端发送合成链路并从 Langfuse API 读回，失败即阻止打包；manifest 保存 `langfuse` 回执。两种包分别标记 `test`/`production`，均无需额外 `langfuse.env`，详见 [Langfuse 接入说明](langfuse.md)。
+两种渠道默认启用 Langfuse，需提供 `LANGFUSE_PUBLIC_KEY`、`LANGFUSE_SECRET_KEY`。本次发布支持在构建时显式设置 `LANGFUSE_ENABLED=false`，此时不打包追踪凭证、不执行追踪读回，manifest 记录 `langfuse.enabled=false`，运行时也关闭追踪。启用时地址默认 `http://192.168.1.118:3000`。构建时使用冻结后端发送合成链路并从 Langfuse API 读回，失败即阻止打包；manifest 保存 `langfuse` 回执。两种包分别标记 `test`/`production`，均无需额外 `langfuse.env`，详见 [Langfuse 接入说明](langfuse.md)。
 
 会议事实复核的模型偏好 `MEETING_REVIEW_MODEL` 也会写入公开配置，默认 `gpt-6-astra`；两种包一致。构建环境可显式覆盖（空字符串表示沿用当前模型）。只在云端目录确认模型可用后使用，不会切换用户的全局模型。复核会增加真实 LLM 调用，当前模型仍负责初稿；本地/自定义模型复核复用当前提供方。
 
@@ -75,3 +81,7 @@ yarn client:test
 manifest 的 `dirty` 仍保守检查构建结束时的已暂存、未暂存和未跟踪变更；Tauri 更新受跟踪的 `gen/schemas` 也会使其为 true。不按目录统一忽略或自动恢复这些文件，以免掩盖用户修改。应只读审查差异及构建前后证据；不能把工具生成物触发的 dirty 直接描述为业务源码修改，也不能把 dirty=false 当作完整输入快照证明。
 
 公开 Release 说明、构建 manifest、启动日志与计划输出不展示服务域名。完整服务配置和 Langfuse 追踪链接仅用于本地构建验收；公开 manifest 只保留版本、提交、文件校验值和脱敏后的验证结果。运行时连接地址仍由内部配置提供，无法以文档脱敏保证地址不可被客户端提取。
+
+## macOS 本机构建与已有密钥签名
+
+本机没有 OTA 私钥时，`node scripts/build-desktop.mjs --channel release --defer-updater-signing` 生成待签名安装包与更新归档。待签名状态不能通过正式发布验证。将更新归档上传源码仓库草稿 Release 后，可运行 `sign-macos-updater.yml`，传入版本标签、精确文件名和 SHA-256。工作流只在 GitHub 内使用已有 Secret 签名，并以当前发布公钥验证，只回传签名文件。回收签名、补齐 manifest 文件校验值后，仍需通过既有发布校验再发布。

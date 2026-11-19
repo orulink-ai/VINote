@@ -7,13 +7,13 @@ export const RELEASE_REPOSITORIES = ['orulink-ai/VINote', PUBLIC_REPOSITORY]
 export const UPDATE_ENDPOINT = `https://github.com/${PUBLIC_REPOSITORY}/releases/latest/download/latest.json`
 export const sha256 = bytes => createHash('sha256').update(bytes).digest('hex')
 
-export function updaterBuildConfig(channel, env, baseUpdater = {}) {
+export function updaterBuildConfig(channel, env, baseUpdater = {}, { deferredSigning = false } = {}) {
   if (channel === 'test') return { bundle: { createUpdaterArtifacts: false }, plugins: { updater: { ...baseUpdater, endpoints: [] } } }
   if (channel !== 'release') throw new Error('Unsupported release channel')
-  if (!env.TAURI_SIGNING_PRIVATE_KEY?.trim()) throw new Error('Release requires TAURI_SIGNING_PRIVATE_KEY')
+  if (!deferredSigning && !env.TAURI_SIGNING_PRIVATE_KEY?.trim()) throw new Error('Release requires TAURI_SIGNING_PRIVATE_KEY')
   const pubkey = env.VINOTE_UPDATER_PUBLIC_KEY?.trim() || baseUpdater.pubkey
   if (!pubkey) throw new Error('Release requires VINOTE_UPDATER_PUBLIC_KEY or configured updater pubkey')
-  return { bundle: { createUpdaterArtifacts: true }, plugins: { updater: { ...baseUpdater, pubkey, endpoints: [UPDATE_ENDPOINT] } } }
+  return { bundle: { createUpdaterArtifacts: !deferredSigning }, plugins: { updater: { ...baseUpdater, pubkey, endpoints: [UPDATE_ENDPOINT] } } }
 }
 
 // Tauri wraps the standard minisign text in base64. Verify both the artifact

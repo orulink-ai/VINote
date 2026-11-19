@@ -1,3 +1,4 @@
+import { isTauriRuntime } from '@/lib/desktopMicrophonePermission'
 import { feishuVerificationUnavailable, feishuVerificationMessage } from '@/lib/feishuConnectionState'
 import { useEffect, useRef, useState } from "react";
 import { useLocation } from 'react-router-dom';
@@ -115,6 +116,7 @@ export function FeishuSettings() {
   const canEnableAutomatic = value?.automatic_delivery_protocol === 1 && value.capabilities?.background_delivery === true;
   const cliMode = value?.transport === 'cli';
   const canAuthorize = cliMode ? value?.setup?.cli_available === true : !!value?.configured;
+  const connectionBlocked = !cliMode && !canAuthorize && !value?.connected && !verificationUnavailable;
   const [destinationCheck, setDestinationCheck] =
     useState<DestinationCheck | null>(null);
   const renderScope = owner ? publishScope(owner) : null;
@@ -149,6 +151,16 @@ export function FeishuSettings() {
     try {
       const next = await feishuStatus();
       if (!current()) return false;
+      if (isTauriRuntime() && next.transport !== 'cli') {
+        valueOwner.current = undefined;
+        setValue(null);
+        setAuthUrl('');
+        setAuthorization(null);
+        setAuthExpired(false);
+        setMessage('');
+        setError('本机飞书服务未启用。请完全退出 VINote，并使用最新版桌面应用重新打开。');
+        return false;
+      }
       let draft: Partial<FeishuStatus> | undefined;
       try {
         const stored = draftKey && sessionStorage.getItem(draftKey);
@@ -443,7 +455,7 @@ export function FeishuSettings() {
               </AlertDescription>
             </Alert>
           )}
-          <section
+          {!connectionBlocked && <section
             aria-label="账号连接"
             className="flex flex-col gap-4 border-b pb-5"
           >
@@ -455,7 +467,7 @@ export function FeishuSettings() {
                 </span>
                 <div className="flex flex-wrap items-center gap-2">
                   <span>
-                    {verificationUnavailable ? value.name || "飞书账号" : value.connected ? value.name : "连接你的公司飞书账号"}
+                    {verificationUnavailable ? value.name || "飞书账号" : value.connected ? value.name : cliMode ? "连接此设备的飞书账号" : "连接你的公司飞书账号"}
                   </span>
                   <Badge variant="secondary" className="w-fit">
                     {authExpired ? '授权链接已过期' : authorization?.pending ? '正在准备应用连接' : authUrl ? '等待你授权' : verificationUnavailable ? '连接暂时无法核验' : value.expired
@@ -560,11 +572,11 @@ export function FeishuSettings() {
                 </Button>
               </div>
             )}
-          </section>
+          </section>}
           {verificationUnavailable && <Alert><AlertDescription>{feishuVerificationMessage}</AlertDescription></Alert>}
           </div>
           <div className="flex flex-col gap-5">
-          {(!value.connected || value.expired || verificationUnavailable) && <p className="text-sm text-muted-foreground">连接飞书后，在这里选择接收位置与发送偏好。</p>}
+          {!connectionBlocked && (!value.connected || value.expired || verificationUnavailable) && <p className="text-sm text-muted-foreground">连接飞书后，在这里选择接收位置与发送偏好。</p>}
           {value.connected && !value.expired && !verificationUnavailable && <><section
             aria-labelledby="delivery-preferences-heading"
             className="flex min-w-0 flex-col gap-4"
@@ -731,7 +743,8 @@ export function FeishuSettings() {
             </Button>
           </div></>}
           </div>
-          <section className="pt-1">
+          {connectionBlocked && <FeishuApplicationSetup key={JSON.stringify([owner, identityVisit, "application"])} onChanged={() => void load()} />}
+          {!connectionBlocked && <section className="pt-1">
             <Button variant="ghost" className="px-0" aria-expanded={advancedOpen} aria-controls="feishu-advanced" onClick={() => setAdvancedOpen(open => !open)}>高级设置<ChevronRight aria-hidden="true" className={advancedOpen ? 'rotate-90' : ''} /></Button>
 
             {advancedOpen && <div id="feishu-advanced" className="mt-5 flex flex-col gap-5">
@@ -750,7 +763,7 @@ export function FeishuSettings() {
                 ? <FeishuObjectHotwords key={JSON.stringify([owner, identityVisit, "hotwords"])} connectionKey={statusRequest.current} connectionCurrent={() => displayedStatus === statusRequest.current && isCurrentOwner()} />
                 : <p className="text-sm text-muted-foreground">连接飞书后可设置对象热词。</p>}
             </div>}
-          </section>
+          </section>}
         </>
       )}
       </div>

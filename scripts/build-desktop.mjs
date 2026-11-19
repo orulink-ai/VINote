@@ -10,6 +10,7 @@ import { resolveLarkCli } from './lark-cli-bundle.mjs'
 import { updaterBuildConfig, verifyUpdaterSignature } from './ota-release.mjs'
 const { values } = parseArgs({ options: {
   channel: { type: 'string', default: 'release' },
+  'defer-updater-signing': { type: 'boolean', default: false },
   'build-id': { type: 'string' }, plan: { type: 'boolean', default: false },
 } })
 loadEnv()
@@ -25,7 +26,12 @@ if (values.plan) {
   process.exit(0)
 }
 const updaterPublicConfig = JSON.parse(readFileSync(join(root, 'config/desktop-updater-public.json'), 'utf8'))
-const updaterConfig = updaterBuildConfig(profile.channel, process.env, { ...baseConfig.plugins?.updater, ...updaterPublicConfig })
+const deferredSigning = values['defer-updater-signing']
+if (deferredSigning && (process.platform !== 'darwin' || profile.channel !== 'release')) {
+  throw new Error('Deferred signing is supported only for macOS release preparation')
+}
+const updaterConfig = updaterBuildConfig(profile.channel, process.env,
+  { ...baseConfig.plugins?.updater, ...updaterPublicConfig }, { deferredSigning })
 bootstrap()
 if (!['win32', 'darwin'].includes(process.platform)) throw new Error('Build Windows installers on Windows, macOS installers on macOS.')
 const py = python()
@@ -49,6 +55,7 @@ function clearBuildOutput(directory) {
   if (!target.startsWith(buildRoot + pathSeparator)) throw new Error('Build cleanup must stay inside .desktop-build')
   rmSync(target, { recursive: true, force: true })
 }
+clearBuildOutput(join(staging, 'bin'))
 mkdirSync(join(staging, 'bin'), { recursive: true })
 exec(py, [join(root, 'scripts/setup_diarization.py'), '--models-dir', join(staging, 'models/diarization')])
 writeFileSync(join(staging, 'desktop-config.json'), JSON.stringify(profile.config, null, 2))
@@ -92,11 +99,15 @@ exec(join(backendDir, profile.backendName + (process.platform === 'win32' ? '.ex
     VINOTE_DESKTOP_DATA: join(staging, 'smoke-data'), PORT: '0' },
 })
 const tauriConfig = join(staging, 'tauri-package.json')
-// Require actual ingestion and API readback from the frozen runtime, not just SDK imports.
-exec(join(backendDir, profile.backendName + (process.platform === 'win32' ? '.exe' : '')), ['--langfuse-smoke-test'], {
-  cwd: staging, env: { ...process.env, PATH: smokePath, PYTHONHOME: '', PYTHONPATH: '',
-    VINOTE_DESKTOP_DATA: join(staging, 'smoke-data'), PORT: '0' },
-})
+let tracingReceipt = { enabled: false }
+if (profile.config.LANGFUSE_ENABLED === 'true') {
+  // Verify the enabled tracing configuration through the frozen runtime.
+  exec(join(backendDir, profile.backendName + (process.platform === 'win32' ? '.exe' : '')), ['--langfuse-smoke-test'], {
+    cwd: staging, env: { ...process.env, PATH: smokePath, PYTHONHOME: '', PYTHONPATH: '',
+      VINOTE_DESKTOP_DATA: join(staging, 'smoke-data'), PORT: '0' },
+  })
+  tracingReceipt = publicTracingReceipt(JSON.parse(readFileSync(join(staging, 'smoke-data/langfuse-smoke.json'), 'utf8')))
+}
 const hooks = join(staging, 'installer-hooks.nsh')
 writeFileSync(hooks, `!define VINOTE_MAIN_EXE "${profile.binaryName}.exe"\n!define VINOTE_BACKEND_EXE "${profile.backendName}.exe"\n!define VINOTE_APP_NAME "${profile.productName}"\n!include "${join(root, 'frontend/src-tauri/installer-hooks.nsh')}"\n`)
 writeFileSync(tauriConfig, JSON.stringify({
@@ -120,6 +131,12 @@ exec(process.execPath, [join(root, 'frontend/node_modules/@tauri-apps/cli/tauri.
 })
 const { readdirSync, cpSync } = await import('node:fs')
 const bundleDir = join(targetDir, 'release/bundle')
+if (deferredSigning) {
+  const macos = join(bundleDir, 'macos')
+  const apps = readdirSync(macos).filter(name => name.endsWith('.app'))
+  if (apps.length !== 1) throw new Error('Expected one macOS app for deferred signing')
+  exec('/usr/bin/tar', ['-czf', join(macos, apps[0] + '.tar.gz'), '-C', macos, apps[0]])
+}
 const artifacts = join(root, '.desktop-build/artifacts', profile.channel, profile.version, profile.buildId)
 clearBuildOutput(artifacts)
 mkdirSync(artifacts, { recursive: true })
@@ -135,7 +152,7 @@ for (const type of process.platform === 'win32' ? ['nsis'] : ['macos', 'dmg']) {
   }
 }
 if (!files.length) throw new Error('No desktop package artifacts were produced')
-if (profile.channel === 'release') {
+if (profile.channel === 'release' && !deferredSigning) {
   const suffix = process.platform === 'win32' ? '.exe' : '.app.tar.gz'
   const updates = files.filter(file => file.name.endsWith(suffix))
   if (updates.length !== 1) throw new Error('Expected one signed updater artifact')
@@ -153,6 +170,6 @@ const dirty = gitRun('diff', '--quiet').status !== 0
 writeFileSync(join(artifacts, 'manifest.json'), JSON.stringify({ channel: profile.channel, version: profile.version,
   buildId: profile.buildId, identifier: profile.identifier,
   platform: process.platform, arch: process.arch, commit: git('rev-parse', 'HEAD'),
-  dirty, feishuCli: { version: cliVersion, sha256: checksum(readFileSync(cliBinary)) },
-  langfuse: publicTracingReceipt(JSON.parse(readFileSync(join(staging, 'smoke-data/langfuse-smoke.json'), 'utf8'))), files }, null, 2))
+  dirty, updaterSignaturePending: deferredSigning, feishuCli: { version: cliVersion, sha256: checksum(readFileSync(cliBinary)) },
+  langfuse: tracingReceipt, files }, null, 2))
 console.log(`Desktop ${profile.channel} artifacts: ${artifacts}`)

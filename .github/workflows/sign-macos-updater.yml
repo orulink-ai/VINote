@@ -1,0 +1,68 @@
+name: Sign prepared macOS updater
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing draft release tag
+        type: string
+        required: true
+      asset:
+        description: Exact macOS updater archive filename
+        type: string
+        required: true
+      sha256:
+        description: Expected archive SHA-256
+        type: string
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  sign:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm ci --prefix frontend
+      - name: Validate and download draft asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          ASSET_NAME: ${{ inputs.asset }}
+          EXPECTED_SHA256: ${{ inputs.sha256 }}
+        run: |
+          node --input-type=module -e '
+          if (!/^v\d+\.\d+\.\d+$/.test(process.env.RELEASE_TAG) ||
+              !/^[a-zA-Z0-9_.-]+\.app\.tar\.gz$/.test(process.env.ASSET_NAME) ||
+              !/^[a-f0-9]{64}$/.test(process.env.EXPECTED_SHA256)) process.exit(1)'
+          test "$(gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = true
+          mkdir prepared
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --pattern "$ASSET_NAME" --dir prepared
+          printf '%s  %s\n' "$EXPECTED_SHA256" "prepared/$ASSET_NAME" | sha256sum --check
+      - name: Sign with the existing updater key
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          ASSET_NAME: ${{ inputs.asset }}
+        run: |
+          node frontend/node_modules/@tauri-apps/cli/tauri.js signer sign --private-key "$TAURI_SIGNING_PRIVATE_KEY" --password "$TAURI_SIGNING_PRIVATE_KEY_PASSWORD" "prepared/$ASSET_NAME"
+      - name: Verify against the released public key
+        env:
+          ASSET_NAME: ${{ inputs.asset }}
+        run: |
+          node --input-type=module -e '
+          import { readFileSync } from "node:fs";
+          import { verifyUpdaterSignature } from "./scripts/ota-release.mjs";
+          const path = "prepared/" + process.env.ASSET_NAME;
+          const key = JSON.parse(readFileSync("config/desktop-updater-public.json", "utf8")).pubkey;
+          verifyUpdaterSignature(readFileSync(path), readFileSync(path + ".sig", "utf8"), key);'
+      - name: Upload verified signature to the same draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+          ASSET_NAME: ${{ inputs.asset }}
+        run: gh release upload "$RELEASE_TAG" "prepared/$ASSET_NAME.sig" --repo "$GITHUB_REPOSITORY"

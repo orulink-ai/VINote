@@ -17,7 +17,26 @@ from app.services.cloud_account_service import CloudAccountService, _request
 from app.services.feishu_service import FeishuService, FeishuError
 from app.services.feishu_application_service import application_status, save_application, clear_application
 
-router = APIRouter(prefix="/feishu", tags=["feishu"])
+async def select_local_desktop_transport(request: Request):
+    from app.services.feishu_cli import local_desktop_request
+
+    # The development WebView can use a separately started loopback API.
+    # Remote and bearer-authenticated calls must never select the device CLI.
+    loopback = {"127.0.0.1", "::1", "localhost"}
+    if (settings.allow_split_desktop_feishu
+            and request.headers.get("x-vinote-client") == "desktop"
+            and request.client is not None
+            and request.client.host in loopback
+            and request.url.hostname in loopback
+            and "authorization" not in request.headers):
+        with local_desktop_request():
+            yield
+        return
+    yield
+
+
+router = APIRouter(prefix="/feishu", tags=["feishu"],
+                   dependencies=[Depends(select_local_desktop_transport)])
 service = FeishuService()
 
 
@@ -45,6 +64,8 @@ def principal(request: Request):
         # remotely supplied integration principal or shared cloud connection.
         user = get_current_user(request, None)
         return user.user_id, user.user_id
+    if request.headers.get("x-vinote-client") == "desktop":
+        raise HTTPException(503, "本机飞书服务未启用。请完全退出 VINote，并使用最新版桌面应用重新打开。")
     if authorization.startswith("Bearer "):
         # This route alone accepts a verified Supabase bearer. No unsigned JWT claims.
         identity = _request("user", token=authorization[7:])

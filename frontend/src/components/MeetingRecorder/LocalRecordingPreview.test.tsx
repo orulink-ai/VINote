@@ -36,10 +36,29 @@ it('opens model confirmation without starting a worker, and cancellation retains
   await userEvent.click(screen.getByRole('button', { name: '生成会议纪要' }))
   expect(screen.getByRole('dialog', { name: '确认本次生成' })).toBeVisible()
   expect(screen.getByText('现有转写与总结选择组件')).toBeInTheDocument()
+  expect(screen.queryByRole('button', { name: '重新读取模型配置' })).not.toBeInTheDocument()
   expect(storage.process).not.toHaveBeenCalled()
   await userEvent.click(screen.getByRole('button', { name: '暂不生成' }))
   expect(screen.queryByRole('dialog')).not.toBeInTheDocument()
   expect(storage.remove).not.toHaveBeenCalled()
+})
+
+it('offers a model configuration retry only after loading fails', async () => {
+  const load = vi.fn()
+    .mockImplementationOnce(async () => useAppModeStore.setState({ error: '模型配置暂时无法读取' }))
+    .mockImplementationOnce(async () => useAppModeStore.setState({ error: '' }))
+  useAppModeStore.setState({ load })
+  render(<LocalRecordingPreview recording={recording} onDeleted={vi.fn()} />)
+
+  await userEvent.click(screen.getByRole('button', { name: '生成会议纪要' }))
+  expect(screen.getByRole('alert')).toHaveTextContent('模型配置暂时无法读取')
+  expect(screen.getByRole('button', { name: '确认模型并开始生成' })).toBeDisabled()
+  await userEvent.click(screen.getByRole('button', { name: '重新读取模型配置' }))
+
+  expect(load).toHaveBeenCalledTimes(2)
+  expect(screen.queryByRole('button', { name: '重新读取模型配置' })).not.toBeInTheDocument()
+  expect(screen.getByRole('button', { name: '确认模型并开始生成' })).toBeEnabled()
+  expect(storage.process).not.toHaveBeenCalled()
 })
 
 it('submits only the explicitly confirmed model selection', async () => {
@@ -123,6 +142,8 @@ it('invalidates an IndexedDB save immediately on account changes without relying
 it('routes local meeting deletion to its dossier without deleting the recording separately', async () => {
   const deleted = vi.fn()
   render(<LocalRecordingPreview recording={recording} onDeleted={deleted} />)
+  expect(screen.getByText('前往会议档案 · 删除整场会议')).not.toBeVisible()
+  await userEvent.click(screen.getByText('录制管理'))
   const link = screen.getByRole('link', { name: '前往会议档案 · 删除整场会议' })
   expect(link.getAttribute('href')).toContain('locate_recording=' + recording.id)
   expect(screen.queryByRole('button', { name: '删除录制文件' })).not.toBeInTheDocument()

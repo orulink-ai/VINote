@@ -45,7 +45,12 @@ def verify_task_status_storage():
 
 
 def configure_langfuse(config):
-    """Use only the bundled project; stale installation files cannot disable tracing."""
+    """Use the build-managed tracing choice, ignoring stale installation files."""
+    if config.get('LANGFUSE_ENABLED') == 'false':
+        os.environ['LANGFUSE_ENABLED'] = 'false'
+        for key in ('LANGFUSE_PUBLIC_KEY', 'LANGFUSE_SECRET_KEY'):
+            os.environ.pop(key, None)
+        return
     keys = ('LANGFUSE_BASE_URL', 'LANGFUSE_PUBLIC_KEY', 'LANGFUSE_SECRET_KEY')
     if not all((config.get(key) or '').strip() for key in keys):
         raise RuntimeError('Bundled Langfuse configuration is incomplete; rebuild the package')
