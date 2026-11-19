@@ -84,3 +84,19 @@ def test_packaged_tracing_can_be_explicitly_disabled(monkeypatch):
     assert os.environ["LANGFUSE_ENABLED"] == "false"
     assert "LANGFUSE_SECRET_KEY" not in os.environ
     assert "LANGFUSE_PUBLIC_KEY" not in os.environ
+
+
+def test_packaged_media_smoke_checks_real_webm_playback(tmp_path):
+    """A version banner alone misses the FFmpeg 8.0 Opus EOF parser defect."""
+    import hashlib
+    from scripts.desktop_backend import verify_media_playback_toolchain
+
+    preview = verify_media_playback_toolchain(tmp_path)
+    original = tmp_path / 'toolchain.webm'
+    assert preview.is_file() and preview != original
+    from app.services.media_playback_service import _packet_manifest
+    assert _packet_manifest(original)['streams'] == _packet_manifest(preview)['streams']
+    before = hashlib.sha256(original.read_bytes()).hexdigest()
+    from app.services.media_playback_service import playback_file
+    assert playback_file(original) == preview
+    assert hashlib.sha256(original.read_bytes()).hexdigest() == before

@@ -127,6 +127,27 @@ def configure():
     return bundle
 
 
+def verify_media_playback_toolchain(directory: Path) -> Path:
+    """Exercise the bundled codecs and strict playback proof with synthetic audio."""
+    import subprocess
+    import wave
+    from app.services.media_playback_service import playback_file
+
+    directory = Path(directory)
+    sample = directory / 'toolchain.wav'
+    with wave.open(str(sample), 'wb') as output:
+        output.setnchannels(1)
+        output.setsampwidth(2)
+        output.setframerate(48000)
+        output.writeframes(bytes(24000))
+    source = directory / 'toolchain.webm'
+    subprocess.run([
+        'ffmpeg', '-nostdin', '-v', 'error', '-y', '-i', str(sample),
+        '-c:a', 'libopus', '-f', 'webm', '-live', '1', str(source),
+    ], check=True, capture_output=True, timeout=30)
+    return playback_file(source)
+
+
 def main():
     import multiprocessing
     multiprocessing.freeze_support()
@@ -194,7 +215,8 @@ def main():
                 output.setframerate(16000)
                 output.writeframes(bytes(32000))
             prepare_meeting_audio(str(sample), Path(directory) / 'clean.f32')
-        print('Desktop backend smoke test passed: database, task status polling, routes, frontend, ffmpeg, ffprobe and bundled speaker inference.')
+            verify_media_playback_toolchain(Path(directory))
+        print('Desktop backend smoke test passed: database, task status polling, routes, frontend, ffmpeg, ffprobe, strict WebM playback and bundled speaker inference.')
         return
     uvicorn.run(app, host='127.0.0.1', port=int(os.environ['PORT']), log_level='info')
 
