@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { nativeSignTargets } from './macos-sign.mjs'
 
-test('native signing discovers Mach-O files and ignores aliases and foreign executables', () => {
+test('native signing discovers Mach-O files and ignores aliases and foreign executables', { skip: process.platform === 'win32' }, () => {
   const root = mkdtempSync(join(tmpdir(), 'vinote-sign-'))
   try {
     mkdirSync(join(root, 'nested'))
