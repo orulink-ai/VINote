@@ -5,6 +5,7 @@ import { parseArgs } from 'node:util'
 import { resolveDesktopProfile, checksum, publicTracingReceipt } from './desktop-build-profile.mjs'
 import { root, python, loadEnv } from './runtime.mjs'
 import { signMacBinaries } from './macos-sign.mjs'
+import { createMacUpdaterArchive, assertMacUpdaterArchive } from './macos-updater-archive.mjs'
 import { bootstrap } from './bootstrap-dev.mjs'
 import { assertProjectVersion } from './project-version.mjs'
 import { resolveLarkCli } from './lark-cli-bundle.mjs'
@@ -135,11 +136,17 @@ exec(process.execPath, [join(root, 'frontend/node_modules/@tauri-apps/cli/tauri.
 })
 const { readdirSync, cpSync } = await import('node:fs')
 const bundleDir = join(targetDir, 'release/bundle')
-if (deferredSigning) {
+if (process.platform === 'darwin' && profile.channel === 'release') {
   const macos = join(bundleDir, 'macos')
   const apps = readdirSync(macos).filter(name => name.endsWith('.app'))
-  if (apps.length !== 1) throw new Error('Expected one macOS app for deferred signing')
-  exec('/usr/bin/tar', ['-czf', join(macos, apps[0] + '.tar.gz'), '-C', macos, apps[0]])
+  if (apps.length !== 1) throw new Error('Expected one macOS application for OTA packaging')
+  if (deferredSigning) {
+    createMacUpdaterArchive(join(macos, apps[0]), join(macos, apps[0] + '.tar.gz'))
+  } else {
+    const archives = readdirSync(macos).filter(name => name.endsWith('.app.tar.gz'))
+    if (archives.length !== 1) throw new Error('Expected one macOS updater archive')
+    assertMacUpdaterArchive(join(macos, archives[0]), apps[0])
+  }
 }
 const artifacts = join(root, '.desktop-build/artifacts', profile.channel, profile.version, profile.buildId)
 clearBuildOutput(artifacts)

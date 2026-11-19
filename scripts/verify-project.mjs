@@ -13,7 +13,8 @@ function check(label, command, args, cwd = root) {
 check('Backend tests', python(), ['-m', 'pytest', 'tests', '-q'])
 check('Desktop script contracts', process.execPath, ['--test',
   'scripts/desktop-build-profile.test.mjs', 'scripts/desktop-dev-profile.test.mjs', 'scripts/project-scripts.test.mjs',
-  'scripts/lark-cli-bundle.test.mjs'])
+  'scripts/lark-cli-bundle.test.mjs', 'scripts/ota-release.test.mjs',
+  'scripts/macos-sign.test.mjs', 'scripts/macos-updater-archive.test.mjs'])
 check('Frontend tests', process.execPath,
   [join(root, 'frontend/node_modules/vitest/vitest.mjs'), 'run'], join(root, 'frontend'))
 check('Frontend type check', process.execPath,

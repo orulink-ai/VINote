@@ -58,3 +58,12 @@ actual installer launch or an end-to-end update on a user's device.
 ## Migration from the former public repository
 
 Versions through 0.3.8 check `Ro-In-AI/Vinote-public`. This migration does not publish a bridge there: install 0.3.9 from the new public repository to switch existing installations to the new endpoint. Starting with 0.3.9, subsequent stable updates use `vilab-orulink/Vinote-public`. Keep the existing updater signing key.
+
+
+## macOS archive and native-install acceptance
+
+macOS OTA archives contain exactly one `.app` root. `scripts/macos-updater-archive.mjs` creates deferred-signing archives with `COPYFILE_DISABLE=1` and validates all release archives through the standard-library raw-tar checker. AppleDouble members such as `._VINote.app` must never reach the native updater, which strips the first path component during extraction. BSD tar may hide these members in its listing, so a successful `tar -t` or ordinary extraction is insufficient evidence. Keep the real `Contents/CodeResources` notarization ticket file. Repacking changes the archive hash and requires a new updater signature.
+
+`node --test scripts/macos-updater-archive.test.mjs` exercises both a clean application archive and rejection of AppleDouble siblings. `VINOTE_MACOS_OTA_FIXTURE_APP` can point to a prepared App for the optional real-bundle case. These checks run in the project verification script and CI.
+
+A signed and notarized DMG is the initial installation. Install VINote into Applications; future OTA uses the complete signed `.app.tar.gz`. Each subsequent stable release must publish a newer version with its actual `darwin-aarch64` entry, URL and matching signature at the configured stable endpoint. A lower/equal version is not an upgrade. Keep the trusted key unchanged. Native acceptance uses an isolated bundle and the exact shipped updater version to check the live feed, download and verify the public payload, install it, and verify the resulting bundle; it does not create a fake public release.
