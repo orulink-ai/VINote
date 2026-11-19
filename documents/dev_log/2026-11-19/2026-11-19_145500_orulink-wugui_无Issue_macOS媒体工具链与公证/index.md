@@ -1,7 +1,7 @@
 # macOS 媒体工具链与公证验收
 
 - 作者：orulink-wugui；日期：2026-11-19 Asia/Shanghai
-- 分支：codex/macos-playback-ffmpeg8；状态：媒体修复及完整回归通过，嵌套签名和公证待确认
+- 分支：codex/macos-playback-ffmpeg8；状态：已完成：修复合入 dev，公证版发布及远端校验通过
 - 用户要求：本地跑通 CI 即可，发现问题修复后合并，并完成 macOS 公证。
 
 ## 根因与范围
@@ -23,3 +23,11 @@
 签名枚举测试先因缺少模块失败；加入实现后发布脚本共 27 项通过。实际重建 App 的 174 个 Mach-O 全部使用 Developer ID Application 完成签名，整体 codesign --verify --deep --strict 通过。仅使用包内 bin 的严格 WebM 预览检查通过；PATH 只含系统目录的冻结后端 --smoke-test 也通过。公证、票据和安装包发布仍在进行，不将有效代码签名当作 Apple Accepted。
 
 本次 v0.3.11 运行时代码仍从既有标签对应 fc3adda 干净构建，使用 FFmpeg/FFprobe 8.1.3 替换第三方构建依赖并补齐分发签名；新工具链冒烟与签名流程作为后续发布保障合入 dev，不重写已发布标签。
+
+## 最终公证验收
+
+2026-11-19｜orulink-wugui：最终 App 提交 55d7e338-2f54-4a5e-9e4d-9d82e25d0514 与 DMG 提交 00d92327-66ea-4d56-8485-c9937289e65b 均为 Accepted。App、DMG、镜像内 App 以及更新归档解压后的 App 均通过票据、签名及 Gatekeeper 验证。OTA 签名与已有公钥匹配。飞书 CLI 保持 1.0.93，FFmpeg/FFprobe 8.1.3；系统默认 FFmpeg 已切换到已验证工具链，媒体集成复测通过。
+
+[最终验收记录](../../../../docs/reviews/2026-11-19-macos-0311-notarization.md) 包含来源、检查范围、Apple 提交 ID 与最终文件 SHA-256。此链接为同一任务的完成材料，不改写此前失败调查记录。
+
+2026-11-19｜orulink-wugui：源仓库和公开下载仓库均完成公证修订版发布，两端五项资产哈希全部匹配；旧的未公证资产已移除，来源标签与 Windows 既有 latest 选择保持不变。此提交补齐最终验收材料和任务闭环状态，未修改产品代码，不重复执行已经通过的完整代码回归。
