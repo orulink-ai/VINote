@@ -81,3 +81,7 @@ yarn client:test
 manifest 的 `dirty` 仍保守检查构建结束时的已暂存、未暂存和未跟踪变更；Tauri 更新受跟踪的 `gen/schemas` 也会使其为 true。不按目录统一忽略或自动恢复这些文件，以免掩盖用户修改。应只读审查差异及构建前后证据；不能把工具生成物触发的 dirty 直接描述为业务源码修改，也不能把 dirty=false 当作完整输入快照证明。
 
 公开 Release 说明、构建 manifest、启动日志与计划输出不展示服务域名。完整服务配置和 Langfuse 追踪链接仅用于本地构建验收；公开 manifest 只保留版本、提交、文件校验值和脱敏后的验证结果。运行时连接地址仍由内部配置提供，无法以文档脱敏保证地址不可被客户端提取。
+
+## macOS 本机构建与已有密钥签名
+
+本机没有 OTA 私钥时，`node scripts/build-desktop.mjs --channel release --defer-updater-signing` 生成待签名安装包与更新归档。待签名状态不能通过正式发布验证。将更新归档上传源码仓库草稿 Release 后，可运行 `sign-macos-updater.yml`，传入版本标签、精确文件名和 SHA-256。工作流只在 GitHub 内使用已有 Secret 签名，并以当前发布公钥验证，只回传签名文件。回收签名、补齐 manifest 文件校验值后，仍需通过既有发布校验再发布。

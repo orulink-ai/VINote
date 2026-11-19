@@ -125,3 +125,10 @@ test('multiple drafts for the same tag stop publishing before uploads or additio
   await assert.rejects(publishRelease(plan, fake, { publish: true }), /Multiple releases/)
   assert.equal(fake.events.some(event => event.method === 'POST' || event.upload), false)
 })
+
+test('deferred macOS signing retains the trusted updater configuration', () => {
+  const config = updaterBuildConfig('release', {}, { pubkey: 'existing-public-key' }, { deferredSigning: true })
+  assert.equal(config.bundle.createUpdaterArtifacts, false)
+  assert.equal(config.plugins.updater.pubkey, 'existing-public-key')
+  assert.deepEqual(config.plugins.updater.endpoints, [UPDATE_ENDPOINT])
+})
