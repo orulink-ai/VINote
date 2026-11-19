@@ -1,5 +1,5 @@
 import { existsSync, realpathSync, statSync } from 'node:fs'
-import { delimiter, isAbsolute, join } from 'node:path'
+import { delimiter, dirname, isAbsolute, join } from 'node:path'
 
 export function resolveLarkCli({ platform = process.platform, path = process.env.PATH || '', override = process.env.VINOTE_LARK_CLI_PATH } = {}) {
   const suffix = platform === 'win32' ? '.exe' : ''
@@ -10,5 +10,11 @@ export function resolveLarkCli({ platform = process.platform, path = process.env
   const found = candidates.find(candidate => isAbsolute(candidate) && existsSync(candidate) && statSync(candidate).isFile() &&
     (platform !== 'win32' || candidate.toLowerCase().endsWith('.exe')))
   if (!found) throw new Error('Install the official lark-cli native binary or set VINOTE_LARK_CLI_PATH; credentials are never bundled.')
-  return realpathSync(found)
+  const resolved = realpathSync(found)
+  if (platform === 'darwin' && resolved.endsWith('/@larksuite/cli/scripts/run.js')) {
+    const native = join(dirname(resolved), '..', 'bin', 'lark-cli')
+    if (!existsSync(native) || !statSync(native).isFile()) throw new Error('Official lark-cli native executable is missing')
+    return realpathSync(native)
+  }
+  return resolved
 }
