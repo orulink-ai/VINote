@@ -40,3 +40,13 @@ test('updater archive validation rejects AppleDouble siblings before publishing'
     assert.throws(() => assertMacUpdaterArchive(archive, 'VINote.app'), /AppleDouble/)
   } finally { rmSync(root, { recursive: true }) }
 })
+
+test('updater archive rejects a dot wrapper consumed as the app root', { skip: process.platform === 'win32' }, () => {
+  const root = mkdtempSync(join(tmpdir(), 'vinote-ota-wrapper-'))
+  try {
+    mkdirSync(join(root, 'VINote.app'))
+    const archive = join(root, 'wrapped.tar.gz')
+    execFileSync('/usr/bin/tar', ['-czf', archive, '-C', root, './VINote.app'], { env: { ...process.env, COPYFILE_DISABLE: '1' } })
+    assert.throws(() => assertMacUpdaterArchive(archive, 'VINote.app'), /one application root/)
+  } finally { rmSync(root, { recursive: true }) }
+})

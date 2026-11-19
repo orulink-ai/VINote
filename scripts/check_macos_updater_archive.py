@@ -11,7 +11,8 @@ def check_archive(path, app_name):
             parts = PurePosixPath(member.name).parts
             if any(part.startswith('._') for part in parts):
                 raise ValueError('AppleDouble metadata is incompatible with the native macOS updater')
-            if not parts or parts[0] != app_name or '..' in parts:
+            # The native extractor strips the first component, including a leading './'.
+            if not parts or member.name.split('/', 1)[0] != app_name or '..' in parts:
                 raise ValueError('macOS updater archive must contain exactly one application root')
             found = True
     if not found:
