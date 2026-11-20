@@ -9,9 +9,10 @@ import {useAuthStore} from '@/stores/authStore';
 import {listPendingMeetings} from '@/lib/audioStorage';
 vi.mock('@/lib/api',async original=>({...await original<typeof import('@/lib/api')>(),apiJson:vi.fn()}));
 vi.mock('@/lib/audioStorage',()=>({listPendingMeetings:vi.fn(async()=>[])}));
-vi.mock('@/hooks/useLibraryNotes',()=>({useLibraryNotes:()=>[],libraryNoteUrl:()=>'/notes'}));
+const historyNotes=vi.hoisted(()=>({items:[] as any[]}));
+vi.mock('@/hooks/useLibraryNotes',()=>({useLibraryNotes:()=>historyNotes.items,libraryNoteUrl:()=>'/notes'}));
 const api=vi.mocked(apiJson);
-beforeEach(()=>{localStorage.clear();api.mockReset();vi.mocked(listPendingMeetings).mockResolvedValue([]);useAuthStore.setState({user:{id:'center-owner'} as never})});
+beforeEach(()=>{historyNotes.items=[];localStorage.clear();api.mockReset();vi.mocked(listPendingMeetings).mockResolvedValue([]);useAuthStore.setState({user:{id:'center-owner'} as never})});
 afterEach(()=>{cleanup();localStorage.clear()});
 it('shows each live source, measured stage, completed note and failure recovery without posting',async()=>{
  for(const [id,title]of [['a','评审会议'],['b','培训纪要'],['c','采购讨论'],['d','周会纪要']])localStorage.setItem(`vinote:source-receipt:center-owner:${id}`,JSON.stringify({id,operationId:id,meeting:true,sourceTitle:title,workspace:{scope:'personal'},submissionState:'accepted'}));
@@ -65,4 +66,13 @@ it('persists verified operation identity for a deleted task and stops polling it
  await waitFor(()=>expect(screen.queryByText('正在更新任务状态…')).not.toBeInTheDocument());
  expect(screen.queryByText('已删的未知提交')).not.toBeInTheDocument();expect(api).not.toHaveBeenCalled();
  expect(localStorage.getItem('vinote:source-receipt:center-owner:old-op')).toBe(receipt);
+});
+
+it('does not duplicate a saved note when its historical receipt resolves to the same note by a different task id',async()=>{
+ historyNotes.items=[{id:'same-note',title:'Erşad · X 帖子',taskId:'new-task',status:'done',scope:'personal'}];
+ localStorage.setItem('vinote:source-receipt:center-owner:old-operation',JSON.stringify({id:'old-task',operationId:'old-operation',meeting:false,sourceTitle:'Erşad · X 帖子',workspace:{scope:'personal'},submissionState:'accepted'}));
+ api.mockImplementation(async path=>path==='/api/notes'?[{id:'same-note',task_id:'old-task',status:'done'}]:{task_id:'old-task',status:'success',result:{task_id:'old-task',title:'Erşad · X 帖子',markdown:'正文'}});
+ render(<MemoryRouter><Tasks/></MemoryRouter>);
+ await waitFor(()=>expect(api.mock.calls.some(([p])=>p==='/api/notes')).toBe(true));
+ await waitFor(()=>expect(screen.getAllByRole('link',{name:'打开已保存内容'})).toHaveLength(1));
 });
