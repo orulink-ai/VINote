@@ -9,7 +9,10 @@ export type RemoteImagePolicy = 'allow' | 'confirm'
 // The local artifact API checks task ownership. Arbitrary relative paths are
 // never promoted to this channel, and attachment access URLs stay above it.
 function deviceArtifact(source: string) {
-  return /^\/api\/task\/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}\/artifacts\/(?:screenshots|media)\/[\w-]+\.(?:png|jpe?g|webp)$/i.test(source)
+  return (
+    /^\/api\/task\/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}\/artifacts\/(?:screenshots|media)\/[\w-]+\.(?:png|jpe?g|webp)$/i.test(source) ||
+    /^\/api\/task\/[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}\/artifacts\/visuals\/[\w-]+\.png$/.test(source)
+  )
 }
 
 function remoteImageUrl(source: string): URL | undefined {

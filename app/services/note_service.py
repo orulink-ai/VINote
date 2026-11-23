@@ -488,6 +488,7 @@ class NoteService:
                 self.artifact_service.update_status(final_dir, "success", "Note generated successfully")
                 if span is not None:
                     span.update(output={"status": "success", "task_id": context.task_id})
+            self._maybe_schedule_visual_slides(context)
             update_current(metadata={"stage_duration_ms": {
                 key: round(value * 1000) for key, value in context.step_timings.items()
             }})
@@ -502,6 +503,50 @@ class NoteService:
                 details['failed_stage'] = failed_stage
             self.artifact_service.update_status(final_dir, "failed", str(exc), **details)
             raise
+
+    def _maybe_schedule_visual_slides(self, context: PipelineContext) -> None:
+        if not (
+            settings.visual_slides_enabled
+            and settings.visual_slides_auto_generate
+            and context.style == "meeting"
+            and context.presentation in (None, "text")
+            and context.user_id
+        ):
+            return
+        try:
+            import threading
+            from app.services.visual_slide_service import generate_visual_slides_for_task
+
+            owner = context.user_id
+            task_id = context.task_id
+            output_language = context.output_language or "zh-CN"
+
+            def _run() -> None:
+                try:
+                    generate_visual_slides_for_task(
+                        self.artifact_service,
+                        owner,
+                        task_id,
+                        output_language=output_language,
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[VisualSlides] background task=%s failed: kind=%s",
+                        task_id,
+                        type(exc).__name__,
+                    )
+
+            threading.Thread(
+                target=_run,
+                name=f"visual-slides-{task_id[:8]}",
+                daemon=True,
+            ).start()
+        except Exception as exc:
+            logger.warning(
+                "[VisualSlides] failed to schedule task=%s: kind=%s",
+                context.task_id,
+                type(exc).__name__,
+            )
 
     @staticmethod
     def _rebase_audio_meta_path_after_finalize(

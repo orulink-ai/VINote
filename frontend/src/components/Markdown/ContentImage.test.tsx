@@ -98,3 +98,21 @@ it('owner-authenticated attachments still use the bounded fetch and revoke their
   unmount()
   expect(revoke).toHaveBeenCalledWith('blob:owner-image')
 })
+
+it('renders authenticated task visual slide PNG routes directly without remote confirmation', () => {
+  const path = '/api/task/12345678-1234-1234-1234-123456789abc/artifacts/visuals/slide-01.png'
+  const { container } = render(<ContentImage src={path} alt="系统架构图" />)
+  expect(container.querySelector('img')).toHaveAttribute('src', path)
+  expect(screen.queryByRole('button')).toBeNull()
+})
+
+it.each([
+  '/api/task/12345678-1234-1234-1234-123456789abc/artifacts/visuals/slide-01.html',
+  '/api/task/12345678-1234-1234-1234-123456789abc/artifacts/visuals/slide-01.svg',
+  '/api/task/12345678-1234-1234-1234-123456789abc/artifacts/visuals/../note.md',
+  '/api/task/not-a-uuid/artifacts/visuals/slide-01.png',
+])('blocks non-PNG, traversal, or non-UUID visual slide paths: %s', src => {
+  const { container } = render(<ContentImage src={src} />)
+  expect(container.querySelector('img')).toBeNull()
+  expect(screen.queryByRole('button')).toBeNull()
+})

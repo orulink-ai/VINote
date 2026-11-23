@@ -112,7 +112,19 @@ class Settings:
     cloud_auth_public_key: str = os.getenv("VINOTE_SUPABASE_PUBLISHABLE_KEY", "")
     azure_openai_api_version: str = os.getenv("AZURE_OPENAI_API_VERSION", "2024-10-21")
 
+    visual_slides_enabled: bool = os.getenv("VISUAL_SLIDES_ENABLED", "true").lower() != "false"
+    visual_slides_auto_generate: bool = os.getenv("VISUAL_SLIDES_AUTO_GENERATE", "false").lower() == "true"
+    visual_slides_max_count: int = int(os.getenv("VISUAL_SLIDES_MAX_COUNT", "3"))
+    visual_slides_vlm_review_enabled: bool = os.getenv("VISUAL_SLIDES_VLM_REVIEW_ENABLED", "true").lower() != "false"
+    visual_chrome_path: str = os.getenv("VISUAL_CHROME_PATH", "").strip()
+    visual_renderer_url: str = os.getenv("VISUAL_RENDERER_URL", "").strip()
+
     def __post_init__(self):
+        if not 0 <= self.visual_slides_max_count <= 3:
+            raise ValueError("VISUAL_SLIDES_MAX_COUNT must be between 0 and 3")
+        if self.visual_renderer_url:
+            from app.services.visual_slide_renderer import validate_renderer_url
+            self.visual_renderer_url = validate_renderer_url(self.visual_renderer_url)
         if self.content_cloud_runtime and not self.workspace_cloud_runtime:
             raise ValueError("Cloud content requires VINOTE_WORKSPACE_CLOUD=true")
         if not 1024 <= self.content_upload_max_bytes <= 512 * 1024 * 1024:
