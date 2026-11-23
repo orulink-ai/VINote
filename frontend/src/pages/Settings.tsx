@@ -13,6 +13,7 @@ import {
 import { DesktopUpdatePanel } from "@/components/Settings/DesktopUpdatePanel";
 import { NotificationSettingsPanel } from "@/components/Settings/NotificationSettingsPanel";
 import { ModelSourcePanel } from "@/components/Settings/ModelSourcePanel";
+import { VisualSlidesSettingsPanel } from "@/components/Settings/VisualSlidesSettingsPanel";
 import { PageHeading } from "@/components/Layout/PageHeading";
 import { AppearanceSettingsPanel } from "@/components/Settings/AppearanceSettingsPanel";
 import { ProfileSettingsPanel } from "@/components/Settings/ProfileSettingsPanel";
@@ -110,7 +111,7 @@ export function Settings() {
             <h2 className="mb-2 text-base font-medium">设置总览</h2>
             <SettingLink parent={parent} to="/settings?tab=profile" title="我的账号" description="当前登录身份。" icon={Users} />
             <SettingLink parent={parent} to="/settings?tab=spaces" title="空间与协作" description="选择个人或团队空间，管理成员。" icon={Users} />
-            <SettingLink parent={parent} to="/settings?tab=models" title="转写与总结" description="选择下次处理使用的模型与服务。" icon={Plug} />
+            <SettingLink parent={parent} to="/settings?tab=models" title="转写与总结" description="选择下次处理使用的模型、服务与自动配图。" icon={Plug} />
             <SettingLink parent={parent} to="/settings?tab=storage" title="存储" description="查看当前设备的内容、原文件与回收站。" icon={HardDrive} />
             <SettingLink parent={parent} to="/settings?tab=notifications" title="任务通知" description="完成或失败时提醒，后台可使用系统通知。" icon={Bell} />
             <SettingLink parent={sectionPath} to="/settings/feishu" title="飞书" description="发布内容与发送通知。" icon={Plug} />
@@ -131,7 +132,12 @@ export function Settings() {
                 icon={Users}
               />
             </div>}
-          {activeTab === "models" && <ModelSourcePanel />}
+          {activeTab === "models" && (
+            <div className="flex flex-col gap-6">
+              <ModelSourcePanel />
+              <VisualSlidesSettingsPanel />
+            </div>
+          )}
           {activeTab === "appearance" && (
             <AppearanceSettingsPanel
               theme={theme}

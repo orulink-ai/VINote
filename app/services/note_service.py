@@ -504,13 +504,27 @@ class NoteService:
             self.artifact_service.update_status(final_dir, "failed", str(exc), **details)
             raise
 
+    @staticmethod
+    def _should_auto_generate_visual_slides(user_id: str | None) -> bool:
+        if not settings.visual_slides_enabled or not user_id:
+            return False
+        try:
+            from app.services.preferences_repository import PreferenceRepository
+
+            return PreferenceRepository().visual_slides_auto_generate_enabled(user_id)
+        except Exception as exc:
+            logger.warning(
+                "[VisualSlides] preference lookup failed for user=%s: kind=%s",
+                user_id,
+                type(exc).__name__,
+            )
+            return bool(settings.visual_slides_auto_generate)
+
     def _maybe_schedule_visual_slides(self, context: PipelineContext) -> None:
         if not (
-            settings.visual_slides_enabled
-            and settings.visual_slides_auto_generate
-            and context.style == "meeting"
+            context.style == "meeting"
             and context.presentation in (None, "text")
-            and context.user_id
+            and self._should_auto_generate_visual_slides(context.user_id)
         ):
             return
         try:

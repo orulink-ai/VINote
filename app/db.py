@@ -37,6 +37,7 @@ def init_db():
         # default grants must not expose tables between separate commits.
         with engine.begin() as connection:
             Base.metadata.create_all(bind=connection)
+            _ensure_user_preference_columns(connection)
             protect_api_tables(connection, Base.metadata.tables.values())
         return
     Base.metadata.create_all(bind=engine)
@@ -45,6 +46,40 @@ def init_db():
     _ensure_note_evidence_columns()
     _ensure_note_origin_column()
     _ensure_local_file_purpose_column()
+    _ensure_user_preference_columns()
+
+
+def _ensure_pg_visual_slides_column(connection):
+    quote = connection.dialect.identifier_preparer.quote
+    schema = connection.exec_driver_sql("SELECT current_schema()").scalar_one()
+    if not schema:
+        raise RuntimeError("共享服务数据库没有可用的内容 schema")
+    table_name = f"{quote(schema)}.{quote('user_preferences')}"
+    connection.exec_driver_sql(
+        f"ALTER TABLE {table_name} ADD COLUMN IF NOT EXISTS visual_slides_auto_generate BOOLEAN"
+    )
+
+
+def _ensure_user_preference_columns(connection=None):
+    target = connection if connection is not None else engine
+    inspector = inspect(target)
+    if "user_preferences" not in inspector.get_table_names():
+        return
+    if target.dialect.name == "postgresql":
+        if connection is not None:
+            _ensure_pg_visual_slides_column(connection)
+        else:
+            with engine.begin() as conn:
+                _ensure_pg_visual_slides_column(conn)
+        return
+    columns = {column["name"] for column in inspector.get_columns("user_preferences")}
+    if "visual_slides_auto_generate" not in columns:
+        stmt = "ALTER TABLE user_preferences ADD COLUMN visual_slides_auto_generate BOOLEAN"
+        if connection is not None:
+            connection.exec_driver_sql(stmt)
+        else:
+            with engine.begin() as conn:
+                conn.exec_driver_sql(stmt)
 
 
 def _ensure_local_file_purpose_column():

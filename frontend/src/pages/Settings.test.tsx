@@ -1,6 +1,6 @@
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { MemoryRouter, Route, Routes, useLocation } from 'react-router-dom'
 import { I18nProvider } from '../lib/i18n'
 import { Settings } from './Settings'
@@ -22,7 +22,15 @@ function renderSettings(path: string, state?: { returnTo: string }) {
 }
 
 vi.mock('../stores/authStore', () => ({
-  useAuthStore: () => ({ initialized: true, user: { id: 'user-1', email: 'user@example.com' } }),
+  useAuthStore: Object.assign(
+    (selector?: (state: { initialized: boolean; user: { id: string; email: string } }) => unknown) => {
+      const state = { initialized: true, user: { id: 'user-1', email: 'user@example.com' } }
+      return typeof selector === 'function' ? selector(state) : state
+    },
+    {
+      getState: () => ({ initialized: true, user: { id: 'user-1', email: 'user@example.com' } }),
+    },
+  ),
 }))
 
 vi.mock('../stores/languageStore', () => ({
@@ -38,7 +46,25 @@ vi.mock('../stores/themeStore', () => ({
 }))
 
 describe('Settings page layout', () => {
-  afterEach(cleanup)
+  let fetchSpy: ReturnType<typeof vi.spyOn>
+  beforeEach(() => {
+    fetchSpy = vi.spyOn(globalThis, 'fetch').mockImplementation(() =>
+      Promise.resolve(
+        new Response(
+          JSON.stringify({
+            language: 'zh-CN',
+            visual_slides_enabled: true,
+            visual_slides_auto_generate: false,
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    )
+  })
+  afterEach(() => {
+    fetchSpy.mockRestore()
+    cleanup()
+  })
   it('keeps the settings canvas responsive within the main area', () => {
     render(
       <MemoryRouter future={{ v7_startTransition: true, v7_relativeSplatPath: true }}>
@@ -125,4 +151,26 @@ it('opens real task notification preferences from settings navigation', async ()
   expect(screen.getByRole('heading', { name: '任务通知' })).toBeVisible();
   expect(screen.getByRole('switch', { name: '后台使用系统通知' })).toBeDisabled();
   expect(screen.getByText('系统通知可在桌面应用中启用；当前使用应用内提示。')).toBeVisible();
+});
+
+it('exposes the visual slides auto-generation switch under the transcription and summary tab', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+    new Response(
+      JSON.stringify({
+        language: 'zh-CN',
+        visual_slides_enabled: true,
+        visual_slides_auto_generate: false,
+      }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    ),
+  );
+  try {
+    renderSettings('/settings?tab=models');
+    expect(screen.getByRole('heading', { name: '视觉幻灯片' })).toBeVisible();
+    const toggle = await screen.findByRole('switch', { name: '会议纪要自动生成视觉幻灯片' });
+    await waitFor(() => expect(toggle).not.toBeDisabled());
+    expect(toggle).toBeVisible();
+  } finally {
+    fetchSpy.mockRestore();
+  }
 });

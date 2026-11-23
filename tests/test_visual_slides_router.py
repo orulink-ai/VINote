@@ -346,7 +346,14 @@ def test_note_service_maybe_schedule_visual_slides_respects_flags_and_style(tmp_
     import threading
     from app.models.audio import AudioDownloadResult
     from app.services import note_service as ns_mod
+    from app.services import preferences_repository as pref_mod
     from app.services import visual_slide_service as vs_mod
+
+    monkeypatch.setattr(
+        pref_mod.PreferenceRepository,
+        "visual_slides_auto_generate_enabled",
+        lambda self, user_id: bool(ns_mod.settings.visual_slides_enabled and ns_mod.settings.visual_slides_auto_generate),
+    )
 
     artifacts, task_id, folder = _create_task(tmp_path, owner="alice")
     svc = ns_mod.NoteService(artifact_service=artifacts)
