@@ -44,6 +44,7 @@ import {
   useSearchParams,
 } from "react-router-dom";
 import { ResultPreview } from '@/components/Notes/ResultPreview';
+import { VisualSlidesPanel } from '@/components/Notes/visual/VisualSlidesPanel';
 import { KeyMomentsRail } from "../components/Notes/KeyMomentsRail";
 import { VideoReferencePanel } from "../components/Notes/VideoReferencePanel";
 import { SavedRecordingActions } from "../components/Notes/SavedRecordingActions";
@@ -1070,6 +1071,14 @@ export function NoteEditor() {
                       ref={previewRef}
                       className="stealth-scroll min-w-0 flex-1 overflow-auto [&:has(>[data-summary-html-preview])]:flex [&:has(>[data-summary-html-preview])]:min-h-0 [&:has(>[data-summary-html-preview])]:flex-col [&:has(>[data-summary-html-preview])>div:not([data-summary-html-preview])]:shrink-0"
                     >
+                      {!pendingMeeting && id && isMeetingContent && currentNote?.id === id && currentNote.taskId && (
+                        <VisualSlidesPanel
+                          taskId={currentNote.taskId}
+                          noteTitle={currentNote.title || localTitle}
+                          noteContent={currentNote.content}
+                          disabled={hasUnsavedChanges || saving}
+                        />
+                      )}
                       {pendingMeeting && !hasUnsavedChanges ? <p className="px-6 py-6 text-sm text-muted-foreground">{zh ? "纪要尚未生成，原录音和处理进度已保留。" : "Meeting notes are not ready yet. Your original recording and processing status are retained."}</p> : <ResultPreview
                         noteId={id}
                         taskId={currentNote?.taskId}
