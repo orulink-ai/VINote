@@ -89,6 +89,9 @@ def create_app() -> FastAPI:
     from app.routers.summary_visual import create_summary_visual_router
     app.include_router(create_summary_visual_router(
         artifacts=note._note_service.artifact_service), prefix='/api')
+    from app.routers.visual_slides import create_visual_slides_router
+    app.include_router(create_visual_slides_router(
+        artifacts=note._note_service.artifact_service), prefix='/api')
     from app.routers.meeting_version_context import create_meeting_version_router
     from app.services.task_fresh_asr import FreshASRService
     app.include_router(create_meeting_version_router(

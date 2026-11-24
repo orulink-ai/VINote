@@ -44,7 +44,10 @@ MAX_BYTES = 20 * 1024 * 1024
 MAX_PIXELS = 40_000_000
 MAX_IMAGES = 16
 _ID = re.compile(r"[A-Za-z0-9_-]{1,200}\Z")
-_REF = re.compile(r"/api/task/([0-9a-f-]{36})/artifacts/screenshots/([A-Za-z0-9_-]{1,150}\.(?:png|jpg|jpeg))\Z")
+_REF = re.compile(
+    r"/api/task/([0-9a-f-]{36})/artifacts/"
+    r"(?:(screenshots)/([A-Za-z0-9_-]{1,150}\.(?:png|jpg|jpeg))|(visuals)/([A-Za-z0-9_-]{1,120}\.png))\Z"
+)
 _IMAGE = re.compile(r" {0,3}!\[([^\]\n]{0,500})\]\(([^\s()]+)\)[ \t]*(?:\r?\n)?\Z")
 
 
@@ -101,9 +104,11 @@ def read_asset(artifacts, owner, task_id, reference):
     if (folder is None or folder.is_symlink() or getattr(folder, "is_junction", lambda: False)()
             or folder.resolve().parent != root):
         raise _error("image_source_unbound")
-    screenshots = folder / "screenshots"
-    if (screenshots.is_symlink() or getattr(screenshots, "is_junction", lambda: False)()
-            or screenshots.resolve().parent != folder.resolve()):
+    bucket = match[2] or match[4]
+    file_name = match[3] or match[5]
+    asset_dir = folder / bucket
+    if (asset_dir.is_symlink() or getattr(asset_dir, "is_junction", lambda: False)()
+            or asset_dir.resolve().parent != folder.resolve()):
         raise _error("image_source_unbound")
     try:
         markers_match = (_regular(folder / "recording_owner", 512).decode("utf-8") == owner and
@@ -112,25 +117,26 @@ def read_asset(artifacts, owner, task_id, reference):
         markers_match = False
     if not markers_match:
         raise _error("image_source_unbound")
-    data = _regular(screenshots / match[2], MAX_BYTES)
+    data = _regular(asset_dir / file_name, MAX_BYTES)
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
             with Image.open(BytesIO(data)) as picture:
                 width, height = picture.size
                 fmt = picture.format
-                if (fmt not in ("PNG", "JPEG") or width < 1 or height < 1 or width * height > MAX_PIXELS
+                allowed_formats = ("PNG",) if bucket == "visuals" else ("PNG", "JPEG")
+                if (fmt not in allowed_formats or width < 1 or height < 1 or width * height > MAX_PIXELS
                         or getattr(picture, "n_frames", 1) != 1):
                     raise ValueError()
                 picture.verify()
             with Image.open(BytesIO(data)) as picture:
                 picture.load()
-        suffix = Path(match[2]).suffix.lower()
+        suffix = Path(file_name).suffix.lower()
         if (fmt == "PNG") != (suffix == ".png"):
             raise ValueError()
     except (OSError, ValueError, SyntaxError, Image.DecompressionBombError, Image.DecompressionBombWarning):
         raise _error("image_mime_invalid") from None
-    return {"reference": reference, "file_name": match[2], "size": len(data),
+    return {"reference": reference, "file_name": file_name, "size": len(data),
             "sha256": hashlib.sha256(data).hexdigest(), "mime": "image/png" if fmt == "PNG" else "image/jpeg",
             "width": width, "height": height}, data
 

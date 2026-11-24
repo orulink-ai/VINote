@@ -7,6 +7,7 @@ import hashlib
 import logging
 import math
 import re
+import stat
 import uuid
 import threading
 from dataclasses import asdict, replace
@@ -761,10 +762,24 @@ def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | N
         raise HTTPException(status_code=404, detail="Task not found")
 
     normalized_parts = asset_path.split('/')
-    if (len(normalized_parts) < 2 or normalized_parts[0] not in {"screenshots", "media"}
+    if (len(normalized_parts) < 2 or normalized_parts[0] not in {"screenshots", "media", "visuals"}
             or '\\' in asset_path or ':' in asset_path or '\x00' in asset_path
             or any(not part or part.startswith('.') for part in normalized_parts)):
         raise HTTPException(status_code=404, detail="Artifact not found")
+
+    if normalized_parts[0] == "visuals":
+        if len(normalized_parts) != 2 or not re.fullmatch(r"[A-Za-z0-9_-]{1,120}\.png\Z", normalized_parts[1]):
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        output_root = _note_service.artifact_service.output_dir.resolve()
+        deleted_marker = task_dir / "recording_deleted"
+        if (
+            task_dir.is_symlink()
+            or getattr(task_dir, "is_junction", lambda: False)()
+            or task_dir.resolve().parent != output_root
+            or deleted_marker.exists()
+            or deleted_marker.is_symlink()
+        ):
+            raise HTTPException(status_code=404, detail="Artifact not found")
 
     if (task_dir / "source_reference.json").exists() and normalized_parts[0] == "media":
         source = _note_service.artifact_service.resolve_source_media(task_dir)
@@ -788,6 +803,23 @@ def get_task_artifact(task_id: str, asset_path: str, user: AuthenticatedUser | N
             raise HTTPException(status_code=404, detail="Artifact not found")
     if not requested_path.exists() or not requested_path.is_file():
         raise HTTPException(status_code=404, detail="Artifact not found")
+
+    if normalized_parts[0] == "visuals":
+        try:
+            info = current_path.lstat()
+        except OSError:
+            raise HTTPException(status_code=404, detail="Artifact not found") from None
+        if not stat.S_ISREG(info.st_mode) or stat.S_ISLNK(info.st_mode) or info.st_nlink != 1:
+            raise HTTPException(status_code=404, detail="Artifact not found")
+        return FileResponse(
+            Path(requested_path),
+            media_type="image/png",
+            headers={
+                "Cache-Control": "private, no-store",
+                "X-Content-Type-Options": "nosniff",
+                "Content-Security-Policy": "default-src 'none'; sandbox",
+            },
+        )
 
     if playback and normalized_parts[0] == "media":
         from app.services.media_playback_service import playback_file

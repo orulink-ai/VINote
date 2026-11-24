@@ -3,6 +3,7 @@ from contextlib import contextmanager
 from copy import deepcopy
 from io import BytesIO
 import json
+import os
 import subprocess
 from types import SimpleNamespace
 import uuid
@@ -399,3 +400,75 @@ def test_binary_upload_uses_exact_bytes_explicit_user_and_no_hidden_rollback(ima
     assert args[:3] == ["api", "POST", "/open-apis/drive/v1/medias/upload_all"]
     assert args[args.index("--file") + 1] == "-" and args[args.index("--as") + 1] == "user"
     assert "--yes" not in args and "--from-clipboard" not in args
+
+
+def test_visual_slides_png_succeeds_in_split_read_and_native_writer(image_job):
+    c = image_job
+    visuals = c.folder / "visuals"
+    visuals.mkdir()
+    slide = visuals / "slide-01.png"
+    Image.new("RGB", (3200, 1800), (248, 250, 252)).save(slide, format="PNG")
+    visual_ref = f"/api/task/{c.task}/artifacts/visuals/slide-01.png"
+    visual_content = f"# 架构讨论\n\n## 系统链路\n\n![系统架构总览]({visual_ref})\n\n后续行动说明。"
+
+    parts = media.split_body(visual_content)
+    img_parts = [p for p in parts if p["kind"] == "image"]
+    assert len(img_parts) == 1
+    assert img_parts[0]["reference"] == visual_ref
+    assert img_parts[0]["caption"] == "系统架构总览"
+
+    asset, data = media.read_asset(c.artifacts, "alice", c.task, visual_ref)
+    assert asset["width"] == 3200 and asset["height"] == 1800
+    assert asset["mime"] == "image/png"
+    assert data == slide.read_bytes()
+
+    # Full NativeImageWriter prepare + run using visual slide PNG
+    with c.scope() as db:
+        note = db.get(NoteDB, "note")
+        job = db.get(FeishuDeliveryDB, c.jobid)
+        note.content = visual_content
+        job.content = visual_content
+    c.writer.upload = lambda owner, binding, doc, block, a, raw: (
+        c.writes.append("upload") or {"file_token": "visualSlideToken"}
+    ) if raw == data and a["file_name"] == "slide-01.png" else pytest.fail("unexpected visual upload bytes")
+
+    manifest = c.writer.prepare("alice", c.jobid, c.task)
+    assert any(e["kind"] == "image" and e["reference"] == visual_ref for e in manifest["events"])
+    outcome = c.writer.run("alice", c.jobid)
+    assert outcome["images_embedded"] is True and outcome["image_count"] == 1
+
+
+def test_visual_slides_rejects_non_png_traversal_links_and_wrong_owner(image_job, tmp_path):
+    c = image_job
+    visuals = c.folder / "visuals"
+    visuals.mkdir(exist_ok=True)
+    (visuals / "slide-01.html").write_text("<html></html>", encoding="utf-8")
+    Image.new("RGB", (32, 24), "red").save(visuals / "slide-01.jpg", format="JPEG")
+    victim = tmp_path / "victim_slide.png"
+    Image.new("RGB", (64, 36), "green").save(victim, format="PNG")
+    (visuals / "symlink.png").symlink_to(victim)
+    os.link(victim, visuals / "hardlink.png")
+
+    for bad_ref in (
+        f"/api/task/{c.task}/artifacts/visuals/slide-01.html",
+        f"/api/task/{c.task}/artifacts/visuals/slide-01.jpg",
+        f"/api/task/{c.task}/artifacts/visuals/../note.md",
+        f"/api/task/{c.task}/artifacts/visuals/symlink.png",
+        f"/api/task/{c.task}/artifacts/visuals/hardlink.png",
+    ):
+        with pytest.raises(FeishuError):
+            media.read_asset(c.artifacts, "alice", c.task, bad_ref)
+
+    with pytest.raises(FeishuError):
+        media.split_body(f"![bad](/api/task/{c.task}/artifacts/visuals/slide-01.html)")
+    with pytest.raises(FeishuError):
+        media.split_body(f"![bad](/api/task/{c.task}/artifacts/visuals/slide-01.jpg)")
+
+    # Wrong owner & wrong task_id rejected
+    valid_slide = visuals / "slide-02.png"
+    Image.new("RGB", (64, 36), "blue").save(valid_slide, format="PNG")
+    ref = f"/api/task/{c.task}/artifacts/visuals/slide-02.png"
+    with pytest.raises(FeishuError):
+        media.read_asset(c.artifacts, "bob", c.task, ref)
+    with pytest.raises(FeishuError):
+        media.read_asset(c.artifacts, "alice", str(uuid.uuid4()), ref)
