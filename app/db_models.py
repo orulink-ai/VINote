@@ -149,7 +149,8 @@ class UserPreferenceDB(Base):
     __tablename__ = "user_preferences"
 
     user_id: Mapped[str] = mapped_column(String(36), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
-    language: Mapped[str] = mapped_column(String(16), default="en")
+    language: Mapped[str] = mapped_column(String(16), default="")
+    visual_slides_auto_generate: Mapped[bool | None] = mapped_column(Boolean, nullable=True, default=None)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
 
