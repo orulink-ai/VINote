@@ -20,7 +20,13 @@ const apiMock = vi.hoisted(() => ({
   apiFetch: vi.fn(),
 }));
 
-vi.mock("../lib/api", () => ({ apiJson: apiMock.apiJson, apiFetch: apiMock.apiFetch }));
+import { ApiError } from "../lib/api";
+
+vi.mock("../lib/api", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../lib/api")>()),
+  apiJson: apiMock.apiJson,
+  apiFetch: apiMock.apiFetch,
+}));
 vi.mock("../stores/languageStore", () => ({
   useLanguageStore: () => ({
     language: "en",
@@ -694,4 +700,129 @@ describe("NoteEditor transcript evidence", () => {
     expect(screen.getByTestId("source-video")).toBe(video);
     expect(video.currentTime).toBe(62);
   });
+
+  it("shows the manual visual slides control for completed meeting notes, triggers generation, and respects unsaved edits", async () => {
+    const taskUuid = "11111111-1111-4111-8111-111111111111";
+    useAuthStore.setState({ user: { id: "owner-1" } as never });
+    noteStoreMock.loadNoteById.mockResolvedValue({
+      id: "note-1",
+      title: "Cost Review Meeting",
+      content: "# Cost Review\n\nMinutes only.",
+      sourceType: "meeting_recording",
+      taskId: taskUuid,
+      status: "done",
+      scope: "personal",
+      createdAt: "2026-07-01T00:00:00Z",
+      updatedAt: "2026-07-01T00:00:00Z",
+    });
+    let slidesGenerated = false;
+    const readyManifest = {
+      protocol: "visual-slides/1",
+      task_id: taskUuid,
+      status: "ready",
+      error_code: null,
+      slide_count: 1,
+      dropped_count: 0,
+      slides: [
+        {
+          index: 1,
+          id: "slide-01",
+          title: "Cost Roadmap",
+          caption: "Unit cost reduction plan",
+          target_heading: "Cost Review",
+          png_filename: "slide-01.png",
+          image_url: `/api/task/${taskUuid}/artifacts/visuals/slide-01.png`,
+          width: 3200,
+          height: 1800,
+          png_sha256: "a".repeat(32),
+        },
+      ],
+    };
+    apiMock.apiJson.mockImplementation((path: string, init?: RequestInit) => {
+      if (path.endsWith("/recording")) {
+        return Promise.resolve({ available: true, deleted: false, can_delete: false, filename: "sample.webm", size_bytes: 1000 });
+      }
+      if (path === `/api/task/${taskUuid}/visual-slides` && init?.method === "POST") {
+        slidesGenerated = true;
+        return Promise.resolve(readyManifest);
+      }
+      if (path === `/api/task/${taskUuid}/visual-slides`) {
+        return Promise.resolve(
+          slidesGenerated
+            ? readyManifest
+            : {
+                protocol: "visual-slides/1",
+                task_id: taskUuid,
+                status: "idle",
+                error_code: null,
+                slide_count: 0,
+                dropped_count: 0,
+                slides: [],
+              },
+        );
+      }
+      if (path.endsWith("/summary-presentation")) {
+        return Promise.reject(new ApiError("not found", 404, {}));
+      }
+      return Promise.resolve(transcriptEvidence);
+    });
+
+    renderEditor();
+    const generateBtn = await screen.findByRole("button", { name: "Generate visual slides" });
+    expect(generateBtn).toBeEnabled();
+
+    fireEvent.click(generateBtn);
+    expect(await screen.findByText("Cost Roadmap")).toBeInTheDocument();
+    expect(noteStoreMock.updateNote).not.toHaveBeenCalled();
+
+    // Unsaved draft in split view disables regeneration until saved
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Split" }));
+    fireEvent.change(screen.getByLabelText("Markdown content"), {
+      target: { value: "# Cost Review\n\nUnsaved edit." },
+    });
+    expect(await screen.findByRole("button", { name: "Regenerate" })).toBeDisabled();
+    expect(screen.getByText(/Save your changes before generating or regenerating visual slides/i)).toBeInTheDocument();
+  });
+
+  it.each([
+    {
+      label: "pending meeting",
+      noteId: "note-pending",
+      sourceType: "meeting_recording",
+      status: "pending",
+      expectedText: "Meeting notes are not ready yet.",
+    },
+    {
+      label: "non-meeting document",
+      noteId: "note-doc",
+      sourceType: "document",
+      status: "done",
+      expectedText: "Plain document.",
+    },
+  ])(
+    "does not mount the visual slides panel on $label",
+    async ({ noteId, sourceType, status, expectedText }) => {
+      const taskUuid = "22222222-2222-4222-8222-222222222222";
+      useAuthStore.setState({ user: { id: "owner-1" } as never });
+      noteStoreMock.loadNoteById.mockResolvedValue({
+        id: noteId,
+        title: "Excluded Note",
+        content: "# Excluded\n\nPlain document.",
+        sourceType,
+        taskId: taskUuid,
+        status,
+        scope: "personal",
+        createdAt: "2026-07-01T00:00:00Z",
+        updatedAt: "2026-07-01T00:00:00Z",
+      });
+
+      renderEditor(`/note/${noteId}`);
+      await screen.findByText(new RegExp(expectedText));
+      expect(
+        apiMock.apiJson.mock.calls.some(([path]) => String(path).includes("/visual-slides")),
+      ).toBe(false);
+      expect(screen.queryByRole("heading", { name: "Visual slides" })).not.toBeInTheDocument();
+    },
+  );
 });
